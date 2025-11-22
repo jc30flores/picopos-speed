@@ -307,7 +307,8 @@ const POS = () => {
               </div>
               
               <Button 
-                className="w-full bg-gradient-accent text-white font-bold hover:opacity-90"
+                variant="default"
+                className="w-full font-bold"
                 size="lg"
                 disabled={cart.length === 0}
               >
