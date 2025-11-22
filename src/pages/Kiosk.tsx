@@ -103,7 +103,8 @@ const Kiosk = () => {
           </div>
           <Button
             size="lg"
-            className="w-full text-2xl py-8 bg-gradient-accent text-primary-foreground font-bold hover:scale-105 transition-transform"
+            variant="default"
+            className="w-full text-2xl py-8 font-bold hover:scale-105 transition-transform"
             onClick={() => setStep("category")}
           >
             Empezar Pedido
