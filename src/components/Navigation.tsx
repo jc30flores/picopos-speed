@@ -76,7 +76,7 @@ export const Navigation = () => {
           <div className="flex items-center gap-3">
             {/* Theme Toggle */}
             <Button
-              variant="outline"
+              variant="ghost"
               size="icon"
               onClick={toggleTheme}
               className="rounded-lg"
@@ -91,7 +91,7 @@ export const Navigation = () => {
             {/* Branch Selector */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="hidden md:flex gap-2 rounded-lg">
+                <Button variant="ghost" className="hidden md:flex gap-2 rounded-lg border border-border">
                   Sucursal Centro
                   <ChevronDown className="h-4 w-4" />
                 </Button>
@@ -106,7 +106,7 @@ export const Navigation = () => {
             {/* User Avatar */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" className="rounded-full">
+                <Button variant="ghost" size="icon" className="rounded-full">
                   <div className="w-8 h-8 bg-gradient-accent rounded-full flex items-center justify-center">
                     <span className="text-sm font-semibold text-primary">JD</span>
                   </div>
