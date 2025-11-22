@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { Moon, Sun, ChevronDown } from "lucide-react";
+import galloLogo from "@/assets/gallo-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -45,8 +46,8 @@ export const Navigation = () => {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 group">
-            <div className="w-10 h-10 bg-gradient-accent rounded-lg flex items-center justify-center shadow-md group-hover:scale-105 transition-transform">
-              <span className="text-2xl font-bold text-primary">🐓</span>
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform overflow-hidden">
+              <img src={galloLogo} alt="Pico de Gallo" className="w-full h-full object-cover" />
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg leading-tight text-foreground">Pico de Gallo</span>
