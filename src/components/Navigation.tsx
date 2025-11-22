@@ -44,8 +44,8 @@ export const Navigation = () => {
     <nav className="fixed top-0 left-0 right-0 z-50 bg-card border-b border-border shadow-sm">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
-          {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 group">
+          {/* Logo - Hidden on small screens */}
+          <Link to="/" className="hidden lg:flex items-center gap-2 group">
             <div className="w-10 h-10 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform overflow-hidden">
               <img src={galloLogo} alt="Pico de Gallo" className="w-full h-full object-cover" />
             </div>
@@ -55,41 +55,43 @@ export const Navigation = () => {
             </div>
           </Link>
 
-          {/* Center Navigation */}
-          <div className="hidden lg:flex items-center gap-1">
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200",
-                  location.pathname === item.path
-                    ? "bg-primary text-primary-foreground shadow-md"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-              >
-                {item.label}
-              </Link>
-            ))}
+          {/* Center Navigation - Always visible, scrollable on small screens */}
+          <div className="flex-1 lg:flex-initial overflow-x-auto">
+            <div className="flex items-center gap-1 min-w-max lg:min-w-0">
+              {navItems.map((item) => (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={cn(
+                    "px-3 lg:px-4 py-2 rounded-lg text-xs lg:text-sm font-medium transition-all duration-200 whitespace-nowrap",
+                    location.pathname === item.path
+                      ? "bg-primary text-primary-foreground shadow-md"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  )}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </div>
           </div>
 
           {/* Right Actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 lg:gap-3">
             {/* Theme Toggle */}
             <Button
               variant="ghost"
               size="icon"
               onClick={toggleTheme}
-              className="rounded-lg"
+              className="rounded-lg shrink-0"
             >
               {theme === "light" ? (
-                <Moon className="h-5 w-5" />
+                <Moon className="h-4 w-4 lg:h-5 lg:w-5" />
               ) : (
-                <Sun className="h-5 w-5" />
+                <Sun className="h-4 w-4 lg:h-5 lg:w-5" />
               )}
             </Button>
 
-            {/* Branch Selector */}
+            {/* Branch Selector - Hidden on small screens */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="hidden md:flex gap-2 rounded-lg border border-border">
@@ -107,9 +109,9 @@ export const Navigation = () => {
             {/* User Avatar */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-full">
-                  <div className="w-8 h-8 bg-gradient-accent rounded-full flex items-center justify-center">
-                    <span className="text-sm font-semibold text-primary">JD</span>
+                <Button variant="ghost" size="icon" className="rounded-full shrink-0">
+                  <div className="w-7 h-7 lg:w-8 lg:h-8 bg-gradient-accent rounded-full flex items-center justify-center">
+                    <span className="text-xs lg:text-sm font-semibold text-primary">JD</span>
                   </div>
                 </Button>
               </DropdownMenuTrigger>
