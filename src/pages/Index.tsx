@@ -180,7 +180,8 @@ const POS = () => {
                     <p className="text-base font-bold text-secondary">${product.price.toFixed(2)}</p>
                     {product.modifierGroups && product.modifierGroups.length > 0 && (
                       <Badge variant="secondary" className="mt-1 text-xs">
-                        Personalizable
+                        <span className="md:hidden">Custom</span>
+                        <span className="hidden md:inline">Personalizable</span>
                       </Badge>
                     )}
                   </Card>
