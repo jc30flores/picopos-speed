@@ -46,7 +46,7 @@ export const Navigation = () => {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 group">
             <div className="w-10 h-10 bg-gradient-accent rounded-lg flex items-center justify-center shadow-md group-hover:scale-105 transition-transform">
-              <span className="text-2xl font-bold text-primary">🌶️</span>
+              <span className="text-2xl font-bold text-primary">🐓</span>
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg leading-tight text-foreground">Pico de Gallo</span>
