@@ -8,8 +8,7 @@ import Kiosk from "./pages/Kiosk";
 import Kitchen from "./pages/Kitchen";
 import CustomerDisplay from "./pages/CustomerDisplay";
 import Menu from "./pages/Menu";
-import Reports from "./pages/Reports";
-import SalesHistory from "./pages/SalesHistory";
+import ReportsHistory from "./pages/ReportsHistory";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
@@ -27,8 +26,7 @@ const App = () => (
           <Route path="/kitchen" element={<Kitchen />} />
           <Route path="/customer-display" element={<CustomerDisplay />} />
           <Route path="/menu" element={<Menu />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/sales-history" element={<SalesHistory />} />
+          <Route path="/reports-history" element={<ReportsHistory />} />
           <Route path="/settings" element={<Settings />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
