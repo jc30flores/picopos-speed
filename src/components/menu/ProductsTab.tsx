@@ -8,17 +8,30 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { mockProducts, categories, modifierGroups } from "@/data/mockProducts";
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
+import { ProductFormDialog } from "./ProductFormDialog";
 
 export const ProductsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<any>(null);
 
   const filteredProducts = mockProducts.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
+
+  const handleNewProduct = () => {
+    setEditingProduct(null);
+    setShowProductForm(true);
+  };
+
+  const handleEditProduct = (product: any) => {
+    setEditingProduct(product);
+    setShowProductForm(true);
+  };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -27,7 +40,11 @@ export const ProductsTab = () => {
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">Productos del Menú</h2>
-            <Button variant="default" className="bg-secondary hover:bg-secondary/90">
+            <Button
+              variant="default"
+              className="bg-secondary hover:bg-secondary/90"
+              onClick={handleNewProduct}
+            >
               <Plus className="h-4 w-4 mr-2" />
               Nuevo Producto
             </Button>
@@ -99,7 +116,11 @@ export const ProductsTab = () => {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="sm">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEditProduct(product)}
+                        >
                           <Edit className="h-4 w-4 mr-1" />
                           Editar
                         </Button>
@@ -125,6 +146,13 @@ export const ProductsTab = () => {
       <div className="lg:col-span-2">
         <ModifierPanel selectedProduct={selectedProduct} />
       </div>
+
+      {/* Product Form Dialog */}
+      <ProductFormDialog
+        open={showProductForm}
+        onOpenChange={setShowProductForm}
+        editingProduct={editingProduct}
+      />
     </div>
   );
 };

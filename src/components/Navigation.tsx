@@ -16,7 +16,7 @@ const navItems = [
   { label: "Kiosk", path: "/kiosk" },
   { label: "Cocina", path: "/kitchen" },
   { label: "Pedidos Clientes", path: "/customer-display" },
-  { label: "Menú & Modificadores", path: "/menu" },
+  { label: "Menú y Descuentos", path: "/menu" },
   { label: "Reportes", path: "/reports" },
   { label: "Configuración", path: "/settings" },
 ];

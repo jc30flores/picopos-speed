@@ -12,7 +12,7 @@ const Menu = () => {
       <Navigation />
       <div className="pt-20 px-4 pb-4">
         <div className="max-w-[1600px] mx-auto">
-          <h1 className="text-3xl font-bold mb-6">Menú & Modificadores</h1>
+          <h1 className="text-3xl font-bold mb-6">Menú y Descuentos</h1>
           
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="mb-6">
