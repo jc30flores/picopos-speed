@@ -93,13 +93,10 @@ export const ProductsTab = () => {
                 {filteredProducts.map((product) => (
                   <TableRow key={product.id}>
                     <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="text-2xl">{product.image}</div>
-                        <div>
-                          <div className="font-semibold">{product.name}</div>
-                          <div className="text-sm text-muted-foreground line-clamp-1">
-                            {product.description}
-                          </div>
+                      <div>
+                        <div className="font-semibold">{product.name}</div>
+                        <div className="text-sm text-muted-foreground line-clamp-1">
+                          {product.description}
                         </div>
                       </div>
                     </TableCell>
