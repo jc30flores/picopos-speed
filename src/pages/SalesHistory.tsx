@@ -166,7 +166,8 @@ const mockSales: Sale[] = [
 
 const SalesHistory = () => {
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
-  const [date, setDate] = useState<Date>(new Date());
+  const [startDate, setStartDate] = useState<Date>(new Date());
+  const [endDate, setEndDate] = useState<Date>(new Date());
   const [serviceType, setServiceType] = useState<ServiceType>("all");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -243,12 +244,12 @@ const SalesHistory = () => {
               </div>
             </div>
 
-            {/* Date Picker and Additional Filters */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {/* Date Picker */}
+            {/* Date Range Pickers */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              {/* Start Date */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">
-                  Fecha
+                  Desde
                 </label>
                 <Popover>
                   <PopoverTrigger asChild>
@@ -256,18 +257,48 @@ const SalesHistory = () => {
                       variant="outline"
                       className={cn(
                         "w-full justify-start text-left font-normal",
-                        !date && "text-muted-foreground"
+                        !startDate && "text-muted-foreground"
                       )}
                     >
                       <CalendarIcon className="mr-2 h-4 w-4" />
-                      {date ? format(date, "PPP") : "Selecciona fecha"}
+                      {startDate ? format(startDate, "PPP") : "Fecha inicio"}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <Calendar
                       mode="single"
-                      selected={date}
-                      onSelect={(newDate) => newDate && setDate(newDate)}
+                      selected={startDate}
+                      onSelect={(newDate) => newDate && setStartDate(newDate)}
+                      initialFocus
+                      className="pointer-events-auto"
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {/* End Date */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  Hasta
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !endDate && "text-muted-foreground"
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {endDate ? format(endDate, "PPP") : "Fecha fin"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={endDate}
+                      onSelect={(newDate) => newDate && setEndDate(newDate)}
                       initialFocus
                       className="pointer-events-auto"
                     />
@@ -340,7 +371,7 @@ const SalesHistory = () => {
         </Card>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -371,20 +402,6 @@ const SalesHistory = () => {
                 {((completedSales / filteredSales.length) * 100).toFixed(1)}%
                 del total
               </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Ticket promedio
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                ${(totalSales / filteredSales.length || 0).toFixed(2)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">Por orden</p>
             </CardContent>
           </Card>
         </div>
