@@ -374,28 +374,16 @@ const SalesHistory = () => {
           </CardContent>
         </Card>
 
-        {/* Summary Cards */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Ventas completadas
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">
-              {completedSales}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {((completedSales / filteredSales.length) * 100).toFixed(1)}%
-              del total
-            </p>
-          </CardContent>
-        </Card>
 
         {/* Sales Table */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Transacciones</CardTitle>
+            <div>
+              <CardTitle>Transacciones</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                Total de ventas: <span className="font-semibold text-foreground">${totalSales.toFixed(2)}</span> · {filteredSales.length} transacciones
+              </p>
+            </div>
             <Button variant="outline" size="sm">
               <Download className="h-4 w-4 mr-2" />
               Exportar
