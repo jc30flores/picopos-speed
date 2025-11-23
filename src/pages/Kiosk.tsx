@@ -347,7 +347,8 @@ const Kiosk = () => {
             </Button>
             <Button
               size="lg"
-              className="text-xl py-8 bg-gradient-accent"
+              variant="default"
+              className="text-xl py-8"
               onClick={() => setStep("payment")}
             >
               Proceder al Pago
