@@ -375,40 +375,22 @@ const SalesHistory = () => {
         </Card>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total de ventas
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                ${totalSales.toFixed(2)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {filteredSales.length} transacciones
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Ventas completadas
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                {completedSales}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {((completedSales / filteredSales.length) * 100).toFixed(1)}%
-                del total
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Ventas completadas
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">
+              {completedSales}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {((completedSales / filteredSales.length) * 100).toFixed(1)}%
+              del total
+            </p>
+          </CardContent>
+        </Card>
 
         {/* Sales Table */}
         <Card>
