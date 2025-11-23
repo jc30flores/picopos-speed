@@ -98,7 +98,7 @@ export const DiscountsTab = () => {
       <Card className="p-6">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h2 className="text-2xl font-bold">Descuentos & Happy Hour</h2>
+            <h2 className="text-2xl font-bold">Descuentos</h2>
             <p className="text-sm text-muted-foreground mt-1">
               Configura descuentos automáticos por día, hora y tipo de venta
             </p>
