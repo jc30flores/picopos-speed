@@ -17,7 +17,7 @@ const Menu = () => {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="mb-6">
               <TabsTrigger value="products">Productos & Modificadores</TabsTrigger>
-              <TabsTrigger value="discounts">Descuentos & Happy Hour</TabsTrigger>
+              <TabsTrigger value="discounts">Descuentos</TabsTrigger>
             </TabsList>
 
             <TabsContent value="products" className="mt-0">
