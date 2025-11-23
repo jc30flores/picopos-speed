@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ interface CartItem {
 }
 
 const Kiosk = () => {
+  const navigate = useNavigate();
   const [step, setStep] = useState<Step>("welcome");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -92,7 +94,16 @@ const Kiosk = () => {
 
   if (step === "welcome") {
     return (
-      <div className="min-h-screen bg-gradient-primary flex items-center justify-center p-8">
+      <div className="min-h-screen bg-gradient-primary flex items-center justify-center p-8 relative">
+        {/* Back Button - Almost invisible */}
+        <button
+          onClick={() => navigate(-1)}
+          className="fixed top-4 left-4 p-2 text-foreground/20 hover:text-foreground/40 transition-colors z-50"
+          aria-label="Volver"
+        >
+          <ArrowLeft className="h-6 w-6" />
+        </button>
+
         <Card className="max-w-2xl w-full p-12 text-center space-y-8 shadow-2xl">
           <div className="w-24 h-24 bg-gradient-accent rounded-3xl flex items-center justify-center mx-auto shadow-xl">
             <span className="text-6xl">🌶️</span>
