@@ -18,6 +18,7 @@ const navItems = [
   { label: "Pedidos Clientes", path: "/customer-display" },
   { label: "Menú y Descuentos", path: "/menu" },
   { label: "Reportes", path: "/reports" },
+  { label: "Historial de Ventas", path: "/sales-history" },
   { label: "Configuración", path: "/settings" },
 ];
 
