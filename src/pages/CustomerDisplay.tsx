@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import { mockOrders, Order } from "@/data/mockOrders";
 import { cn } from "@/lib/utils";
 
 const CustomerDisplay = () => {
+  const navigate = useNavigate();
   const [orders, setOrders] = useState<Order[]>(mockOrders);
 
   useEffect(() => {
@@ -22,7 +25,16 @@ const CustomerDisplay = () => {
   const readyOrders = orders.filter((o) => o.status === "ready");
 
   return (
-    <div className="min-h-screen bg-primary text-primary-foreground p-8">
+    <div className="min-h-screen bg-primary text-primary-foreground p-8 relative">
+      {/* Back Button - Almost invisible */}
+      <button
+        onClick={() => navigate(-1)}
+        className="fixed top-4 left-4 p-2 text-primary-foreground/20 hover:text-primary-foreground/40 transition-colors z-50"
+        aria-label="Volver"
+      >
+        <ArrowLeft className="h-6 w-6" />
+      </button>
+
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">
