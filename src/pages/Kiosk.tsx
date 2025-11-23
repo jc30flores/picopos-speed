@@ -22,7 +22,7 @@ interface CartItem {
 
 const Kiosk = () => {
   const navigate = useNavigate();
-  const [step, setStep] = useState<Step>("welcome");
+  const [step, setStep] = useState<Step>("category");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
@@ -92,69 +92,35 @@ const Kiosk = () => {
 
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  if (step === "welcome") {
-    return (
-      <div className="min-h-screen bg-gradient-primary flex items-center justify-center p-8 relative">
-        {/* Back Button - Almost invisible */}
-        <button
-          onClick={() => navigate(-1)}
-          className="fixed top-4 left-4 p-2 text-foreground/20 hover:text-foreground/40 transition-colors z-50"
-          aria-label="Volver"
-        >
-          <ArrowLeft className="h-6 w-6" />
-        </button>
-
-        <Card className="max-w-2xl w-full p-12 text-center space-y-8 shadow-2xl">
-          <div className="w-24 h-24 bg-gradient-accent rounded-3xl flex items-center justify-center mx-auto shadow-xl">
-            <span className="text-6xl">🌶️</span>
-          </div>
-          <div>
-            <h1 className="text-5xl font-bold mb-3">Pico de Gallo</h1>
-            <p className="text-xl text-muted-foreground">Autoservicio - Kiosk</p>
-          </div>
-          <Button
-            size="lg"
-            variant="default"
-            className="w-full text-2xl py-8 font-bold hover:scale-105 transition-transform"
-            onClick={() => setStep("category")}
-          >
-            Empezar Pedido
-          </Button>
-          <div className="flex gap-4 justify-center">
-            <Button variant="outline" size="lg">Español</Button>
-            <Button variant="outline" size="lg">English</Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
 
   if (step === "category") {
     const filteredCategories = categories.filter((cat) => cat !== "Todos");
     
     return (
-      <div className="min-h-screen bg-background p-8">
+      <div className="min-h-screen bg-background p-4 sm:p-8">
         <div className="max-w-6xl mx-auto">
           <Button
             variant="outline"
             size="lg"
-            onClick={() => setStep("welcome")}
+            onClick={() => navigate(-1)}
             className="mb-6"
           >
             <ArrowLeft className="mr-2" />
             Volver
           </Button>
 
-          <h1 className="text-4xl font-bold mb-8 text-center">Selecciona una Categoría</h1>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-8 text-center break-words">
+            Selecciona una Categoría
+          </h1>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
             {filteredCategories.map((category) => (
               <Card
                 key={category}
-                className="p-8 cursor-pointer hover-lift text-center"
+                className="p-6 sm:p-8 cursor-pointer hover-lift text-center"
                 onClick={() => handleCategorySelect(category)}
               >
-                <h3 className="text-2xl font-bold">{category}</h3>
+                <h3 className="text-xl sm:text-2xl font-bold break-words">{category}</h3>
               </Card>
             ))}
           </div>
@@ -317,9 +283,11 @@ const Kiosk = () => {
 
   if (step === "review") {
     return (
-      <div className="min-h-screen bg-background p-8">
+      <div className="min-h-screen bg-background p-4 sm:p-8">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8 text-center">Resumen de Pedido</h1>
+          <h1 className="text-3xl sm:text-4xl font-bold mb-8 text-center break-words">
+            Resumen de Pedido
+          </h1>
 
           <div className="space-y-4 mb-8">
             {cart.map((item) => (
@@ -342,27 +310,27 @@ const Kiosk = () => {
           </div>
 
           <Card className="p-6 mb-8">
-            <div className="text-3xl font-bold text-center">
+            <div className="text-2xl sm:text-3xl font-bold text-center break-words">
               Total: <span className="text-secondary">${total.toFixed(2)}</span>
             </div>
           </Card>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Button
               size="lg"
               variant="outline"
-              className="text-xl py-8"
+              className="text-lg sm:text-xl py-6 sm:py-8 w-full"
               onClick={() => setStep("category")}
             >
-              Agregar Más
+              <span className="truncate">Agregar Más</span>
             </Button>
             <Button
               size="lg"
               variant="default"
-              className="text-xl py-8"
+              className="text-lg sm:text-xl py-6 sm:py-8 w-full"
               onClick={() => setStep("payment")}
             >
-              Proceder al Pago
+              <span className="truncate">Proceder al Pago</span>
             </Button>
           </div>
         </div>
@@ -403,28 +371,30 @@ const Kiosk = () => {
 
   if (step === "complete") {
     return (
-      <div className="min-h-screen bg-gradient-primary flex items-center justify-center p-8">
-        <Card className="max-w-2xl w-full p-12 text-center space-y-8 shadow-2xl">
-          <div className="w-24 h-24 bg-gradient-accent rounded-full flex items-center justify-center mx-auto shadow-xl">
-            <Check className="w-16 h-16 text-primary" />
+      <div className="min-h-screen bg-gradient-primary flex items-center justify-center p-4 sm:p-8">
+        <Card className="max-w-2xl w-full p-6 sm:p-12 text-center space-y-6 sm:space-y-8 shadow-2xl">
+          <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-accent rounded-full flex items-center justify-center mx-auto shadow-xl">
+            <Check className="w-12 h-12 sm:w-16 sm:h-16 text-primary" />
           </div>
           
           <div>
-            <h1 className="text-3xl font-bold mb-4">¡Pedido Confirmado!</h1>
-            <p className="text-xl text-muted-foreground mb-8">Tu número de pedido es:</p>
-            <div className="text-9xl font-black text-secondary mb-8">
+            <h1 className="text-2xl sm:text-3xl font-bold mb-4 break-words">¡Pedido Confirmado!</h1>
+            <p className="text-lg sm:text-xl text-muted-foreground mb-6 sm:mb-8 break-words">
+              Tu número de pedido es:
+            </p>
+            <div className="text-6xl sm:text-7xl md:text-9xl font-black text-secondary mb-6 sm:mb-8 break-all">
               #{orderNumber}
             </div>
-            <p className="text-xl text-muted-foreground">
+            <p className="text-lg sm:text-xl text-muted-foreground break-words">
               Por favor espera a que tu pedido esté listo
             </p>
           </div>
 
           <Button
             size="lg"
-            className="w-full text-2xl py-8"
+            className="w-full text-xl sm:text-2xl py-6 sm:py-8"
             onClick={() => {
-              setStep("welcome");
+              setStep("category");
               setCart([]);
               setSelectedCategory("");
             }}
