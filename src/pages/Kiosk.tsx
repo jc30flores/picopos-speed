@@ -292,7 +292,8 @@ const Kiosk = () => {
 
           <Button
             size="lg"
-            className="w-full mt-8 text-xl py-8 bg-gradient-accent"
+            variant="default"
+            className="w-full mt-8 text-xl py-8"
             onClick={handleAddModifiers}
             disabled={!canContinue()}
           >
