@@ -1,23 +1,45 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Plus, Edit, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { mockProducts, categories, modifierGroups } from "@/data/mockProducts";
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
+import { getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
 
 export const ProductsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Todos");
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showProductForm, setShowProductForm] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<any>(null);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
 
-  const filteredProducts = mockProducts.filter((product) => {
+  const loadMenuData = async () => {
+    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+      getCategories(),
+      getProducts(),
+      getModifierGroups(),
+    ]);
+    setCategories(categoriesResponse);
+    setProducts(productsResponse);
+    setModifierGroups(modifierGroupsResponse);
+  };
+
+  useEffect(() => {
+    loadMenuData().catch((error) => {
+      console.error("Failed to load menu data", error);
+    });
+  }, []);
+
+  const categoryNames = ["Todos", ...categories.map((cat) => cat.name)];
+
+  const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
@@ -28,7 +50,7 @@ export const ProductsTab = () => {
     setShowProductForm(true);
   };
 
-  const handleEditProduct = (product: any) => {
+  const handleEditProduct = (product: Product) => {
     setEditingProduct(product);
     setShowProductForm(true);
   };
@@ -62,7 +84,7 @@ export const ProductsTab = () => {
             </div>
 
             <div className="flex gap-2 flex-wrap">
-              {categories.map((cat) => (
+              {categoryNames.map((cat) => (
                 <Badge
                   key={cat}
                   variant={selectedCategory === cat ? "default" : "outline"}
@@ -141,7 +163,11 @@ export const ProductsTab = () => {
 
       {/* Right: Modifier Panel (40%) */}
       <div className="lg:col-span-2">
-        <ModifierPanel selectedProduct={selectedProduct} />
+        <ModifierPanel
+          selectedProduct={selectedProduct}
+          modifierGroups={modifierGroups}
+          onModifierGroupsUpdated={loadMenuData}
+        />
       </div>
 
       {/* Product Form Dialog */}
@@ -149,6 +175,8 @@ export const ProductsTab = () => {
         open={showProductForm}
         onOpenChange={setShowProductForm}
         editingProduct={editingProduct}
+        categories={categories}
+        onSaved={loadMenuData}
       />
     </div>
   );

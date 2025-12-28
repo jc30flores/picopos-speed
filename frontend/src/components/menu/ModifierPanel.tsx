@@ -1,25 +1,37 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Edit, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { modifierGroups } from "@/data/mockProducts";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
+import { ModifierGroup, Product } from "@/lib/api";
 
 interface ModifierPanelProps {
-  selectedProduct: any;
+  selectedProduct: Product | null;
+  modifierGroups: ModifierGroup[];
+  onModifierGroupsUpdated: () => Promise<void>;
 }
 
-export const ModifierPanel = ({ selectedProduct }: ModifierPanelProps) => {
-  const [assignedGroups, setAssignedGroups] = useState<string[]>([]);
+export const ModifierPanel = ({
+  selectedProduct,
+  modifierGroups,
+  onModifierGroupsUpdated,
+}: ModifierPanelProps) => {
+  const [assignedGroups, setAssignedGroups] = useState<number[]>([]);
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showGroupFormDialog, setShowGroupFormDialog] = useState(false);
-  const [editingGroup, setEditingGroup] = useState<any>(null);
-  const [selectedForAssign, setSelectedForAssign] = useState<string[]>([]);
+  const [editingGroup, setEditingGroup] = useState<ModifierGroup | null>(null);
+  const [selectedForAssign, setSelectedForAssign] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (selectedProduct) {
+      setAssignedGroups(selectedProduct.modifierGroups ?? []);
+    }
+  }, [selectedProduct]);
 
   const handleAssignGroups = () => {
     setAssignedGroups([...new Set([...assignedGroups, ...selectedForAssign])]);
@@ -27,7 +39,7 @@ export const ModifierPanel = ({ selectedProduct }: ModifierPanelProps) => {
     setSelectedForAssign([]);
   };
 
-  const handleRemoveGroup = (groupId: string) => {
+  const handleRemoveGroup = (groupId: number) => {
     setAssignedGroups(assignedGroups.filter(id => id !== groupId));
   };
 
@@ -36,7 +48,7 @@ export const ModifierPanel = ({ selectedProduct }: ModifierPanelProps) => {
     setShowGroupFormDialog(true);
   };
 
-  const handleEditGroup = (group: any) => {
+  const handleEditGroup = (group: ModifierGroup) => {
     setEditingGroup(group);
     setShowGroupFormDialog(true);
   };
@@ -53,7 +65,7 @@ export const ModifierPanel = ({ selectedProduct }: ModifierPanelProps) => {
     );
   }
 
-  const assignedGroupObjects = modifierGroups.filter(g => 
+  const assignedGroupObjects = modifierGroups.filter(g =>
     assignedGroups.includes(g.id)
   );
 
@@ -244,6 +256,7 @@ export const ModifierPanel = ({ selectedProduct }: ModifierPanelProps) => {
         open={showGroupFormDialog}
         onOpenChange={setShowGroupFormDialog}
         editingGroup={editingGroup}
+        onSaved={onModifierGroupsUpdated}
       />
     </div>
   );

@@ -9,13 +9,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Discount } from "@/types/menu";
-import { categories } from "@/data/mockProducts";
-import { cn } from "@/lib/utils";
+import { Category, ServiceType, createDiscount } from "@/lib/api";
 
 interface DiscountFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editingDiscount: Discount | null;
+  categories: Category[];
+  serviceTypes: ServiceType[];
+  onSaved: () => Promise<void>;
 }
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
@@ -25,6 +27,9 @@ export const DiscountFormDialog = ({
   open,
   onOpenChange,
   editingDiscount,
+  categories,
+  serviceTypes: availableServiceTypes,
+  onSaved,
 }: DiscountFormDialogProps) => {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -154,9 +159,34 @@ export const DiscountFormDialog = ({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isValid()) return;
-    // Mock save - in real app would save to backend
+    const categoryIds = categories
+      .filter((category) => targetCategories.includes(category.name))
+      .map((category) => category.id);
+    const serviceTypeIds = availableServiceTypes
+      .filter((service) => serviceTypes.includes(service.key as any))
+      .map((service) => service.id);
+
+    await createDiscount({
+      id: editingDiscount ? Number(editingDiscount.id) : 0,
+      name,
+      description,
+      type,
+      value,
+      appliesTo,
+      targetCategoryIds: categoryIds,
+      targetProductIds: [],
+      days,
+      startTime: startTime || null,
+      endTime: endTime || null,
+      serviceTypeIds,
+      minAmount,
+      requiresApproval,
+      autoApply,
+      active,
+    });
+    await onSaved();
     onOpenChange(false);
   };
 
@@ -289,14 +319,14 @@ export const DiscountFormDialog = ({
               <div className="mt-3">
                 <Label>Selecciona categorías</Label>
                 <div className="flex gap-2 flex-wrap mt-2">
-                  {categories.filter(c => c !== "Todos").map((category) => (
+                  {categories.map((category) => (
                     <Badge
-                      key={category}
-                      variant={targetCategories.includes(category) ? "default" : "outline"}
+                      key={category.id}
+                      variant={targetCategories.includes(category.name) ? "default" : "outline"}
                       className="cursor-pointer"
-                      onClick={() => toggleCategory(category)}
+                      onClick={() => toggleCategory(category.name)}
                     >
-                      {category}
+                      {category.name}
                     </Badge>
                   ))}
                 </div>
@@ -351,17 +381,12 @@ export const DiscountFormDialog = ({
               <div>
                 <Label>Tipo de servicio</Label>
                 <div className="flex gap-2 flex-wrap mt-2">
-                  {[
-                    { id: "dine-in", label: "En local" },
-                    { id: "takeout", label: "Para llevar" },
-                    { id: "delivery", label: "Delivery" },
-                    { id: "kiosk", label: "Kiosk" },
-                  ].map((service) => (
+                  {availableServiceTypes.map((service) => (
                     <Badge
                       key={service.id}
-                      variant={serviceTypes.includes(service.id as any) ? "default" : "outline"}
+                      variant={serviceTypes.includes(service.key as any) ? "default" : "outline"}
                       className="cursor-pointer"
-                      onClick={() => toggleServiceType(service.id as any)}
+                      onClick={() => toggleServiceType(service.key as any)}
                     >
                       {service.label}
                     </Badge>

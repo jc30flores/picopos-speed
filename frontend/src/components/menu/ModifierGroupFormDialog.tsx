@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { createModifierGroup, ModifierGroup } from "@/lib/api";
 
 interface ModifierOption {
   id: string;
@@ -18,13 +19,15 @@ interface ModifierOption {
 interface ModifierGroupFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editingGroup?: any;
+  editingGroup?: ModifierGroup | null;
+  onSaved: () => Promise<void>;
 }
 
 export const ModifierGroupFormDialog = ({
   open,
   onOpenChange,
   editingGroup,
+  onSaved,
 }: ModifierGroupFormDialogProps) => {
   const [name, setName] = useState("");
   const [required, setRequired] = useState(false);
@@ -39,7 +42,7 @@ export const ModifierGroupFormDialog = ({
       setMinSelection(editingGroup.minSelection);
       setMaxSelection(editingGroup.maxSelection);
       setOptions(
-        editingGroup.modifiers.map((m: any) => ({
+        editingGroup.modifiers.map((m) => ({
           id: m.id,
           name: m.name,
           price: m.price,
@@ -87,9 +90,19 @@ export const ModifierGroupFormDialog = ({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isValid()) return;
-    // Mock save - in real app would save to backend
+    await createModifierGroup({
+      name,
+      required,
+      minSelection,
+      maxSelection,
+      modifiers: options.map((option) => ({
+        name: option.name,
+        price: option.price,
+      })),
+    });
+    await onSaved();
     onOpenChange(false);
   };
 

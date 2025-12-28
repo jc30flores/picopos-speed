@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Plus, Edit, Copy, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,9 +6,16 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { mockDiscounts } from "@/data/mockDiscounts";
 import { Discount } from "@/types/menu";
 import { DiscountFormDialog } from "./DiscountFormDialog";
+import {
+  getCategories,
+  getDiscounts,
+  getServiceTypes,
+  Category,
+  ServiceType,
+  Discount as ApiDiscount,
+} from "@/lib/api";
 
 const DAYS_SHORT = ["D", "L", "M", "X", "J", "V", "S"];
 
@@ -18,8 +25,71 @@ export const DiscountsTab = () => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [showFormDialog, setShowFormDialog] = useState(false);
   const [editingDiscount, setEditingDiscount] = useState<Discount | null>(null);
+  const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
 
-  const filteredDiscounts = mockDiscounts.filter((discount) => {
+  const categoryMap = useMemo(
+    () => new Map(categories.map((category) => [category.id, category.name])),
+    [categories]
+  );
+  const serviceTypeMap = useMemo(
+    () => new Map(serviceTypes.map((serviceType) => [serviceType.id, serviceType.key])),
+    [serviceTypes]
+  );
+
+  const mapDiscounts = (
+    apiDiscounts: ApiDiscount[],
+    mapCategories: Map<number, string>,
+    mapServiceTypes: Map<number, string>
+  ) => {
+    const mapped = apiDiscounts.map((discount) => ({
+      id: String(discount.id),
+      name: discount.name,
+      description: discount.description,
+      type: discount.type,
+      value: discount.value,
+      appliesTo: discount.appliesTo,
+      targetCategories: (discount.targetCategoryIds ?? [])
+        .map((id) => mapCategories.get(id))
+        .filter(Boolean) as string[],
+      targetProducts: [],
+      days: discount.days,
+      startTime: discount.startTime ?? undefined,
+      endTime: discount.endTime ?? undefined,
+      serviceTypes: (discount.serviceTypeIds ?? [])
+        .map((id) => mapServiceTypes.get(id))
+        .filter(Boolean) as Discount["serviceTypes"],
+      minAmount: discount.minAmount ?? 0,
+      requiresApproval: discount.requiresApproval,
+      autoApply: discount.autoApply,
+      active: discount.active,
+    }));
+    setDiscounts(mapped);
+  };
+
+  const loadDiscountData = async () => {
+    const [categoriesResponse, serviceTypesResponse, discountsResponse] = await Promise.all([
+      getCategories(),
+      getServiceTypes(),
+      getDiscounts(),
+    ]);
+    setCategories(categoriesResponse);
+    setServiceTypes(serviceTypesResponse);
+    mapDiscounts(
+      discountsResponse,
+      new Map(categoriesResponse.map((category) => [category.id, category.name])),
+      new Map(serviceTypesResponse.map((serviceType) => [serviceType.id, serviceType.key]))
+    );
+  };
+
+  useEffect(() => {
+    loadDiscountData().catch((error) => {
+      console.error("Failed to load discounts", error);
+    });
+  }, []);
+
+  const filteredDiscounts = discounts.filter((discount) => {
     const matchesSearch = discount.name.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = typeFilter === "all" || discount.type === typeFilter;
     const matchesStatus =
@@ -232,6 +302,9 @@ export const DiscountsTab = () => {
         open={showFormDialog}
         onOpenChange={setShowFormDialog}
         editingDiscount={editingDiscount}
+        categories={categories}
+        serviceTypes={serviceTypes}
+        onSaved={loadDiscountData}
       />
     </div>
   );

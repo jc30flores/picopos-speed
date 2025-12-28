@@ -6,24 +6,28 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { categories } from "@/data/mockProducts";
+import { Category, createProduct, Product } from "@/lib/api";
 
 interface ProductFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editingProduct?: any;
+  editingProduct?: Product | null;
+  categories: Category[];
+  onSaved: () => Promise<void>;
 }
 
 export const ProductFormDialog = ({
   open,
   onOpenChange,
   editingProduct,
+  categories,
+  onSaved,
 }: ProductFormDialogProps) => {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState(0);
   const [category, setCategory] = useState("");
-  const [image, setImage] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [available, setAvailable] = useState(true);
 
   useEffect(() => {
@@ -32,14 +36,14 @@ export const ProductFormDialog = ({
       setDescription(editingProduct.description);
       setPrice(editingProduct.price);
       setCategory(editingProduct.category);
-      setImage(editingProduct.image);
+      setImageFile(null);
       setAvailable(editingProduct.available);
     } else {
       setName("");
       setDescription("");
       setPrice(0);
       setCategory("");
-      setImage("🍽️");
+      setImageFile(null);
       setAvailable(true);
     }
   }, [editingProduct, open]);
@@ -48,9 +52,20 @@ export const ProductFormDialog = ({
     return name.trim() !== "" && category !== "" && price > 0;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isValid()) return;
-    // Mock save - in real app would save to backend
+    const selectedCategory = categories.find((item) => item.name === category);
+    if (!selectedCategory) return;
+
+    await createProduct({
+      name,
+      description,
+      price,
+      categoryId: selectedCategory.id,
+      image: imageFile,
+      available,
+    });
+    await onSaved();
     onOpenChange(false);
   };
 
@@ -122,14 +137,13 @@ export const ProductFormDialog = ({
             </div>
 
             <div>
-              <Label htmlFor="product-image">Emoji / Ícono</Label>
+              <Label htmlFor="product-image">Imagen</Label>
               <Input
                 id="product-image"
-                placeholder="🌮"
-                value={image}
-                onChange={(e) => setImage(e.target.value)}
-                className="mt-1 text-2xl text-center"
-                maxLength={2}
+                type="file"
+                accept="image/*"
+                onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+                className="mt-1"
               />
             </div>
 

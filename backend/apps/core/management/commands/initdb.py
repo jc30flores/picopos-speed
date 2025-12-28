@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from apps.core.models import Branch, TaxConfig, ServiceType, Table
-from apps.menu.models import Category
 
 
 DEFAULT_BRANCHES = [
@@ -15,16 +14,6 @@ DEFAULT_SERVICE_TYPES = [
     {"key": "takeout", "label": "Para llevar"},
     {"key": "delivery", "label": "Delivery"},
     {"key": "kiosk", "label": "Kiosk"},
-]
-
-DEFAULT_CATEGORIES = [
-    "Tacos",
-    "Burritos",
-    "Bowls",
-    "Quesadillas",
-    "Bebidas",
-    "Acompañamientos",
-    "Postres",
 ]
 
 
@@ -50,8 +39,5 @@ class Command(BaseCommand):
                 key=service_data["key"],
                 defaults={"label": service_data["label"]},
             )
-
-        for category_name in DEFAULT_CATEGORIES:
-            Category.objects.get_or_create(name=category_name)
 
         self.stdout.write(self.style.SUCCESS("Initialization complete."))
