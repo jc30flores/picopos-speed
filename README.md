@@ -10,6 +10,14 @@
 1. Start the backend (`python backend/manage.py runserver`)
 2. Start the frontend (`npm run dev` from `frontend/`)
 
+### Database setup (required)
+
+1. `python backend/manage.py dbcheck`
+2. `python backend/manage.py migrate`
+3. `python backend/manage.py schemacheck`
+4. `python backend/manage.py initdb`
+5. `python backend/manage.py runserver 0.0.0.0:8102`
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e
