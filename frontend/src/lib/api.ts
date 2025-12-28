@@ -61,6 +61,26 @@ export type ServiceType = {
   isActive?: boolean;
 };
 
+export type OrderItem = {
+  id: number;
+  productName: string;
+  quantity: number;
+  modifiers: string[];
+  price: number;
+};
+
+export type Order = {
+  id: number;
+  orderNumber: number;
+  items: OrderItem[];
+  total: number;
+  status: "new" | "preparing" | "ready" | "delivered" | "canceled";
+  serviceType: "dine-in" | "takeout" | "delivery" | "kiosk";
+  createdAt: Date;
+  prepTime: number;
+  customerName?: string;
+};
+
 const buildApiUrl = (path: string) => {
   if (!path.startsWith("/")) {
     return `${API_BASE_URL}/${path}`;
@@ -298,6 +318,159 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
     key: item.key,
     label: item.label,
     isActive: item.is_active,
+  }));
+};
+
+const mapOrder = (order: {
+  id: number;
+  order_number: number;
+  status: Order["status"];
+  customer_name: string;
+  total: string;
+  service_type: Order["serviceType"];
+  created_at: string;
+  items: Array<{
+    id: number;
+    product_id: number;
+    product_name_snapshot: string;
+    price_snapshot: string;
+    quantity: number;
+    applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+  }>;
+}): Order => {
+  const createdAt = new Date(order.created_at);
+  const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
+  return {
+    id: order.id,
+    orderNumber: order.order_number,
+    items: order.items.map((item) => ({
+      id: item.id,
+      productName: item.product_name_snapshot,
+      quantity: item.quantity,
+      modifiers: item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot),
+      price: Number(item.price_snapshot),
+    })),
+    total: Number(order.total),
+    status: order.status,
+    serviceType: order.service_type,
+    createdAt,
+    prepTime,
+    customerName: order.customer_name || undefined,
+  };
+};
+
+export const createOrder = async (payload: {
+  serviceType: Order["serviceType"];
+  customerName?: string;
+  items: Array<{
+    productId: number;
+    productName: string;
+    price: number;
+    quantity: number;
+    modifiers: Array<{ name: string; price: number }>;
+  }>;
+}): Promise<Order> => {
+  const response = await fetch(buildApiUrl("/api/orders/"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      service_type_key: payload.serviceType,
+      customer_name: payload.customerName ?? "",
+      items: payload.items.map((item) => ({
+        product_id: item.productId,
+        product_name_snapshot: item.productName,
+        price_snapshot: item.price,
+        quantity: item.quantity,
+        modifiers: item.modifiers.map((modifier) => ({
+          name: modifier.name,
+          price: modifier.price,
+        })),
+      })),
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    order_number: number;
+    status: Order["status"];
+    customer_name: string;
+    total: string;
+    service_type: Order["serviceType"];
+    created_at: string;
+    items: Array<{
+      id: number;
+      product_id: number;
+      product_name_snapshot: string;
+      price_snapshot: string;
+      quantity: number;
+      applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+    }>;
+  }>(response);
+  return mapOrder(data);
+};
+
+export const getActiveOrders = async (): Promise<Order[]> => {
+  const response = await fetch(buildApiUrl("/api/orders/active/"));
+  const data = await handleJson<
+    Array<{
+      id: number;
+      order_number: number;
+      status: Order["status"];
+      customer_name: string;
+      total: string;
+      service_type: Order["serviceType"];
+      created_at: string;
+      items: Array<{
+        id: number;
+        product_id: number;
+        product_name_snapshot: string;
+        price_snapshot: string;
+        quantity: number;
+        applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+      }>;
+    }>
+  >(response);
+  return data.map(mapOrder);
+};
+
+export const updateOrderStatus = async (orderId: number, statusValue: Order["status"]): Promise<Order> => {
+  const response = await fetch(buildApiUrl(`/api/orders/${orderId}/status/`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: statusValue }),
+  });
+  const data = await handleJson<{
+    id: number;
+    order_number: number;
+    status: Order["status"];
+    customer_name: string;
+    total: string;
+    service_type: Order["serviceType"];
+    created_at: string;
+    items: Array<{
+      id: number;
+      product_id: number;
+      product_name_snapshot: string;
+      price_snapshot: string;
+      quantity: number;
+      applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+    }>;
+  }>(response);
+  return mapOrder(data);
+};
+
+export const getCustomerOrders = async (): Promise<
+  Array<{ id: number; orderNumber: number; status: Order["status"]; customerName?: string; createdAt: Date }>
+> => {
+  const response = await fetch(buildApiUrl("/api/orders/customer-display/"));
+  const data = await handleJson<
+    Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
+  >(response);
+  return data.map((order) => ({
+    id: order.id,
+    orderNumber: order.order_number,
+    status: order.status,
+    customerName: order.customer_name || undefined,
+    createdAt: new Date(order.created_at),
   }));
 };
 

@@ -1,6 +1,6 @@
 from django.db import models
 from apps.core.models import Branch, ServiceType, Table
-from apps.menu.models import Product, Modifier, Discount
+from apps.menu.models import Product, Discount
 
 
 class Order(models.Model):
@@ -9,7 +9,7 @@ class Order(models.Model):
         ("preparing", "Preparing"),
         ("ready", "Ready"),
         ("delivered", "Delivered"),
-        ("cancelled", "Cancelled"),
+        ("canceled", "Canceled"),
     ]
 
     order_number = models.PositiveIntegerField()
@@ -39,28 +39,27 @@ class Order(models.Model):
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="order_items")
-    product_name = models.CharField(max_length=160)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    product_name_snapshot = models.CharField(max_length=160)
+    price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.PositiveIntegerField(default=1)
 
     class Meta:
         indexes = [models.Index(fields=["order"]) ]
 
     def __str__(self) -> str:
-        return f"{self.product_name} x{self.quantity}"
+        return f"{self.product_name_snapshot} x{self.quantity}"
 
 
-class AppliedModifier(models.Model):
+class OrderItemModifier(models.Model):
     order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, related_name="applied_modifiers")
-    modifier = models.ForeignKey(Modifier, on_delete=models.PROTECT, related_name="applied_modifiers")
-    name = models.CharField(max_length=120)
-    price = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    modifier_name_snapshot = models.CharField(max_length=120)
+    modifier_price_snapshot = models.DecimalField(max_digits=8, decimal_places=2, default=0)
 
     class Meta:
         indexes = [models.Index(fields=["order_item"]) ]
 
     def __str__(self) -> str:
-        return self.name
+        return self.modifier_name_snapshot
 
 
 class AppliedDiscount(models.Model):

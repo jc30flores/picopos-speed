@@ -1,10 +1,9 @@
 import { Navigation } from "@/components/Navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { mockProducts, categories, modifierGroups } from "@/data/mockProducts";
 import { Search, Plus, Minus, Trash2, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -17,10 +16,12 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { createOrder, getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
+import { toast } from "sonner";
 
 interface CartItem {
   id: string;
-  productId: string;
+  productId: number;
   name: string;
   price: number;
   quantity: number;
@@ -33,16 +34,36 @@ const POS = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
   const [showModifierDialog, setShowModifierDialog] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
 
-  const filteredProducts = mockProducts.filter((product) => {
+  const loadMenuData = async () => {
+    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+      getCategories(),
+      getProducts(),
+      getModifierGroups(),
+    ]);
+    setCategories(categoriesResponse);
+    setProducts(productsResponse);
+    setModifierGroups(modifierGroupsResponse);
+  };
+
+  useEffect(() => {
+    loadMenuData().catch((error) => {
+      console.error("Failed to load menu data", error);
+    });
+  }, []);
+
+  const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch && product.available;
   });
 
-  const handleProductClick = (product: any) => {
+  const handleProductClick = (product: Product) => {
     if (product.modifierGroups && product.modifierGroups.length > 0) {
       setSelectedProduct(product);
       setSelectedModifiers({});
@@ -52,7 +73,7 @@ const POS = () => {
     }
   };
 
-  const addToCart = (product: any, modifiers: Array<{ name: string; price: number }>) => {
+  const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = product.price + modifierPrice;
 
@@ -97,8 +118,29 @@ const POS = () => {
   };
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const tax = subtotal * 0.08;
-  const total = subtotal + tax;
+  const tax = 0;
+  const total = subtotal;
+
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    try {
+      const order = await createOrder({
+        serviceType,
+        items: cart.map((item) => ({
+          productId: item.productId,
+          productName: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          modifiers: item.modifiers,
+        })),
+      });
+      toast.success(`Pedido #${order.orderNumber} creado · Total $${order.total.toFixed(2)}`);
+      setCart([]);
+    } catch (error) {
+      console.error("Failed to create order", error);
+      toast.error("No se pudo crear el pedido. Intenta de nuevo.");
+    }
+  };
 
   const handleAddModifiers = () => {
     const selectedMods: Array<{ name: string; price: number }> = [];
@@ -107,7 +149,7 @@ const POS = () => {
       const group = modifierGroups.find((g) => g.id === groupId);
       if (group && selectedModifiers[groupId]) {
         selectedModifiers[groupId].forEach((modId) => {
-          const mod = group.modifiers.find((m) => m.id === modId);
+          const mod = group.modifiers.find((m) => String(m.id) === modId);
           if (mod) selectedMods.push({ name: mod.name, price: mod.price });
         });
       }
@@ -150,7 +192,7 @@ const POS = () => {
                 </div>
                 
                 <div className="flex gap-2 flex-wrap">
-                  {categories.map((cat) => (
+                  {["Todos", ...categories.map((cat) => cat.name)].map((cat) => (
                     <Badge
                       key={cat}
                       variant={selectedCategory === cat ? "default" : "outline"}
@@ -170,9 +212,9 @@ const POS = () => {
             {/* Products Grid */}
             <div className="lg:flex-1 lg:overflow-y-auto pb-4 lg:pb-0">
               <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
-                {filteredProducts.map((product) => (
-                  <Card
-                    key={product.id}
+                  {filteredProducts.map((product) => (
+                    <Card
+                      key={product.id}
                     className="p-3 cursor-pointer hover-lift"
                     onClick={() => handleProductClick(product)}
                   >
@@ -311,6 +353,7 @@ const POS = () => {
                 className="w-full font-bold"
                 size="lg"
                 disabled={cart.length === 0}
+                onClick={handleCheckout}
               >
                 Cobrar ${total.toFixed(2)}
               </Button>
@@ -330,7 +373,7 @@ const POS = () => {
           </DialogHeader>
 
           <div className="space-y-6">
-            {selectedProduct?.modifierGroups?.map((groupId: string) => {
+            {selectedProduct?.modifierGroups?.map((groupId: number) => {
               const group = modifierGroups.find((g) => g.id === groupId);
               if (!group) return null;
 
@@ -358,8 +401,8 @@ const POS = () => {
                     >
                       {group.modifiers.map((mod) => (
                         <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
-                          <RadioGroupItem value={mod.id} id={mod.id} />
-                          <Label htmlFor={mod.id} className="flex-1 cursor-pointer">
+                          <RadioGroupItem value={String(mod.id)} id={String(mod.id)} />
+                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
                             {mod.name}
                           </Label>
                           {mod.price > 0 && (
@@ -373,28 +416,28 @@ const POS = () => {
                       {group.modifiers.map((mod) => (
                         <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
                           <Checkbox
-                            id={mod.id}
-                            checked={selectedModifiers[groupId]?.includes(mod.id) || false}
+                            id={String(mod.id)}
+                            checked={selectedModifiers[groupId]?.includes(String(mod.id)) || false}
                             onCheckedChange={(checked) => {
                               const current = selectedModifiers[groupId] || [];
                               if (checked && current.length < group.maxSelection) {
                                 setSelectedModifiers({
                                   ...selectedModifiers,
-                                  [groupId]: [...current, mod.id],
+                                  [groupId]: [...current, String(mod.id)],
                                 });
                               } else if (!checked) {
                                 setSelectedModifiers({
                                   ...selectedModifiers,
-                                  [groupId]: current.filter((id) => id !== mod.id),
+                                  [groupId]: current.filter((id) => id !== String(mod.id)),
                                 });
                               }
                             }}
                             disabled={
-                              !selectedModifiers[groupId]?.includes(mod.id) &&
+                              !selectedModifiers[groupId]?.includes(String(mod.id)) &&
                               (selectedModifiers[groupId]?.length || 0) >= group.maxSelection
                             }
                           />
-                          <Label htmlFor={mod.id} className="flex-1 cursor-pointer">
+                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
                             {mod.name}
                           </Label>
                           {mod.price > 0 && (

@@ -1,23 +1,23 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import { mockOrders, Order } from "@/data/mockOrders";
 import { cn } from "@/lib/utils";
+import { getCustomerOrders } from "@/lib/api";
 
 const CustomerDisplay = () => {
   const navigate = useNavigate();
-  const [orders, setOrders] = useState<Order[]>(mockOrders);
+  const [orders, setOrders] = useState<Array<{ id: number; orderNumber: number; status: string; customerName?: string }>>([]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setOrders((currentOrders) =>
-        currentOrders.map((order) => ({
-          ...order,
-          prepTime: Math.floor((Date.now() - order.createdAt.getTime()) / 60000),
-        }))
-      );
-    }, 30000);
-
+    const loadOrders = () => {
+      getCustomerOrders()
+        .then((data) => setOrders(data))
+        .catch((error) => {
+          console.error("Failed to load customer orders", error);
+        });
+    };
+    loadOrders();
+    const interval = setInterval(loadOrders, 5000);
     return () => clearInterval(interval);
   }, []);
 

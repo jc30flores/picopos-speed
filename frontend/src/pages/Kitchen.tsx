@@ -1,28 +1,32 @@
 import { Navigation } from "@/components/Navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { mockOrders, Order } from "@/data/mockOrders";
 import { Clock, ChefHat } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getActiveOrders, updateOrderStatus, Order } from "@/lib/api";
 
 const Kitchen = () => {
-  const [orders, setOrders] = useState<Order[]>(mockOrders);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setOrders((currentOrders) =>
-        currentOrders.map((order) => ({
-          ...order,
-          prepTime: Math.floor((Date.now() - order.createdAt.getTime()) / 60000),
-        }))
-      );
-    }, 60000);
-
-    return () => clearInterval(interval);
+  const loadOrders = useCallback(async () => {
+    const data = await getActiveOrders();
+    setOrders(data);
   }, []);
+
+  useEffect(() => {
+    loadOrders().catch((error) => {
+      console.error("Failed to load kitchen orders", error);
+    });
+    const interval = setInterval(() => {
+      loadOrders().catch((error) => {
+        console.error("Failed to refresh kitchen orders", error);
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [loadOrders]);
 
   const getStatusColor = (prepTime: number) => {
     if (prepTime < 10) return "status-new";
@@ -38,12 +42,13 @@ const Kitchen = () => {
     return { label: "Retrasado", variant: "destructive" as const };
   };
 
-  const updateOrderStatus = (orderId: string, newStatus: Order["status"]) => {
-    setOrders(
-      orders.map((order) =>
-        order.id === orderId ? { ...order, status: newStatus } : order
-      )
-    );
+  const handleStatusUpdate = async (orderId: number, newStatus: Order["status"]) => {
+    try {
+      await updateOrderStatus(orderId, newStatus);
+      await loadOrders();
+    } catch (error) {
+      console.error("Failed to update order status", error);
+    }
   };
 
   const filteredOrders = orders.filter((order) => {
@@ -155,7 +160,7 @@ const Kitchen = () => {
                     <Button
                       className="flex-1"
                       variant="outline"
-                      onClick={() => updateOrderStatus(order.id, "preparing")}
+                      onClick={() => handleStatusUpdate(order.id, "preparing")}
                     >
                       Iniciar
                     </Button>
@@ -163,7 +168,7 @@ const Kitchen = () => {
                   {order.status === "preparing" && (
                     <Button
                       className="flex-1 bg-gradient-accent"
-                      onClick={() => updateOrderStatus(order.id, "ready")}
+                      onClick={() => handleStatusUpdate(order.id, "ready")}
                     >
                       Marcar Listo
                     </Button>
@@ -172,7 +177,7 @@ const Kitchen = () => {
                     <Button
                       className="flex-1"
                       variant="secondary"
-                      onClick={() => updateOrderStatus(order.id, "delivered")}
+                      onClick={() => handleStatusUpdate(order.id, "delivered")}
                     >
                       Entregado
                     </Button>

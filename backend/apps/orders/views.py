@@ -3,6 +3,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from apps.orders.models import Order
 from apps.orders.serializers import OrderSerializer, OrderCreateSerializer
+from rest_framework import serializers
+
+
+class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
+    order_number = serializers.IntegerField(source="order_number")
+    customer_name = serializers.CharField(source="customer_name")
+
+    class Meta:
+        model = Order
+        fields = ["id", "order_number", "customer_name", "status", "created_at"]
 
 
 class OrderCreateView(generics.CreateAPIView):
@@ -20,7 +30,11 @@ class ActiveOrderListView(generics.ListAPIView):
     serializer_class = OrderSerializer
 
     def get_queryset(self):
-        return Order.objects.filter(status__in=["new", "preparing", "ready"]).order_by("created_at")
+        return (
+            Order.objects.filter(status__in=["new", "preparing", "ready"])
+            .prefetch_related("items__applied_modifiers")
+            .order_by("created_at")
+        )
 
 
 class OrderStatusUpdateView(generics.UpdateAPIView):
@@ -36,3 +50,10 @@ class OrderStatusUpdateView(generics.UpdateAPIView):
             order.save(update_fields=["status", "updated_at"])
         data = OrderSerializer(order, context={"request": request}).data
         return Response(data, status=status.HTTP_200_OK)
+
+
+class CustomerDisplayOrderListView(generics.ListAPIView):
+    serializer_class = CustomerDisplayOrderSerializer
+
+    def get_queryset(self):
+        return Order.objects.filter(status__in=["new", "preparing", "ready"]).order_by("created_at")
