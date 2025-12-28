@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -36,115 +36,99 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getSalesReport, SalesReportRow } from "@/lib/api";
 
 type TimeFilter = "daily" | "weekly" | "monthly" | "all";
 
-// Mock data
-const mockSalesByHour = [
-  { time: "9:00", ventas: 120 },
-  { time: "10:00", ventas: 250 },
-  { time: "11:00", ventas: 380 },
-  { time: "12:00", ventas: 520 },
-  { time: "13:00", ventas: 680 },
-  { time: "14:00", ventas: 590 },
-  { time: "15:00", ventas: 420 },
-  { time: "16:00", ventas: 310 },
-  { time: "17:00", ventas: 280 },
-  { time: "18:00", ventas: 450 },
-  { time: "19:00", ventas: 620 },
-  { time: "20:00", ventas: 580 },
-];
-
-const mockServiceTypes = [
-  { name: "En local", value: 45, amount: 560.0, color: "hsl(var(--primary))" },
-  { name: "Kiosk", value: 30, amount: 375.0, color: "hsl(var(--secondary))" },
-  { name: "Para llevar", value: 18, amount: 225.0, color: "hsl(var(--info))" },
-  { name: "Delivery", value: 7, amount: 90.5, color: "hsl(var(--warning))" },
-];
-
-const mockRecentSales = [
-  {
-    id: "001",
-    date: "2025-11-23 19:45",
-    orderNumber: "#1234",
-    serviceType: "En local",
-    channel: "POS",
-    amount: 34.5,
-  },
-  {
-    id: "002",
-    date: "2025-11-23 19:32",
-    orderNumber: "#1233",
-    serviceType: "Kiosk",
-    channel: "Kiosk",
-    amount: 18.75,
-  },
-  {
-    id: "003",
-    date: "2025-11-23 19:18",
-    orderNumber: "#1232",
-    serviceType: "Para llevar",
-    channel: "POS",
-    amount: 42.0,
-  },
-  {
-    id: "004",
-    date: "2025-11-23 19:05",
-    orderNumber: "#1231",
-    serviceType: "En local",
-    channel: "POS",
-    amount: 27.5,
-  },
-  {
-    id: "005",
-    date: "2025-11-23 18:52",
-    orderNumber: "#1230",
-    serviceType: "Delivery",
-    channel: "POS",
-    amount: 56.25,
-  },
-  {
-    id: "006",
-    date: "2025-11-23 18:40",
-    orderNumber: "#1229",
-    serviceType: "Kiosk",
-    channel: "Kiosk",
-    amount: 15.0,
-  },
-  {
-    id: "007",
-    date: "2025-11-23 18:28",
-    orderNumber: "#1228",
-    serviceType: "En local",
-    channel: "POS",
-    amount: 68.5,
-  },
-  {
-    id: "008",
-    date: "2025-11-23 18:15",
-    orderNumber: "#1227",
-    serviceType: "Para llevar",
-    channel: "POS",
-    amount: 22.75,
-  },
-];
+const SERVICE_TYPE_LABELS: Record<string, string> = {
+  "dine-in": "En local",
+  takeout: "Para llevar",
+  delivery: "Delivery",
+  kiosk: "Kiosk",
+};
 
 export const ReportsTab = () => {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("daily");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");
+  const [sales, setSales] = useState<SalesReportRow[]>([]);
 
-  // Mock KPIs
-  const totalSales = 1250.5;
-  const totalTickets = 87;
+  const getDateRange = (filter: TimeFilter) => {
+    if (filter === "all") return {};
+    const now = new Date();
+    const end = new Date(now);
+    const start = new Date(now);
+    if (filter === "daily") {
+      start.setDate(end.getDate());
+    } else if (filter === "weekly") {
+      start.setDate(end.getDate() - 7);
+    } else if (filter === "monthly") {
+      start.setDate(end.getDate() - 30);
+    }
+    return {
+      dateFrom: start.toISOString().slice(0, 10),
+      dateTo: end.toISOString().slice(0, 10),
+    };
+  };
+
+  useEffect(() => {
+    getSalesReport(getDateRange(timeFilter))
+      .then(setSales)
+      .catch((error) => {
+        console.error("Failed to load sales report", error);
+      });
+  }, [timeFilter]);
+
+  const totalSales = sales.reduce((sum, sale) => sum + sale.total, 0);
+  const totalTickets = sales.length;
   const mainChannel = "POS";
-  const mainChannelPercentage = 62;
+  const mainChannelPercentage = totalTickets > 0 ? 100 : 0;
 
-  const filteredSales = mockRecentSales.filter(
-    (sale) =>
-      sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.serviceType.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredSales = sales.filter((sale) => {
+    const orderNumber = `#${sale.orderNumber}`;
+    const serviceLabel = SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType;
+    return (
+      orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      serviceLabel.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  });
+
+  const salesByHour = useMemo(() => {
+    const map = new Map<string, number>();
+    sales.forEach((sale) => {
+      const hours = sale.createdAt.getHours();
+      const label = `${hours}:00`;
+      map.set(label, (map.get(label) ?? 0) + sale.total);
+    });
+    return Array.from(map.entries())
+      .sort(([a], [b]) => Number(a.split(":")[0]) - Number(b.split(":")[0]))
+      .map(([time, ventas]) => ({ time, ventas }));
+  }, [sales]);
+
+  const serviceTypeData = useMemo(() => {
+    const total = sales.length || 1;
+    const map = new Map<string, { count: number; amount: number }>();
+    sales.forEach((sale) => {
+      const key = sale.serviceType;
+      const current = map.get(key) ?? { count: 0, amount: 0 };
+      map.set(key, {
+        count: current.count + 1,
+        amount: current.amount + sale.total,
+      });
+    });
+    const colors = [
+      "hsl(var(--primary))",
+      "hsl(var(--secondary))",
+      "hsl(var(--info))",
+      "hsl(var(--warning))",
+    ];
+    return Array.from(map.entries()).map(([key, value], index) => ({
+      name: SERVICE_TYPE_LABELS[key] || key,
+      value: Math.round((value.count / total) * 100),
+      amount: value.amount,
+      color: colors[index % colors.length],
+    }));
+  }, [sales]);
 
   return (
     <div className="space-y-6">
@@ -241,7 +225,7 @@ export const ReportsTab = () => {
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={mockSalesByHour}>
+                  <BarChart data={salesByHour}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis
                   dataKey="time"
@@ -260,9 +244,9 @@ export const ReportsTab = () => {
                   }}
                   labelStyle={{ color: "hsl(var(--foreground))" }}
                 />
-                <Bar dataKey="ventas" fill="hsl(var(--secondary))" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+                    <Bar dataKey="ventas" fill="hsl(var(--secondary))" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
           </CardContent>
         </Card>
 
@@ -275,7 +259,7 @@ export const ReportsTab = () => {
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
                 <Pie
-                  data={mockServiceTypes}
+                      data={serviceTypeData}
                   cx="50%"
                   cy="50%"
                   innerRadius={50}
@@ -283,9 +267,9 @@ export const ReportsTab = () => {
                   paddingAngle={5}
                   dataKey="value"
                 >
-                  {mockServiceTypes.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
+                      {serviceTypeData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
                 </Pie>
                 <Tooltip
                   contentStyle={{
@@ -298,8 +282,8 @@ export const ReportsTab = () => {
             </ResponsiveContainer>
 
             <div className="space-y-2 mt-4">
-              {mockServiceTypes.map((type, index) => (
-                <div key={index} className="flex items-center justify-between text-sm">
+                  {serviceTypeData.map((type, index) => (
+                    <div key={index} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
                     <div
                       className="w-3 h-3 rounded-full"
@@ -346,26 +330,30 @@ export const ReportsTab = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredSales.map((sale) => (
-                  <TableRow key={sale.id}>
-                    <TableCell className="text-muted-foreground">{sale.date}</TableCell>
-                    <TableCell className="font-medium">{sale.orderNumber}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{sale.serviceType}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={sale.channel === "POS" ? "default" : "secondary"}
-                        className="text-xs"
-                      >
-                        {sale.channel}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      ${sale.amount.toFixed(2)}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                    {filteredSales.map((sale) => (
+                      <TableRow key={sale.orderId}>
+                        <TableCell className="text-muted-foreground">
+                          {sale.createdAt.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="font-medium">#{sale.orderNumber}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">
+                            {SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="default"
+                            className="text-xs"
+                          >
+                            POS
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          ${sale.total.toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
               </TableBody>
             </Table>
           </div>

@@ -81,6 +81,17 @@ export type Order = {
   customerName?: string;
 };
 
+export type SalesReportRow = {
+  orderId: number;
+  orderNumber: number;
+  serviceType: Order["serviceType"];
+  createdAt: Date;
+  subtotal: number;
+  tax: number;
+  total: number;
+  status: Order["status"];
+};
+
 const buildApiUrl = (path: string) => {
   if (!path.startsWith("/")) {
     return `${API_BASE_URL}/${path}`;
@@ -471,6 +482,43 @@ export const getCustomerOrders = async (): Promise<
     status: order.status,
     customerName: order.customer_name || undefined,
     createdAt: new Date(order.created_at),
+  }));
+};
+
+export const getSalesReport = async (filters?: {
+  dateFrom?: string;
+  dateTo?: string;
+  serviceType?: Order["serviceType"];
+  status?: Order["status"];
+}): Promise<SalesReportRow[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.serviceType) params.set("service_type", filters.serviceType);
+  if (filters?.status) params.set("status", filters.status);
+  const query = params.toString();
+  const response = await fetch(buildApiUrl(`/api/reports/sales/${query ? `?${query}` : ""}`));
+  const data = await handleJson<
+    Array<{
+      order_id: number;
+      order_number: number;
+      service_type: Order["serviceType"];
+      date: string;
+      subtotal: string;
+      tax: string;
+      total: string;
+      status: Order["status"];
+    }>
+  >(response);
+  return data.map((row) => ({
+    orderId: row.order_id,
+    orderNumber: row.order_number,
+    serviceType: row.service_type,
+    createdAt: new Date(row.date),
+    subtotal: Number(row.subtotal),
+    tax: Number(row.tax),
+    total: Number(row.total),
+    status: row.status,
   }));
 };
 

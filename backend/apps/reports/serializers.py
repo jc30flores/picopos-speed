@@ -1,21 +1,12 @@
 from rest_framework import serializers
-from apps.reports.models import SaleSnapshot
 
 
-class SaleSnapshotSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SaleSnapshot
-        fields = [
-            "id",
-            "order_number",
-            "service_type_id",
-            "channel",
-            "payment_method",
-            "items",
-            "subtotal",
-            "tax",
-            "total",
-            "cashier_name",
-            "status",
-            "created_at",
-        ]
+class SalesReportSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField()
+    order_number = serializers.IntegerField()
+    service_type = serializers.CharField()
+    date = serializers.DateTimeField()
+    subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+    tax = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    status = serializers.CharField()

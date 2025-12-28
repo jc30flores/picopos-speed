@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import {
 import { CalendarIcon, Search, Download, Eye } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { getSalesReport, SalesReportRow } from "@/lib/api";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceType = "all" | "en-local" | "para-llevar" | "delivery" | "kiosk";
@@ -47,121 +48,17 @@ interface Sale {
   status: "completado" | "anulado" | "reembolsado";
 }
 
-// Mock data
-const mockSales: Sale[] = [
-  {
-    id: "1",
-    date: new Date(2025, 10, 23, 14, 30),
-    orderNumber: "ORD-2023-1145",
-    serviceType: "En local",
-    channel: "POS",
-    paymentMethod: "Tarjeta",
-    items: 3,
-    subtotal: 125.50,
-    tax: 12.55,
-    total: 138.05,
-    cashier: "María García",
-    status: "completado",
-  },
-  {
-    id: "2",
-    date: new Date(2025, 10, 23, 14, 15),
-    orderNumber: "ORD-2023-1144",
-    serviceType: "Kiosk",
-    channel: "Kiosk",
-    paymentMethod: "Tarjeta",
-    items: 2,
-    subtotal: 45.00,
-    tax: 4.50,
-    total: 49.50,
-    cashier: "Auto",
-    status: "completado",
-  },
-  {
-    id: "3",
-    date: new Date(2025, 10, 23, 13, 45),
-    orderNumber: "ORD-2023-1143",
-    serviceType: "Para llevar",
-    channel: "POS",
-    paymentMethod: "Efectivo",
-    items: 5,
-    subtotal: 89.75,
-    tax: 8.98,
-    total: 98.73,
-    cashier: "Juan Pérez",
-    status: "completado",
-  },
-  {
-    id: "4",
-    date: new Date(2025, 10, 23, 13, 20),
-    orderNumber: "ORD-2023-1142",
-    serviceType: "Delivery",
-    channel: "POS",
-    paymentMethod: "Transferencia",
-    items: 4,
-    subtotal: 156.00,
-    tax: 15.60,
-    total: 171.60,
-    cashier: "María García",
-    status: "completado",
-  },
-  {
-    id: "5",
-    date: new Date(2025, 10, 23, 12, 50),
-    orderNumber: "ORD-2023-1141",
-    serviceType: "En local",
-    channel: "POS",
-    paymentMethod: "Tarjeta",
-    items: 2,
-    subtotal: 67.50,
-    tax: 6.75,
-    total: 74.25,
-    cashier: "Juan Pérez",
-    status: "completado",
-  },
-  {
-    id: "6",
-    date: new Date(2025, 10, 23, 12, 30),
-    orderNumber: "ORD-2023-1140",
-    serviceType: "Kiosk",
-    channel: "Kiosk",
-    paymentMethod: "Tarjeta",
-    items: 1,
-    subtotal: 22.00,
-    tax: 2.20,
-    total: 24.20,
-    cashier: "Auto",
-    status: "anulado",
-  },
-  {
-    id: "7",
-    date: new Date(2025, 10, 23, 11, 45),
-    orderNumber: "ORD-2023-1139",
-    serviceType: "En local",
-    channel: "POS",
-    paymentMethod: "Efectivo",
-    items: 6,
-    subtotal: 234.50,
-    tax: 23.45,
-    total: 257.95,
-    cashier: "María García",
-    status: "completado",
-  },
-  {
-    id: "8",
-    date: new Date(2025, 10, 23, 11, 20),
-    orderNumber: "ORD-2023-1138",
-    serviceType: "Para llevar",
-    channel: "POS",
-    paymentMethod: "Tarjeta",
-    items: 3,
-    subtotal: 78.25,
-    tax: 7.83,
-    total: 86.08,
-    cashier: "Juan Pérez",
-    status: "completado",
-  },
-];
+const SERVICE_TYPE_LABELS: Record<string, string> = {
+  "dine-in": "En local",
+  takeout: "Para llevar",
+  delivery: "Delivery",
+  kiosk: "Kiosk",
+};
+
+const mapStatus = (status: SalesReportRow["status"]): Sale["status"] => {
+  if (status === "canceled") return "anulado";
+  return "completado";
+};
 
 export const SalesHistoryTab = () => {
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
@@ -170,8 +67,68 @@ export const SalesHistoryTab = () => {
   const [serviceType, setServiceType] = useState<ServiceType>("all");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sales, setSales] = useState<Sale[]>([]);
 
-  const filteredSales = mockSales.filter((sale) => {
+  const dateFrom = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
+  const dateTo = endDate ? format(endDate, "yyyy-MM-dd") : undefined;
+
+  useEffect(() => {
+    const now = new Date();
+    if (timeRange === "daily") {
+      setStartDate(now);
+      setEndDate(now);
+    }
+    if (timeRange === "weekly") {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 7);
+      setStartDate(start);
+      setEndDate(now);
+    }
+    if (timeRange === "monthly") {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 30);
+      setStartDate(start);
+      setEndDate(now);
+    }
+  }, [timeRange]);
+
+  useEffect(() => {
+    const serviceTypeFilter =
+      serviceType === "all"
+        ? undefined
+        : serviceType === "en-local"
+          ? "dine-in"
+          : serviceType === "para-llevar"
+            ? "takeout"
+            : serviceType;
+    getSalesReport({
+      dateFrom,
+      dateTo,
+      serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
+    })
+      .then((data) => {
+        const mapped = data.map((row) => ({
+          id: String(row.orderId),
+          date: row.createdAt,
+          orderNumber: `ORD-${row.orderNumber}`,
+          serviceType: SERVICE_TYPE_LABELS[row.serviceType] || row.serviceType,
+          channel: "POS",
+          paymentMethod: "N/A",
+          items: 0,
+          subtotal: row.subtotal,
+          tax: row.tax,
+          total: row.total,
+          cashier: "Auto",
+          status: mapStatus(row.status),
+        }));
+        setSales(mapped);
+      })
+      .catch((error) => {
+        console.error("Failed to load sales history", error);
+      });
+  }, [dateFrom, dateTo, serviceType]);
+
+  const filteredSales = sales.filter((sale) => {
     const matchesSearch =
       sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
