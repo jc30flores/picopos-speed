@@ -1,5 +1,15 @@
 # Welcome to your Lovable project
 
+## Runtime ports
+
+- Backend: http://localhost:8102
+- Frontend: http://localhost:8182
+
+### Startup order
+
+1. Start the backend (`python backend/manage.py runserver`)
+2. Start the frontend (`npm run dev` from `frontend/`)
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e
