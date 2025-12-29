@@ -11,6 +11,7 @@ urlpatterns = [
     path("api/kitchen/", include("apps.kitchen.urls")),
     path("api/employees/", include("apps.employees.urls")),
     path("api/reports/", include("apps.reports.urls")),
+    path("api/auth/", include("apps.users.urls")),
 ]
 
 if settings.DEBUG:

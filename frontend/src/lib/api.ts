@@ -112,11 +112,46 @@ export type SalesReportAggregates = {
   sumDiscountTotal: number;
 };
 
+export type AuthUser = {
+  id: number;
+  username: string;
+  email: string;
+  role: "admin" | "manager" | "cashier" | "kitchen";
+};
+
 const buildApiUrl = (path: string) => {
   if (!path.startsWith("/")) {
     return `${API_BASE_URL}/${path}`;
   }
   return `${API_BASE_URL}${path}`;
+};
+
+const getCsrfToken = () => {
+  const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+};
+
+const request = async (path: string, options: RequestInit = {}) => {
+  const method = options.method ?? "GET";
+  const headers = new Headers(options.headers || {});
+  const isFormData = options.body instanceof FormData;
+
+  if (!isFormData && !headers.has("Content-Type") && method !== "GET") {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    const csrfToken = getCsrfToken();
+    if (csrfToken && !headers.has("X-CSRFToken")) {
+      headers.set("X-CSRFToken", csrfToken);
+    }
+  }
+
+  return fetch(buildApiUrl(path), {
+    credentials: "include",
+    ...options,
+    headers,
+  });
 };
 
 const handleJson = async <T>(response: Response): Promise<T> => {
@@ -127,10 +162,40 @@ const handleJson = async <T>(response: Response): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
+export const getCSRF = async (): Promise<void> => {
+  const response = await request("/api/auth/csrf/");
+  await handleJson(response);
+};
+
+export const login = async (payload: {
+  email?: string;
+  username?: string;
+  password: string;
+}): Promise<AuthUser> => {
+  const response = await request("/api/auth/login/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return handleJson<AuthUser>(response);
+};
+
+export const logout = async (): Promise<void> => {
+  const response = await request("/api/auth/logout/", { method: "POST" });
+  if (!response.ok && response.status !== 204) {
+    const message = await response.text();
+    throw new Error(message || "Logout failed");
+  }
+};
+
+export const me = async (): Promise<AuthUser> => {
+  const response = await request("/api/auth/me/");
+  return handleJson<AuthUser>(response);
+};
+
 let cachedTaxConfig: TaxConfig | null = null;
 
 export const getCategories = async (): Promise<Category[]> => {
-  const response = await fetch(buildApiUrl("/api/menu/categories/"));
+  const response = await request("/api/menu/categories/");
   const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -140,7 +205,7 @@ export const getCategories = async (): Promise<Category[]> => {
 };
 
 export const createCategory = async (name: string): Promise<Category> => {
-  const response = await fetch(buildApiUrl("/api/menu/categories/"), {
+  const response = await request("/api/menu/categories/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
@@ -154,7 +219,7 @@ export const createCategory = async (name: string): Promise<Category> => {
 };
 
 export const getProducts = async (): Promise<Product[]> => {
-  const response = await fetch(buildApiUrl("/api/menu/products/"));
+  const response = await request("/api/menu/products/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -203,7 +268,7 @@ export const createProduct = async (payload: {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
   }
 
-  const response = await fetch(buildApiUrl("/api/menu/products/"), {
+  const response = await request("/api/menu/products/", {
     method: "POST",
     body: formData,
   });
@@ -234,7 +299,7 @@ export const createProduct = async (payload: {
 };
 
 export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
-  const response = await fetch(buildApiUrl("/api/menu/modifier-groups/"));
+  const response = await request("/api/menu/modifier-groups/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -265,7 +330,7 @@ export const createModifierGroup = async (payload: {
   maxSelection: number;
   modifiers: Array<{ name: string; price: number; isActive?: boolean }>;
 }): Promise<ModifierGroup> => {
-  const response = await fetch(buildApiUrl("/api/menu/modifier-groups/"), {
+  const response = await request("/api/menu/modifier-groups/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -304,7 +369,7 @@ export const createModifierGroup = async (payload: {
 };
 
 export const getDiscounts = async (): Promise<Discount[]> => {
-  const response = await fetch(buildApiUrl("/api/menu/discounts/"));
+  const response = await request("/api/menu/discounts/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -342,7 +407,7 @@ export const getDiscounts = async (): Promise<Discount[]> => {
 };
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
-  const response = await fetch(buildApiUrl("/api/core/service-types/"));
+  const response = await request("/api/core/service-types/");
   const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -354,7 +419,7 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
 
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
   if (cachedTaxConfig) return cachedTaxConfig;
-  const response = await fetch(buildApiUrl("/api/core/tax-config/active/"));
+  const response = await request("/api/core/tax-config/active/");
   const data = await handleJson<{ rate: string }>(response);
   cachedTaxConfig = { rate: Number(data.rate) };
   return cachedTaxConfig;
@@ -409,7 +474,7 @@ export const createOrder = async (payload: {
     modifiers: Array<{ name: string; price: number }>;
   }>;
 }): Promise<Order> => {
-  const response = await fetch(buildApiUrl("/api/orders/"), {
+  const response = await request("/api/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -448,7 +513,7 @@ export const createOrder = async (payload: {
 };
 
 export const getActiveOrders = async (): Promise<Order[]> => {
-  const response = await fetch(buildApiUrl("/api/orders/active/"));
+  const response = await request("/api/orders/active/");
   const data = await handleJson<
     Array<{
       id: number;
@@ -472,7 +537,7 @@ export const getActiveOrders = async (): Promise<Order[]> => {
 };
 
 export const updateOrderStatus = async (orderId: number, statusValue: Order["status"]): Promise<Order> => {
-  const response = await fetch(buildApiUrl(`/api/orders/${orderId}/status/`), {
+  const response = await request(`/api/orders/${orderId}/status/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: statusValue }),
@@ -500,7 +565,7 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
 export const getCustomerOrders = async (): Promise<
   Array<{ id: number; orderNumber: number; status: Order["status"]; customerName?: string; createdAt: Date }>
 > => {
-  const response = await fetch(buildApiUrl("/api/orders/customer-display/"));
+  const response = await request("/api/orders/customer-display/");
   const data = await handleJson<
     Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
   >(response);
@@ -525,7 +590,7 @@ export const getSalesReport = async (filters?: {
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
   if (filters?.status) params.set("status", filters.status);
   const query = params.toString();
-  const response = await fetch(buildApiUrl(`/api/reports/sales/${query ? `?${query}` : ""}`));
+  const response = await request(`/api/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
     results: Array<{
       order_id: number;
@@ -569,7 +634,7 @@ export const getSalesReport = async (filters?: {
 };
 
 export const createDiscount = async (payload: Discount): Promise<Discount> => {
-  const response = await fetch(buildApiUrl("/api/menu/discounts/"), {
+  const response = await request("/api/menu/discounts/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -626,7 +691,7 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
 };
 
 export const updateDiscount = async (discountId: number, payload: Discount): Promise<Discount> => {
-  const response = await fetch(buildApiUrl(`/api/menu/discounts/${discountId}/`), {
+  const response = await request(`/api/menu/discounts/${discountId}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -706,7 +771,7 @@ const resolveRoleKey = (role: string) => {
 const mapEmployeeRoleLabel = (roleKey: string) => ROLE_LABELS[roleKey] ?? roleKey;
 
 export const getEmployees = async (): Promise<import("@/types/employee").Employee[]> => {
-  const response = await fetch(buildApiUrl("/api/employees/"));
+  const response = await request("/api/employees/");
   const data = await handleJson<Array<{
     id: number;
     full_name: string;
@@ -740,7 +805,7 @@ export const createEmployee = async (
   if (!roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
   }
-  const response = await fetch(buildApiUrl("/api/employees/"), {
+  const response = await request("/api/employees/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -786,7 +851,7 @@ export const updateEmployee = async (
   if (payload.role && !roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
   }
-  const response = await fetch(buildApiUrl(`/api/employees/${id}/`), {
+  const response = await request(`/api/employees/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -845,7 +910,7 @@ export const getAttendance = async (filters?: {
   if (filters?.dateFrom) params.append("date_from", filters.dateFrom);
   if (filters?.dateTo) params.append("date_to", filters.dateTo);
   if (filters?.employeeId) params.append("employee_id", filters.employeeId);
-  const response = await fetch(buildApiUrl(`/api/employees/attendance/?${params.toString()}`));
+  const response = await request(`/api/employees/attendance/?${params.toString()}`);
   const data = await handleJson<Array<{
     id: number;
     employee: number;
@@ -883,7 +948,7 @@ export const createAttendance = async (payload: {
   minutesLate?: number;
   notes?: string;
 }) => {
-  const response = await fetch(buildApiUrl("/api/employees/attendance/"), {
+  const response = await request("/api/employees/attendance/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -911,7 +976,7 @@ export const updateAttendance = async (
   if ((payload.entryTime || payload.exitTime) && !payload.date) {
     throw new Error("Fecha requerida para actualizar horas de asistencia.");
   }
-  const response = await fetch(buildApiUrl(`/api/employees/attendance/${id}/`), {
+  const response = await request(`/api/employees/attendance/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -934,7 +999,7 @@ export const getSchedules = async (
 ): Promise<Array<import("@/types/employee").Schedule & { employeeId: string; dayOfWeek: number }>> => {
   const params = new URLSearchParams();
   if (employeeId) params.append("employee_id", employeeId);
-  const response = await fetch(buildApiUrl(`/api/employees/schedules/?${params.toString()}`));
+  const response = await request(`/api/employees/schedules/?${params.toString()}`);
   const data = await handleJson<Array<{
     id: number;
     employee: number;
@@ -969,7 +1034,7 @@ export const createSchedule = async (payload: {
   breakMinutes?: number;
   allowsOvertime?: boolean;
 }) => {
-  const response = await fetch(buildApiUrl("/api/employees/schedules/"), {
+  const response = await request("/api/employees/schedules/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -998,7 +1063,7 @@ export const updateSchedule = async (
     isActive?: boolean;
   }
 ) => {
-  const response = await fetch(buildApiUrl(`/api/employees/schedules/${id}/`), {
+  const response = await request(`/api/employees/schedules/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1015,7 +1080,7 @@ export const updateSchedule = async (
 };
 
 export const deleteSchedule = async (id: string) => {
-  const response = await fetch(buildApiUrl(`/api/employees/schedules/${id}/`), {
+  const response = await request(`/api/employees/schedules/${id}/`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1025,7 +1090,7 @@ export const deleteSchedule = async (id: string) => {
 };
 
 export const getEmployeeStats = async (): Promise<EmployeeStats> => {
-  const response = await fetch(buildApiUrl("/api/employees/stats/"));
+  const response = await request("/api/employees/stats/");
   const data = await handleJson<{
     total_employees: number;
     active_employees: number;

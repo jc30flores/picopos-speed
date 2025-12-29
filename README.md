@@ -22,6 +22,13 @@
 
 - `GET /api/core/tax-config/active/` → active tax rate (IVA 13%)
 
+### Auth endpoints
+
+- `GET /api/auth/csrf/`
+- `POST /api/auth/login/`
+- `POST /api/auth/logout/`
+- `GET /api/auth/me/`
+
 ### Menu endpoints
 
 - `GET /api/menu/discounts/`
@@ -59,6 +66,30 @@ Example: get active tax config
 
 ```sh
 curl http://localhost:8102/api/core/tax-config/active/
+```
+
+Example: login (session + CSRF)
+
+```sh
+curl -c cookies.txt http://localhost:8102/api/auth/csrf/
+curl -b cookies.txt -c cookies.txt \\
+  -H "Content-Type: application/json" \\
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \\
+  -d '{"username":"admin","password":"your-password"}' \\
+  http://localhost:8102/api/auth/login/
+```
+
+### Roles
+
+- admin: full access
+- manager: menu/settings/reports access
+- cashier: POS/orders access
+- kitchen: kitchen screen and order status updates
+
+### Create admin user
+
+```sh
+python backend/manage.py createadmin --email admin@example.com
 ```
 
 ### Reset database (development only)

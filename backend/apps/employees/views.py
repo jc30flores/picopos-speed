@@ -1,6 +1,8 @@
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import generics
+from apps.core.audit import log_audit
+from apps.core.permissions import IsAdminOrManager
 from rest_framework.response import Response
 from apps.employees.models import Employee, AttendanceRecord, Schedule
 from apps.employees.serializers import EmployeeSerializer, AttendanceSerializer, ScheduleSerializer
@@ -16,13 +18,25 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
             queryset = queryset.filter(status=status)
         return queryset
 
+    permission_classes = [IsAdminOrManager]
+
+    def perform_create(self, serializer):
+        employee = serializer.save()
+        log_audit(self.request, "employees.create", "Employee", employee.id, {"full_name": employee.full_name})
+
 
 class EmployeeDetailView(generics.RetrieveUpdateAPIView):
     queryset = Employee.objects.select_related("branch").all()
     serializer_class = EmployeeSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def perform_update(self, serializer):
+        employee = serializer.save()
+        log_audit(self.request, "employees.update", "Employee", employee.id, {"full_name": employee.full_name})
 
 
 class EmployeeStatsView(generics.GenericAPIView):
+    permission_classes = [IsAdminOrManager]
     def get(self, request, *args, **kwargs):
         today = timezone.localdate()
         total_employees = Employee.objects.count()
@@ -45,6 +59,7 @@ class EmployeeStatsView(generics.GenericAPIView):
 
 class AttendanceListCreateView(generics.ListCreateAPIView):
     serializer_class = AttendanceSerializer
+    permission_classes = [IsAdminOrManager]
 
     def get_queryset(self):
         queryset = AttendanceRecord.objects.select_related("employee")
@@ -64,10 +79,12 @@ class AttendanceListCreateView(generics.ListCreateAPIView):
 class AttendanceDetailView(generics.RetrieveUpdateAPIView):
     queryset = AttendanceRecord.objects.select_related("employee")
     serializer_class = AttendanceSerializer
+    permission_classes = [IsAdminOrManager]
 
 
 class ScheduleListCreateView(generics.ListCreateAPIView):
     serializer_class = ScheduleSerializer
+    permission_classes = [IsAdminOrManager]
 
     def get_queryset(self):
         queryset = Schedule.objects.select_related("employee")
@@ -80,3 +97,8 @@ class ScheduleListCreateView(generics.ListCreateAPIView):
 class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Schedule.objects.select_related("employee")
     serializer_class = ScheduleSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def perform_destroy(self, instance):
+        log_audit(self.request, "schedules.delete", "Schedule", instance.id, {"employee": instance.employee_id})
+        instance.delete()

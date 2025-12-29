@@ -4,10 +4,12 @@ from rest_framework import generics
 from rest_framework.response import Response
 from apps.orders.models import Order
 from apps.reports.serializers import SalesReportSerializer
+from apps.core.permissions import IsAdminOrManager
 
 
 class SalesReportListView(generics.ListAPIView):
     serializer_class = SalesReportSerializer
+    permission_classes = [IsAdminOrManager]
 
     def get_queryset(self):
         queryset = Order.objects.select_related("service_type").all()
