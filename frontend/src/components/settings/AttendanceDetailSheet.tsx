@@ -19,21 +19,17 @@ interface AttendanceDetailSheetProps {
   onOpenChange: (open: boolean) => void;
   record: AttendanceRecord | null;
   month: string;
+  dailyRecords: DailyAttendance[];
+  onSaveEntry: (payload: { date: string; entryTime: string; exitTime: string; notes?: string }) => Promise<void>;
 }
-
-const mockDailyRecords: DailyAttendance[] = [
-  { date: "2025-11-22", entryTime: "08:03", exitTime: "17:12", hoursWorked: 9.15 },
-  { date: "2025-11-21", entryTime: "07:58", exitTime: "17:05", hoursWorked: 9.12 },
-  { date: "2025-11-20", entryTime: "08:15", exitTime: "17:20", hoursWorked: 9.08, notes: "Llegó tarde" },
-  { date: "2025-11-19", entryTime: "08:00", exitTime: "17:00", hoursWorked: 9 },
-  { date: "2025-11-18", entryTime: "08:05", exitTime: "17:10", hoursWorked: 9.08 },
-];
 
 export const AttendanceDetailSheet = ({
   open,
   onOpenChange,
   record,
   month,
+  dailyRecords,
+  onSaveEntry,
 }: AttendanceDetailSheetProps) => {
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
@@ -45,14 +41,25 @@ export const AttendanceDetailSheet = ({
 
   if (!record) return null;
 
-  const handleSaveManualEntry = () => {
+  const handleSaveManualEntry = async () => {
     if (!formData.date || !formData.entryTime || !formData.exitTime) {
       toast.error("Por favor completa todos los campos obligatorios");
       return;
     }
-    toast.success("Jornada registrada correctamente");
-    setShowForm(false);
-    setFormData({ date: "", entryTime: "", exitTime: "", notes: "" });
+    try {
+      await onSaveEntry({
+        date: formData.date,
+        entryTime: formData.entryTime,
+        exitTime: formData.exitTime,
+        notes: formData.notes,
+      });
+      toast.success("Jornada registrada correctamente");
+      setShowForm(false);
+      setFormData({ date: "", entryTime: "", exitTime: "", notes: "" });
+    } catch (error) {
+      console.error("Failed to save attendance entry", error);
+      toast.error("No se pudo registrar la jornada");
+    }
   };
 
   return (
@@ -173,29 +180,37 @@ export const AttendanceDetailSheet = ({
           <div>
             <h4 className="font-semibold mb-3">Registro diario</h4>
             <div className="space-y-2">
-              {mockDailyRecords.map((day) => (
-                <Card key={day.date}>
-                  <CardContent className="p-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex-1">
-                        <p className="font-medium text-sm">
-                          {new Date(day.date).toLocaleDateString("es-ES", {
-                            weekday: "long",
-                            day: "numeric",
-                            month: "short",
-                          })}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {day.entryTime} - {day.exitTime} ({day.hoursWorked.toFixed(2)}h)
-                        </p>
-                        {day.notes && (
-                          <p className="text-xs text-destructive mt-1">{day.notes}</p>
-                        )}
-                      </div>
-                    </div>
+              {dailyRecords.length === 0 ? (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground text-center">
+                    No hay registros de asistencia para este periodo.
                   </CardContent>
                 </Card>
-              ))}
+              ) : (
+                dailyRecords.map((day) => (
+                  <Card key={day.date}>
+                    <CardContent className="p-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex-1">
+                          <p className="font-medium text-sm">
+                            {new Date(day.date).toLocaleDateString("es-ES", {
+                              weekday: "long",
+                              day: "numeric",
+                              month: "short",
+                            })}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {day.entryTime} - {day.exitTime} ({day.hoursWorked.toFixed(2)}h)
+                          </p>
+                          {day.notes && (
+                            <p className="text-xs text-destructive mt-1">{day.notes}</p>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
             </div>
           </div>
         </div>

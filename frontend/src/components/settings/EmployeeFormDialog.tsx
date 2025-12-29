@@ -23,6 +23,7 @@ interface EmployeeFormDialogProps {
   onOpenChange: (open: boolean) => void;
   employee: Employee | null;
   onSave: (data: Partial<Employee>) => void;
+  branches?: string[];
 }
 
 export const EmployeeFormDialog = ({
@@ -30,6 +31,7 @@ export const EmployeeFormDialog = ({
   onOpenChange,
   employee,
   onSave,
+  branches = ["Sucursal Centro", "Sucursal Norte"],
 }: EmployeeFormDialogProps) => {
   const [formData, setFormData] = useState({
     name: "",
@@ -124,8 +126,11 @@ export const EmployeeFormDialog = ({
                 <SelectValue placeholder="Seleccionar sucursal" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="Sucursal Centro">Sucursal Centro</SelectItem>
-                <SelectItem value="Sucursal Norte">Sucursal Norte</SelectItem>
+                {branches.map((branch) => (
+                  <SelectItem key={branch} value={branch}>
+                    {branch}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

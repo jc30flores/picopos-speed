@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction, connection
 from apps.core.models import Branch, TaxConfig, ServiceType, Table
-from apps.menu.models import Category
 
 
 DEFAULT_BRANCHES = [
@@ -17,15 +16,6 @@ DEFAULT_SERVICE_TYPES = [
     {"key": "kiosk", "label": "Kiosk"},
 ]
 
-DEFAULT_CATEGORIES = [
-    "Tacos",
-    "Burritos",
-    "Bowls",
-    "Quesadillas",
-    "Bebidas",
-    "Acompañamientos",
-    "Postres",
-]
 
 
 class Command(BaseCommand):
@@ -58,8 +48,5 @@ class Command(BaseCommand):
             )
 
         TaxConfig.objects.get_or_create(name="IVA", defaults={"rate": 0.13, "is_active": True})
-
-        for category_name in DEFAULT_CATEGORIES:
-            Category.objects.get_or_create(name=category_name)
 
         self.stdout.write(self.style.SUCCESS("Initialization complete."))

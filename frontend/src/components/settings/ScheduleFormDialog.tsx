@@ -24,6 +24,7 @@ interface ScheduleFormDialogProps {
   onOpenChange: (open: boolean) => void;
   schedule: Schedule | null;
   onSave: (data: Partial<Schedule>) => void;
+  employees?: { id: string; name: string }[];
 }
 
 const DAYS = [
@@ -41,6 +42,7 @@ export const ScheduleFormDialog = ({
   onOpenChange,
   schedule,
   onSave,
+  employees = [],
 }: ScheduleFormDialogProps) => {
   const [formData, setFormData] = useState({
     employeeName: "",
@@ -127,7 +129,13 @@ export const ScheduleFormDialog = ({
                 setFormData({ ...formData, employeeName: e.target.value })
               }
               placeholder="Nombre del empleado"
+              list="employee-options"
             />
+            <datalist id="employee-options">
+              {employees.map((employee) => (
+                <option key={employee.id} value={employee.name} />
+              ))}
+            </datalist>
           </div>
 
           <div className="grid gap-2">

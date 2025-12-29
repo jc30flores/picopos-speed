@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Plus, Search } from "lucide-react";
@@ -13,66 +13,37 @@ import { EmployeesTable } from "./EmployeesTable";
 import { EmployeeFormDialog } from "./EmployeeFormDialog";
 import { EmployeeProfileSheet } from "./EmployeeProfileSheet";
 import { Employee } from "@/types/employee";
-
-const mockEmployees: Employee[] = [
-  {
-    id: "1",
-    name: "Juan Pérez",
-    email: "juan@example.com",
-    role: "Cajero",
-    phone: "555-0101",
-    branch: "Sucursal Centro",
-    status: "active",
-    daysWorked: 22,
-    hoursWorked: 176,
-    lateArrivals: 2,
-  },
-  {
-    id: "2",
-    name: "María García",
-    email: "maria@example.com",
-    role: "Gerente",
-    phone: "555-0102",
-    branch: "Sucursal Centro",
-    status: "active",
-    daysWorked: 20,
-    hoursWorked: 160,
-    lateArrivals: 0,
-  },
-  {
-    id: "3",
-    name: "Carlos López",
-    email: "carlos@example.com",
-    role: "Cocinero",
-    phone: "555-0103",
-    branch: "Sucursal Norte",
-    status: "active",
-    daysWorked: 24,
-    hoursWorked: 192,
-    lateArrivals: 1,
-  },
-  {
-    id: "4",
-    name: "Ana Martínez",
-    email: "ana@example.com",
-    role: "Mesera",
-    phone: "555-0104",
-    branch: "Sucursal Centro",
-    status: "inactive",
-    daysWorked: 0,
-    hoursWorked: 0,
-    lateArrivals: 0,
-  },
-];
+import { createEmployee, getEmployees, updateEmployee } from "@/lib/api";
+import { toast } from "sonner";
 
 export const EmployeesTab = () => {
-  const [employees, setEmployees] = useState<Employee[]>(mockEmployees);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+
+  const loadEmployees = async () => {
+    try {
+      const data = await getEmployees();
+      setEmployees(data);
+    } catch (error) {
+      console.error("Failed to load employees", error);
+      toast.error("No se pudieron cargar los empleados");
+    }
+  };
+
+  useEffect(() => {
+    loadEmployees();
+  }, []);
+
+  const branchOptions = useMemo(() => {
+    const options = employees.map((employee) => employee.branch).filter(Boolean);
+    const unique = Array.from(new Set(options));
+    return unique.length ? unique : ["Sucursal Centro", "Sucursal Norte"];
+  }, [employees]);
 
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch =
@@ -92,28 +63,35 @@ export const EmployeesTab = () => {
     setIsProfileOpen(true);
   };
 
-  const handleSaveEmployee = (employeeData: Partial<Employee>) => {
-    if (editingEmployee) {
-      setEmployees(
-        employees.map((emp) =>
-          emp.id === editingEmployee.id ? { ...emp, ...employeeData } : emp
-        )
-      );
-    } else {
-      const newEmployee: Employee = {
-        id: Date.now().toString(),
-        daysWorked: 0,
-        hoursWorked: 0,
-        lateArrivals: 0,
-        status: "active",
-        ...employeeData,
-      } as Employee;
-      setEmployees([...employees, newEmployee]);
+  const handleSaveEmployee = async (employeeData: Partial<Employee>) => {
+    try {
+      if (editingEmployee) {
+        await updateEmployee(editingEmployee.id, employeeData);
+      } else {
+        await createEmployee({
+          name: employeeData.name ?? "",
+          email: employeeData.email ?? "",
+          role: employeeData.role ?? "",
+          phone: employeeData.phone ?? "",
+          branch: employeeData.branch ?? "",
+          status: employeeData.status ?? "active",
+        });
+      }
+      await loadEmployees();
+    } catch (error) {
+      console.error("Failed to save employee", error);
+      toast.error("No se pudo guardar el empleado");
     }
   };
 
-  const handleDeleteEmployee = (id: string) => {
-    setEmployees(employees.filter((emp) => emp.id !== id));
+  const handleDeleteEmployee = async (id: string) => {
+    try {
+      await updateEmployee(id, { status: "inactive" });
+      await loadEmployees();
+    } catch (error) {
+      console.error("Failed to deactivate employee", error);
+      toast.error("No se pudo desactivar el empleado");
+    }
   };
 
   return (
@@ -131,15 +109,18 @@ export const EmployeesTab = () => {
           </div>
           <Select value={selectedBranch} onValueChange={setSelectedBranch}>
             <SelectTrigger className="w-full sm:w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas</SelectItem>
-              <SelectItem value="Sucursal Centro">Sucursal Centro</SelectItem>
-              <SelectItem value="Sucursal Norte">Sucursal Norte</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas</SelectItem>
+            {branchOptions.map((branch) => (
+              <SelectItem key={branch} value={branch}>
+                {branch}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
         <Button onClick={() => handleOpenDialog()} className="w-full sm:w-auto">
           <Plus className="h-4 w-4" />
           Agregar Empleado
@@ -158,6 +139,7 @@ export const EmployeesTab = () => {
         onOpenChange={setIsDialogOpen}
         employee={editingEmployee}
         onSave={handleSaveEmployee}
+        branches={branchOptions}
       />
 
       <EmployeeProfileSheet

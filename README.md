@@ -32,6 +32,29 @@
 
 - `GET /api/reports/sales/` (filters: `date_from`, `date_to`, `service_type`, `status`)
 
+### Employees/Settings endpoints
+
+- `GET /api/employees/`
+- `POST /api/employees/`
+- `GET /api/employees/{id}/`
+- `PATCH /api/employees/{id}/`
+- `GET /api/employees/stats/`
+- `GET /api/employees/attendance/` (filters: `date_from`, `date_to`, `employee_id`)
+- `POST /api/employees/attendance/`
+- `PATCH /api/employees/attendance/{id}/`
+- `GET /api/employees/schedules/` (filter: `employee_id`)
+- `POST /api/employees/schedules/`
+- `PATCH /api/employees/schedules/{id}/`
+- `DELETE /api/employees/schedules/{id}/`
+
+Example: create employee
+
+```sh
+curl -X POST http://localhost:8102/api/employees/ \
+  -H "Content-Type: application/json" \
+  -d '{"full_name":"Maria Gomez","email":"maria@example.com","role":"cashier","status":"active","branch_name_input":"Sucursal Centro"}'
+```
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e

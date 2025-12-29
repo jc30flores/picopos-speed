@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.test import Client
 from apps.core.models import Branch, ServiceType, TaxConfig
 from apps.menu.models import Category, Product
+from apps.employees.models import Employee
 from apps.orders.models import Order
 
 
@@ -60,6 +61,55 @@ class Command(BaseCommand):
         if Decimal(str(order_data.get("tax"))) != expected_tax:
             raise CommandError("Tax calculation mismatch")
 
+        employee_payload = {
+            "full_name": "Test Employee",
+            "email": "test.employee@example.com",
+            "role": "cashier",
+            "status": "active",
+            "branch_name": branch.name,
+        }
+        employee_response = client.post("/api/employees/", data=employee_payload, content_type="application/json")
+        if employee_response.status_code != 201:
+            raise CommandError("Employee creation failed")
+        employee_id = employee_response.json().get("id")
+
+        attendance_payload = {
+            "employee": employee_id,
+            "date": "2025-01-15",
+            "check_in": "2025-01-15T08:00:00Z",
+            "check_out": "2025-01-15T17:00:00Z",
+            "minutes_late": 0,
+            "notes": "On time",
+        }
+        attendance_response = client.post(
+            "/api/employees/attendance/",
+            data=attendance_payload,
+            content_type="application/json",
+        )
+        if attendance_response.status_code != 201:
+            raise CommandError("Attendance creation failed")
+
+        schedule_payload = {
+            "employee": employee_id,
+            "day_of_week": 1,
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "break_minutes": 30,
+            "is_active": True,
+        }
+        schedule_response = client.post(
+            "/api/employees/schedules/",
+            data=schedule_payload,
+            content_type="application/json",
+        )
+        if schedule_response.status_code != 201:
+            raise CommandError("Schedule creation failed")
+
+        stats_response = client.get("/api/employees/stats/")
+        if stats_response.status_code != 200:
+            raise CommandError("Employee stats endpoint failed")
+
         self.stdout.write(f"Categories: {Category.objects.count()}")
         self.stdout.write(f"Products: {Product.objects.count()}")
         self.stdout.write(f"Orders: {Order.objects.count()}")
+        self.stdout.write(f"Employees: {Employee.objects.count()}")

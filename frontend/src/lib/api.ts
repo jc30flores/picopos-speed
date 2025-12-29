@@ -84,6 +84,14 @@ export type Order = {
   customerName?: string;
 };
 
+export type EmployeeStats = {
+  totalEmployees: number;
+  activeEmployees: number;
+  inactiveEmployees: number;
+  attendanceTodayCount: number;
+  lateTodayCount: number;
+};
+
 export type SalesReportRow = {
   orderId: number;
   orderNumber: number;
@@ -672,4 +680,369 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     autoApply: data.auto_apply,
     isActive: data.is_active,
   };
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  cashier: "Cajero",
+  kitchen: "Cocinero",
+  manager: "Gerente",
+  admin: "Administrador",
+};
+
+const ROLE_KEYS: Record<string, string> = Object.entries(ROLE_LABELS).reduce(
+  (acc, [key, label]) => {
+    acc[label.toLowerCase()] = key;
+    acc[key.toLowerCase()] = key;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
+const resolveRoleKey = (role: string) => {
+  const normalized = role.trim().toLowerCase();
+  return ROLE_KEYS[normalized];
+};
+
+const mapEmployeeRoleLabel = (roleKey: string) => ROLE_LABELS[roleKey] ?? roleKey;
+
+export const getEmployees = async (): Promise<import("@/types/employee").Employee[]> => {
+  const response = await fetch(buildApiUrl("/api/employees/"));
+  const data = await handleJson<Array<{
+    id: number;
+    full_name: string;
+    email: string | null;
+    phone: string;
+    role: string;
+    branch_name: string | null;
+    status: "active" | "inactive";
+    days_worked: number;
+    hours_worked: string;
+    late_arrivals: number;
+  }>>(response);
+  return data.map((item) => ({
+    id: String(item.id),
+    name: item.full_name,
+    email: item.email ?? "",
+    role: mapEmployeeRoleLabel(item.role),
+    phone: item.phone ?? "",
+    branch: item.branch_name ?? "",
+    status: item.status,
+    daysWorked: item.days_worked ?? 0,
+    hoursWorked: Number(item.hours_worked ?? 0),
+    lateArrivals: item.late_arrivals ?? 0,
+  }));
+};
+
+export const createEmployee = async (
+  payload: Omit<import("@/types/employee").Employee, "id" | "daysWorked" | "hoursWorked" | "lateArrivals">
+): Promise<import("@/types/employee").Employee> => {
+  const roleKey = resolveRoleKey(payload.role);
+  if (!roleKey) {
+    throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const response = await fetch(buildApiUrl("/api/employees/"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      full_name: payload.name,
+      email: payload.email || null,
+      phone: payload.phone ?? "",
+      role: roleKey,
+      branch_name_input: payload.branch || null,
+      status: payload.status ?? "active",
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    full_name: string;
+    email: string | null;
+    phone: string;
+    role: string;
+    branch_name: string | null;
+    status: "active" | "inactive";
+    days_worked: number;
+    hours_worked: string;
+    late_arrivals: number;
+  }>(response);
+  return {
+    id: String(data.id),
+    name: data.full_name,
+    email: data.email ?? "",
+    role: mapEmployeeRoleLabel(data.role),
+    phone: data.phone ?? "",
+    branch: data.branch_name ?? payload.branch,
+    status: data.status,
+    daysWorked: data.days_worked ?? 0,
+    hoursWorked: Number(data.hours_worked ?? 0),
+    lateArrivals: data.late_arrivals ?? 0,
+  };
+};
+
+export const updateEmployee = async (
+  id: string,
+  payload: Partial<import("@/types/employee").Employee>
+): Promise<import("@/types/employee").Employee> => {
+  const roleKey = payload.role ? resolveRoleKey(payload.role) : undefined;
+  if (payload.role && !roleKey) {
+    throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const response = await fetch(buildApiUrl(`/api/employees/${id}/`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(payload.name !== undefined ? { full_name: payload.name } : {}),
+      ...(payload.email !== undefined ? { email: payload.email || null } : {}),
+      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
+      ...(roleKey ? { role: roleKey } : {}),
+      ...(payload.branch !== undefined ? { branch_name_input: payload.branch } : {}),
+      ...(payload.status !== undefined ? { status: payload.status } : {}),
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    full_name: string;
+    email: string | null;
+    phone: string;
+    role: string;
+    branch_name: string | null;
+    status: "active" | "inactive";
+    days_worked: number;
+    hours_worked: string;
+    late_arrivals: number;
+  }>(response);
+  return {
+    id: String(data.id),
+    name: data.full_name,
+    email: data.email ?? "",
+    role: mapEmployeeRoleLabel(data.role),
+    phone: data.phone ?? "",
+    branch: data.branch_name ?? payload.branch ?? "",
+    status: data.status,
+    daysWorked: data.days_worked ?? 0,
+    hoursWorked: Number(data.hours_worked ?? 0),
+    lateArrivals: data.late_arrivals ?? 0,
+  };
+};
+
+export const getAttendance = async (filters?: {
+  dateFrom?: string;
+  dateTo?: string;
+  employeeId?: string;
+}): Promise<
+  Array<{
+    id: number;
+    employeeId: string;
+    employeeName: string;
+    role: string;
+    date: string;
+    checkIn?: string | null;
+    checkOut?: string | null;
+    minutesLate: number;
+    notes?: string;
+  }>
+> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.append("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.append("date_to", filters.dateTo);
+  if (filters?.employeeId) params.append("employee_id", filters.employeeId);
+  const response = await fetch(buildApiUrl(`/api/employees/attendance/?${params.toString()}`));
+  const data = await handleJson<Array<{
+    id: number;
+    employee: number;
+    employee_name: string;
+    role: string;
+    date: string;
+    check_in: string | null;
+    check_out: string | null;
+    minutes_late: number;
+    notes: string;
+  }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    employeeId: String(item.employee),
+    employeeName: item.employee_name,
+    role: mapEmployeeRoleLabel(item.role),
+    date: item.date,
+    checkIn: item.check_in,
+    checkOut: item.check_out,
+    minutesLate: item.minutes_late ?? 0,
+    notes: item.notes ?? "",
+  }));
+};
+
+const buildDateTime = (date: string, time: string) => {
+  if (!date || !time) return null;
+  return `${date}T${time}:00`;
+};
+
+export const createAttendance = async (payload: {
+  employeeId: string;
+  date: string;
+  entryTime?: string;
+  exitTime?: string;
+  minutesLate?: number;
+  notes?: string;
+}) => {
+  const response = await fetch(buildApiUrl("/api/employees/attendance/"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      employee: Number(payload.employeeId),
+      date: payload.date,
+      check_in: payload.entryTime ? buildDateTime(payload.date, payload.entryTime) : null,
+      check_out: payload.exitTime ? buildDateTime(payload.date, payload.exitTime) : null,
+      minutes_late: payload.minutesLate ?? 0,
+      notes: payload.notes ?? "",
+    }),
+  });
+  return handleJson(response);
+};
+
+export const updateAttendance = async (
+  id: number,
+  payload: {
+    entryTime?: string;
+    exitTime?: string;
+    minutesLate?: number;
+    notes?: string;
+    date?: string;
+  }
+) => {
+  if ((payload.entryTime || payload.exitTime) && !payload.date) {
+    throw new Error("Fecha requerida para actualizar horas de asistencia.");
+  }
+  const response = await fetch(buildApiUrl(`/api/employees/attendance/${id}/`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(payload.date ? { date: payload.date } : {}),
+      ...(payload.entryTime && payload.date
+        ? { check_in: buildDateTime(payload.date, payload.entryTime) }
+        : {}),
+      ...(payload.exitTime && payload.date
+        ? { check_out: buildDateTime(payload.date, payload.exitTime) }
+        : {}),
+      ...(payload.minutesLate !== undefined ? { minutes_late: payload.minutesLate } : {}),
+      ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+    }),
+  });
+  return handleJson(response);
+};
+
+export const getSchedules = async (
+  employeeId?: string
+): Promise<Array<import("@/types/employee").Schedule & { employeeId: string; dayOfWeek: number }>> => {
+  const params = new URLSearchParams();
+  if (employeeId) params.append("employee_id", employeeId);
+  const response = await fetch(buildApiUrl(`/api/employees/schedules/?${params.toString()}`));
+  const data = await handleJson<Array<{
+    id: number;
+    employee: number;
+    employee_name: string;
+    schedule_type: "Fijo" | "Turnos rotativos";
+    day_of_week: number;
+    start_time: string;
+    end_time: string;
+    break_minutes: number;
+    allows_overtime: boolean;
+    is_active: boolean;
+  }>>(response);
+  return data.map((item) => ({
+    id: String(item.id),
+    employeeName: item.employee_name,
+    scheduleType: item.schedule_type,
+    days: dayOfWeekLabel(item.day_of_week),
+    entryTime: item.start_time.slice(0, 5),
+    exitTime: item.end_time.slice(0, 5),
+    allowsOvertime: item.allows_overtime,
+    employeeId: String(item.employee),
+    dayOfWeek: item.day_of_week,
+  }));
+};
+
+export const createSchedule = async (payload: {
+  employeeId: string;
+  scheduleType: "Fijo" | "Turnos rotativos";
+  dayOfWeek: number;
+  entryTime: string;
+  exitTime: string;
+  breakMinutes?: number;
+  allowsOvertime?: boolean;
+}) => {
+  const response = await fetch(buildApiUrl("/api/employees/schedules/"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      employee: Number(payload.employeeId),
+      schedule_type: payload.scheduleType,
+      day_of_week: payload.dayOfWeek,
+      start_time: payload.entryTime,
+      end_time: payload.exitTime,
+      break_minutes: payload.breakMinutes ?? 0,
+      allows_overtime: payload.allowsOvertime ?? false,
+      is_active: true,
+    }),
+  });
+  return handleJson(response);
+};
+
+export const updateSchedule = async (
+  id: string,
+  payload: {
+    scheduleType?: "Fijo" | "Turnos rotativos";
+    dayOfWeek?: number;
+    entryTime?: string;
+    exitTime?: string;
+    breakMinutes?: number;
+    allowsOvertime?: boolean;
+    isActive?: boolean;
+  }
+) => {
+  const response = await fetch(buildApiUrl(`/api/employees/schedules/${id}/`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(payload.scheduleType ? { schedule_type: payload.scheduleType } : {}),
+      ...(payload.dayOfWeek !== undefined ? { day_of_week: payload.dayOfWeek } : {}),
+      ...(payload.entryTime ? { start_time: payload.entryTime } : {}),
+      ...(payload.exitTime ? { end_time: payload.exitTime } : {}),
+      ...(payload.breakMinutes !== undefined ? { break_minutes: payload.breakMinutes } : {}),
+      ...(payload.allowsOvertime !== undefined ? { allows_overtime: payload.allowsOvertime } : {}),
+      ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}),
+    }),
+  });
+  return handleJson(response);
+};
+
+export const deleteSchedule = async (id: string) => {
+  const response = await fetch(buildApiUrl(`/api/employees/schedules/${id}/`), {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to delete schedule");
+  }
+};
+
+export const getEmployeeStats = async (): Promise<EmployeeStats> => {
+  const response = await fetch(buildApiUrl("/api/employees/stats/"));
+  const data = await handleJson<{
+    total_employees: number;
+    active_employees: number;
+    inactive_employees: number;
+    attendance_today_count: number;
+    late_today_count: number;
+  }>(response);
+  return {
+    totalEmployees: data.total_employees ?? 0,
+    activeEmployees: data.active_employees ?? 0,
+    inactiveEmployees: data.inactive_employees ?? 0,
+    attendanceTodayCount: data.attendance_today_count ?? 0,
+    lateTodayCount: data.late_today_count ?? 0,
+  };
+};
+
+const dayOfWeekLabel = (dayOfWeek: number) => {
+  const map = ["D", "L", "M", "X", "J", "V", "S"];
+  return map[dayOfWeek] ?? "";
 };
