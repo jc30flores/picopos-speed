@@ -33,8 +33,9 @@ class DiscountListCreateView(generics.ListCreateAPIView):
     serializer_class = DiscountSerializer
 
     def get_queryset(self):
-        return Discount.objects.prefetch_related(
-            "target_categories",
-            "target_products",
-            "service_types",
-        ).order_by("name")
+        return Discount.objects.prefetch_related("targets").order_by("name")
+
+
+class DiscountDetailView(generics.RetrieveUpdateAPIView):
+    serializer_class = DiscountSerializer
+    queryset = Discount.objects.prefetch_related("targets").all()

@@ -16,16 +16,15 @@ class Branch(models.Model):
 
 
 class TaxConfig(models.Model):
-    branch = models.OneToOneField(Branch, on_delete=models.CASCADE, related_name="tax_config")
-    rate = models.DecimalField(max_digits=5, decimal_places=4)
+    name = models.CharField(max_length=80, default="IVA")
+    rate = models.DecimalField(max_digits=5, decimal_places=4, default=0.13)
     is_active = models.BooleanField(default=True)
-    effective_from = models.DateField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["branch", "is_active"])]
+        indexes = [models.Index(fields=["is_active"])]
 
     def __str__(self) -> str:
-        return f"{self.branch.name} - {self.rate}"
+        return f"{self.name} - {self.rate}"
 
 
 class ServiceType(models.Model):

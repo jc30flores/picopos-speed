@@ -1,6 +1,5 @@
 from rest_framework import serializers
-from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount
-from apps.core.models import ServiceType
+from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount, DiscountRuleTarget
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -75,24 +74,14 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class DiscountSerializer(serializers.ModelSerializer):
-    target_category_ids = serializers.PrimaryKeyRelatedField(
-        many=True,
-        source="target_categories",
-        queryset=Category.objects.all(),
-        required=False,
+    target_category_ids = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False
     )
-    target_product_ids = serializers.PrimaryKeyRelatedField(
-        many=True,
-        source="target_products",
-        queryset=Product.objects.all(),
-        required=False,
+    target_product_ids = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False
     )
-    service_type_ids = serializers.PrimaryKeyRelatedField(
-        many=True,
-        source="service_types",
-        queryset=ServiceType.objects.all(),
-        required=False,
-    )
+    target_category_ids_display = serializers.SerializerMethodField()
+    target_product_ids_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Discount
@@ -103,14 +92,45 @@ class DiscountSerializer(serializers.ModelSerializer):
             "type",
             "value",
             "applies_to",
-            "target_category_ids",
-            "target_product_ids",
-            "days",
+            "is_active",
+            "min_amount",
+            "auto_apply",
+            "service_types",
+            "days_of_week",
             "start_time",
             "end_time",
-            "service_type_ids",
-            "min_amount",
-            "requires_approval",
-            "auto_apply",
-            "active",
+            "target_category_ids",
+            "target_product_ids",
+            "target_category_ids_display",
+            "target_product_ids_display",
         ]
+
+    def get_target_category_ids_display(self, obj: Discount):
+        return list(obj.targets.filter(category__isnull=False).values_list("category_id", flat=True))
+
+    def get_target_product_ids_display(self, obj: Discount):
+        return list(obj.targets.filter(product__isnull=False).values_list("product_id", flat=True))
+
+    def create(self, validated_data):
+        target_category_ids = validated_data.pop("target_category_ids", [])
+        target_product_ids = validated_data.pop("target_product_ids", [])
+        discount = Discount.objects.create(**validated_data)
+        for category_id in target_category_ids:
+            DiscountRuleTarget.objects.create(discount=discount, category_id=category_id)
+        for product_id in target_product_ids:
+            DiscountRuleTarget.objects.create(discount=discount, product_id=product_id)
+        return discount
+
+    def update(self, instance, validated_data):
+        target_category_ids = validated_data.pop("target_category_ids", None)
+        target_product_ids = validated_data.pop("target_product_ids", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if target_category_ids is not None or target_product_ids is not None:
+            instance.targets.all().delete()
+            for category_id in target_category_ids or []:
+                DiscountRuleTarget.objects.create(discount=instance, category_id=category_id)
+            for product_id in target_product_ids or []:
+                DiscountRuleTarget.objects.create(discount=instance, product_id=product_id)
+        return instance

@@ -1,6 +1,6 @@
 from django.db import models
 from apps.core.models import Branch, ServiceType, Table
-from apps.menu.models import Product, Discount
+from apps.menu.models import Product
 
 
 class Order(models.Model):
@@ -21,6 +21,7 @@ class Order(models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -28,6 +29,8 @@ class Order(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["service_type"]),
             models.Index(fields=["branch", "order_number"]),
         ]
         unique_together = ("branch", "order_number")
@@ -64,12 +67,13 @@ class OrderItemModifier(models.Model):
 
 class AppliedDiscount(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="applied_discounts")
-    discount = models.ForeignKey(Discount, on_delete=models.PROTECT, related_name="applied_discounts")
-    name = models.CharField(max_length=160)
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_name_snapshot = models.CharField(max_length=160)
+    discount_type_snapshot = models.CharField(max_length=20)
+    discount_value_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
+    amount_discounted = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
         indexes = [models.Index(fields=["order"]) ]
 
     def __str__(self) -> str:
-        return self.name
+        return self.discount_name_snapshot

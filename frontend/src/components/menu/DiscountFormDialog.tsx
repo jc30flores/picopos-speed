@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Discount } from "@/types/menu";
-import { Category, ServiceType, createDiscount } from "@/lib/api";
+import { Category, ServiceType, createDiscount, updateDiscount } from "@/lib/api";
 
 interface DiscountFormDialogProps {
   open: boolean;
@@ -34,16 +34,15 @@ export const DiscountFormDialog = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [active, setActive] = useState(true);
-  const [type, setType] = useState<"percentage" | "fixed" | "happy-hour" | "category">("percentage");
+  const [type, setType] = useState<"percent" | "fixed">("percent");
   const [value, setValue] = useState(0);
-  const [appliesTo, setAppliesTo] = useState<"ticket" | "categories" | "products">("ticket");
+  const [appliesTo, setAppliesTo] = useState<"order" | "categories" | "products">("order");
   const [targetCategories, setTargetCategories] = useState<string[]>([]);
   const [days, setDays] = useState<number[]>([]);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [serviceTypes, setServiceTypes] = useState<("dine-in" | "takeout" | "delivery" | "kiosk")[]>([]);
   const [minAmount, setMinAmount] = useState(0);
-  const [requiresApproval, setRequiresApproval] = useState(false);
   const [autoApply, setAutoApply] = useState(true);
 
   useEffect(() => {
@@ -60,23 +59,21 @@ export const DiscountFormDialog = ({
       setEndTime(editingDiscount.endTime || "");
       setServiceTypes(editingDiscount.serviceTypes);
       setMinAmount(editingDiscount.minAmount || 0);
-      setRequiresApproval(editingDiscount.requiresApproval);
       setAutoApply(editingDiscount.autoApply);
     } else {
       // Reset form
       setName("");
       setDescription("");
       setActive(true);
-      setType("percentage");
+      setType("percent");
       setValue(0);
-      setAppliesTo("ticket");
+      setAppliesTo("order");
       setTargetCategories([]);
       setDays([]);
       setStartTime("");
       setEndTime("");
       setServiceTypes([]);
       setMinAmount(0);
-      setRequiresApproval(false);
       setAutoApply(true);
     }
   }, [editingDiscount, open]);
@@ -109,14 +106,14 @@ export const DiscountFormDialog = ({
     const parts: string[] = [];
     
     // Value
-    if (type === "percentage" || type === "happy-hour") {
+    if (type === "percent") {
       parts.push(`${value}% de descuento`);
     } else {
       parts.push(`$${value} de descuento`);
     }
     
     // Applies to
-    if (appliesTo === "ticket") {
+    if (appliesTo === "order") {
       parts.push("en el ticket completo");
     } else if (appliesTo === "categories" && targetCategories.length > 0) {
       parts.push(`en ${targetCategories.join(", ")}`);
@@ -164,11 +161,11 @@ export const DiscountFormDialog = ({
     const categoryIds = categories
       .filter((category) => targetCategories.includes(category.name))
       .map((category) => category.id);
-    const serviceTypeIds = availableServiceTypes
+    const serviceTypeKeys = availableServiceTypes
       .filter((service) => serviceTypes.includes(service.key as any))
-      .map((service) => service.id);
+      .map((service) => service.key);
 
-    await createDiscount({
+    const payload = {
       id: editingDiscount ? Number(editingDiscount.id) : 0,
       name,
       description,
@@ -177,15 +174,19 @@ export const DiscountFormDialog = ({
       appliesTo,
       targetCategoryIds: categoryIds,
       targetProductIds: [],
-      days,
+      daysOfWeek: days,
       startTime: startTime || null,
       endTime: endTime || null,
-      serviceTypeIds,
+      serviceTypes: serviceTypeKeys,
       minAmount,
-      requiresApproval,
       autoApply,
-      active,
-    });
+      isActive: active,
+    };
+    if (editingDiscount && Number(editingDiscount.id) > 0) {
+      await updateDiscount(Number(editingDiscount.id), payload);
+    } else {
+      await createDiscount(payload);
+    }
     await onSaved();
     onOpenChange(false);
   };
@@ -247,8 +248,8 @@ export const DiscountFormDialog = ({
             <RadioGroup value={type} onValueChange={(v: any) => setType(v)}>
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="percentage" id="type-percentage" />
-                  <Label htmlFor="type-percentage" className="cursor-pointer">
+                  <RadioGroupItem value="percent" id="type-percent" />
+                  <Label htmlFor="type-percent" className="cursor-pointer">
                     Porcentaje (%)
                   </Label>
                 </div>
@@ -256,18 +257,6 @@ export const DiscountFormDialog = ({
                   <RadioGroupItem value="fixed" id="type-fixed" />
                   <Label htmlFor="type-fixed" className="cursor-pointer">
                     Monto fijo
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="happy-hour" id="type-happy-hour" />
-                  <Label htmlFor="type-happy-hour" className="cursor-pointer">
-                    Happy Hour
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="category" id="type-category" />
-                  <Label htmlFor="type-category" className="cursor-pointer">
-                    Por categoría
                   </Label>
                 </div>
               </div>
@@ -295,8 +284,8 @@ export const DiscountFormDialog = ({
             <RadioGroup value={appliesTo} onValueChange={(v: any) => setAppliesTo(v)}>
               <div className="space-y-2">
                 <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="ticket" id="applies-ticket" />
-                  <Label htmlFor="applies-ticket" className="cursor-pointer">
+                  <RadioGroupItem value="order" id="applies-order" />
+                  <Label htmlFor="applies-order" className="cursor-pointer">
                     Ticket completo
                   </Label>
                 </div>
@@ -408,16 +397,6 @@ export const DiscountFormDialog = ({
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="requires-approval"
-                    checked={requiresApproval}
-                    onCheckedChange={(checked) => setRequiresApproval(checked as boolean)}
-                  />
-                  <Label htmlFor="requires-approval" className="cursor-pointer">
-                    Requiere aprobación de supervisor
-                  </Label>
-                </div>
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="auto-apply"

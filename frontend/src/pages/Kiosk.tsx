@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { mockProducts, categories, modifierGroups } from "@/data/mockProducts";
 import { ArrowLeft, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
@@ -25,16 +25,31 @@ const Kiosk = () => {
   const [step, setStep] = useState<Step>("category");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [orderNumber] = useState(Math.floor(Math.random() * 900) + 100);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+
+  useEffect(() => {
+    Promise.all([getCategories(), getProducts(), getModifierGroups()])
+      .then(([categoriesResponse, productsResponse, modifierGroupsResponse]) => {
+        setCategories(categoriesResponse);
+        setProducts(productsResponse);
+        setModifierGroups(modifierGroupsResponse);
+      })
+      .catch((error) => {
+        console.error("Failed to load kiosk menu data", error);
+      });
+  }, []);
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
     setStep("products");
   };
 
-  const handleProductSelect = (product: any) => {
+  const handleProductSelect = (product: Product) => {
     setSelectedProduct(product);
     setSelectedModifiers({});
     if (product.modifierGroups && product.modifierGroups.length > 0) {
@@ -45,7 +60,7 @@ const Kiosk = () => {
     }
   };
 
-  const addToCart = (product: any, modifiers: Array<{ name: string; price: number }>) => {
+  const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = product.price + modifierPrice;
 
@@ -64,11 +79,11 @@ const Kiosk = () => {
   const handleAddModifiers = () => {
     const selectedMods: Array<{ name: string; price: number }> = [];
     
-    selectedProduct.modifierGroups.forEach((groupId: string) => {
+    selectedProduct.modifierGroups.forEach((groupId: number) => {
       const group = modifierGroups.find((g) => g.id === groupId);
       if (group && selectedModifiers[groupId]) {
         selectedModifiers[groupId].forEach((modId) => {
-          const mod = group.modifiers.find((m) => m.id === modId);
+          const mod = group.modifiers.find((m) => String(m.id) === modId);
           if (mod) selectedMods.push({ name: mod.name, price: mod.price });
         });
       }
@@ -94,7 +109,7 @@ const Kiosk = () => {
 
 
   if (step === "category") {
-    const filteredCategories = categories.filter((cat) => cat !== "Todos");
+    const filteredCategories = categories.map((cat) => cat.name);
     
     return (
       <div className="min-h-screen bg-background p-4 sm:p-8">
@@ -130,7 +145,7 @@ const Kiosk = () => {
   }
 
   if (step === "products") {
-    const products = mockProducts.filter((p) => p.category === selectedCategory && p.available);
+    const productsForCategory = products.filter((p) => p.category === selectedCategory && p.available);
     
     return (
       <div className="min-h-screen bg-background p-8">
@@ -148,7 +163,7 @@ const Kiosk = () => {
           <h1 className="text-4xl font-bold mb-8 text-center">{selectedCategory}</h1>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-            {products.map((product) => (
+            {productsForCategory.map((product) => (
               <Card
                 key={product.id}
                 className="p-6 cursor-pointer hover-lift"
@@ -187,7 +202,7 @@ const Kiosk = () => {
           </p>
 
           <div className="space-y-8">
-            {selectedProduct?.modifierGroups?.map((groupId: string) => {
+            {selectedProduct?.modifierGroups?.map((groupId: number) => {
               const group = modifierGroups.find((g) => g.id === groupId);
               if (!group) return null;
 
@@ -215,8 +230,8 @@ const Kiosk = () => {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {group.modifiers.map((mod) => (
                           <div key={mod.id} className="flex items-center space-x-3 p-4 rounded-lg border hover:bg-muted cursor-pointer">
-                            <RadioGroupItem value={mod.id} id={mod.id} />
-                            <Label htmlFor={mod.id} className="flex-1 cursor-pointer text-lg">
+                            <RadioGroupItem value={String(mod.id)} id={String(mod.id)} />
+                            <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer text-lg">
                               {mod.name}
                             </Label>
                             {mod.price > 0 && (
@@ -231,28 +246,28 @@ const Kiosk = () => {
                       {group.modifiers.map((mod) => (
                         <div key={mod.id} className="flex items-center space-x-3 p-4 rounded-lg border hover:bg-muted">
                           <Checkbox
-                            id={mod.id}
-                            checked={selectedModifiers[groupId]?.includes(mod.id) || false}
+                            id={String(mod.id)}
+                            checked={selectedModifiers[groupId]?.includes(String(mod.id)) || false}
                             onCheckedChange={(checked) => {
                               const current = selectedModifiers[groupId] || [];
                               if (checked && current.length < group.maxSelection) {
                                 setSelectedModifiers({
                                   ...selectedModifiers,
-                                  [groupId]: [...current, mod.id],
+                                  [groupId]: [...current, String(mod.id)],
                                 });
                               } else if (!checked) {
                                 setSelectedModifiers({
                                   ...selectedModifiers,
-                                  [groupId]: current.filter((id) => id !== mod.id),
+                                  [groupId]: current.filter((id) => id !== String(mod.id)),
                                 });
                               }
                             }}
                             disabled={
-                              !selectedModifiers[groupId]?.includes(mod.id) &&
+                              !selectedModifiers[groupId]?.includes(String(mod.id)) &&
                               (selectedModifiers[groupId]?.length || 0) >= group.maxSelection
                             }
                           />
-                          <Label htmlFor={mod.id} className="flex-1 cursor-pointer text-lg">
+                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer text-lg">
                             {mod.name}
                           </Label>
                           {mod.price > 0 && (

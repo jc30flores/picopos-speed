@@ -4,17 +4,16 @@ export interface Discount {
   id: string;
   name: string;
   description?: string;
-  type: 'percentage' | 'fixed' | 'happy-hour' | 'category';
+  type: 'percent' | 'fixed';
   value: number;
-  appliesTo: 'ticket' | 'categories' | 'products';
+  appliesTo: 'order' | 'categories' | 'products';
   targetCategories?: string[];
   targetProducts?: string[];
-  days: number[]; // 0-6 (Sun-Sat)
+  days: number[]; // 0-6 (Mon-Sun)
   startTime?: string;
   endTime?: string;
   serviceTypes: ('dine-in' | 'takeout' | 'delivery' | 'kiosk')[];
-  minAmount?: number;
-  requiresApproval: boolean;
+  minAmount?: number | null;
   autoApply: boolean;
   active: boolean;
 }

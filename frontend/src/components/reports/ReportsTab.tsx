@@ -36,7 +36,7 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getSalesReport, SalesReportRow } from "@/lib/api";
+import { getSalesReport, SalesReportRow, SalesReportAggregates } from "@/lib/api";
 
 type TimeFilter = "daily" | "weekly" | "monthly" | "all";
 
@@ -52,6 +52,13 @@ export const ReportsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");
   const [sales, setSales] = useState<SalesReportRow[]>([]);
+  const [aggregates, setAggregates] = useState<SalesReportAggregates>({
+    countOrders: 0,
+    sumSubtotal: 0,
+    sumTax: 0,
+    sumTotal: 0,
+    sumDiscountTotal: 0,
+  });
 
   const getDateRange = (filter: TimeFilter) => {
     if (filter === "all") return {};
@@ -73,14 +80,17 @@ export const ReportsTab = () => {
 
   useEffect(() => {
     getSalesReport(getDateRange(timeFilter))
-      .then(setSales)
+      .then((report) => {
+        setSales(report.rows);
+        setAggregates(report.aggregates);
+      })
       .catch((error) => {
         console.error("Failed to load sales report", error);
       });
   }, [timeFilter]);
 
-  const totalSales = sales.reduce((sum, sale) => sum + sale.total, 0);
-  const totalTickets = sales.length;
+  const totalSales = aggregates.sumTotal;
+  const totalTickets = aggregates.countOrders;
   const mainChannel = "POS";
   const mainChannelPercentage = totalTickets > 0 ? 100 : 0;
 

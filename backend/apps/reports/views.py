@@ -1,4 +1,5 @@
 from django.utils.dateparse import parse_date
+from decimal import Decimal
 from rest_framework import generics
 from rest_framework.response import Response
 from apps.orders.models import Order
@@ -38,8 +39,16 @@ class SalesReportListView(generics.ListAPIView):
                 "tax": order.tax,
                 "total": order.total,
                 "status": order.status,
+                "discount_total": order.discount_total,
             }
             for order in queryset
         ]
         serializer = self.get_serializer(data, many=True)
-        return Response(serializer.data)
+        aggregates = {
+            "count_orders": queryset.count(),
+            "sum_subtotal": sum((order.subtotal for order in queryset), Decimal("0")),
+            "sum_tax": sum((order.tax for order in queryset), Decimal("0")),
+            "sum_total": sum((order.total for order in queryset), Decimal("0")),
+            "sum_discount_total": sum((order.discount_total for order in queryset), Decimal("0")),
+        }
+        return Response({"results": serializer.data, "aggregates": aggregates})

@@ -39,19 +39,18 @@ export type Discount = {
   id: number;
   name: string;
   description?: string;
-  type: "percentage" | "fixed" | "happy-hour" | "category";
+  type: "percent" | "fixed";
   value: number;
-  appliesTo: "ticket" | "categories" | "products";
+  appliesTo: "order" | "categories" | "products";
   targetCategoryIds?: number[];
   targetProductIds?: number[];
-  days: number[];
+  daysOfWeek?: number[];
   startTime?: string | null;
   endTime?: string | null;
-  serviceTypeIds?: number[];
-  minAmount?: number;
-  requiresApproval: boolean;
+  serviceTypes?: string[];
+  minAmount?: number | null;
   autoApply: boolean;
-  active: boolean;
+  isActive: boolean;
 };
 
 export type ServiceType = {
@@ -59,6 +58,10 @@ export type ServiceType = {
   key: string;
   label: string;
   isActive?: boolean;
+};
+
+export type TaxConfig = {
+  rate: number;
 };
 
 export type OrderItem = {
@@ -89,7 +92,16 @@ export type SalesReportRow = {
   subtotal: number;
   tax: number;
   total: number;
+  discountTotal: number;
   status: Order["status"];
+};
+
+export type SalesReportAggregates = {
+  countOrders: number;
+  sumSubtotal: number;
+  sumTax: number;
+  sumTotal: number;
+  sumDiscountTotal: number;
 };
 
 const buildApiUrl = (path: string) => {
@@ -106,6 +118,8 @@ const handleJson = async <T>(response: Response): Promise<T> => {
   }
   return response.json() as Promise<T>;
 };
+
+let cachedTaxConfig: TaxConfig | null = null;
 
 export const getCategories = async (): Promise<Category[]> => {
   const response = await fetch(buildApiUrl("/api/menu/categories/"));
@@ -290,16 +304,15 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     type: Discount["type"];
     value: string;
     applies_to: Discount["appliesTo"];
-    target_category_ids: number[];
-    target_product_ids: number[];
-    days: number[];
+    target_category_ids_display: number[];
+    target_product_ids_display: number[];
+    days_of_week: number[];
     start_time: string | null;
     end_time: string | null;
-    service_type_ids: number[];
-    min_amount: string;
-    requires_approval: boolean;
+    service_types: string[];
+    min_amount: string | null;
     auto_apply: boolean;
-    active: boolean;
+    is_active: boolean;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -308,16 +321,15 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     type: item.type,
     value: Number(item.value),
     appliesTo: item.applies_to,
-    targetCategoryIds: item.target_category_ids ?? [],
-    targetProductIds: item.target_product_ids ?? [],
-    days: item.days,
+    targetCategoryIds: item.target_category_ids_display ?? [],
+    targetProductIds: item.target_product_ids_display ?? [],
+    daysOfWeek: item.days_of_week ?? [],
     startTime: item.start_time ?? undefined,
     endTime: item.end_time ?? undefined,
-    serviceTypeIds: item.service_type_ids ?? [],
-    minAmount: Number(item.min_amount),
-    requiresApproval: item.requires_approval,
+    serviceTypes: item.service_types ?? [],
+    minAmount: item.min_amount ? Number(item.min_amount) : null,
     autoApply: item.auto_apply,
-    active: item.active,
+    isActive: item.is_active,
   }));
 };
 
@@ -330,6 +342,14 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
     label: item.label,
     isActive: item.is_active,
   }));
+};
+
+export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
+  if (cachedTaxConfig) return cachedTaxConfig;
+  const response = await fetch(buildApiUrl("/api/core/tax-config/active/"));
+  const data = await handleJson<{ rate: string }>(response);
+  cachedTaxConfig = { rate: Number(data.rate) };
+  return cachedTaxConfig;
 };
 
 const mapOrder = (order: {
@@ -490,7 +510,7 @@ export const getSalesReport = async (filters?: {
   dateTo?: string;
   serviceType?: Order["serviceType"];
   status?: Order["status"];
-}): Promise<SalesReportRow[]> => {
+}): Promise<{ rows: SalesReportRow[]; aggregates: SalesReportAggregates }> => {
   const params = new URLSearchParams();
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
@@ -498,8 +518,8 @@ export const getSalesReport = async (filters?: {
   if (filters?.status) params.set("status", filters.status);
   const query = params.toString();
   const response = await fetch(buildApiUrl(`/api/reports/sales/${query ? `?${query}` : ""}`));
-  const data = await handleJson<
-    Array<{
+  const data = await handleJson<{
+    results: Array<{
       order_id: number;
       order_number: number;
       service_type: Order["serviceType"];
@@ -507,19 +527,37 @@ export const getSalesReport = async (filters?: {
       subtotal: string;
       tax: string;
       total: string;
+      discount_total: string;
       status: Order["status"];
-    }>
-  >(response);
-  return data.map((row) => ({
-    orderId: row.order_id,
-    orderNumber: row.order_number,
-    serviceType: row.service_type,
-    createdAt: new Date(row.date),
-    subtotal: Number(row.subtotal),
-    tax: Number(row.tax),
-    total: Number(row.total),
-    status: row.status,
-  }));
+    }>;
+    aggregates: {
+      count_orders: number;
+      sum_subtotal: string;
+      sum_tax: string;
+      sum_total: string;
+      sum_discount_total: string;
+    };
+  }>(response);
+  return {
+    rows: data.results.map((row) => ({
+      orderId: row.order_id,
+      orderNumber: row.order_number,
+      serviceType: row.service_type,
+      createdAt: new Date(row.date),
+      subtotal: Number(row.subtotal),
+      tax: Number(row.tax),
+      total: Number(row.total),
+      discountTotal: Number(row.discount_total),
+      status: row.status,
+    })),
+    aggregates: {
+      countOrders: data.aggregates.count_orders,
+      sumSubtotal: Number(data.aggregates.sum_subtotal),
+      sumTax: Number(data.aggregates.sum_tax),
+      sumTotal: Number(data.aggregates.sum_total),
+      sumDiscountTotal: Number(data.aggregates.sum_discount_total),
+    },
+  };
 };
 
 export const createDiscount = async (payload: Discount): Promise<Discount> => {
@@ -534,14 +572,13 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
       applies_to: payload.appliesTo,
       target_category_ids: payload.targetCategoryIds ?? [],
       target_product_ids: payload.targetProductIds ?? [],
-      days: payload.days,
+      days_of_week: payload.daysOfWeek ?? [],
       start_time: payload.startTime ?? null,
       end_time: payload.endTime ?? null,
-      service_type_ids: payload.serviceTypeIds ?? [],
-      min_amount: payload.minAmount ?? 0,
-      requires_approval: payload.requiresApproval,
+      service_types: payload.serviceTypes ?? [],
+      min_amount: payload.minAmount ?? null,
       auto_apply: payload.autoApply,
-      active: payload.active,
+      is_active: payload.isActive,
     }),
   });
   const data = await handleJson<{
@@ -551,16 +588,15 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     type: Discount["type"];
     value: string;
     applies_to: Discount["appliesTo"];
-    target_category_ids: number[];
-    target_product_ids: number[];
-    days: number[];
+    target_category_ids_display: number[];
+    target_product_ids_display: number[];
+    days_of_week: number[];
     start_time: string | null;
     end_time: string | null;
-    service_type_ids: number[];
-    min_amount: string;
-    requires_approval: boolean;
+    service_types: string[];
+    min_amount: string | null;
     auto_apply: boolean;
-    active: boolean;
+    is_active: boolean;
   }>(response);
   return {
     id: data.id,
@@ -569,15 +605,71 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     type: data.type,
     value: Number(data.value),
     appliesTo: data.applies_to,
-    targetCategoryIds: data.target_category_ids ?? [],
-    targetProductIds: data.target_product_ids ?? [],
-    days: data.days,
+    targetCategoryIds: data.target_category_ids_display ?? [],
+    targetProductIds: data.target_product_ids_display ?? [],
+    daysOfWeek: data.days_of_week ?? [],
     startTime: data.start_time ?? undefined,
     endTime: data.end_time ?? undefined,
-    serviceTypeIds: data.service_type_ids ?? [],
-    minAmount: Number(data.min_amount),
-    requiresApproval: data.requires_approval,
+    serviceTypes: data.service_types ?? [],
+    minAmount: data.min_amount ? Number(data.min_amount) : null,
     autoApply: data.auto_apply,
-    active: data.active,
+    isActive: data.is_active,
+  };
+};
+
+export const updateDiscount = async (discountId: number, payload: Discount): Promise<Discount> => {
+  const response = await fetch(buildApiUrl(`/api/menu/discounts/${discountId}/`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      description: payload.description ?? "",
+      type: payload.type,
+      value: payload.value,
+      applies_to: payload.appliesTo,
+      target_category_ids: payload.targetCategoryIds ?? [],
+      target_product_ids: payload.targetProductIds ?? [],
+      days_of_week: payload.daysOfWeek ?? [],
+      start_time: payload.startTime ?? null,
+      end_time: payload.endTime ?? null,
+      service_types: payload.serviceTypes ?? [],
+      min_amount: payload.minAmount ?? null,
+      auto_apply: payload.autoApply,
+      is_active: payload.isActive,
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    description: string;
+    type: Discount["type"];
+    value: string;
+    applies_to: Discount["appliesTo"];
+    target_category_ids_display: number[];
+    target_product_ids_display: number[];
+    days_of_week: number[];
+    start_time: string | null;
+    end_time: string | null;
+    service_types: string[];
+    min_amount: string | null;
+    auto_apply: boolean;
+    is_active: boolean;
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    type: data.type,
+    value: Number(data.value),
+    appliesTo: data.applies_to,
+    targetCategoryIds: data.target_category_ids_display ?? [],
+    targetProductIds: data.target_product_ids_display ?? [],
+    daysOfWeek: data.days_of_week ?? [],
+    startTime: data.start_time ?? undefined,
+    endTime: data.end_time ?? undefined,
+    serviceTypes: data.service_types ?? [],
+    minAmount: data.min_amount ? Number(data.min_amount) : null,
+    autoApply: data.auto_apply,
+    isActive: data.is_active,
   };
 };

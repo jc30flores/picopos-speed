@@ -106,8 +106,8 @@ export const SalesHistoryTab = () => {
       dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
     })
-      .then((data) => {
-        const mapped = data.map((row) => ({
+      .then((report) => {
+        const mapped = report.rows.map((row) => ({
           id: String(row.orderId),
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,

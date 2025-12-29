@@ -33,15 +33,10 @@ export const DiscountsTab = () => {
     () => new Map(categories.map((category) => [category.id, category.name])),
     [categories]
   );
-  const serviceTypeMap = useMemo(
-    () => new Map(serviceTypes.map((serviceType) => [serviceType.id, serviceType.key])),
-    [serviceTypes]
-  );
 
   const mapDiscounts = (
     apiDiscounts: ApiDiscount[],
-    mapCategories: Map<number, string>,
-    mapServiceTypes: Map<number, string>
+    mapCategories: Map<number, string>
   ) => {
     const mapped = apiDiscounts.map((discount) => ({
       id: String(discount.id),
@@ -54,16 +49,13 @@ export const DiscountsTab = () => {
         .map((id) => mapCategories.get(id))
         .filter(Boolean) as string[],
       targetProducts: [],
-      days: discount.days,
+      days: discount.daysOfWeek ?? [],
       startTime: discount.startTime ?? undefined,
       endTime: discount.endTime ?? undefined,
-      serviceTypes: (discount.serviceTypeIds ?? [])
-        .map((id) => mapServiceTypes.get(id))
-        .filter(Boolean) as Discount["serviceTypes"],
+      serviceTypes: (discount.serviceTypes ?? []).filter(Boolean) as Discount["serviceTypes"],
       minAmount: discount.minAmount ?? 0,
-      requiresApproval: discount.requiresApproval,
       autoApply: discount.autoApply,
-      active: discount.active,
+      active: discount.isActive,
     }));
     setDiscounts(mapped);
   };
@@ -78,8 +70,7 @@ export const DiscountsTab = () => {
     setServiceTypes(serviceTypesResponse);
     mapDiscounts(
       discountsResponse,
-      new Map(categoriesResponse.map((category) => [category.id, category.name])),
-      new Map(serviceTypesResponse.map((serviceType) => [serviceType.id, serviceType.key]))
+      new Map(categoriesResponse.map((category) => [category.id, category.name]))
     );
   };
 
@@ -101,16 +92,14 @@ export const DiscountsTab = () => {
 
   const getTypeLabel = (type: string) => {
     const types: Record<string, string> = {
-      percentage: "Porcentaje",
+      percent: "Porcentaje",
       fixed: "Monto fijo",
-      "happy-hour": "Happy Hour",
-      category: "Por categoría",
     };
     return types[type] || type;
   };
 
   const getAppliesLabel = (discount: Discount) => {
-    if (discount.appliesTo === "ticket") return "Ticket completo";
+    if (discount.appliesTo === "order") return "Ticket completo";
     if (discount.appliesTo === "categories")
       return `Categorías: ${discount.targetCategories?.join(", ")}`;
     if (discount.appliesTo === "products")
@@ -199,14 +188,12 @@ export const DiscountsTab = () => {
               <SelectTrigger>
                 <SelectValue placeholder="Tipo de descuento" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los tipos</SelectItem>
-                <SelectItem value="percentage">Porcentaje</SelectItem>
-                <SelectItem value="fixed">Monto fijo</SelectItem>
-                <SelectItem value="happy-hour">Happy Hour</SelectItem>
-                <SelectItem value="category">Por categoría</SelectItem>
-              </SelectContent>
-            </Select>
+            <SelectContent>
+              <SelectItem value="all">Todos los tipos</SelectItem>
+              <SelectItem value="percent">Porcentaje</SelectItem>
+              <SelectItem value="fixed">Monto fijo</SelectItem>
+            </SelectContent>
+          </Select>
 
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger>
@@ -250,10 +237,8 @@ export const DiscountsTab = () => {
                     <div>
                       <Badge variant="outline">{getTypeLabel(discount.type)}</Badge>
                       <div className="text-sm font-semibold text-secondary mt-1">
-                        {discount.type === "percentage" && `${discount.value}%`}
+                        {discount.type === "percent" && `${discount.value}%`}
                         {discount.type === "fixed" && `$${discount.value}`}
-                        {discount.type === "happy-hour" && `${discount.value}%`}
-                        {discount.type === "category" && `${discount.value}%`}
                       </div>
                     </div>
                   </TableCell>

@@ -6,4 +6,5 @@ urlpatterns = [
     path("products/", views.ProductListCreateView.as_view(), name="menu-products"),
     path("modifier-groups/", views.ModifierGroupListCreateView.as_view(), name="menu-modifier-groups"),
     path("discounts/", views.DiscountListCreateView.as_view(), name="menu-discounts"),
+    path("discounts/<int:pk>/", views.DiscountDetailView.as_view(), name="menu-discounts-detail"),
 ]

@@ -9,4 +9,5 @@ class SalesReportSerializer(serializers.Serializer):
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
     tax = serializers.DecimalField(max_digits=10, decimal_places=2)
     total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    discount_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     status = serializers.CharField()

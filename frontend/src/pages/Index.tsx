@@ -16,7 +16,16 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { createOrder, getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
+import {
+  createOrder,
+  getActiveTaxConfig,
+  getCategories,
+  getModifierGroups,
+  getProducts,
+  Category,
+  ModifierGroup,
+  Product,
+} from "@/lib/api";
 import { toast } from "sonner";
 
 interface CartItem {
@@ -39,6 +48,7 @@ const POS = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+  const [taxRate, setTaxRate] = useState(0.13);
 
   const loadMenuData = async () => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -55,6 +65,11 @@ const POS = () => {
     loadMenuData().catch((error) => {
       console.error("Failed to load menu data", error);
     });
+    getActiveTaxConfig()
+      .then((config) => setTaxRate(config.rate))
+      .catch((error) => {
+        console.error("Failed to load tax config", error);
+      });
   }, []);
 
   const filteredProducts = products.filter((product) => {
@@ -117,9 +132,9 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const tax = 0;
-  const total = subtotal;
+  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal = total / (1 + taxRate);
+  const tax = total - subtotal;
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
@@ -330,7 +345,7 @@ const POS = () => {
                   <span>${subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Impuesto (8%)</span>
+                  <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
                   <span>${tax.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-lg font-bold">

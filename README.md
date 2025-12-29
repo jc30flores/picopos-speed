@@ -18,6 +18,20 @@
 4. `python backend/manage.py initdb`
 5. `python backend/manage.py runserver 0.0.0.0:8102`
 
+### Core endpoints
+
+- `GET /api/core/tax-config/active/` → active tax rate (IVA 13%)
+
+### Menu endpoints
+
+- `GET /api/menu/discounts/`
+- `POST /api/menu/discounts/`
+- `PATCH /api/menu/discounts/{id}/`
+
+### Reports endpoints
+
+- `GET /api/reports/sales/` (filters: `date_from`, `date_to`, `service_type`, `status`)
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e

@@ -47,7 +47,6 @@ class Command(BaseCommand):
                 code=branch_data["code"],
                 defaults={"name": branch_data["name"]},
             )
-            TaxConfig.objects.get_or_create(branch=branch, defaults={"rate": 0.08})
 
             for table_number in range(1, 11):
                 Table.objects.get_or_create(branch=branch, number=table_number)
@@ -57,6 +56,8 @@ class Command(BaseCommand):
                 key=service_data["key"],
                 defaults={"label": service_data["label"]},
             )
+
+        TaxConfig.objects.get_or_create(name="IVA", defaults={"rate": 0.13, "is_active": True})
 
         for category_name in DEFAULT_CATEGORIES:
             Category.objects.get_or_create(name=category_name)

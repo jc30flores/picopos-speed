@@ -1,6 +1,5 @@
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
-from apps.core.models import ServiceType
 
 
 class Category(models.Model):
@@ -66,15 +65,13 @@ class Product(models.Model):
 
 class Discount(models.Model):
     TYPE_CHOICES = [
-        ("percentage", "Percentage"),
+        ("percent", "Percent"),
         ("fixed", "Fixed"),
-        ("happy-hour", "Happy Hour"),
-        ("category", "Category"),
     ]
     APPLIES_CHOICES = [
-        ("ticket", "Ticket"),
-        ("categories", "Categories"),
+        ("order", "Order"),
         ("products", "Products"),
+        ("categories", "Categories"),
     ]
 
     name = models.CharField(max_length=160)
@@ -82,22 +79,33 @@ class Discount(models.Model):
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     value = models.DecimalField(max_digits=6, decimal_places=2)
     applies_to = models.CharField(max_length=20, choices=APPLIES_CHOICES)
-    target_categories = models.ManyToManyField(Category, blank=True, related_name="discounts")
-    target_products = models.ManyToManyField(Product, blank=True, related_name="discounts")
-    days = ArrayField(models.IntegerField(), default=list)
+    is_active = models.BooleanField(default=True)
+    min_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    auto_apply = models.BooleanField(default=True)
+    service_types = ArrayField(models.CharField(max_length=32), default=list, blank=True)
+    days_of_week = ArrayField(models.IntegerField(), default=list, blank=True)
     start_time = models.TimeField(blank=True, null=True)
     end_time = models.TimeField(blank=True, null=True)
-    service_types = models.ManyToManyField(ServiceType, blank=True, related_name="discounts")
-    min_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    requires_approval = models.BooleanField(default=False)
-    auto_apply = models.BooleanField(default=True)
-    active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["name"]
         indexes = [
-            models.Index(fields=["active", "type"]),
+            models.Index(fields=["is_active", "type"]),
         ]
 
     def __str__(self) -> str:
         return self.name
+
+
+class DiscountRuleTarget(models.Model):
+    discount = models.ForeignKey(Discount, on_delete=models.CASCADE, related_name="targets")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True)
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(product__isnull=False) | models.Q(category__isnull=False),
+                name="discount_rule_target_product_or_category",
+            )
+        ]
