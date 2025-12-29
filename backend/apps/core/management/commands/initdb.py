@@ -47,6 +47,9 @@ class Command(BaseCommand):
                 defaults={"label": service_data["label"]},
             )
 
-        TaxConfig.objects.get_or_create(name="IVA", defaults={"rate": 0.13, "is_active": True})
+        TaxConfig.objects.get_or_create(
+            name="IVA",
+            defaults={"rate": 0.13, "is_active": True},
+        )
 
         self.stdout.write(self.style.SUCCESS("Initialization complete."))

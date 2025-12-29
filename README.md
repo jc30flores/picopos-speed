@@ -55,6 +55,27 @@ curl -X POST http://localhost:8102/api/employees/ \
   -d '{"full_name":"Maria Gomez","email":"maria@example.com","role":"cashier","status":"active","branch_name_input":"Sucursal Centro"}'
 ```
 
+Example: get active tax config
+
+```sh
+curl http://localhost:8102/api/core/tax-config/active/
+```
+
+### Reset database (development only)
+
+```sh
+python backend/manage.py resetdb --yes
+```
+
+Manual fallback (psql/cli):
+
+```sh
+dropdb gallo_db
+createdb -O jarvis gallo_db
+python backend/manage.py migrate
+python backend/manage.py initdb
+```
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e
