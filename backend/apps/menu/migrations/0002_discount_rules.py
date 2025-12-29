@@ -33,10 +33,6 @@ class Migration(migrations.Migration):
             model_name="discount",
             name="active",
         ),
-        migrations.RemoveIndex(
-            model_name="discount",
-            name="menu_discount_active__c4f9aa_idx",
-        ),
         migrations.AddField(
             model_name="discount",
             name="is_active",
