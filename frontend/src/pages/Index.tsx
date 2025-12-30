@@ -27,6 +27,8 @@ import {
   createOrder,
   createPayment,
   getOrderById,
+  createPrintJob,
+  markPrintJobPrinted,
   getActiveTaxConfig,
   getCategories,
   getModifierGroups,
@@ -36,8 +38,10 @@ import {
   Product,
   PaymentMethod,
   Order,
+  PrintJob,
 } from "@/lib/api";
 import { toast } from "sonner";
+import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 
 interface CartItem {
   id: string;
@@ -67,6 +71,8 @@ const POS = () => {
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
+  const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
 
   const loadMenuData = async () => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -256,6 +262,35 @@ const POS = () => {
     } finally {
       setIsProcessingPayment(false);
     }
+  };
+
+  const handlePrintReceipt = async () => {
+    if (!activeOrder) return;
+    try {
+      const job = await createPrintJob({ orderId: activeOrder.id, type: "customer" });
+      setReceiptJob(job);
+      setIsReceiptPreviewOpen(true);
+    } catch (error) {
+      console.error("Failed to create print job", error);
+      toast.error("No se pudo generar el ticket");
+    }
+  };
+
+  const handleMarkPrinted = async () => {
+    if (!receiptJob) return;
+    try {
+      const job = await markPrintJobPrinted(receiptJob.id);
+      setReceiptJob(job);
+      toast.success("Ticket marcado como impreso");
+    } catch (error) {
+      console.error("Failed to mark printed", error);
+      toast.error("No se pudo actualizar el ticket");
+    }
+  };
+
+  const handleReprint = async () => {
+    if (!activeOrder) return;
+    await handlePrintReceipt();
   };
 
   return (
@@ -534,12 +569,26 @@ const POS = () => {
                   {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                 </Button>
               </div>
+
+              {activeOrder.paymentStatus === "paid" && (
+                <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>
+                  Imprimir recibo
+                </Button>
+              )}
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">No hay pedido activo.</div>
           )}
         </DialogContent>
       </Dialog>
+
+      <PrintPreviewDialog
+        open={isReceiptPreviewOpen}
+        onOpenChange={setIsReceiptPreviewOpen}
+        job={receiptJob}
+        onMarkPrinted={handleMarkPrinted}
+        onReprint={handleReprint}
+      />
 
       {/* Modifier Dialog */}
       <Dialog open={showModifierDialog} onOpenChange={setShowModifierDialog}>

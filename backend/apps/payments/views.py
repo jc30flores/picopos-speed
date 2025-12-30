@@ -7,6 +7,8 @@ from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.orders.models import Order
 from apps.payments.models import Payment
+from apps.printing.models import PrintJob
+from apps.printing.services.jobs import create_print_job
 from apps.payments.serializers import PaymentSerializer
 
 
@@ -72,6 +74,9 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 payment.order_id,
                 {"order_id": payment.order_id},
             )
+            exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
+            if not exists:
+                create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
         else:
             log_audit(
                 request,

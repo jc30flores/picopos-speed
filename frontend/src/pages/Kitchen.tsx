@@ -5,11 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Clock, ChefHat } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getActiveOrders, updateOrderStatus, Order } from "@/lib/api";
+import { createPrintJob, markPrintJobPrinted, getActiveOrders, updateOrderStatus, Order, PrintJob } from "@/lib/api";
+import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { toast } from "sonner";
 
 const Kitchen = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [kitchenJob, setKitchenJob] = useState<PrintJob | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const loadOrders = useCallback(async () => {
     const data = await getActiveOrders();
@@ -49,6 +54,35 @@ const Kitchen = () => {
     } catch (error) {
       console.error("Failed to update order status", error);
     }
+  };
+
+  const handlePrintKitchen = async (order: Order) => {
+    try {
+      const job = await createPrintJob({ orderId: order.id, type: "kitchen" });
+      setSelectedOrder(order);
+      setKitchenJob(job);
+      setIsPreviewOpen(true);
+    } catch (error) {
+      console.error("Failed to create kitchen ticket", error);
+      toast.error("No se pudo generar la comanda");
+    }
+  };
+
+  const handleMarkPrinted = async () => {
+    if (!kitchenJob) return;
+    try {
+      const job = await markPrintJobPrinted(kitchenJob.id);
+      setKitchenJob(job);
+      toast.success("Comanda marcada como impresa");
+    } catch (error) {
+      console.error("Failed to mark kitchen ticket", error);
+      toast.error("No se pudo actualizar la comanda");
+    }
+  };
+
+  const handleReprint = async () => {
+    if (!selectedOrder) return;
+    await handlePrintKitchen(selectedOrder);
   };
 
   const filteredOrders = orders.filter((order) => {
@@ -182,11 +216,26 @@ const Kitchen = () => {
                       Entregado
                     </Button>
                   )}
+                  <Button
+                    className="flex-1"
+                    variant="outline"
+                    onClick={() => handlePrintKitchen(order)}
+                  >
+                    Imprimir
+                  </Button>
                 </div>
               </Card>
             );
           })}
         </div>
+
+        <PrintPreviewDialog
+          open={isPreviewOpen}
+          onOpenChange={setIsPreviewOpen}
+          job={kitchenJob}
+          onMarkPrinted={handleMarkPrinted}
+          onReprint={handleReprint}
+        />
 
         {filteredOrders.length === 0 && (
           <div className="text-center py-16">

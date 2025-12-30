@@ -59,6 +59,13 @@
 - `GET /api/payments/?order_id=`
 - `POST /api/payments/`
 
+### Printing endpoints (simulated)
+
+- `POST /api/printing/jobs/`
+- `GET /api/printing/jobs/?order_id=`
+- `GET /api/printing/jobs/{id}/`
+- `POST /api/printing/jobs/{id}/mark-printed/`
+
 Example: create employee
 
 ```sh
@@ -93,6 +100,18 @@ curl -b cookies.txt -c cookies.txt \
   -d '{"order":123,"method":"cash","amount":25.00,"tip_amount":2.00}' \
   http://localhost:8102/api/payments/
 ```
+
+Example: create print job (customer receipt)
+
+```sh
+curl -b cookies.txt -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \
+  -d '{"order_id":123,"type":"customer"}' \
+  http://localhost:8102/api/printing/jobs/
+```
+
+Printing is simulated during development: jobs render to text/HTML and can be marked as printed.
 
 ### Roles
 

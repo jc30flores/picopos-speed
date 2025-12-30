@@ -11,6 +11,8 @@ from apps.core.permissions import (
     IsCashierOrManagerOrAdmin,
     IsKitchenOrManagerOrAdmin,
 )
+from apps.printing.models import PrintJob
+from apps.printing.services.jobs import create_print_job
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
@@ -71,6 +73,10 @@ class OrderStatusUpdateView(generics.UpdateAPIView):
                 order.id,
                 {"status": order.status},
             )
+            if status_value == "preparing":
+                exists = PrintJob.objects.filter(order=order, type="kitchen", meta__event="status.preparing").exists()
+                if not exists:
+                    create_print_job(order, "kitchen", requested_by=request.user, event="status.preparing")
         data = OrderSerializer(order, context={"request": request}).data
         return Response(data, status=status.HTTP_200_OK)
 

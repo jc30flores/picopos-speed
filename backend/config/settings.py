@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "apps.reports",
     "apps.employees",
     "apps.payments",
+    "apps.printing",
 ]
 
 MIDDLEWARE = [
@@ -124,3 +125,6 @@ CSRF_TRUSTED_ORIGINS = [
 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+
+PRINT_WIDTH = 42
+PRINT_DRIVER = "dummy"

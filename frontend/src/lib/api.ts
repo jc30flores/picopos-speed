@@ -108,6 +108,17 @@ export type Payment = {
   createdAt: Date;
 };
 
+export type PrintJob = {
+  id: number;
+  orderId: number | null;
+  type: "kitchen" | "customer" | "closeout";
+  status: "queued" | "rendered" | "printed" | "failed";
+  contentText: string;
+  contentHtml?: string;
+  createdAt: Date;
+  printedAt?: Date | null;
+};
+
 export type SalesReportRow = {
   orderId: number;
   orderNumber: number;
@@ -1255,4 +1266,113 @@ export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> =>
     receivedBy: payment.received_by,
     createdAt: new Date(payment.created_at),
   }));
+};
+
+export const createPrintJob = async (payload: {
+  orderId: number;
+  type: "kitchen" | "customer";
+}): Promise<PrintJob> => {
+  const response = await request("/api/printing/jobs/", {
+    method: "POST",
+    body: JSON.stringify({
+      order_id: payload.orderId,
+      type: payload.type,
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    order: number | null;
+    type: PrintJob["type"];
+    status: PrintJob["status"];
+    content_text: string;
+    content_html: string;
+    created_at: string;
+    printed_at: string | null;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    type: data.type,
+    status: data.status,
+    contentText: data.content_text,
+    contentHtml: data.content_html || undefined,
+    createdAt: new Date(data.created_at),
+    printedAt: data.printed_at ? new Date(data.printed_at) : null,
+  };
+};
+
+export const getPrintJobsByOrder = async (orderId: number): Promise<PrintJob[]> => {
+  const response = await request(`/api/printing/jobs/?order_id=${orderId}`);
+  const data = await handleJson<
+    Array<{
+      id: number;
+      order: number | null;
+      type: PrintJob["type"];
+      status: PrintJob["status"];
+      content_text: string;
+      content_html: string;
+      created_at: string;
+      printed_at: string | null;
+    }>
+  >(response);
+  return data.map((job) => ({
+    id: job.id,
+    orderId: job.order,
+    type: job.type,
+    status: job.status,
+    contentText: job.content_text,
+    contentHtml: job.content_html || undefined,
+    createdAt: new Date(job.created_at),
+    printedAt: job.printed_at ? new Date(job.printed_at) : null,
+  }));
+};
+
+export const getPrintJobById = async (id: number): Promise<PrintJob> => {
+  const response = await request(`/api/printing/jobs/${id}/`);
+  const data = await handleJson<{
+    id: number;
+    order: number | null;
+    type: PrintJob["type"];
+    status: PrintJob["status"];
+    content_text: string;
+    content_html: string;
+    created_at: string;
+    printed_at: string | null;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    type: data.type,
+    status: data.status,
+    contentText: data.content_text,
+    contentHtml: data.content_html || undefined,
+    createdAt: new Date(data.created_at),
+    printedAt: data.printed_at ? new Date(data.printed_at) : null,
+  };
+};
+
+export const markPrintJobPrinted = async (id: number): Promise<PrintJob> => {
+  const response = await request(`/api/printing/jobs/${id}/mark-printed/`, {
+    method: "POST",
+  });
+  const data = await handleJson<{
+    id: number;
+    order: number | null;
+    type: PrintJob["type"];
+    status: PrintJob["status"];
+    content_text: string;
+    content_html: string;
+    created_at: string;
+    printed_at: string | null;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    type: data.type,
+    status: data.status,
+    contentText: data.content_text,
+    contentHtml: data.content_html || undefined,
+    createdAt: new Date(data.created_at),
+    printedAt: data.printed_at ? new Date(data.printed_at) : null,
+  };
 };
