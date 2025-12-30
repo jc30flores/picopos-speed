@@ -82,6 +82,9 @@ export type Order = {
   createdAt: Date;
   prepTime: number;
   customerName?: string;
+  paymentStatus: "unpaid" | "partial" | "paid";
+  totalPaid: number;
+  remaining: number;
 };
 
 export type EmployeeStats = {
@@ -90,6 +93,19 @@ export type EmployeeStats = {
   inactiveEmployees: number;
   attendanceTodayCount: number;
   lateTodayCount: number;
+};
+
+export type PaymentMethod = "cash" | "card" | "transfer";
+
+export type Payment = {
+  id: number;
+  orderId: number;
+  method: PaymentMethod;
+  amount: number;
+  tipAmount: number;
+  reference?: string;
+  receivedBy?: string | null;
+  createdAt: Date;
 };
 
 export type SalesReportRow = {
@@ -110,6 +126,14 @@ export type SalesReportAggregates = {
   sumTax: number;
   sumTotal: number;
   sumDiscountTotal: number;
+  paymentMethods: {
+    cash: number;
+    card: number;
+    transfer: number;
+  };
+  tipsTotal: number;
+  cashTotal: number;
+  nonCashTotal: number;
 };
 
 export type AuthUser = {
@@ -441,6 +465,9 @@ const mapOrder = (order: {
     quantity: number;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
+  payment_status: Order["paymentStatus"];
+  total_paid: string;
+  remaining: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -460,6 +487,9 @@ const mapOrder = (order: {
     createdAt,
     prepTime,
     customerName: order.customer_name || undefined,
+    paymentStatus: order.payment_status,
+    totalPaid: Number(order.total_paid ?? 0),
+    remaining: Number(order.remaining ?? 0),
   };
 };
 
@@ -500,6 +530,9 @@ export const createOrder = async (payload: {
     total: string;
     service_type: Order["serviceType"];
     created_at: string;
+    payment_status: Order["paymentStatus"];
+    total_paid: string;
+    remaining: string;
     items: Array<{
       id: number;
       product_id: number;
@@ -523,6 +556,9 @@ export const getActiveOrders = async (): Promise<Order[]> => {
       total: string;
       service_type: Order["serviceType"];
       created_at: string;
+      payment_status: Order["paymentStatus"];
+      total_paid: string;
+      remaining: string;
       items: Array<{
         id: number;
         product_id: number;
@@ -550,6 +586,34 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
     total: string;
     service_type: Order["serviceType"];
     created_at: string;
+    payment_status: Order["paymentStatus"];
+    total_paid: string;
+    remaining: string;
+    items: Array<{
+      id: number;
+      product_id: number;
+      product_name_snapshot: string;
+      price_snapshot: string;
+      quantity: number;
+      applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+    }>;
+  }>(response);
+  return mapOrder(data);
+};
+
+export const getOrderById = async (orderId: number): Promise<Order> => {
+  const response = await request(`/api/orders/${orderId}/`);
+  const data = await handleJson<{
+    id: number;
+    order_number: number;
+    status: Order["status"];
+    customer_name: string;
+    total: string;
+    service_type: Order["serviceType"];
+    created_at: string;
+    payment_status: Order["paymentStatus"];
+    total_paid: string;
+    remaining: string;
     items: Array<{
       id: number;
       product_id: number;
@@ -609,6 +673,14 @@ export const getSalesReport = async (filters?: {
       sum_tax: string;
       sum_total: string;
       sum_discount_total: string;
+      payment_methods?: {
+        cash: string;
+        card: string;
+        transfer: string;
+      };
+      tips_total?: string;
+      cash_total?: string;
+      non_cash_total?: string;
     };
   }>(response);
   return {
@@ -629,6 +701,14 @@ export const getSalesReport = async (filters?: {
       sumTax: Number(data.aggregates.sum_tax),
       sumTotal: Number(data.aggregates.sum_total),
       sumDiscountTotal: Number(data.aggregates.sum_discount_total),
+      paymentMethods: {
+        cash: Number(data.aggregates.payment_methods?.cash ?? 0),
+        card: Number(data.aggregates.payment_methods?.card ?? 0),
+        transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
+      },
+      tipsTotal: Number(data.aggregates.tips_total ?? 0),
+      cashTotal: Number(data.aggregates.cash_total ?? 0),
+      nonCashTotal: Number(data.aggregates.non_cash_total ?? 0),
     },
   };
 };
@@ -1110,4 +1190,69 @@ export const getEmployeeStats = async (): Promise<EmployeeStats> => {
 const dayOfWeekLabel = (dayOfWeek: number) => {
   const map = ["D", "L", "M", "X", "J", "V", "S"];
   return map[dayOfWeek] ?? "";
+};
+
+export const createPayment = async (payload: {
+  orderId: number;
+  method: PaymentMethod;
+  amount: number;
+  tipAmount?: number;
+  reference?: string;
+}): Promise<Payment> => {
+  const response = await request("/api/payments/", {
+    method: "POST",
+    body: JSON.stringify({
+      order: payload.orderId,
+      method: payload.method,
+      amount: payload.amount,
+      tip_amount: payload.tipAmount ?? 0,
+      reference: payload.reference ?? "",
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    order: number;
+    method: PaymentMethod;
+    amount: string;
+    tip_amount: string;
+    reference: string;
+    received_by: string | null;
+    created_at: string;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    method: data.method,
+    amount: Number(data.amount),
+    tipAmount: Number(data.tip_amount),
+    reference: data.reference ?? undefined,
+    receivedBy: data.received_by,
+    createdAt: new Date(data.created_at),
+  };
+};
+
+export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
+  const response = await request(`/api/payments/?order_id=${orderId}`);
+  const data = await handleJson<
+    Array<{
+      id: number;
+      order: number;
+      method: PaymentMethod;
+      amount: string;
+      tip_amount: string;
+      reference: string;
+      received_by: string | null;
+      created_at: string;
+    }>
+  >(response);
+  return data.map((payment) => ({
+    id: payment.id,
+    orderId: payment.order,
+    method: payment.method,
+    amount: Number(payment.amount),
+    tipAmount: Number(payment.tip_amount),
+    reference: payment.reference ?? undefined,
+    receivedBy: payment.received_by,
+    createdAt: new Date(payment.created_at),
+  }));
 };

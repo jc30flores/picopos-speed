@@ -2,9 +2,11 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
+from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount
 from apps.menu.models import Product, Discount
 from apps.core.models import Branch, ServiceType, Table, TaxConfig
+from apps.payments.models import Payment
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -32,6 +34,8 @@ class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     service_type = serializers.CharField(source="service_type.key", read_only=True)
     discounts_applied = serializers.SerializerMethodField()
+    total_paid = serializers.SerializerMethodField()
+    remaining = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -44,6 +48,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "tax",
             "total",
             "discount_total",
+            "payment_status",
+            "total_paid",
+            "remaining",
             "service_type",
             "branch_id",
             "table_id",
@@ -62,6 +69,22 @@ class OrderSerializer(serializers.ModelSerializer):
             }
             for discount in obj.applied_discounts.all()
         ]
+
+    def get_total_paid(self, obj: Order):
+        total = Payment.objects.filter(order=obj).aggregate(
+            total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            )
+        )["total"] or Decimal("0")
+        return total
+
+    def get_remaining(self, obj: Order):
+        total_paid = self.get_total_paid(obj)
+        remaining = (obj.total - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return remaining
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):

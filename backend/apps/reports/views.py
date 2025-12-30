@@ -1,8 +1,10 @@
 from django.utils.dateparse import parse_date
 from decimal import Decimal
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import generics
 from rest_framework.response import Response
 from apps.orders.models import Order
+from apps.payments.models import Payment
 from apps.reports.serializers import SalesReportSerializer
 from apps.core.permissions import IsAdminOrManager
 
@@ -46,11 +48,50 @@ class SalesReportListView(generics.ListAPIView):
             for order in queryset
         ]
         serializer = self.get_serializer(data, many=True)
+        payment_totals = Payment.objects.filter(order__in=queryset).aggregate(
+            total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            ),
+            tips=Sum("tip_amount"),
+            cash_total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                ),
+                filter=Q(method="cash"),
+            ),
+            card_total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                ),
+                filter=Q(method="card"),
+            ),
+            transfer_total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                ),
+                filter=Q(method="transfer"),
+            ),
+        )
         aggregates = {
             "count_orders": queryset.count(),
             "sum_subtotal": sum((order.subtotal for order in queryset), Decimal("0")),
             "sum_tax": sum((order.tax for order in queryset), Decimal("0")),
             "sum_total": sum((order.total for order in queryset), Decimal("0")),
             "sum_discount_total": sum((order.discount_total for order in queryset), Decimal("0")),
+            "payment_methods": {
+                "cash": payment_totals["cash_total"] or Decimal("0"),
+                "card": payment_totals["card_total"] or Decimal("0"),
+                "transfer": payment_totals["transfer_total"] or Decimal("0"),
+            },
+            "tips_total": payment_totals["tips"] or Decimal("0"),
+            "cash_total": payment_totals["cash_total"] or Decimal("0"),
+            "non_cash_total": (payment_totals["card_total"] or Decimal("0"))
+            + (payment_totals["transfer_total"] or Decimal("0")),
         }
         return Response({"results": serializer.data, "aggregates": aggregates})

@@ -54,6 +54,11 @@
 - `PATCH /api/employees/schedules/{id}/`
 - `DELETE /api/employees/schedules/{id}/`
 
+### Payments endpoints
+
+- `GET /api/payments/?order_id=`
+- `POST /api/payments/`
+
 Example: create employee
 
 ```sh
@@ -77,6 +82,16 @@ curl -b cookies.txt -c cookies.txt \\
   -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \\
   -d '{"username":"admin","password":"your-password"}' \\
   http://localhost:8102/api/auth/login/
+```
+
+Example: create payment
+
+```sh
+curl -b cookies.txt -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \
+  -d '{"order":123,"method":"cash","amount":25.00,"tip_amount":2.00}' \
+  http://localhost:8102/api/payments/
 ```
 
 ### Roles

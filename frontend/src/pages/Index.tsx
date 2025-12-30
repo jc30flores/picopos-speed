@@ -17,7 +17,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   createOrder,
+  createPayment,
+  getOrderById,
   getActiveTaxConfig,
   getCategories,
   getModifierGroups,
@@ -25,6 +34,8 @@ import {
   Category,
   ModifierGroup,
   Product,
+  PaymentMethod,
+  Order,
 } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -49,6 +60,13 @@ const POS = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [taxRate, setTaxRate] = useState(0.13);
+  const [activeOrder, setActiveOrder] = useState<Order | null>(null);
+  const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [tipAmount, setTipAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
   const loadMenuData = async () => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -138,6 +156,7 @@ const POS = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    setIsProcessingPayment(true);
     try {
       const order = await createOrder({
         serviceType,
@@ -149,11 +168,18 @@ const POS = () => {
           modifiers: item.modifiers,
         })),
       });
-      toast.success(`Pedido #${order.orderNumber} creado · Total $${order.total.toFixed(2)}`);
+      setActiveOrder(order);
       setCart([]);
+      setPaymentAmount(order.remaining.toFixed(2));
+      setTipAmount("0");
+      setPaymentReference("");
+      setIsPaymentOpen(true);
+      toast.success(`Pedido #${order.orderNumber} creado · Total $${order.total.toFixed(2)}`);
     } catch (error) {
       console.error("Failed to create order", error);
       toast.error("No se pudo crear el pedido. Intenta de nuevo.");
+    } finally {
+      setIsProcessingPayment(false);
     }
   };
 
@@ -183,6 +209,53 @@ const POS = () => {
       const selectedCount = selectedModifiers[groupId]?.length || 0;
       return selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
     });
+  };
+
+  const handleSubmitPayment = async () => {
+    if (!activeOrder) return;
+    const amountValue = Number(paymentAmount);
+    const tipValue = Number(tipAmount);
+    const totalPayment = amountValue + tipValue;
+
+    if (!amountValue || amountValue <= 0) {
+      toast.error("Ingresa un monto válido");
+      return;
+    }
+    if (tipValue < 0) {
+      toast.error("La propina no puede ser negativa");
+      return;
+    }
+    if (totalPayment > activeOrder.remaining) {
+      toast.error("El pago supera el saldo pendiente");
+      return;
+    }
+
+    try {
+      setIsProcessingPayment(true);
+      await createPayment({
+        orderId: activeOrder.id,
+        method: paymentMethod,
+        amount: amountValue,
+        tipAmount: tipValue,
+        reference: paymentReference || undefined,
+      });
+      const refreshed = await getOrderById(activeOrder.id);
+      setActiveOrder(refreshed);
+      setPaymentAmount(refreshed.remaining.toFixed(2));
+      setTipAmount("0");
+      setPaymentReference("");
+      if (refreshed.paymentStatus === "paid") {
+        toast.success("Pago completado");
+        setIsPaymentOpen(false);
+      } else {
+        toast.success("Pago registrado");
+      }
+    } catch (error) {
+      console.error("Failed to create payment", error);
+      toast.error("No se pudo registrar el pago");
+    } finally {
+      setIsProcessingPayment(false);
+    }
   };
 
   return (
@@ -367,7 +440,7 @@ const POS = () => {
                 variant="default"
                 className="w-full font-bold"
                 size="lg"
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || isProcessingPayment}
                 onClick={handleCheckout}
               >
                 Cobrar ${total.toFixed(2)}
@@ -376,6 +449,97 @@ const POS = () => {
           </Card>
         </div>
       </div>
+
+      {/* Payment Dialog */}
+      <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cobrar pedido</DialogTitle>
+            <DialogDescription>Registra el pago del pedido en curso</DialogDescription>
+          </DialogHeader>
+          {activeOrder ? (
+            <div className="space-y-4">
+              <div className="rounded-md border p-3 space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span>Pedido</span>
+                  <span>#{activeOrder.orderNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Total</span>
+                  <span>${activeOrder.total.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Pagado</span>
+                  <span>${activeOrder.totalPaid.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-semibold">
+                  <span>Pendiente</span>
+                  <span>${activeOrder.remaining.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Método</Label>
+                <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Efectivo</SelectItem>
+                    <SelectItem value="card">Tarjeta</SelectItem>
+                    <SelectItem value="transfer">Transferencia</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Monto</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Propina</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={tipAmount}
+                    onChange={(e) => setTipAmount(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                <div className="space-y-2">
+                  <Label>Referencia</Label>
+                  <Input
+                    value={paymentReference}
+                    onChange={(e) => setPaymentReference(e.target.value)}
+                    placeholder="Opcional"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>
+                  Cerrar
+                </Button>
+                <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment}>
+                  {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No hay pedido activo.</div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Modifier Dialog */}
       <Dialog open={showModifierDialog} onOpenChange={setShowModifierDialog}>

@@ -11,6 +11,11 @@ class Order(models.Model):
         ("delivered", "Delivered"),
         ("canceled", "Canceled"),
     ]
+    PAYMENT_STATUS_CHOICES = [
+        ("unpaid", "Unpaid"),
+        ("partial", "Partial"),
+        ("paid", "Paid"),
+    ]
 
     order_number = models.PositiveIntegerField()
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="orders")
@@ -22,6 +27,7 @@ class Order(models.Model):
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unpaid")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
