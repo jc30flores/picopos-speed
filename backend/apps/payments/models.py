@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from apps.orders.models import Order
+from apps.cashier.models import CashSession
 
 
 class Payment(models.Model):
@@ -15,6 +16,13 @@ class Payment(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     tip_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     reference = models.CharField(max_length=120, blank=True)
+    cash_session = models.ForeignKey(
+        CashSession,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="payments",
+    )
     received_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
