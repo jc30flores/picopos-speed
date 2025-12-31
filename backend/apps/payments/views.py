@@ -1,40 +1,20 @@
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import generics, status
 from rest_framework.response import Response
 from apps.core.audit import log_audit
-from apps.core.permissions import IsCashierOrManagerOrAdmin
-from apps.orders.models import Order
-from apps.payments.models import Payment
+from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
+from apps.cashier.models import CashSession
+from apps.payments.models import Payment, Refund
 from apps.printing.models import PrintJob
-from apps.printing.services.jobs import create_print_job
-from apps.payments.serializers import PaymentSerializer
+from apps.printing.serializers import PrintJobSerializer
+from apps.printing.services.jobs import create_print_job, create_refund_print_job
+from apps.payments.serializers import PaymentSerializer, RefundSerializer
+from apps.orders.serializers import OrderSerializer
 
 
-def _total_paid(order: Order) -> Decimal:
-    total = Payment.objects.filter(order=order).aggregate(
-        total=Sum(
-            ExpressionWrapper(
-                F("amount") + F("tip_amount"),
-                output_field=DecimalField(max_digits=10, decimal_places=2),
-            )
-        )
-    )["total"] or Decimal("0")
-    return total
-
-
-def _update_payment_status(order: Order) -> Decimal:
-    total_paid = _total_paid(order)
-    remaining = (order.total - total_paid).quantize(Decimal("0.01"))
-    if remaining <= 0:
-        order.payment_status = "paid"
-    elif remaining < order.total:
-        order.payment_status = "partial"
-    else:
-        order.payment_status = "unpaid"
-    order.save(update_fields=["payment_status", "updated_at"])
-    return remaining
+def _get_open_session(user):
+    return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
 
 
 class PaymentListCreateView(generics.ListCreateAPIView):
@@ -52,8 +32,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        payment = serializer.save()
-        remaining = _update_payment_status(payment.order)
+        payment = serializer.save(
+            cash_session=_get_open_session(request.user),
+        )
+        payment.order.recalculate_financials()
+        total_paid = payment.order.net_paid + payment.order.refund_total
+        remaining = (payment.order.total - total_paid).quantize(Decimal("0.01"))
         log_audit(
             request,
             "payment.create",
@@ -87,3 +71,62 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             )
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class RefundListCreateView(generics.ListCreateAPIView):
+    serializer_class = RefundSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def get_queryset(self):
+        queryset = Refund.objects.select_related(
+            "order",
+            "original_payment",
+            "cash_session",
+            "approved_by",
+            "created_by",
+        )
+        order_id = self.request.query_params.get("order_id")
+        if order_id:
+            queryset = queryset.filter(order_id=order_id)
+        return queryset
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        cash_session = _get_open_session(request.user)
+        if not cash_session:
+            return Response({"detail": "Open shift required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        refund = serializer.save(
+            cash_session=cash_session,
+            approved_by=request.user,
+            created_by=request.user,
+        )
+        refund.order.recalculate_financials()
+
+        log_audit(
+            request,
+            "refund.create",
+            "Refund",
+            refund.id,
+            {
+                "order_id": refund.order_id,
+                "amount": str(refund.amount),
+                "tip_refunded": str(refund.tip_refunded),
+                "method": refund.method,
+                "reason": refund.reason,
+                "shift_id": cash_session.id,
+                "approved_by": request.user.id,
+            },
+        )
+
+        job = create_refund_print_job(refund, requested_by=request.user)
+        return Response(
+            {
+                "refund": RefundSerializer(refund).data,
+                "order": OrderSerializer(refund.order).data,
+                "print_job": PrintJobSerializer(job).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )

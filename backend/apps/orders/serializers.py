@@ -36,6 +36,9 @@ class OrderSerializer(serializers.ModelSerializer):
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
+    financial_status = serializers.CharField(read_only=True)
+    refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    net_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model = Order
@@ -49,8 +52,11 @@ class OrderSerializer(serializers.ModelSerializer):
             "total",
             "discount_total",
             "payment_status",
+            "financial_status",
             "total_paid",
             "remaining",
+            "refund_total",
+            "net_paid",
             "service_type",
             "branch_id",
             "table_id",

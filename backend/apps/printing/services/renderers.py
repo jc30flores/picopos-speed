@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.utils import timezone
 from apps.orders.models import Order
+from apps.payments.models import Refund
 from apps.payments.models import Payment
 
 
@@ -126,5 +127,131 @@ def render_customer_ticket(order: Order) -> dict:
             "payment_status": order.payment_status,
             "total_paid": str(total_paid),
             "remaining": str(remaining),
+        },
+    }
+
+
+def render_closeout_ticket(session, summary: dict) -> dict:
+    now = timezone.localtime(session.closed_at or timezone.now())
+    lines: list[str] = []
+    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("Corte de caja"))
+    lines.append(_divider())
+    lines.append(_line(f"Register: {session.register.name}"))
+    lines.append(_line(f"Opened: {timezone.localtime(session.opened_at).strftime('%Y-%m-%d %H:%M')}"))
+    if session.closed_by:
+        lines.append(_line(f"Closed by: {session.closed_by.username}"))
+    lines.append(_line(f"Closed: {now.strftime('%Y-%m-%d %H:%M')}"))
+    lines.append(_divider())
+    lines.append(_line(f"Ventas brutas: {_format_money(summary['gross_total'])}"))
+    lines.append(_line(f"Reembolsos: {_format_money(summary['refunds_total'])}"))
+    lines.append(_line(f"Ventas netas: {_format_money(summary['net_sales_total'])}"))
+    lines.append(_divider())
+    lines.append(_line("Totales esperados"))
+    lines.append(_line(f"Efectivo: {_format_money(summary['expected_cash'])}"))
+    lines.append(_line(f"Tarjeta: {_format_money(summary['expected_card'])}"))
+    lines.append(_line(f"Transferencia: {_format_money(summary['expected_transfer'])}"))
+    lines.append(_line(f"Propinas: {_format_money(summary['expected_tips'])}"))
+    lines.append(_divider())
+    lines.append(_line("Reembolsos"))
+    lines.append(_line(f"Efectivo: {_format_money(summary['refunds_cash'])}"))
+    lines.append(_line(f"Tarjeta: {_format_money(summary['refunds_card'])}"))
+    lines.append(_line(f"Transferencia: {_format_money(summary['refunds_transfer'])}"))
+    lines.append(_line(f"Propinas: {_format_money(summary['refunds_tips'])}"))
+    lines.append(_divider())
+    lines.append(_line("Conteo final"))
+    lines.append(_line(f"Efectivo: {_format_money(summary['counted_cash'])}"))
+    lines.append(_line(f"Tarjeta: {_format_money(summary['counted_card'])}"))
+    lines.append(_line(f"Transferencia: {_format_money(summary['counted_transfer'])}"))
+    lines.append(_line(f"Propinas: {_format_money(summary['counted_tips'])}"))
+    lines.append(_line(f"Sobre/Falta: {_format_money(summary['over_short_total'])}"))
+    lines.append(_divider())
+    lines.append(_line("Gracias"))
+
+    text = "\n".join(lines)
+    return {
+        "text": text,
+        "html": f"<pre>{text}</pre>",
+        "meta": {
+            "cash_session_id": session.id,
+            "type": "closeout",
+        },
+    }
+
+
+def render_refund_ticket(order: Order, refund: Refund) -> dict:
+    now = timezone.localtime(refund.created_at)
+    total_refund = refund.amount + refund.tip_refunded
+    lines: list[str] = []
+    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("Recibo de reembolso"))
+    lines.append(_divider())
+    lines.append(_line(f"Orden #{order.order_number}"))
+    lines.append(_line(now.strftime("%Y-%m-%d %H:%M")))
+    lines.append(_divider())
+    lines.append(_line(f"Método: {refund.method}"))
+    lines.append(_line(f"Monto: {_format_money(refund.amount)}"))
+    if refund.tip_refunded > 0:
+        lines.append(_line(f"Propina: {_format_money(refund.tip_refunded)}"))
+    lines.append(_line(f"Total: {_format_money(total_refund)}"))
+    lines.append(_divider())
+    lines.append(_line(f"Motivo: {refund.reason}"))
+    if refund.approved_by:
+        lines.append(_line(f"Aprobado por: {refund.approved_by.username}"))
+    if refund.original_payment and refund.original_payment.reference:
+        lines.append(_line(f"Ref pago: {refund.original_payment.reference}"))
+    lines.append(_divider())
+    lines.append(_line("Articulos:"))
+    for item in order.items.all():
+        item_total = item.price_snapshot * item.quantity
+        name = f"{item.quantity}x {item.product_name_snapshot}"
+        price = _format_money(item_total)
+        space = _width() - len(price) - 1
+        lines.append(f"{name[:space].ljust(space)} {price}")
+    lines.append(_divider())
+    lines.append(_line("Fin del reembolso"))
+
+    text = "\n".join(lines)
+    return {
+        "text": text,
+        "html": f"<pre>{text}</pre>",
+        "meta": {
+            "order_id": order.id,
+            "refund_id": refund.id,
+            "type": "refund",
+            "method": refund.method,
+        },
+    }
+
+
+def render_void_ticket(order: Order, reason: str) -> dict:
+    now = timezone.localtime(timezone.now())
+    lines: list[str] = []
+    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("Orden anulada"))
+    lines.append(_divider())
+    lines.append(_line(f"Orden #{order.order_number}"))
+    lines.append(_line(now.strftime("%Y-%m-%d %H:%M")))
+    lines.append(_divider())
+    lines.append(_line(f"Motivo: {reason}"))
+    lines.append(_divider())
+    lines.append(_line("Articulos:"))
+    for item in order.items.all():
+        item_total = item.price_snapshot * item.quantity
+        name = f"{item.quantity}x {item.product_name_snapshot}"
+        price = _format_money(item_total)
+        space = _width() - len(price) - 1
+        lines.append(f"{name[:space].ljust(space)} {price}")
+    lines.append(_divider())
+    lines.append(_line("Fin de la anulacion"))
+
+    text = "\n".join(lines)
+    return {
+        "text": text,
+        "html": f"<pre>{text}</pre>",
+        "meta": {
+            "order_id": order.id,
+            "type": "void",
+            "reason": reason,
         },
     }

@@ -59,12 +59,19 @@
 - `GET /api/payments/?order_id=`
 - `POST /api/payments/`
 
+### Refunds & voids endpoints
+
+- `POST /api/refunds/`
+- `GET /api/refunds/?order_id=`
+- `POST /api/orders/{id}/void/`
+
 ### Printing endpoints (simulated)
 
 - `POST /api/printing/jobs/`
 - `GET /api/printing/jobs/?order_id=`
 - `GET /api/printing/jobs/{id}/`
 - `POST /api/printing/jobs/{id}/mark-printed/`
+- `POST /api/printing/jobs/refund/`
 
 Example: create employee
 
@@ -112,6 +119,26 @@ curl -b cookies.txt -c cookies.txt \
 ```
 
 Printing is simulated during development: jobs render to text/HTML and can be marked as printed.
+
+Example: create refund
+
+```sh
+curl -b cookies.txt -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \
+  -d '{"order":123,"method":"cash","amount":5.00,"tip_refunded":0.00,"reason":"Cliente devolvió el producto"}' \
+  http://localhost:8102/api/refunds/
+```
+
+Example: void order (unpaid)
+
+```sh
+curl -b cookies.txt -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \
+  -d '{"reason":"Pedido duplicado"}' \
+  http://localhost:8102/api/orders/123/void/
+```
 
 ### Roles
 

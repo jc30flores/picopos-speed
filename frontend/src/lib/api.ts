@@ -83,8 +83,11 @@ export type Order = {
   prepTime: number;
   customerName?: string;
   paymentStatus: "unpaid" | "partial" | "paid";
+  financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
   remaining: number;
+  refundTotal: number;
+  netPaid: number;
 };
 
 export type EmployeeStats = {
@@ -111,7 +114,7 @@ export type Payment = {
 export type PrintJob = {
   id: number;
   orderId: number | null;
-  type: "kitchen" | "customer" | "closeout";
+  type: "kitchen" | "customer" | "closeout" | "refund" | "void";
   status: "queued" | "rendered" | "printed" | "failed";
   contentText: string;
   contentHtml?: string;
@@ -129,6 +132,9 @@ export type SalesReportRow = {
   total: number;
   discountTotal: number;
   status: Order["status"];
+  financialStatus: Order["financialStatus"];
+  refundTotal: number;
+  netPaid: number;
 };
 
 export type SalesReportAggregates = {
@@ -137,14 +143,40 @@ export type SalesReportAggregates = {
   sumTax: number;
   sumTotal: number;
   sumDiscountTotal: number;
+  grossTotal: number;
+  refundTotal: number;
+  netTotal: number;
   paymentMethods: {
     cash: number;
     card: number;
     transfer: number;
   };
   tipsTotal: number;
+  tipsNet: number;
   cashTotal: number;
   nonCashTotal: number;
+  refundsCount: number;
+  ordersPaid: number;
+  ordersVoided: number;
+  refundsByMethod: {
+    cash: number;
+    card: number;
+    transfer: number;
+  };
+};
+
+export type Refund = {
+  id: number;
+  orderId: number;
+  originalPaymentId?: number | null;
+  cashSessionId?: number | null;
+  method: PaymentMethod;
+  amount: number;
+  tipRefunded: number;
+  reason: string;
+  approvedBy?: string | null;
+  createdBy?: string | null;
+  createdAt: Date;
 };
 
 export type AuthUser = {
@@ -477,8 +509,11 @@ const mapOrder = (order: {
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
+  financial_status: Order["financialStatus"];
   total_paid: string;
   remaining: string;
+  refund_total: string;
+  net_paid: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -499,8 +534,11 @@ const mapOrder = (order: {
     prepTime,
     customerName: order.customer_name || undefined,
     paymentStatus: order.payment_status,
+    financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
     remaining: Number(order.remaining ?? 0),
+    refundTotal: Number(order.refund_total ?? 0),
+    netPaid: Number(order.net_paid ?? 0),
   };
 };
 
@@ -568,8 +606,11 @@ export const getActiveOrders = async (): Promise<Order[]> => {
       service_type: Order["serviceType"];
       created_at: string;
       payment_status: Order["paymentStatus"];
+      financial_status: Order["financialStatus"];
       total_paid: string;
       remaining: string;
+      refund_total: string;
+      net_paid: string;
       items: Array<{
         id: number;
         product_id: number;
@@ -598,8 +639,11 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
     service_type: Order["serviceType"];
     created_at: string;
     payment_status: Order["paymentStatus"];
+    financial_status: Order["financialStatus"];
     total_paid: string;
     remaining: string;
+    refund_total: string;
+    net_paid: string;
     items: Array<{
       id: number;
       product_id: number;
@@ -623,8 +667,11 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
     service_type: Order["serviceType"];
     created_at: string;
     payment_status: Order["paymentStatus"];
+    financial_status: Order["financialStatus"];
     total_paid: string;
     remaining: string;
+    refund_total: string;
+    net_paid: string;
     items: Array<{
       id: number;
       product_id: number;
@@ -677,6 +724,9 @@ export const getSalesReport = async (filters?: {
       total: string;
       discount_total: string;
       status: Order["status"];
+      financial_status: Order["financialStatus"];
+      refund_total: string;
+      net_paid: string;
     }>;
     aggregates: {
       count_orders: number;
@@ -684,14 +734,26 @@ export const getSalesReport = async (filters?: {
       sum_tax: string;
       sum_total: string;
       sum_discount_total: string;
+      gross_total?: string;
+      refund_total?: string;
+      net_total?: string;
       payment_methods?: {
         cash: string;
         card: string;
         transfer: string;
       };
       tips_total?: string;
+      tips_net?: string;
       cash_total?: string;
       non_cash_total?: string;
+      refunds_count?: number;
+      orders_paid?: number;
+      orders_voided?: number;
+      refunds_by_method?: {
+        cash: string;
+        card: string;
+        transfer: string;
+      };
     };
   }>(response);
   return {
@@ -705,6 +767,9 @@ export const getSalesReport = async (filters?: {
       total: Number(row.total),
       discountTotal: Number(row.discount_total),
       status: row.status,
+      financialStatus: row.financial_status,
+      refundTotal: Number(row.refund_total ?? 0),
+      netPaid: Number(row.net_paid ?? 0),
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,
@@ -712,14 +777,26 @@ export const getSalesReport = async (filters?: {
       sumTax: Number(data.aggregates.sum_tax),
       sumTotal: Number(data.aggregates.sum_total),
       sumDiscountTotal: Number(data.aggregates.sum_discount_total),
+      grossTotal: Number(data.aggregates.gross_total ?? data.aggregates.sum_total ?? 0),
+      refundTotal: Number(data.aggregates.refund_total ?? 0),
+      netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
         card: Number(data.aggregates.payment_methods?.card ?? 0),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
+      tipsNet: Number(data.aggregates.tips_net ?? 0),
       cashTotal: Number(data.aggregates.cash_total ?? 0),
       nonCashTotal: Number(data.aggregates.non_cash_total ?? 0),
+      refundsCount: data.aggregates.refunds_count ?? 0,
+      ordersPaid: data.aggregates.orders_paid ?? 0,
+      ordersVoided: data.aggregates.orders_voided ?? 0,
+      refundsByMethod: {
+        cash: Number(data.aggregates.refunds_by_method?.cash ?? 0),
+        card: Number(data.aggregates.refunds_by_method?.card ?? 0),
+        transfer: Number(data.aggregates.refunds_by_method?.transfer ?? 0),
+      },
     },
   };
 };
@@ -1268,6 +1345,126 @@ export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> =>
   }));
 };
 
+export const createRefund = async (payload: {
+  orderId: number;
+  method: PaymentMethod;
+  amount: number;
+  tipRefunded?: number;
+  reason: string;
+  originalPaymentId?: number;
+}): Promise<{ refund: Refund; order: Order; printJob: PrintJob }> => {
+  const response = await request("/api/refunds/", {
+    method: "POST",
+    body: JSON.stringify({
+      order: payload.orderId,
+      original_payment: payload.originalPaymentId ?? null,
+      method: payload.method,
+      amount: payload.amount,
+      tip_refunded: payload.tipRefunded ?? 0,
+      reason: payload.reason,
+    }),
+  });
+  const data = await handleJson<{
+    refund: {
+      id: number;
+      order: number;
+      original_payment: number | null;
+      cash_session: number | null;
+      method: PaymentMethod;
+      amount: string;
+      tip_refunded: string;
+      reason: string;
+      approved_by: string | null;
+      created_by: string | null;
+      created_at: string;
+    };
+    order: Parameters<typeof mapOrder>[0];
+    print_job: {
+      id: number;
+      order: number | null;
+      type: PrintJob["type"];
+      status: PrintJob["status"];
+      content_text: string;
+      content_html: string;
+      created_at: string;
+      printed_at: string | null;
+    };
+  }>(response);
+  return {
+    refund: {
+      id: data.refund.id,
+      orderId: data.refund.order,
+      originalPaymentId: data.refund.original_payment,
+      cashSessionId: data.refund.cash_session,
+      method: data.refund.method,
+      amount: Number(data.refund.amount),
+      tipRefunded: Number(data.refund.tip_refunded),
+      reason: data.refund.reason,
+      approvedBy: data.refund.approved_by,
+      createdBy: data.refund.created_by,
+      createdAt: new Date(data.refund.created_at),
+    },
+    order: mapOrder(data.order),
+    printJob: {
+      id: data.print_job.id,
+      orderId: data.print_job.order,
+      type: data.print_job.type,
+      status: data.print_job.status,
+      contentText: data.print_job.content_text,
+      contentHtml: data.print_job.content_html || undefined,
+      createdAt: new Date(data.print_job.created_at),
+      printedAt: data.print_job.printed_at ? new Date(data.print_job.printed_at) : null,
+    },
+  };
+};
+
+export const getRefundsByOrder = async (orderId: number): Promise<Refund[]> => {
+  const response = await request(`/api/refunds/?order_id=${orderId}`);
+  const data = await handleJson<
+    Array<{
+      id: number;
+      order: number;
+      original_payment: number | null;
+      cash_session: number | null;
+      method: PaymentMethod;
+      amount: string;
+      tip_refunded: string;
+      reason: string;
+      approved_by: string | null;
+      created_by: string | null;
+      created_at: string;
+    }>
+  >(response);
+  return data.map((refund) => ({
+    id: refund.id,
+    orderId: refund.order,
+    originalPaymentId: refund.original_payment,
+    cashSessionId: refund.cash_session,
+    method: refund.method,
+    amount: Number(refund.amount),
+    tipRefunded: Number(refund.tip_refunded),
+    reason: refund.reason,
+    approvedBy: refund.approved_by,
+    createdBy: refund.created_by,
+    createdAt: new Date(refund.created_at),
+  }));
+};
+
+export const voidOrder = async (orderId: number, reason: string): Promise<{ order: Order; printJobId: number }> => {
+  const response = await request(`/api/orders/${orderId}/void/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+  const data = await handleJson<{
+    order: Parameters<typeof mapOrder>[0];
+    print_job_id: number;
+  }>(response);
+  return {
+    order: mapOrder(data.order),
+    printJobId: data.print_job_id,
+  };
+};
+
 export const createPrintJob = async (payload: {
   orderId: number;
   type: "kitchen" | "customer";
@@ -1278,6 +1475,33 @@ export const createPrintJob = async (payload: {
       order_id: payload.orderId,
       type: payload.type,
     }),
+  });
+  const data = await handleJson<{
+    id: number;
+    order: number | null;
+    type: PrintJob["type"];
+    status: PrintJob["status"];
+    content_text: string;
+    content_html: string;
+    created_at: string;
+    printed_at: string | null;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    type: data.type,
+    status: data.status,
+    contentText: data.content_text,
+    contentHtml: data.content_html || undefined,
+    createdAt: new Date(data.created_at),
+    printedAt: data.printed_at ? new Date(data.printed_at) : null,
+  };
+};
+
+export const createRefundPrintJob = async (refundId: number): Promise<PrintJob> => {
+  const response = await request("/api/printing/jobs/refund/", {
+    method: "POST",
+    body: JSON.stringify({ refund_id: refundId }),
   });
   const data = await handleJson<{
     id: number;
@@ -1325,6 +1549,30 @@ export const getPrintJobsByOrder = async (orderId: number): Promise<PrintJob[]> 
     createdAt: new Date(job.created_at),
     printedAt: job.printed_at ? new Date(job.printed_at) : null,
   }));
+};
+
+export const getPrintJob = async (jobId: number): Promise<PrintJob> => {
+  const response = await request(`/api/printing/jobs/${jobId}/`);
+  const data = await handleJson<{
+    id: number;
+    order: number | null;
+    type: PrintJob["type"];
+    status: PrintJob["status"];
+    content_text: string;
+    content_html: string;
+    created_at: string;
+    printed_at: string | null;
+  }>(response);
+  return {
+    id: data.id,
+    orderId: data.order,
+    type: data.type,
+    status: data.status,
+    contentText: data.content_text,
+    contentHtml: data.content_html || undefined,
+    createdAt: new Date(data.created_at),
+    printedAt: data.printed_at ? new Date(data.printed_at) : null,
+  };
 };
 
 export const getPrintJobById = async (id: number): Promise<PrintJob> => {

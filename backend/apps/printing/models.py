@@ -8,6 +8,8 @@ class PrintJob(models.Model):
         ("kitchen", "Kitchen"),
         ("customer", "Customer"),
         ("closeout", "Closeout"),
+        ("refund", "Refund"),
+        ("void", "Void"),
     ]
     STATUS_CHOICES = [
         ("queued", "Queued"),

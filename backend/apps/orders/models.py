@@ -16,6 +16,13 @@ class Order(models.Model):
         ("partial", "Partial"),
         ("paid", "Paid"),
     ]
+    FINANCIAL_STATUS_CHOICES = [
+        ("open", "Open"),
+        ("paid", "Paid"),
+        ("refunded_partial", "Refunded (Partial)"),
+        ("refunded_full", "Refunded (Full)"),
+        ("voided", "Voided"),
+    ]
 
     order_number = models.PositiveIntegerField()
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="orders")
@@ -28,6 +35,13 @@ class Order(models.Model):
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unpaid")
+    financial_status = models.CharField(
+        max_length=20,
+        choices=FINANCIAL_STATUS_CHOICES,
+        default="open",
+    )
+    refund_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    net_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -43,6 +57,59 @@ class Order(models.Model):
 
     def __str__(self) -> str:
         return f"Order {self.order_number}"
+
+    def recalculate_financials(self) -> None:
+        from decimal import Decimal
+        from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+        from apps.payments.models import Payment, Refund
+
+        totals = Payment.objects.filter(order=self).aggregate(
+            total_paid=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            )
+        )
+        refunded = Refund.objects.filter(order=self).aggregate(
+            total_refunded=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_refunded"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            )
+        )
+        total_paid = totals["total_paid"] or Decimal("0")
+        total_refunded = refunded["total_refunded"] or Decimal("0")
+        net_paid = max(total_paid - total_refunded, Decimal("0")).quantize(Decimal("0.01"))
+
+        if self.financial_status != "voided":
+            if total_paid <= 0:
+                self.payment_status = "unpaid"
+                self.financial_status = "open"
+            elif total_paid < self.total:
+                self.payment_status = "partial"
+                self.financial_status = "open"
+            else:
+                self.payment_status = "paid"
+                if total_refunded <= 0:
+                    self.financial_status = "paid"
+                elif total_refunded < total_paid:
+                    self.financial_status = "refunded_partial"
+                else:
+                    self.financial_status = "refunded_full"
+
+        self.refund_total = total_refunded
+        self.net_paid = net_paid
+        self.save(
+            update_fields=[
+                "payment_status",
+                "financial_status",
+                "refund_total",
+                "net_paid",
+                "updated_at",
+            ]
+        )
 
 
 class OrderItem(models.Model):

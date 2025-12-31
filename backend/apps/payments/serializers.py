@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
-from apps.payments.models import Payment
+from apps.payments.models import Payment, Refund
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -33,6 +33,8 @@ class PaymentSerializer(serializers.ModelSerializer):
 
         if order is None:
             raise serializers.ValidationError("Order is required")
+        if order.financial_status == "voided":
+            raise serializers.ValidationError("Voided orders cannot accept payments")
 
         remaining = self._remaining_balance(order)
         total_payment = amount + tip_amount
@@ -59,3 +61,83 @@ class PaymentSerializer(serializers.ModelSerializer):
             )
         )["total"] or Decimal("0")
         return (order.total - paid).quantize(Decimal("0.01"))
+
+
+class RefundSerializer(serializers.ModelSerializer):
+    created_by = serializers.CharField(source="created_by.username", read_only=True)
+    approved_by = serializers.CharField(source="approved_by.username", read_only=True)
+
+    class Meta:
+        model = Refund
+        fields = [
+            "id",
+            "order",
+            "original_payment",
+            "cash_session",
+            "method",
+            "amount",
+            "tip_refunded",
+            "reason",
+            "approved_by",
+            "created_by",
+            "created_at",
+        ]
+        read_only_fields = ["cash_session", "approved_by", "created_by", "created_at"]
+
+    def validate(self, attrs):
+        order = attrs.get("order")
+        original_payment = attrs.get("original_payment")
+        amount = attrs.get("amount") or Decimal("0")
+        tip_refunded = attrs.get("tip_refunded") or Decimal("0")
+        reason = (attrs.get("reason") or "").strip()
+
+        if order is None:
+            raise serializers.ValidationError("Order is required")
+        if order.financial_status == "voided":
+            raise serializers.ValidationError("Voided orders cannot be refunded")
+        if amount <= 0:
+            raise serializers.ValidationError("Amount must be greater than 0")
+        if tip_refunded < 0:
+            raise serializers.ValidationError("Tip refund cannot be negative")
+        if not reason:
+            raise serializers.ValidationError("Reason is required")
+
+        refund_total = amount + tip_refunded
+        total_paid = Payment.objects.filter(order=order).aggregate(
+            total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_amount"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            )
+        )["total"] or Decimal("0")
+        total_refunded = Refund.objects.filter(order=order).aggregate(
+            total=Sum(
+                ExpressionWrapper(
+                    F("amount") + F("tip_refunded"),
+                    output_field=DecimalField(max_digits=10, decimal_places=2),
+                )
+            )
+        )["total"] or Decimal("0")
+
+        if total_paid <= 0:
+            raise serializers.ValidationError("Order has no payments to refund")
+        if refund_total + total_refunded > total_paid:
+            raise serializers.ValidationError("Refund exceeds refundable amount")
+
+        if original_payment:
+            if original_payment.order_id != order.id:
+                raise serializers.ValidationError("Payment does not belong to this order")
+            payment_total = original_payment.amount + original_payment.tip_amount
+            payment_refunded = Refund.objects.filter(original_payment=original_payment).aggregate(
+                total=Sum(
+                    ExpressionWrapper(
+                        F("amount") + F("tip_refunded"),
+                        output_field=DecimalField(max_digits=10, decimal_places=2),
+                    )
+                )
+            )["total"] or Decimal("0")
+            if refund_total + payment_refunded > payment_total:
+                raise serializers.ValidationError("Refund exceeds original payment amount")
+
+        return attrs

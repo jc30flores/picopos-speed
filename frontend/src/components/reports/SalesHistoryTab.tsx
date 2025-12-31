@@ -24,14 +24,34 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download, Eye } from "lucide-react";
+import { CalendarIcon, Search, Download } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { getSalesReport, SalesReportRow } from "@/lib/api";
+import {
+  createRefund,
+  createRefundPrintJob,
+  getPrintJob,
+  getSalesReport,
+  markPrintJobPrinted,
+  voidOrder,
+  PaymentMethod,
+  PrintJob,
+  SalesReportRow,
+} from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { toast } from "sonner";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceType = "all" | "en-local" | "para-llevar" | "delivery" | "kiosk";
-type PaymentMethod = "all" | "efectivo" | "tarjeta" | "transferencia";
+type PaymentMethodFilter = "all" | "efectivo" | "tarjeta" | "transferencia";
 
 interface Sale {
   id: string;
@@ -46,6 +66,9 @@ interface Sale {
   total: number;
   cashier: string;
   status: "completado" | "anulado" | "reembolsado";
+  financialStatus: SalesReportRow["financialStatus"];
+  refundTotal: number;
+  netPaid: number;
 }
 
 const SERVICE_TYPE_LABELS: Record<string, string> = {
@@ -55,8 +78,14 @@ const SERVICE_TYPE_LABELS: Record<string, string> = {
   kiosk: "Kiosk",
 };
 
-const mapStatus = (status: SalesReportRow["status"]): Sale["status"] => {
-  if (status === "canceled") return "anulado";
+const mapStatus = (
+  status: SalesReportRow["status"],
+  financialStatus: SalesReportRow["financialStatus"]
+): Sale["status"] => {
+  if (financialStatus === "voided" || status === "canceled") return "anulado";
+  if (financialStatus === "refunded_partial" || financialStatus === "refunded_full") {
+    return "reembolsado";
+  }
   return "completado";
 };
 
@@ -65,9 +94,22 @@ export const SalesHistoryTab = () => {
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
   const [serviceType, setServiceType] = useState<ServiceType>("all");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("all");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [sales, setSales] = useState<Sale[]>([]);
+  const [isRefundOpen, setIsRefundOpen] = useState(false);
+  const [isVoidOpen, setIsVoidOpen] = useState(false);
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundTip, setRefundTip] = useState("");
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>("cash");
+  const [refundReason, setRefundReason] = useState("");
+  const [voidReason, setVoidReason] = useState("");
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [isSubmittingVoid, setIsSubmittingVoid] = useState(false);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  const [refundIdForReprint, setRefundIdForReprint] = useState<number | null>(null);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
 
   const dateFrom = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
   const dateTo = endDate ? format(endDate, "yyyy-MM-dd") : undefined;
@@ -92,7 +134,7 @@ export const SalesHistoryTab = () => {
     }
   }, [timeRange]);
 
-  useEffect(() => {
+  const loadSales = () => {
     const serviceTypeFilter =
       serviceType === "all"
         ? undefined
@@ -101,7 +143,7 @@ export const SalesHistoryTab = () => {
           : serviceType === "para-llevar"
             ? "takeout"
             : serviceType;
-    getSalesReport({
+    return getSalesReport({
       dateFrom,
       dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
@@ -119,13 +161,20 @@ export const SalesHistoryTab = () => {
           tax: row.tax,
           total: row.total,
           cashier: "Auto",
-          status: mapStatus(row.status),
+          status: mapStatus(row.status, row.financialStatus),
+          financialStatus: row.financialStatus,
+          refundTotal: row.refundTotal,
+          netPaid: row.netPaid,
         }));
         setSales(mapped);
       })
       .catch((error) => {
         console.error("Failed to load sales history", error);
       });
+  };
+
+  useEffect(() => {
+    loadSales();
   }, [dateFrom, dateTo, serviceType]);
 
   const filteredSales = sales.filter((sale) => {
@@ -154,6 +203,115 @@ export const SalesHistoryTab = () => {
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </Badge>
     );
+  };
+
+  const openRefundDialog = (sale: Sale) => {
+    setSelectedSale(sale);
+    setRefundAmount(sale.netPaid.toFixed(2));
+    setRefundTip("0");
+    setRefundMethod("cash");
+    setRefundReason("");
+    setIsRefundOpen(true);
+  };
+
+  const openVoidDialog = (sale: Sale) => {
+    setSelectedSale(sale);
+    setVoidReason("");
+    setIsVoidOpen(true);
+  };
+
+  const handleRefundSubmit = async () => {
+    if (!selectedSale) return;
+    const amountValue = Number(refundAmount);
+    const tipValue = Number(refundTip);
+
+    if (!amountValue || amountValue <= 0) {
+      toast.error("Ingresa un monto válido");
+      return;
+    }
+    if (tipValue < 0) {
+      toast.error("La propina no puede ser negativa");
+      return;
+    }
+    if (!refundReason.trim()) {
+      toast.error("Ingresa un motivo");
+      return;
+    }
+
+    try {
+      setIsSubmittingRefund(true);
+      const response = await createRefund({
+        orderId: Number(selectedSale.id),
+        method: refundMethod,
+        amount: amountValue,
+        tipRefunded: tipValue,
+        reason: refundReason,
+      });
+      setPrintJob(response.printJob);
+      setRefundIdForReprint(response.refund.id);
+      setIsPrintPreviewOpen(true);
+      setIsRefundOpen(false);
+      toast.success("Reembolso registrado");
+      await loadSales();
+    } catch (error) {
+      console.error("Failed to create refund", error);
+      toast.error("No se pudo registrar el reembolso");
+    } finally {
+      setIsSubmittingRefund(false);
+    }
+  };
+
+  const handleVoidSubmit = async () => {
+    if (!selectedSale) return;
+    if (!voidReason.trim()) {
+      toast.error("Ingresa un motivo");
+      return;
+    }
+    try {
+      setIsSubmittingVoid(true);
+      const response = await voidOrder(Number(selectedSale.id), voidReason);
+      const job = await getPrintJob(response.printJobId);
+      setPrintJob(job);
+      setRefundIdForReprint(null);
+      setIsPrintPreviewOpen(true);
+      setIsVoidOpen(false);
+      toast.success("Orden anulada");
+      await loadSales();
+    } catch (error) {
+      console.error("Failed to void order", error);
+      toast.error("No se pudo anular la orden");
+    } finally {
+      setIsSubmittingVoid(false);
+    }
+  };
+
+  const handleMarkPrinted = async () => {
+    if (!printJob) return;
+    try {
+      const job = await markPrintJobPrinted(printJob.id);
+      setPrintJob(job);
+      toast.success("Ticket marcado como impreso");
+    } catch (error) {
+      console.error("Failed to mark printed", error);
+      toast.error("No se pudo actualizar el ticket");
+    }
+  };
+
+  const handleReprint = async () => {
+    if (!printJob) return;
+    try {
+      if (refundIdForReprint) {
+        const job = await createRefundPrintJob(refundIdForReprint);
+        setPrintJob(job);
+      } else {
+        const job = await getPrintJob(printJob.id);
+        setPrintJob(job);
+      }
+      toast.success("Ticket listo para reimpresión");
+    } catch (error) {
+      console.error("Failed to reprint ticket", error);
+      toast.error("No se pudo reimprimir el ticket");
+    }
   };
 
   return (
@@ -289,7 +447,7 @@ export const SalesHistoryTab = () => {
               <Select
                 value={paymentMethod}
                 onValueChange={(value) =>
-                  setPaymentMethod(value as PaymentMethod)
+                  setPaymentMethod(value as PaymentMethodFilter)
                 }
               >
                 <SelectTrigger>
@@ -353,7 +511,7 @@ export const SalesHistoryTab = () => {
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Cajero</TableHead>
                   <TableHead>Estado</TableHead>
-                  <TableHead></TableHead>
+                  <TableHead>Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -395,9 +553,24 @@ export const SalesHistoryTab = () => {
                       </TableCell>
                       <TableCell>{getStatusBadge(sale.status)}</TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="sm">
-                          <Eye className="h-4 w-4" />
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openRefundDialog(sale)}
+                            disabled={sale.financialStatus === "voided" || sale.netPaid <= 0}
+                          >
+                            Reembolsar
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openVoidDialog(sale)}
+                            disabled={sale.financialStatus === "voided" || sale.netPaid > 0}
+                          >
+                            Anular
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -407,6 +580,133 @@ export const SalesHistoryTab = () => {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={isRefundOpen} onOpenChange={setIsRefundOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Registrar reembolso</DialogTitle>
+            <DialogDescription>Procesa una devolución parcial o total.</DialogDescription>
+          </DialogHeader>
+          {selectedSale ? (
+            <div className="space-y-4">
+              <div className="rounded-md border p-3 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span>Pedido</span>
+                  <span>{selectedSale.orderNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Pagado neto</span>
+                  <span>${selectedSale.netPaid.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Reembolsado</span>
+                  <span>${selectedSale.refundTotal.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Método</Label>
+                <Select value={refundMethod} onValueChange={(value: PaymentMethod) => setRefundMethod(value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Efectivo</SelectItem>
+                    <SelectItem value="card">Tarjeta</SelectItem>
+                    <SelectItem value="transfer">Transferencia</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Monto</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={refundAmount}
+                    onChange={(event) => setRefundAmount(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Propina</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={refundTip}
+                    onChange={(event) => setRefundTip(event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Motivo</Label>
+                <Input value={refundReason} onChange={(event) => setRefundReason(event.target.value)} />
+              </div>
+
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setIsRefundOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button className="flex-1" onClick={handleRefundSubmit} disabled={isSubmittingRefund}>
+                  {isSubmittingRefund ? "Procesando..." : "Confirmar"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No hay orden seleccionada.</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isVoidOpen} onOpenChange={setIsVoidOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Anular pedido</DialogTitle>
+            <DialogDescription>Esta acción cancela un pedido sin pagos.</DialogDescription>
+          </DialogHeader>
+          {selectedSale ? (
+            <div className="space-y-4">
+              <div className="rounded-md border p-3 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span>Pedido</span>
+                  <span>{selectedSale.orderNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Total</span>
+                  <span>${selectedSale.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Motivo</Label>
+                <Input value={voidReason} onChange={(event) => setVoidReason(event.target.value)} />
+              </div>
+
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setIsVoidOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button className="flex-1" onClick={handleVoidSubmit} disabled={isSubmittingVoid}>
+                  {isSubmittingVoid ? "Procesando..." : "Confirmar"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No hay orden seleccionada.</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <PrintPreviewDialog
+        open={isPrintPreviewOpen}
+        onOpenChange={setIsPrintPreviewOpen}
+        job={printJob}
+        onMarkPrinted={handleMarkPrinted}
+        onReprint={handleReprint}
+      />
     </div>
   );
 };

@@ -58,6 +58,26 @@ export const ReportsTab = () => {
     sumTax: 0,
     sumTotal: 0,
     sumDiscountTotal: 0,
+    grossTotal: 0,
+    refundTotal: 0,
+    netTotal: 0,
+    paymentMethods: {
+      cash: 0,
+      card: 0,
+      transfer: 0,
+    },
+    tipsTotal: 0,
+    tipsNet: 0,
+    cashTotal: 0,
+    nonCashTotal: 0,
+    refundsCount: 0,
+    ordersPaid: 0,
+    ordersVoided: 0,
+    refundsByMethod: {
+      cash: 0,
+      card: 0,
+      transfer: 0,
+    },
   });
 
   const getDateRange = (filter: TimeFilter) => {
@@ -89,7 +109,7 @@ export const ReportsTab = () => {
       });
   }, [timeFilter]);
 
-  const totalSales = aggregates.sumTotal;
+  const totalSales = aggregates.netTotal || aggregates.sumTotal;
   const totalTickets = aggregates.countOrders;
   const mainChannel = "POS";
   const mainChannelPercentage = totalTickets > 0 ? 100 : 0;
@@ -189,7 +209,7 @@ export const ReportsTab = () => {
       </Card>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="hover-lift">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Ventas del período</CardTitle>
@@ -197,7 +217,7 @@ export const ReportsTab = () => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-secondary">${totalSales.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground mt-1">Total vendido</p>
+            <p className="text-xs text-muted-foreground mt-1">Ventas netas después de reembolsos</p>
           </CardContent>
         </Card>
 
@@ -209,6 +229,17 @@ export const ReportsTab = () => {
           <CardContent>
             <div className="text-2xl font-bold">{totalTickets} tickets</div>
             <p className="text-xs text-muted-foreground mt-1">Órdenes procesadas</p>
+          </CardContent>
+        </Card>
+
+        <Card className="hover-lift">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Reembolsos</CardTitle>
+            <Receipt className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-warning">${aggregates.refundTotal.toFixed(2)}</div>
+            <p className="text-xs text-muted-foreground mt-1">{aggregates.refundsCount} reembolsos</p>
           </CardContent>
         </Card>
 

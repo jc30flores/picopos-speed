@@ -2,11 +2,12 @@ from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.core.permissions import IsAuthenticatedAndActive
+from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
 from apps.orders.models import Order
+from apps.payments.models import Refund
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
-from apps.printing.services.jobs import create_print_job
+from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.users.models import UserProfile
 
 
@@ -74,3 +75,19 @@ class PrintJobMarkPrintedView(APIView):
         job.save(update_fields=["status", "printed_at"])
         serializer = PrintJobSerializer(job)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class RefundPrintJobCreateView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def post(self, request):
+        refund_id = request.data.get("refund_id")
+        if not refund_id:
+            return Response({"detail": "refund_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        refund = Refund.objects.select_related("order").prefetch_related("order__items__applied_modifiers").filter(id=refund_id).first()
+        if not refund:
+            return Response({"detail": "Refund not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        job = create_refund_print_job(refund, requested_by=request.user)
+        serializer = PrintJobSerializer(job)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

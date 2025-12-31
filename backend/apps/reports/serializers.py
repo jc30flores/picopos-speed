@@ -11,3 +11,6 @@ class SalesReportSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=10, decimal_places=2)
     discount_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     status = serializers.CharField()
+    financial_status = serializers.CharField()
+    refund_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    net_paid = serializers.DecimalField(max_digits=10, decimal_places=2)

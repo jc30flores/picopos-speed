@@ -41,3 +41,50 @@ class Payment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.order_id} {self.method} {self.amount}"
+
+
+class Refund(models.Model):
+    METHOD_CHOICES = Payment.METHOD_CHOICES
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="refunds")
+    original_payment = models.ForeignKey(
+        Payment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="refunds",
+    )
+    cash_session = models.ForeignKey(
+        CashSession,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="refunds",
+    )
+    method = models.CharField(max_length=20, choices=METHOD_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    tip_refunded = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    reason = models.TextField()
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_refunds",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_refunds",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["order", "created_at"]),
+            models.Index(fields=["method"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Refund {self.order_id} {self.method} {self.amount}"
