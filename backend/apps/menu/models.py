@@ -74,7 +74,7 @@ class Product(models.Model):
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
-    image = models.ImageField(upload_to=product_image_upload_to, blank=True, null=True)
+    image = models.CharField(max_length=255, blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
     modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
@@ -87,9 +87,9 @@ class Product(models.Model):
         return self.name
 
     def save(self, *args, **kwargs) -> None:
-        if self.image and hasattr(self.image, "name"):
-            self.image_path = f"{settings.MEDIA_URL}{self.image.name}"
-        elif not self.image:
+        if self.image:
+            self.image_path = f"{settings.MEDIA_URL}{self.image}"
+        else:
             self.image_path = None
         super().save(*args, **kwargs)
 

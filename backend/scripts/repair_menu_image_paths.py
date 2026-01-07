@@ -58,7 +58,7 @@ def main() -> int:
 
     products_with_image = Product.objects.exclude(image__isnull=True).exclude(image="")
     for product in products_with_image:
-        desired_path = f"{settings.MEDIA_URL.rstrip('/')}/{product.image.name}"
+        desired_path = f"{settings.MEDIA_URL.rstrip('/')}/{product.image}"
         if product.image_path != desired_path:
             Product.objects.filter(id=product.id).update(image_path=desired_path)
 

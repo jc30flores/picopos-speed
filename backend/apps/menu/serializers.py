@@ -1,4 +1,3 @@
-import os
 from rest_framework import serializers
 from apps.menu.models import (
     Category,
@@ -48,6 +47,7 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
+    image = serializers.CharField(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
         source="category", queryset=Category.objects.all(), write_only=True
     )
@@ -96,17 +96,6 @@ class ProductSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.image.url)
             return obj.image.url
         return None
-
-    def validate_image(self, value):
-        if not value:
-            return value
-        max_size = 5 * 1024 * 1024
-        if value.size > max_size:
-            raise serializers.ValidationError("La imagen excede el máximo de 5MB.")
-        extension = os.path.splitext(value.name)[1].lower().lstrip(".")
-        if extension not in {"jpg", "jpeg", "png", "webp"}:
-            raise serializers.ValidationError("Formato de imagen no permitido.")
-        return value
 
     def update(self, instance, validated_data):
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
