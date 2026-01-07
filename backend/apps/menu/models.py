@@ -1,5 +1,23 @@
+import os
+import re
+import uuid
+from django.conf import settings
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
+
+
+def normalize_category_name(name: str | None) -> str:
+    return (name or "").strip().upper()
+
+
+def product_image_upload_to(instance: "Product", filename: str) -> str:
+    extension = os.path.splitext(filename)[1].lower().lstrip(".")
+    category_name = normalize_category_name(
+        instance.category.name if instance.category_id else "SIN_CATEGORIA"
+    )
+    safe_category = re.sub(r"[^A-Z0-9_-]+", "_", category_name) or "SIN_CATEGORIA"
+    filename = f"{uuid.uuid4().hex}.{extension or 'jpg'}"
+    return f"{safe_category}/{filename}"
 
 
 class Category(models.Model):
@@ -11,6 +29,11 @@ class Category(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def save(self, *args, **kwargs) -> None:
+        if self.name:
+            self.name = normalize_category_name(self.name)
+        super().save(*args, **kwargs)
 
 
 class ModifierGroup(models.Model):
@@ -51,7 +74,8 @@ class Product(models.Model):
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
-    image = models.ImageField(upload_to="products/", blank=True, null=True)
+    image = models.ImageField(upload_to=product_image_upload_to, blank=True, null=True)
+    image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
     modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
 
@@ -61,6 +85,13 @@ class Product(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def save(self, *args, **kwargs) -> None:
+        if self.image and hasattr(self.image, "name"):
+            self.image_path = f"{settings.MEDIA_URL}{self.image.name}"
+        elif not self.image:
+            self.image_path = None
+        super().save(*args, **kwargs)
 
 
 class Discount(models.Model):

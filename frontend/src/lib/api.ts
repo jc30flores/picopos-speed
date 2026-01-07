@@ -30,6 +30,7 @@ export type Product = {
   category: string;
   categoryId: number;
   image?: string | null;
+  imagePath?: string | null;
   imageUrl?: string | null;
   available: boolean;
   modifierGroups: number[];
@@ -261,8 +262,9 @@ export const me = async (): Promise<AuthUser> => {
 
 let cachedTaxConfig: TaxConfig | null = null;
 
-export const getCategories = async (): Promise<Category[]> => {
-  const response = await request("/api/menu/categories/");
+export const getCategories = async (query?: string): Promise<Category[]> => {
+  const params = query ? `?q=${encodeURIComponent(query)}` : "";
+  const response = await request(`/api/menu/categories/${params}`);
   const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -295,6 +297,7 @@ export const getProducts = async (): Promise<Product[]> => {
     category: string;
     category_id_display?: number;
     image: string | null;
+    image_path?: string | null;
     image_url: string | null;
     available: boolean;
     modifier_groups: number[];
@@ -307,6 +310,7 @@ export const getProducts = async (): Promise<Product[]> => {
     category: item.category,
     categoryId: item.category_id_display ?? 0,
     image: item.image,
+    imagePath: item.image_path ?? null,
     imageUrl: item.image_url ?? undefined,
     available: item.available,
     modifierGroups: item.modifier_groups,
@@ -347,6 +351,7 @@ export const createProduct = async (payload: {
     category: string;
     category_id_display?: number;
     image: string | null;
+    image_path?: string | null;
     image_url: string | null;
     available: boolean;
     modifier_groups: number[];
@@ -359,6 +364,64 @@ export const createProduct = async (payload: {
     category: data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
     image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: data.image_url ?? undefined,
+    available: data.available,
+    modifierGroups: data.modifier_groups,
+  };
+};
+
+export const updateProduct = async (
+  productId: number,
+  payload: {
+    name: string;
+    description: string;
+    price: number;
+    categoryId: number;
+    image?: File | null;
+    available: boolean;
+    modifierGroupIds?: number[];
+  }
+): Promise<Product> => {
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  formData.append("description", payload.description);
+  formData.append("price", payload.price.toString());
+  formData.append("category_id", payload.categoryId.toString());
+  formData.append("available", payload.available ? "true" : "false");
+  if (payload.image) {
+    formData.append("image", payload.image);
+  }
+  if (payload.modifierGroupIds?.length) {
+    payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+
+  const response = await request(`/api/menu/products/${productId}/`, {
+    method: "PATCH",
+    body: formData,
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    description: string;
+    price: string;
+    category: string;
+    category_id_display?: number;
+    image: string | null;
+    image_path?: string | null;
+    image_url: string | null;
+    available: boolean;
+    modifier_groups: number[];
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    category: data.category,
+    categoryId: data.category_id_display ?? payload.categoryId,
+    image: data.image,
+    imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
     modifierGroups: data.modifier_groups,

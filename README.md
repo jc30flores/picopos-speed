@@ -5,6 +5,11 @@
 - Backend: http://localhost:8102
 - Frontend: http://localhost:8182
 
+### Menu images
+
+- Product images are stored on disk in `backend/menu_image/<CATEGORIA>/`.
+- Images are served locally from `http://localhost:8102/menu_image/...`.
+
 ### Startup order
 
 1. Start the backend (`python backend/manage.py runserver`)

@@ -1,12 +1,13 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Category, createProduct, Product } from "@/lib/api";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
+import { Category, createCategory, createProduct, getCategories, Product, updateProduct } from "@/lib/api";
 
 interface ProductFormDialogProps {
   open: boolean;
@@ -26,8 +27,15 @@ export const ProductFormDialog = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState(0);
-  const [category, setCategory] = useState("");
+  const [categoryQuery, setCategoryQuery] = useState("");
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
+  const [categoryOptions, setCategoryOptions] = useState<Category[]>(categories);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [isFetchingCategories, setIsFetchingCategories] = useState(false);
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
+  const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
 
   useEffect(() => {
@@ -35,39 +43,126 @@ export const ProductFormDialog = ({
       setName(editingProduct.name);
       setDescription(editingProduct.description);
       setPrice(editingProduct.price);
-      setCategory(editingProduct.category);
+      setCategoryQuery(editingProduct.category);
+      setSelectedCategoryId(editingProduct.categoryId);
       setImageFile(null);
+      setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
     } else {
       setName("");
       setDescription("");
       setPrice(0);
-      setCategory("");
+      setCategoryQuery("");
+      setSelectedCategoryId(null);
       setImageFile(null);
+      setExistingImageUrl(null);
       setAvailable(true);
     }
   }, [editingProduct, open]);
 
+  useEffect(() => {
+    if (!imageFile) {
+      setLocalImageUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setLocalImageUrl(previewUrl);
+    return () => {
+      URL.revokeObjectURL(previewUrl);
+    };
+  }, [imageFile]);
+
+  useEffect(() => {
+    const handler = window.setTimeout(async () => {
+      setIsFetchingCategories(true);
+      try {
+        const data = await getCategories(categoryQuery.trim() || undefined);
+        setCategoryOptions(data);
+      } finally {
+        setIsFetchingCategories(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(handler);
+  }, [categoryQuery]);
+
+  useEffect(() => {
+    if (!categoryQuery.trim()) {
+      setCategoryOptions(categories);
+    }
+  }, [categories, categoryQuery]);
+
+  const selectedCategoryName = useMemo(() => {
+    if (selectedCategoryId) {
+      return (
+        categoryOptions.find((cat) => cat.id === selectedCategoryId)?.name ||
+        categories.find((cat) => cat.id === selectedCategoryId)?.name ||
+        ""
+      );
+    }
+    return "";
+  }, [categoryOptions, categories, selectedCategoryId]);
+
+  const canCreateCategory = useMemo(() => {
+    const normalized = categoryQuery.trim().toUpperCase();
+    if (!normalized) return false;
+    return !categoryOptions.some((cat) => cat.name.toUpperCase() === normalized);
+  }, [categoryOptions, categoryQuery]);
+
   const isValid = () => {
-    return name.trim() !== "" && category !== "" && price > 0;
+    return name.trim() !== "" && selectedCategoryId !== null && price > 0;
   };
 
   const handleSave = async () => {
     if (!isValid()) return;
-    const selectedCategory = categories.find((item) => item.name === category);
-    if (!selectedCategory) return;
 
-    await createProduct({
-      name,
-      description,
-      price,
-      categoryId: selectedCategory.id,
-      image: imageFile,
-      available,
-    });
+    if (editingProduct) {
+      await updateProduct(editingProduct.id, {
+        name,
+        description,
+        price,
+        categoryId: selectedCategoryId ?? 0,
+        image: imageFile,
+        available,
+      });
+    } else {
+      await createProduct({
+        name,
+        description,
+        price,
+        categoryId: selectedCategoryId ?? 0,
+        image: imageFile,
+        available,
+      });
+    }
     await onSaved();
     onOpenChange(false);
   };
+
+  const handleSelectCategory = (categoryItem: Category) => {
+    setSelectedCategoryId(categoryItem.id);
+    setCategoryQuery(categoryItem.name);
+    setCategoryOpen(false);
+  };
+
+  const handleCreateCategory = async () => {
+    const normalized = categoryQuery.trim().toUpperCase();
+    if (!normalized || isCreatingCategory) return;
+    setIsCreatingCategory(true);
+    try {
+      const created = await createCategory(normalized);
+      setCategoryOptions((prev) => {
+        if (prev.some((cat) => cat.id === created.id)) return prev;
+        return [...prev, created];
+      });
+      setSelectedCategoryId(created.id);
+      setCategoryQuery(created.name);
+      setCategoryOpen(false);
+    } finally {
+      setIsCreatingCategory(false);
+    }
+  };
+
+  const previewUrl = localImageUrl ?? existingImageUrl;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -122,18 +217,65 @@ export const ProductFormDialog = ({
 
             <div>
               <Label htmlFor="product-category">Categoría</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue placeholder="Selecciona categoría" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories.filter(c => c !== "Todos").map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {cat}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    className="mt-1 w-full justify-between"
+                  >
+                    {selectedCategoryName || "Selecciona categoría"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[320px] p-0" align="start">
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      placeholder="Buscar categoría..."
+                      value={categoryQuery}
+                      onValueChange={(value) => {
+                        setCategoryQuery(value.toUpperCase());
+                        setSelectedCategoryId(null);
+                      }}
+                      className="uppercase"
+                    />
+                    <CommandList>
+                      {isFetchingCategories && (
+                        <CommandItem disabled>Buscando categorías...</CommandItem>
+                      )}
+                      {!isFetchingCategories && categoryOptions.length === 0 && (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          Sin coincidencias
+                        </div>
+                      )}
+                      {categoryOptions.length > 0 && (
+                        <CommandGroup heading="Categorías">
+                          {categoryOptions.map((cat) => (
+                            <CommandItem
+                              key={cat.id}
+                              value={cat.name}
+                              onSelect={() => handleSelectCategory(cat)}
+                            >
+                              {cat.name}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      )}
+                      {canCreateCategory && (
+                        <>
+                          <CommandSeparator />
+                          <CommandGroup heading="Crear">
+                            <CommandItem onSelect={handleCreateCategory}>
+                              {isCreatingCategory
+                                ? "Creando categoría..."
+                                : `Crear categoría: ${categoryQuery.trim().toUpperCase()}`}
+                            </CommandItem>
+                          </CommandGroup>
+                        </>
+                      )}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
             <div>
@@ -142,6 +284,7 @@ export const ProductFormDialog = ({
                 id="product-image"
                 type="file"
                 accept="image/*"
+                capture="environment"
                 onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
                 className="mt-1"
               />
@@ -158,6 +301,18 @@ export const ProductFormDialog = ({
               </Label>
             </div>
           </div>
+          {previewUrl && (
+            <div className="mt-4">
+              <Label className="text-sm">Vista previa</Label>
+              <div className="mt-2 flex justify-center">
+                <img
+                  src={previewUrl}
+                  alt="Vista previa del producto"
+                  className="h-32 w-32 rounded-lg object-cover border"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-3 pt-4">
