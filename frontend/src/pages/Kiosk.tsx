@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, resolveImageUrl, Category, ModifierGroup, Product } from "@/lib/api";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
@@ -31,6 +31,7 @@ const Kiosk = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+  const [imageErrors, setImageErrors] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     Promise.all([getCategories(), getProducts(), getModifierGroups()])
@@ -169,7 +170,27 @@ const Kiosk = () => {
                 className="p-6 cursor-pointer hover-lift"
                 onClick={() => handleProductSelect(product)}
               >
-                <div className="text-7xl text-center mb-4">{product.image}</div>
+                {(() => {
+                  const imageSrc = resolveImageUrl(product.imagePath ?? product.imageUrl);
+                  if (!imageSrc || imageErrors[product.id]) {
+                    return (
+                      <div className="mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">
+                        Sin imagen
+                      </div>
+                    );
+                  }
+                  return (
+                    <img
+                      src={imageSrc}
+                      alt={product.name}
+                      className="mb-4 h-32 w-full rounded-md object-cover"
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                        setImageErrors((prev) => ({ ...prev, [product.id]: true }));
+                      }}
+                    />
+                  );
+                })()}
                 <h3 className="font-bold text-xl mb-2 text-center">{product.name}</h3>
                 <p className="text-2xl font-bold text-secondary text-center">
                   ${product.price.toFixed(2)}

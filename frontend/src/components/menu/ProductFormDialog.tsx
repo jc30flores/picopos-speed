@@ -26,7 +26,7 @@ export const ProductFormDialog = ({
 }: ProductFormDialogProps) => {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [price, setPrice] = useState(0);
+  const [price, setPrice] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [categoryOptions, setCategoryOptions] = useState<Category[]>(categories);
@@ -42,7 +42,7 @@ export const ProductFormDialog = ({
     if (editingProduct) {
       setName(editingProduct.name);
       setDescription(editingProduct.description);
-      setPrice(editingProduct.price);
+      setPrice(editingProduct.price ? String(editingProduct.price) : "");
       setCategoryQuery(editingProduct.category);
       setSelectedCategoryId(editingProduct.categoryId);
       setImageFile(null);
@@ -51,7 +51,7 @@ export const ProductFormDialog = ({
     } else {
       setName("");
       setDescription("");
-      setPrice(0);
+      setPrice("");
       setCategoryQuery("");
       setSelectedCategoryId(null);
       setImageFile(null);
@@ -109,17 +109,21 @@ export const ProductFormDialog = ({
   }, [categoryOptions, categoryQuery]);
 
   const isValid = () => {
-    return name.trim() !== "" && selectedCategoryId !== null && price > 0;
+    const parsed = price === "" ? NaN : Number(price);
+    return name.trim() !== "" && selectedCategoryId !== null && Number.isFinite(parsed) && parsed > 0;
   };
 
   const handleSave = async () => {
     if (!isValid()) return;
 
+    const parsedPrice = price === "" ? NaN : Number(price);
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) return;
+
     if (editingProduct) {
       await updateProduct(editingProduct.id, {
         name,
         description,
-        price,
+        price: parsedPrice,
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
@@ -128,7 +132,7 @@ export const ProductFormDialog = ({
       await createProduct({
         name,
         description,
-        price,
+        price: parsedPrice,
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
@@ -205,12 +209,16 @@ export const ProductFormDialog = ({
               <Label htmlFor="product-price">Precio</Label>
               <Input
                 id="product-price"
-                type="number"
-                step="0.01"
-                min={0}
+                type="text"
+                inputMode="decimal"
                 placeholder="0.00"
                 value={price}
-                onChange={(e) => setPrice(parseFloat(e.target.value) || 0)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "" || /^\d*\.?\d*$/.test(value)) {
+                    setPrice(value);
+                  }
+                }}
                 className="mt-1"
               />
             </div>

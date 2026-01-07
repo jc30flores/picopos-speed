@@ -36,6 +36,14 @@ export type Product = {
   modifierGroups: number[];
 };
 
+export const resolveImageUrl = (imagePath?: string | null): string | null => {
+  if (!imagePath) return null;
+  if (/^https?:\/\//i.test(imagePath)) return imagePath;
+  const base = import.meta.env.VITE_API_URL || API_BASE_URL;
+  const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  return `${base}${normalizedPath}`;
+};
+
 export type Discount = {
   id: number;
   name: string;
