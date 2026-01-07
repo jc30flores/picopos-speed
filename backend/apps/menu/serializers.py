@@ -9,6 +9,7 @@ from apps.menu.models import (
     DiscountRuleTarget,
     normalize_category_name,
 )
+from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -108,12 +109,31 @@ class ProductSerializer(serializers.ModelSerializer):
         return value
 
     def update(self, instance, validated_data):
-        new_image = validated_data.get("image")
+        image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
+        validated_data.pop("image", None)
         old_image = instance.image
         instance = super().update(instance, validated_data)
-        if new_image and old_image and old_image.name != instance.image.name:
-            old_image.delete(save=False)
+
+        if image_file:
+            saved = save_menu_image(image_file, instance.category.name)
+            instance.image = saved["image"]
+            instance.image_path = saved["image_path"]
+            instance.save(update_fields=["image", "image_path"])
+            if old_image and old_image != instance.image:
+                delete_menu_image_by_image_field(old_image)
+
         return instance
+
+    def create(self, validated_data):
+        image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
+        validated_data.pop("image", None)
+        product = super().create(validated_data)
+        if image_file:
+            saved = save_menu_image(image_file, product.category.name)
+            product.image = saved["image"]
+            product.image_path = saved["image_path"]
+            product.save(update_fields=["image", "image_path"])
+        return product
 
 
 class DiscountSerializer(serializers.ModelSerializer):

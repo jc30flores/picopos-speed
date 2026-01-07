@@ -16,7 +16,7 @@ django.setup()
 from django.conf import settings  # noqa: E402
 from apps.menu.models import Product  # noqa: E402
 
-MENU_IMAGE_DIR = settings.MEDIA_ROOT
+MENU_IMAGE_DIR = settings.MENU_IMAGE_ROOT
 
 OLD_PATH_PATTERN = re.compile(r"^/menu_image/([^/]+)$")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
