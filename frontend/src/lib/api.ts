@@ -37,34 +37,12 @@ export type Product = {
   modifierGroups: number[];
 };
 
-let hasLoggedImageSrc = false;
-
-export const resolveImageUrl = (
-  imagePath?: string | null,
-  categoryName?: string | null
-): string | null => {
+export const resolveImageUrl = (imagePath?: string | null): string | null => {
   if (!imagePath) return null;
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
   const base = import.meta.env.VITE_API_URL || API_BASE_URL;
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
-  const legacyMatch = normalizedPath.match(/^\/menu_image\/([^/]+)$/);
-  if (legacyMatch && categoryName) {
-    const category = String(categoryName).trim().toUpperCase();
-    if (category) {
-      const resolved = `${base}/menu_image/${encodeURIComponent(category)}/${encodeURIComponent(legacyMatch[1])}`;
-      if (import.meta.env.DEV && !hasLoggedImageSrc) {
-        console.log("IMG SRC", resolved);
-        hasLoggedImageSrc = true;
-      }
-      return resolved;
-    }
-  }
-  const resolved = `${base}${normalizedPath}`;
-  if (import.meta.env.DEV && !hasLoggedImageSrc) {
-    console.log("IMG SRC", resolved);
-    hasLoggedImageSrc = true;
-  }
-  return resolved;
+  return `${base}${normalizedPath}`;
 };
 
 export type Discount = {
