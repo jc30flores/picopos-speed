@@ -5,6 +5,7 @@ urlpatterns = [
     path("categories/", views.CategoryListCreateView.as_view(), name="menu-categories"),
     path("products/", views.ProductListCreateView.as_view(), name="menu-products"),
     path("products/<int:pk>/", views.ProductDetailView.as_view(), name="menu-products-detail"),
+    path("image-health/", views.MenuImageHealthView.as_view(), name="menu-image-health"),
     path("modifier-groups/", views.ModifierGroupListCreateView.as_view(), name="menu-modifier-groups"),
     path("discounts/", views.DiscountListCreateView.as_view(), name="menu-discounts"),
     path("discounts/<int:pk>/", views.DiscountDetailView.as_view(), name="menu-discounts-detail"),

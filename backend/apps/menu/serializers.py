@@ -46,6 +46,7 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
         source="category", queryset=Category.objects.all(), write_only=True
     )
@@ -71,6 +72,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "category",
+            "category_name",
             "category_id",
             "category_id_display",
             "image",

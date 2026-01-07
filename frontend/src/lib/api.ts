@@ -28,6 +28,7 @@ export type Product = {
   description: string;
   price: number;
   category: string;
+  categoryName?: string | null;
   categoryId: number;
   image?: string | null;
   imagePath?: string | null;
@@ -36,11 +37,21 @@ export type Product = {
   modifierGroups: number[];
 };
 
-export const resolveImageUrl = (imagePath?: string | null): string | null => {
+export const resolveImageUrl = (
+  imagePath?: string | null,
+  categoryName?: string | null
+): string | null => {
   if (!imagePath) return null;
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
   const base = import.meta.env.VITE_API_URL || API_BASE_URL;
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  const legacyMatch = normalizedPath.match(/^\/menu_image\/([^/]+)$/);
+  if (legacyMatch && categoryName) {
+    const category = String(categoryName).trim().toUpperCase();
+    if (category) {
+      return `${base}/menu_image/${encodeURIComponent(category)}/${encodeURIComponent(legacyMatch[1])}`;
+    }
+  }
   return `${base}${normalizedPath}`;
 };
 
@@ -303,6 +314,7 @@ export const getProducts = async (): Promise<Product[]> => {
     description: string;
     price: string;
     category: string;
+    category_name?: string;
     category_id_display?: number;
     image: string | null;
     image_path?: string | null;
@@ -316,6 +328,7 @@ export const getProducts = async (): Promise<Product[]> => {
     description: item.description,
     price: Number(item.price),
     category: item.category,
+    categoryName: item.category_name ?? item.category,
     categoryId: item.category_id_display ?? 0,
     image: item.image,
     imagePath: item.image_path ?? null,
@@ -357,6 +370,7 @@ export const createProduct = async (payload: {
     description: string;
     price: string;
     category: string;
+    category_name?: string;
     category_id_display?: number;
     image: string | null;
     image_path?: string | null;
@@ -370,6 +384,7 @@ export const createProduct = async (payload: {
     description: data.description,
     price: Number(data.price),
     category: data.category,
+    categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
     image: data.image,
     imagePath: data.image_path ?? null,
@@ -414,6 +429,7 @@ export const updateProduct = async (
     description: string;
     price: string;
     category: string;
+    category_name?: string;
     category_id_display?: number;
     image: string | null;
     image_path?: string | null;
@@ -427,6 +443,7 @@ export const updateProduct = async (
     description: data.description,
     price: Number(data.price),
     category: data.category,
+    categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
     image: data.image,
     imagePath: data.image_path ?? null,

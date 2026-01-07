@@ -171,7 +171,10 @@ const Kiosk = () => {
                 onClick={() => handleProductSelect(product)}
               >
                 {(() => {
-                  const imageSrc = resolveImageUrl(product.imagePath ?? product.imageUrl);
+                  const imageSrc = resolveImageUrl(
+                    product.imagePath ?? product.imageUrl,
+                    product.categoryName ?? product.category
+                  );
                   if (!imageSrc || imageErrors[product.id]) {
                     return (
                       <div className="mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">

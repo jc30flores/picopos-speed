@@ -1,6 +1,9 @@
+import os
 from rest_framework import generics, status
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from django.conf import settings
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -73,6 +76,19 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
         if self.request.method in SAFE_METHODS:
             return [IsAuthenticatedAndActive()]
         return [IsAdminOrManager()]
+
+
+class MenuImageHealthView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        return Response(
+            {
+                "ok": True,
+                "menu_image_dir": str(settings.MEDIA_ROOT),
+                "exists": os.path.isdir(settings.MEDIA_ROOT),
+            }
+        )
 
 
 class ModifierGroupListCreateView(generics.ListCreateAPIView):
