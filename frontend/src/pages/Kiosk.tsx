@@ -3,12 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check } from "lucide-react";
+import { ArrowLeft, Check, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { getCategories, getModifierGroups, getProducts, resolveImageUrl, Category, ModifierGroup, Product } from "@/lib/api";
+import { ProductImagePreviewModal } from "@/components/kiosk/ProductImagePreviewModal";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
@@ -32,6 +33,8 @@ const Kiosk = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [imageErrors, setImageErrors] = useState<Record<number, boolean>>({});
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewItem, setPreviewItem] = useState<Product | null>(null);
 
   useEffect(() => {
     Promise.all([getCategories(), getProducts(), getModifierGroups()])
@@ -59,6 +62,11 @@ const Kiosk = () => {
       addToCart(product, []);
       setStep("review");
     }
+  };
+
+  const handlePreview = (product: Product) => {
+    setPreviewItem(product);
+    setPreviewOpen(true);
   };
 
   const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
@@ -174,21 +182,35 @@ const Kiosk = () => {
                   const imageSrc = resolveImageUrl(product.imagePath ?? product.imageUrl);
                   if (!imageSrc || imageErrors[product.id]) {
                     return (
-                      <div className="mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">
+                      <div className="relative mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">
                         Sin imagen
                       </div>
                     );
                   }
                   return (
-                    <img
-                      src={imageSrc}
-                      alt={product.name}
-                      className="mb-4 h-32 w-full rounded-md object-cover"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                        setImageErrors((prev) => ({ ...prev, [product.id]: true }));
-                      }}
-                    />
+                    <div className="relative mb-4">
+                      <img
+                        src={imageSrc}
+                        alt={product.name}
+                        className="h-32 w-full rounded-md object-cover"
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                          setImageErrors((prev) => ({ ...prev, [product.id]: true }));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        title="Ver imagen"
+                        aria-label="Ver imagen"
+                        className="absolute right-2 top-2 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handlePreview(product);
+                        }}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
                   );
                 })()}
                 <h3 className="font-bold text-xl mb-2 text-center">{product.name}</h3>
@@ -198,6 +220,11 @@ const Kiosk = () => {
               </Card>
             ))}
           </div>
+          <ProductImagePreviewModal
+            open={previewOpen}
+            item={previewItem}
+            onClose={() => setPreviewOpen(false)}
+          />
         </div>
       </div>
     );
