@@ -19,17 +19,22 @@ from apps.menu.models import Product  # noqa: E402
 MENU_IMAGE_DIR = settings.MEDIA_ROOT
 
 OLD_PATH_PATTERN = re.compile(r"^/menu_image/([^/]+)$")
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def list_category_files(category_name: str) -> list[str]:
     category_dir = os.path.join(MENU_IMAGE_DIR, category_name)
     if not os.path.isdir(category_dir):
         return []
-    return [
-        os.path.join(category_dir, filename)
-        for filename in os.listdir(category_dir)
-        if os.path.isfile(os.path.join(category_dir, filename))
-    ]
+    return sorted(
+        [
+            os.path.join(category_dir, filename)
+            for filename in os.listdir(category_dir)
+            if os.path.isfile(os.path.join(category_dir, filename))
+            and os.path.splitext(filename)[1].lower() in IMAGE_EXTENSIONS
+        ],
+        key=lambda path: os.path.getmtime(path),
+    )
 
 
 def find_file_in_tree(filename: str) -> list[str]:
@@ -55,26 +60,40 @@ def main() -> int:
 
     for product in products:
         image_path = product.image_path or ""
-        match = OLD_PATH_PATTERN.match(image_path.strip())
-        if not match:
+        category_name = (product.category.name or "").strip().upper() if product.category else ""
+        normalized_path = image_path.strip()
+        relative_path = normalized_path.lstrip("/")
+        physical_path = os.path.join(BACKEND_ROOT, relative_path)
+
+        if os.path.isfile(physical_path):
             skipped += 1
             continue
 
-        filename = match.group(1)
-        category_name = (product.category.name or "").strip().upper() if product.category else ""
-        candidate = os.path.join(MENU_IMAGE_DIR, category_name, filename)
+        match = OLD_PATH_PATTERN.match(normalized_path)
+        filename = match.group(1) if match else os.path.basename(normalized_path)
+        extension = os.path.splitext(filename)[1].lower()
 
         new_path = None
-        if category_name and os.path.isfile(candidate):
-            new_path = f"{settings.MEDIA_URL.rstrip('/')}/{category_name}/{filename}"
-        else:
+        if category_name:
+            category_files = list_category_files(category_name)
+            if filename and category_files:
+                candidate = os.path.join(MENU_IMAGE_DIR, category_name, filename)
+                if os.path.isfile(candidate):
+                    new_path = f"{settings.MEDIA_URL.rstrip('/')}/{category_name}/{filename}"
+                else:
+                    same_ext = [path for path in category_files if os.path.splitext(path)[1].lower() == extension]
+                    if len(same_ext) == 1:
+                        new_path = to_web_path(same_ext[0])
+                    elif len(category_files) == 1:
+                        new_path = to_web_path(category_files[0])
+                    elif category_files:
+                        newest = category_files[-1]
+                        new_path = to_web_path(newest)
+
+        if not new_path and filename:
             matches = find_file_in_tree(filename)
             if len(matches) == 1:
                 new_path = to_web_path(matches[0])
-            elif category_name:
-                category_files = list_category_files(category_name)
-                if len(category_files) == 1:
-                    new_path = to_web_path(category_files[0])
 
         if new_path:
             Product.objects.filter(id=product.id).update(image_path=new_path)

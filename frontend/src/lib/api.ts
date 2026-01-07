@@ -37,6 +37,8 @@ export type Product = {
   modifierGroups: number[];
 };
 
+let hasLoggedImageSrc = false;
+
 export const resolveImageUrl = (
   imagePath?: string | null,
   categoryName?: string | null
@@ -49,10 +51,20 @@ export const resolveImageUrl = (
   if (legacyMatch && categoryName) {
     const category = String(categoryName).trim().toUpperCase();
     if (category) {
-      return `${base}/menu_image/${encodeURIComponent(category)}/${encodeURIComponent(legacyMatch[1])}`;
+      const resolved = `${base}/menu_image/${encodeURIComponent(category)}/${encodeURIComponent(legacyMatch[1])}`;
+      if (import.meta.env.DEV && !hasLoggedImageSrc) {
+        console.log("IMG SRC", resolved);
+        hasLoggedImageSrc = true;
+      }
+      return resolved;
     }
   }
-  return `${base}${normalizedPath}`;
+  const resolved = `${base}${normalizedPath}`;
+  if (import.meta.env.DEV && !hasLoggedImageSrc) {
+    console.log("IMG SRC", resolved);
+    hasLoggedImageSrc = true;
+  }
+  return resolved;
 };
 
 export type Discount = {
