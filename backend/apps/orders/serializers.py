@@ -108,7 +108,8 @@ class OrderItemInputSerializer(serializers.Serializer):
 
 class OrderCreateSerializer(serializers.Serializer):
     branch_id = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.all(), required=False)
-    service_type_key = serializers.CharField()
+    service_type_id = serializers.IntegerField(required=False)
+    service_type_key = serializers.CharField(required=False, allow_blank=True)
     table_id = serializers.PrimaryKeyRelatedField(queryset=Table.objects.all(), required=False, allow_null=True)
     customer_name = serializers.CharField(required=False, allow_blank=True)
     items = OrderItemInputSerializer(many=True)
@@ -120,16 +121,22 @@ class OrderCreateSerializer(serializers.Serializer):
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop("items")
-        service_type_key = validated_data.pop("service_type_key")
+        service_type_id = validated_data.pop("service_type_id", None)
+        service_type_key = (validated_data.pop("service_type_key", None) or "").strip() or None
         branch = validated_data.pop("branch_id", None)
         if branch is None:
             branch = Branch.objects.first()
             if branch is None:
                 raise serializers.ValidationError("Branch is required")
 
-        service_type = ServiceType.objects.filter(key=service_type_key).first()
+        service_type = None
+        if service_type_id is not None:
+            service_type = ServiceType.objects.filter(id=service_type_id).first()
+        if service_type is None and service_type_key:
+            service_type = ServiceType.objects.filter(key=service_type_key).first()
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
+        service_type_key = service_type.key
 
         order_number = self._next_order_number(branch)
         order = Order.objects.create(

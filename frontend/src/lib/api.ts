@@ -649,6 +649,12 @@ export const createOrder = async (payload: {
       })),
     }),
   });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      throw new Error("Error al crear orden. Revisa backend logs.");
+    }
+  }
   const data = await handleJson<{
     id: number;
     order_number: number;
