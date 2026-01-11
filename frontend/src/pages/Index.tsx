@@ -462,18 +462,22 @@ const POS = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" onClick={() => setCart([])}>
-                  Cancelar
-                </Button>
+              <div className="grid grid-cols-1 gap-3">
                 <Button
                   variant="default"
-                  className="font-bold"
+                  className="w-full font-bold"
                   size="lg"
                   disabled={cart.length === 0 || isProcessingPayment}
                   onClick={handleCheckout}
                 >
                   Cobrar {formatMoney(total)}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setCart([])}
+                >
+                  Cancelar
                 </Button>
               </div>
             </div>
