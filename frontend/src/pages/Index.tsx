@@ -167,7 +167,10 @@ const POS = () => {
   };
 
   const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
-  const paymentTotal = checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+  const paymentTotal =
+    checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+  const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
+  const isPaid = paymentStatus === "paid";
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
@@ -619,7 +622,7 @@ const POS = () => {
                 </Button>
               </div>
 
-              {activeOrder.paymentStatus === "paid" && (
+              {isPaid && (
                 <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>
                   Imprimir recibo
                 </Button>
