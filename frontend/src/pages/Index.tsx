@@ -171,6 +171,12 @@ const POS = () => {
     checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
+  const paymentAmountValue = toNumber(paymentAmount);
+  const tipAmountValue = toNumber(tipAmount);
+  const checkoutTotal = checkoutDraft?.total ?? 0;
+  const paidTotal = paymentAmountValue + tipAmountValue;
+  const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
+  const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
@@ -519,105 +525,144 @@ const POS = () => {
             <DialogDescription>Registra el pago del pedido en curso</DialogDescription>
           </DialogHeader>
           {checkoutDraft ? (
-            <div className="space-y-4">
-              <div className="rounded-md border p-3 space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span>Pedido</span>
-                  <span>{activeOrder?.orderNumber ? `#${activeOrder.orderNumber}` : "—"}</span>
+            <div className="space-y-5">
+              <div className="rounded-lg border bg-muted/30 p-4">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
+                <div className="mt-2 text-3xl font-bold text-secondary">
+                  {formatMoney(checkoutDraft.total)}
                 </div>
-                <div className="flex justify-between">
-                  <span>Subtotal</span>
-                  <span>{formatMoney(checkoutDraft.subtotal)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
-                  <span>{formatMoney(checkoutDraft.tax)}</span>
-                </div>
-                <div className="flex justify-between font-semibold">
-                  <span>Total</span>
-                  <span>{formatMoney(checkoutDraft.total)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Pagado</span>
-                  <span>{formatMoney(toNumber(paymentAmount) + toNumber(tipAmount))}</span>
-                </div>
-                <div className="flex justify-between font-semibold">
-                  <span>Pendiente</span>
-                  <span>
-                    {formatMoney(
-                      Math.max(checkoutDraft.total - toNumber(paymentAmount) - toNumber(tipAmount), 0)
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              <div className="rounded-md border p-3 space-y-2 text-sm">
-                <div className="font-semibold">Detalle</div>
-                <div className="space-y-1">
-                  {checkoutDraft.items.map((item) => (
-                    <div key={item.id} className="flex justify-between">
-                      <span>
-                        {item.name} × {item.quantity}
-                      </span>
-                      <span>{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</span>
-                    </div>
-                  ))}
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Incluye impuesto {(checkoutDraft.taxRate * 100).toFixed(0)}% (
+                  {formatMoney(checkoutDraft.tax)})
                 </div>
               </div>
 
               <div className="space-y-2">
-                <Label>Método</Label>
-                <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cash">Efectivo</SelectItem>
-                    <SelectItem value="card">Tarjeta</SelectItem>
-                    <SelectItem value="transfer">Transferencia</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label>Monto</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={paymentAmount}
-                    onChange={(e) => setPaymentAmount(e.target.value)}
-                  />
+                <div className="flex items-center justify-between text-sm font-semibold">
+                  <span>Detalle</span>
+                  <span className="text-xs text-muted-foreground">
+                    {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : "Pedido sin número"}
+                  </span>
                 </div>
-                <div className="space-y-2">
-                  <Label>Propina</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={tipAmount}
-                    onChange={(e) => setTipAmount(e.target.value)}
-                  />
+                <div className="rounded-md border">
+                  <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
+                    {checkoutDraft.items.map((item) => (
+                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 p-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{item.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {formatMoney(toNumber(item.price))} c/u
+                          </div>
+                        </div>
+                        <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
+                        <div className="text-right font-semibold">
+                          {formatMoney(toNumber(item.price) * toNumber(item.quantity))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {(paymentMethod === "card" || paymentMethod === "transfer") && (
-                <div className="space-y-2">
-                  <Label>Referencia</Label>
-                  <Input
-                    value={paymentReference}
-                    onChange={(e) => setPaymentReference(e.target.value)}
-                    placeholder="Opcional"
-                  />
+              <div className="rounded-md border p-3 text-sm">
+                <div className="mb-2 font-semibold">Resumen</div>
+                <div className="space-y-1 text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span>{formatMoney(checkoutDraft.subtotal)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
+                    <span>{formatMoney(checkoutDraft.tax)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-foreground">
+                    <span>Total</span>
+                    <span>{formatMoney(checkoutDraft.total)}</span>
+                  </div>
                 </div>
-              )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm font-semibold">Pago</div>
+                <div className="space-y-2">
+                  <Label>Método</Label>
+                  <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Efectivo</SelectItem>
+                      <SelectItem value="card">Tarjeta</SelectItem>
+                      <SelectItem value="transfer">Transferencia</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Monto recibido</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(e) => setPaymentAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Propina</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={tipAmount}
+                      onChange={(e) => setTipAmount(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                  <div className="space-y-2">
+                    <Label>Referencia</Label>
+                    <Input
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                      placeholder="Opcional"
+                    />
+                  </div>
+                )}
+
+                <div className="rounded-md border px-3 py-2 text-sm">
+                  {paidTotal === 0 && checkoutTotal > 0 && (
+                    <span className="text-muted-foreground">
+                      Pendiente: {formatMoney(checkoutTotal)}
+                    </span>
+                  )}
+                  {paidTotal > 0 && remainingTotal > 0 && (
+                    <span className="text-destructive">
+                      Pendiente: {formatMoney(remainingTotal)}
+                    </span>
+                  )}
+                  {paidTotal > 0 && remainingTotal === 0 && changeTotal === 0 && (
+                    <span className="text-muted-foreground">Listo: pago exacto</span>
+                  )}
+                  {paidTotal > 0 && changeTotal > 0 && (
+                    <span className="text-emerald-400">
+                      Cambio: {formatMoney(changeTotal)}
+                    </span>
+                  )}
+                </div>
+              </div>
 
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>
                   Cerrar
                 </Button>
-                <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment}>
+                <Button
+                  className="flex-1"
+                  onClick={handleSubmitPayment}
+                  disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0}
+                >
                   {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                 </Button>
               </div>
