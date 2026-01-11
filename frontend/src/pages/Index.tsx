@@ -74,6 +74,15 @@ const POS = () => {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
+  const [checkoutDraft, setCheckoutDraft] = useState<{
+    items: CartItem[];
+    subtotal: number;
+    tax: number;
+    total: number;
+    taxRate: number;
+    serviceType: typeof serviceType;
+    createdAt: number;
+  } | null>(null);
 
   const loadMenuData = async () => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -158,15 +167,26 @@ const POS = () => {
   };
 
   const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
-  const paymentTotal = cart.length > 0 ? total : toNumber(activeOrder?.total);
+  const paymentTotal = checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     setIsProcessingPayment(true);
+    const draftTotals = calculateCartTotals(cart, taxRate);
+    const draft = {
+      items: [...cart],
+      subtotal: draftTotals.subtotal,
+      tax: draftTotals.tax,
+      total: draftTotals.total,
+      taxRate,
+      serviceType,
+      createdAt: Date.now(),
+    };
+    setCheckoutDraft(draft);
     try {
       const order = await createOrder({
         serviceType,
-        items: cart.map((item) => ({
+        items: draft.items.map((item) => ({
           productId: item.productId,
           productName: item.name,
           price: item.price,
@@ -175,13 +195,14 @@ const POS = () => {
         })),
       });
       setActiveOrder(order);
-      setCart([]);
-      setPaymentAmount(toNumber(order.remaining || order.total).toFixed(2));
+      setPaymentAmount(toNumber(draft.total).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
       setIsPaymentOpen(true);
     } catch (error) {
       console.error("Failed to create order", error);
+      setCheckoutDraft(null);
+      setActiveOrder(null);
       toast.error("No se pudo crear el pedido. Intenta de nuevo.");
     } finally {
       setIsProcessingPayment(false);
@@ -221,7 +242,7 @@ const POS = () => {
     const amountValue = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
     const totalPayment = amountValue + tipValue;
-    const remaining = toNumber(activeOrder.remaining || paymentTotal);
+    const remaining = toNumber(paymentTotal);
 
     if (!amountValue || amountValue <= 0) {
       toast.error("Ingresa un monto válido");
@@ -247,12 +268,14 @@ const POS = () => {
       });
       const refreshed = await getOrderById(activeOrder.id);
       setActiveOrder(refreshed);
-      setPaymentAmount(refreshed.remaining.toFixed(2));
+      setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
         toast.success("Pago registrado. Enviado a cocina.");
         setIsPaymentOpen(false);
+        setCart([]);
+        setCheckoutDraft(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -492,16 +515,24 @@ const POS = () => {
             <DialogTitle>Cobrar pedido</DialogTitle>
             <DialogDescription>Registra el pago del pedido en curso</DialogDescription>
           </DialogHeader>
-          {activeOrder ? (
+          {checkoutDraft ? (
             <div className="space-y-4">
               <div className="rounded-md border p-3 space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span>Pedido</span>
-                  <span>{activeOrder.orderNumber ? `#${activeOrder.orderNumber}` : "—"}</span>
+                  <span>{activeOrder?.orderNumber ? `#${activeOrder.orderNumber}` : "—"}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span>{formatMoney(checkoutDraft.subtotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
+                  <span>{formatMoney(checkoutDraft.tax)}</span>
+                </div>
+                <div className="flex justify-between font-semibold">
                   <span>Total</span>
-                  <span>{formatMoney(paymentTotal)}</span>
+                  <span>{formatMoney(checkoutDraft.total)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Pagado</span>
@@ -511,9 +542,23 @@ const POS = () => {
                   <span>Pendiente</span>
                   <span>
                     {formatMoney(
-                      Math.max(paymentTotal - toNumber(paymentAmount) - toNumber(tipAmount), 0)
+                      Math.max(checkoutDraft.total - toNumber(paymentAmount) - toNumber(tipAmount), 0)
                     )}
                   </span>
+                </div>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-2 text-sm">
+                <div className="font-semibold">Detalle</div>
+                <div className="space-y-1">
+                  {checkoutDraft.items.map((item) => (
+                    <div key={item.id} className="flex justify-between">
+                      <span>
+                        {item.name} × {item.quantity}
+                      </span>
+                      <span>{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
