@@ -143,6 +143,7 @@ class OrderCreateSerializer(serializers.Serializer):
             branch=branch,
             order_number=order_number,
             service_type=service_type,
+            status="waiting_payment",
             **validated_data,
         )
 

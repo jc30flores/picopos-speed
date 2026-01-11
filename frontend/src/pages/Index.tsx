@@ -176,11 +176,10 @@ const POS = () => {
       });
       setActiveOrder(order);
       setCart([]);
-      setPaymentAmount(order.remaining.toFixed(2));
+      setPaymentAmount(toNumber(order.remaining || order.total).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
       setIsPaymentOpen(true);
-      toast.success(`Pedido #${order.orderNumber} creado · Total $${order.total.toFixed(2)}`);
     } catch (error) {
       console.error("Failed to create order", error);
       toast.error("No se pudo crear el pedido. Intenta de nuevo.");
@@ -219,9 +218,10 @@ const POS = () => {
 
   const handleSubmitPayment = async () => {
     if (!activeOrder) return;
-    const amountValue = Number(paymentAmount);
-    const tipValue = Number(tipAmount);
+    const amountValue = toNumber(paymentAmount);
+    const tipValue = toNumber(tipAmount);
     const totalPayment = amountValue + tipValue;
+    const remaining = toNumber(activeOrder.remaining || paymentTotal);
 
     if (!amountValue || amountValue <= 0) {
       toast.error("Ingresa un monto válido");
@@ -231,7 +231,7 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (totalPayment > activeOrder.remaining) {
+    if (totalPayment > remaining) {
       toast.error("El pago supera el saldo pendiente");
       return;
     }
@@ -251,7 +251,7 @@ const POS = () => {
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success("Pago completado");
+        toast.success("Pago registrado. Enviado a cocina.");
         setIsPaymentOpen(false);
       } else {
         toast.success("Pago registrado");
@@ -497,7 +497,7 @@ const POS = () => {
               <div className="rounded-md border p-3 space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span>Pedido</span>
-                  <span>#{activeOrder.orderNumber}</span>
+                  <span>{activeOrder.orderNumber ? `#${activeOrder.orderNumber}` : "—"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Total</span>
