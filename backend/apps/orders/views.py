@@ -21,8 +21,8 @@ from apps.payments.models import Payment
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
-    order_number = serializers.IntegerField(source="order_number")
-    customer_name = serializers.CharField(source="customer_name")
+    order_number = serializers.IntegerField()
+    customer_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Order

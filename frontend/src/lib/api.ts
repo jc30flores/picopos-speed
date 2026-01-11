@@ -232,10 +232,29 @@ const request = async (path: string, options: RequestInit = {}) => {
 };
 
 const handleJson = async <T>(response: Response): Promise<T> => {
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "API request failed");
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Sesión expirada. Inicia sesión nuevamente.");
+    }
+    if (isJson) {
+      const errorPayload = await response.json().catch(() => null);
+      const message =
+        (errorPayload && (errorPayload.detail || errorPayload.error)) ||
+        (errorPayload ? JSON.stringify(errorPayload) : "");
+      throw new Error(message || "API request failed");
+    }
+    const text = await response.text();
+    throw new Error(text ? `API request failed: ${text.slice(0, 200)}` : "API request failed");
   }
+
+  if (!isJson) {
+    const text = await response.text();
+    throw new Error(text ? `Unexpected response: ${text.slice(0, 200)}` : "Unexpected response");
+  }
+
   return response.json() as Promise<T>;
 };
 
@@ -595,14 +614,17 @@ const mapOrder = (order: {
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
+  const items = Array.isArray(order.items) ? order.items : [];
   return {
     id: order.id,
     orderNumber: order.order_number,
-    items: order.items.map((item) => ({
+    items: items.map((item) => ({
       id: item.id,
       productName: item.product_name_snapshot,
       quantity: item.quantity,
-      modifiers: item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot),
+      modifiers: Array.isArray(item.applied_modifiers)
+        ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
+        : [],
       price: Number(item.price_snapshot),
     })),
     total: Number(order.total),
@@ -705,7 +727,7 @@ export const getActiveOrders = async (): Promise<Order[]> => {
       }>;
     }>
   >(response);
-  return data.map(mapOrder);
+  return Array.isArray(data) ? data.map(mapOrder) : [];
 };
 
 export const updateOrderStatus = async (orderId: number, statusValue: Order["status"]): Promise<Order> => {
@@ -775,6 +797,9 @@ export const getCustomerOrders = async (): Promise<
   const data = await handleJson<
     Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
   >(response);
+  if (!Array.isArray(data)) {
+    return [];
+  }
   return data.map((order) => ({
     id: order.id,
     orderNumber: order.order_number,
