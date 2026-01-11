@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import {
   Dialog,
   DialogContent,
@@ -156,9 +157,8 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const subtotal = total / (1 + taxRate);
-  const tax = total - subtotal;
+  const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
+  const paymentTotal = cart.length > 0 ? total : toNumber(activeOrder?.total);
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
@@ -450,36 +450,32 @@ const POS = () => {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal</span>
-                  <span>${subtotal.toFixed(2)}</span>
+                  <span>{formatMoney(subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
-                  <span>${tax.toFixed(2)}</span>
+                  <span>{formatMoney(tax)}</span>
                 </div>
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
-                  <span className="text-secondary">${total.toFixed(2)}</span>
+                  <span className="text-secondary">{formatMoney(total)}</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" disabled={cart.length === 0}>
-                  Guardar
-                </Button>
                 <Button variant="outline" onClick={() => setCart([])}>
                   Cancelar
                 </Button>
+                <Button
+                  variant="default"
+                  className="font-bold"
+                  size="lg"
+                  disabled={cart.length === 0 || isProcessingPayment}
+                  onClick={handleCheckout}
+                >
+                  Cobrar {formatMoney(total)}
+                </Button>
               </div>
-              
-              <Button 
-                variant="default"
-                className="w-full font-bold"
-                size="lg"
-                disabled={cart.length === 0 || isProcessingPayment}
-                onClick={handleCheckout}
-              >
-                Cobrar ${total.toFixed(2)}
-              </Button>
             </div>
           </Card>
         </div>
@@ -501,15 +497,19 @@ const POS = () => {
                 </div>
                 <div className="flex justify-between">
                   <span>Total</span>
-                  <span>${activeOrder.total.toFixed(2)}</span>
+                  <span>{formatMoney(paymentTotal)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Pagado</span>
-                  <span>${activeOrder.totalPaid.toFixed(2)}</span>
+                  <span>{formatMoney(toNumber(paymentAmount) + toNumber(tipAmount))}</span>
                 </div>
                 <div className="flex justify-between font-semibold">
                   <span>Pendiente</span>
-                  <span>${activeOrder.remaining.toFixed(2)}</span>
+                  <span>
+                    {formatMoney(
+                      Math.max(paymentTotal - toNumber(paymentAmount) - toNumber(tipAmount), 0)
+                    )}
+                  </span>
                 </div>
               </div>
 
