@@ -40,7 +40,7 @@ export type Product = {
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
   if (!imagePath) return null;
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
-  const base = API_BASE_URL;
+  const base = API_BASE_URL.replace(/\/api\/?$/, "");
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
   return `${base}${normalizedPath}`;
 };
@@ -197,10 +197,9 @@ export type AuthUser = {
 };
 
 const buildApiUrl = (path: string) => {
-  if (!path.startsWith("/")) {
-    return `${API_BASE_URL}/${path}`;
-  }
-  return `${API_BASE_URL}${path}`;
+  const base = API_BASE_URL.replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
 };
 
 const getCsrfToken = () => {
@@ -259,7 +258,7 @@ const handleJson = async <T>(response: Response): Promise<T> => {
 };
 
 export const getCSRF = async (): Promise<void> => {
-  const response = await request("/api/auth/csrf/");
+  const response = await request("/auth/csrf/");
   await handleJson(response);
 };
 
@@ -268,7 +267,7 @@ export const login = async (payload: {
   username?: string;
   password: string;
 }): Promise<AuthUser> => {
-  const response = await request("/api/auth/login/", {
+  const response = await request("/auth/login/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -276,7 +275,7 @@ export const login = async (payload: {
 };
 
 export const logout = async (): Promise<void> => {
-  const response = await request("/api/auth/logout/", { method: "POST" });
+  const response = await request("/auth/logout/", { method: "POST" });
   if (!response.ok && response.status !== 204) {
     const message = await response.text();
     throw new Error(message || "Logout failed");
@@ -284,7 +283,7 @@ export const logout = async (): Promise<void> => {
 };
 
 export const me = async (): Promise<AuthUser> => {
-  const response = await request("/api/auth/me/");
+  const response = await request("/auth/me/");
   return handleJson<AuthUser>(response);
 };
 
@@ -292,7 +291,7 @@ let cachedTaxConfig: TaxConfig | null = null;
 
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
-  const response = await request(`/api/menu/categories/${params}`);
+  const response = await request(`/menu/categories/${params}`);
   const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -302,7 +301,7 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
 };
 
 export const createCategory = async (name: string): Promise<Category> => {
-  const response = await request("/api/menu/categories/", {
+  const response = await request("/menu/categories/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
@@ -316,7 +315,7 @@ export const createCategory = async (name: string): Promise<Category> => {
 };
 
 export const getProducts = async (): Promise<Product[]> => {
-  const response = await request("/api/menu/products/");
+  const response = await request("/menu/products/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -369,7 +368,7 @@ export const createProduct = async (payload: {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
   }
 
-  const response = await request("/api/menu/products/", {
+  const response = await request("/menu/products/", {
     method: "POST",
     body: formData,
   });
@@ -428,7 +427,7 @@ export const updateProduct = async (
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
   }
 
-  const response = await request(`/api/menu/products/${productId}/`, {
+  const response = await request(`/menu/products/${productId}/`, {
     method: "PATCH",
     body: formData,
   });
@@ -468,7 +467,7 @@ export const updateProductModifierGroups = async (
 ): Promise<Product> => {
   const formData = new FormData();
   modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
-  const response = await request(`/api/menu/products/${productId}/`, {
+  const response = await request(`/menu/products/${productId}/`, {
     method: "PATCH",
     body: formData,
   });
@@ -508,7 +507,7 @@ export const updateProductAvailability = async (
 ): Promise<Product> => {
   const formData = new FormData();
   formData.append("available", available ? "true" : "false");
-  const response = await request(`/api/menu/products/${productId}/`, {
+  const response = await request(`/menu/products/${productId}/`, {
     method: "PATCH",
     body: formData,
   });
@@ -543,7 +542,7 @@ export const updateProductAvailability = async (
 };
 
 export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
-  const response = await request("/api/menu/modifier-groups/");
+  const response = await request("/menu/modifier-groups/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -574,7 +573,7 @@ export const createModifierGroup = async (payload: {
   maxSelection: number;
   modifiers: Array<{ name: string; price: number; isActive?: boolean }>;
 }): Promise<ModifierGroup> => {
-  const response = await request("/api/menu/modifier-groups/", {
+  const response = await request("/menu/modifier-groups/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -613,7 +612,7 @@ export const createModifierGroup = async (payload: {
 };
 
 export const getDiscounts = async (): Promise<Discount[]> => {
-  const response = await request("/api/menu/discounts/");
+  const response = await request("/menu/discounts/");
   const data = await handleJson<Array<{
     id: number;
     name: string;
@@ -651,7 +650,7 @@ export const getDiscounts = async (): Promise<Discount[]> => {
 };
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
-  const response = await request("/api/core/service-types/");
+  const response = await request("/core/service-types/");
   const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -663,7 +662,7 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
 
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
   if (cachedTaxConfig) return cachedTaxConfig;
-  const response = await request("/api/core/tax-config/active/");
+  const response = await request("/core/tax-config/active/");
   const data = await handleJson<{ rate: string }>(response);
   cachedTaxConfig = { rate: Number(data.rate) };
   return cachedTaxConfig;
@@ -735,7 +734,7 @@ export const createOrder = async (payload: {
     modifiers: Array<{ name: string; price: number }>;
   }>;
 }): Promise<Order> => {
-  const response = await request("/api/orders/", {
+  const response = await request("/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -788,7 +787,7 @@ export const createOrder = async (payload: {
 };
 
 export const getActiveOrders = async (): Promise<Order[]> => {
-  const response = await request("/api/orders/active/");
+  const response = await request("/orders/active/");
   const data = await handleJson<
     Array<{
       id: number;
@@ -818,7 +817,7 @@ export const getActiveOrders = async (): Promise<Order[]> => {
 };
 
 export const updateOrderStatus = async (orderId: number, statusValue: Order["status"]): Promise<Order> => {
-  const response = await request(`/api/orders/${orderId}/status/`, {
+  const response = await request(`/orders/${orderId}/status/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: statusValue }),
@@ -850,7 +849,7 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
 };
 
 export const getOrderById = async (orderId: number): Promise<Order> => {
-  const response = await request(`/api/orders/${orderId}/`);
+  const response = await request(`/orders/${orderId}/`);
   const data = await handleJson<{
     id: number;
     order_number: number;
@@ -880,7 +879,7 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
 export const getCustomerOrders = async (): Promise<
   Array<{ id: number; orderNumber: number; status: Order["status"]; customerName?: string; createdAt: Date }>
 > => {
-  const response = await request("/api/orders/customer-display/");
+  const response = await request("/orders/customer-display/");
   const data = await handleJson<
     Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
   >(response);
@@ -908,7 +907,7 @@ export const getSalesReport = async (filters?: {
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
   if (filters?.status) params.set("status", filters.status);
   const query = params.toString();
-  const response = await request(`/api/reports/sales/${query ? `?${query}` : ""}`);
+  const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
     results: Array<{
       order_id: number;
@@ -998,7 +997,7 @@ export const getSalesReport = async (filters?: {
 };
 
 export const createDiscount = async (payload: Discount): Promise<Discount> => {
-  const response = await request("/api/menu/discounts/", {
+  const response = await request("/menu/discounts/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1055,7 +1054,7 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
 };
 
 export const updateDiscount = async (discountId: number, payload: Discount): Promise<Discount> => {
-  const response = await request(`/api/menu/discounts/${discountId}/`, {
+  const response = await request(`/menu/discounts/${discountId}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1151,7 +1150,7 @@ export const getEmployees = async (filters?: {
     params.append("status", filters.status);
   }
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await request(`/api/employees/${suffix}`);
+  const response = await request(`/employees/${suffix}`);
   const data = await handleJson<Array<{
     id: number;
     full_name: string;
@@ -1212,7 +1211,7 @@ export const createEmployee = async (
   if (payload.user?.role && !userRoleKey) {
     throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
-  const response = await request("/api/employees/", {
+  const response = await request("/employees/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1289,7 +1288,7 @@ export const updateEmployee = async (
   if (payload.user?.role && !userRoleKey) {
     throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
-  const response = await request(`/api/employees/${id}/`, {
+  const response = await request(`/employees/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1369,7 +1368,7 @@ export const getAttendance = async (filters?: {
   if (filters?.dateFrom) params.append("date_from", filters.dateFrom);
   if (filters?.dateTo) params.append("date_to", filters.dateTo);
   if (filters?.employeeId) params.append("employee_id", filters.employeeId);
-  const response = await request(`/api/employees/attendance/?${params.toString()}`);
+  const response = await request(`/employees/attendance/?${params.toString()}`);
   const data = await handleJson<Array<{
     id: number;
     employee: number;
@@ -1407,7 +1406,7 @@ export const createAttendance = async (payload: {
   minutesLate?: number;
   notes?: string;
 }) => {
-  const response = await request("/api/employees/attendance/", {
+  const response = await request("/employees/attendance/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1435,7 +1434,7 @@ export const updateAttendance = async (
   if ((payload.entryTime || payload.exitTime) && !payload.date) {
     throw new Error("Fecha requerida para actualizar horas de asistencia.");
   }
-  const response = await request(`/api/employees/attendance/${id}/`, {
+  const response = await request(`/employees/attendance/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1458,7 +1457,7 @@ export const getSchedules = async (
 ): Promise<Array<import("@/types/employee").Schedule & { employeeId: string; dayOfWeek: number }>> => {
   const params = new URLSearchParams();
   if (employeeId) params.append("employee_id", employeeId);
-  const response = await request(`/api/employees/schedules/?${params.toString()}`);
+  const response = await request(`/employees/schedules/?${params.toString()}`);
   const data = await handleJson<Array<{
     id: number;
     employee: number;
@@ -1493,7 +1492,7 @@ export const createSchedule = async (payload: {
   breakMinutes?: number;
   allowsOvertime?: boolean;
 }) => {
-  const response = await request("/api/employees/schedules/", {
+  const response = await request("/employees/schedules/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1522,7 +1521,7 @@ export const updateSchedule = async (
     isActive?: boolean;
   }
 ) => {
-  const response = await request(`/api/employees/schedules/${id}/`, {
+  const response = await request(`/employees/schedules/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1539,7 +1538,7 @@ export const updateSchedule = async (
 };
 
 export const deleteSchedule = async (id: string) => {
-  const response = await request(`/api/employees/schedules/${id}/`, {
+  const response = await request(`/employees/schedules/${id}/`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1549,7 +1548,7 @@ export const deleteSchedule = async (id: string) => {
 };
 
 export const getEmployeeStats = async (): Promise<EmployeeStats> => {
-  const response = await request("/api/employees/stats/");
+  const response = await request("/employees/stats/");
   const data = await handleJson<{
     total_employees: number;
     active_employees: number;
@@ -1581,7 +1580,7 @@ export const createPayment = async (payload: {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
   }
-  const response = await request("/api/payments/", {
+  const response = await request("/payments/", {
     method: "POST",
     body: JSON.stringify({
       order: payload.orderId,
@@ -1614,7 +1613,7 @@ export const createPayment = async (payload: {
 };
 
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
-  const response = await request(`/api/payments/?order_id=${orderId}`);
+  const response = await request(`/payments/?order_id=${orderId}`);
   const data = await handleJson<
     Array<{
       id: number;
@@ -1647,7 +1646,7 @@ export const createRefund = async (payload: {
   reason: string;
   originalPaymentId?: number;
 }): Promise<{ refund: Refund; order: Order; printJob: PrintJob }> => {
-  const response = await request("/api/refunds/", {
+  const response = await request("/refunds/", {
     method: "POST",
     body: JSON.stringify({
       order: payload.orderId,
@@ -1713,7 +1712,7 @@ export const createRefund = async (payload: {
 };
 
 export const getRefundsByOrder = async (orderId: number): Promise<Refund[]> => {
-  const response = await request(`/api/refunds/?order_id=${orderId}`);
+  const response = await request(`/refunds/?order_id=${orderId}`);
   const data = await handleJson<
     Array<{
       id: number;
@@ -1745,7 +1744,7 @@ export const getRefundsByOrder = async (orderId: number): Promise<Refund[]> => {
 };
 
 export const voidOrder = async (orderId: number, reason: string): Promise<{ order: Order; printJobId: number }> => {
-  const response = await request(`/api/orders/${orderId}/void/`, {
+  const response = await request(`/orders/${orderId}/void/`, {
     method: "POST",
     body: JSON.stringify({ reason }),
   });
@@ -1763,7 +1762,7 @@ export const createPrintJob = async (payload: {
   orderId: number;
   type: "kitchen" | "customer";
 }): Promise<PrintJob> => {
-  const response = await request("/api/printing/jobs/", {
+  const response = await request("/printing/jobs/", {
     method: "POST",
     body: JSON.stringify({
       order_id: payload.orderId,
@@ -1793,7 +1792,7 @@ export const createPrintJob = async (payload: {
 };
 
 export const createRefundPrintJob = async (refundId: number): Promise<PrintJob> => {
-  const response = await request("/api/printing/jobs/refund/", {
+  const response = await request("/printing/jobs/refund/", {
     method: "POST",
     body: JSON.stringify({ refund_id: refundId }),
   });
@@ -1820,7 +1819,7 @@ export const createRefundPrintJob = async (refundId: number): Promise<PrintJob> 
 };
 
 export const getPrintJobsByOrder = async (orderId: number): Promise<PrintJob[]> => {
-  const response = await request(`/api/printing/jobs/?order_id=${orderId}`);
+  const response = await request(`/printing/jobs/?order_id=${orderId}`);
   const data = await handleJson<
     Array<{
       id: number;
@@ -1846,7 +1845,7 @@ export const getPrintJobsByOrder = async (orderId: number): Promise<PrintJob[]> 
 };
 
 export const getPrintJob = async (jobId: number): Promise<PrintJob> => {
-  const response = await request(`/api/printing/jobs/${jobId}/`);
+  const response = await request(`/printing/jobs/${jobId}/`);
   const data = await handleJson<{
     id: number;
     order: number | null;
@@ -1870,7 +1869,7 @@ export const getPrintJob = async (jobId: number): Promise<PrintJob> => {
 };
 
 export const getPrintJobById = async (id: number): Promise<PrintJob> => {
-  const response = await request(`/api/printing/jobs/${id}/`);
+  const response = await request(`/printing/jobs/${id}/`);
   const data = await handleJson<{
     id: number;
     order: number | null;
@@ -1894,7 +1893,7 @@ export const getPrintJobById = async (id: number): Promise<PrintJob> => {
 };
 
 export const markPrintJobPrinted = async (id: number): Promise<PrintJob> => {
-  const response = await request(`/api/printing/jobs/${id}/mark-printed/`, {
+  const response = await request(`/printing/jobs/${id}/mark-printed/`, {
     method: "POST",
   });
   const data = await handleJson<{

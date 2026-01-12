@@ -7,6 +7,7 @@ import { componentTagger } from "lovable-tagger";
 export default defineConfig(({ mode }) => ({
   server: {
     host: true,
+    allowedHosts: ["pico-de-gallo-pos.cuskatech.com"],
     port: 8182,
     strictPort: true,
     proxy: {
