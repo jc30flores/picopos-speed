@@ -90,11 +90,14 @@ class ProductSerializer(serializers.ModelSerializer):
         if obj.image_path:
             url = obj.image_path
         elif obj.image:
-            url = f"{settings.MEDIA_URL}{obj.image}"
+            image_value = obj.image
+            if not image_value.startswith("menu_image/"):
+                image_value = f"menu_image/{image_value}"
+            url = f"{settings.MEDIA_URL.rstrip('/')}/{image_value}"
         if not url:
             return None
         if url.startswith("/menu_image/"):
-            url = url.replace("/menu_image/", "/media/", 1)
+            url = url.replace("/menu_image/", "/media/menu_image/", 1)
         return url
 
     def update(self, instance, validated_data):

@@ -1,7 +1,7 @@
 import os
 import logging
 from rest_framework import generics, status
-from rest_framework.permissions import SAFE_METHODS
+from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.conf import settings
@@ -33,7 +33,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
 
     def create(self, request, *args, **kwargs):
@@ -62,7 +62,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
 
     def perform_create(self, serializer):
@@ -77,7 +77,7 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
 
     def perform_update(self, serializer):

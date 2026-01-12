@@ -47,12 +47,12 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
     return normalizedPath.replace(/^\/api/, "");
   }
   if (normalizedPath.startsWith("/menu_image/")) {
-    return normalizedPath.replace("/menu_image/", "/media/", 1);
+    return normalizedPath.replace("/menu_image/", "/media/menu_image/", 1);
   }
   if (normalizedPath.startsWith("/media/")) {
     return normalizedPath;
   }
-  return `${base}${normalizedPath}`;
+  return normalizedPath;
 };
 
 export type Discount = {
