@@ -28,11 +28,21 @@ export type Product = {
   description: string;
   price: number;
   category: string;
+  categoryName?: string | null;
   categoryId: number;
   image?: string | null;
+  imagePath?: string | null;
   imageUrl?: string | null;
   available: boolean;
   modifierGroups: number[];
+};
+
+export const resolveImageUrl = (imagePath?: string | null): string | null => {
+  if (!imagePath) return null;
+  if (/^https?:\/\//i.test(imagePath)) return imagePath;
+  const base = import.meta.env.VITE_API_URL || API_BASE_URL;
+  const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  return `${base}${normalizedPath}`;
 };
 
 export type Discount = {
@@ -222,10 +232,29 @@ const request = async (path: string, options: RequestInit = {}) => {
 };
 
 const handleJson = async <T>(response: Response): Promise<T> => {
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "API request failed");
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Sesión expirada. Inicia sesión nuevamente.");
+    }
+    if (isJson) {
+      const errorPayload = await response.json().catch(() => null);
+      const message =
+        (errorPayload && (errorPayload.detail || errorPayload.error)) ||
+        (errorPayload ? JSON.stringify(errorPayload) : "");
+      throw new Error(message || "API request failed");
+    }
+    const text = await response.text();
+    throw new Error(text ? `API request failed: ${text.slice(0, 200)}` : "API request failed");
   }
+
+  if (!isJson) {
+    const text = await response.text();
+    throw new Error(text ? `Unexpected response: ${text.slice(0, 200)}` : "Unexpected response");
+  }
+
   return response.json() as Promise<T>;
 };
 
@@ -261,8 +290,9 @@ export const me = async (): Promise<AuthUser> => {
 
 let cachedTaxConfig: TaxConfig | null = null;
 
-export const getCategories = async (): Promise<Category[]> => {
-  const response = await request("/api/menu/categories/");
+export const getCategories = async (query?: string): Promise<Category[]> => {
+  const params = query ? `?q=${encodeURIComponent(query)}` : "";
+  const response = await request(`/api/menu/categories/${params}`);
   const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -293,8 +323,10 @@ export const getProducts = async (): Promise<Product[]> => {
     description: string;
     price: string;
     category: string;
+    category_name?: string;
     category_id_display?: number;
     image: string | null;
+    image_path?: string | null;
     image_url: string | null;
     available: boolean;
     modifier_groups: number[];
@@ -305,8 +337,10 @@ export const getProducts = async (): Promise<Product[]> => {
     description: item.description,
     price: Number(item.price),
     category: item.category,
+    categoryName: item.category_name ?? item.category,
     categoryId: item.category_id_display ?? 0,
     image: item.image,
+    imagePath: item.image_path ?? null,
     imageUrl: item.image_url ?? undefined,
     available: item.available,
     modifierGroups: item.modifier_groups,
@@ -345,8 +379,10 @@ export const createProduct = async (payload: {
     description: string;
     price: string;
     category: string;
+    category_name?: string;
     category_id_display?: number;
     image: string | null;
+    image_path?: string | null;
     image_url: string | null;
     available: boolean;
     modifier_groups: number[];
@@ -357,8 +393,69 @@ export const createProduct = async (payload: {
     description: data.description,
     price: Number(data.price),
     category: data.category,
+    categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
     image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: data.image_url ?? undefined,
+    available: data.available,
+    modifierGroups: data.modifier_groups,
+  };
+};
+
+export const updateProduct = async (
+  productId: number,
+  payload: {
+    name: string;
+    description: string;
+    price: number;
+    categoryId: number;
+    image?: File | null;
+    available: boolean;
+    modifierGroupIds?: number[];
+  }
+): Promise<Product> => {
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  formData.append("description", payload.description);
+  formData.append("price", payload.price.toString());
+  formData.append("category_id", payload.categoryId.toString());
+  formData.append("available", payload.available ? "true" : "false");
+  if (payload.image) {
+    formData.append("image", payload.image);
+  }
+  if (payload.modifierGroupIds?.length) {
+    payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+
+  const response = await request(`/api/menu/products/${productId}/`, {
+    method: "PATCH",
+    body: formData,
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    description: string;
+    price: string;
+    category: string;
+    category_name?: string;
+    category_id_display?: number;
+    image: string | null;
+    image_path?: string | null;
+    image_url: string | null;
+    available: boolean;
+    modifier_groups: number[];
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    category: data.category,
+    categoryName: data.category_name ?? data.category,
+    categoryId: data.category_id_display ?? payload.categoryId,
+    image: data.image,
+    imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
     modifierGroups: data.modifier_groups,
@@ -517,14 +614,17 @@ const mapOrder = (order: {
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
+  const items = Array.isArray(order.items) ? order.items : [];
   return {
     id: order.id,
     orderNumber: order.order_number,
-    items: order.items.map((item) => ({
+    items: items.map((item) => ({
       id: item.id,
       productName: item.product_name_snapshot,
       quantity: item.quantity,
-      modifiers: item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot),
+      modifiers: Array.isArray(item.applied_modifiers)
+        ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
+        : [],
       price: Number(item.price_snapshot),
     })),
     total: Number(order.total),
@@ -571,6 +671,12 @@ export const createOrder = async (payload: {
       })),
     }),
   });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      throw new Error("Error al crear orden. Revisa backend logs.");
+    }
+  }
   const data = await handleJson<{
     id: number;
     order_number: number;
@@ -591,6 +697,9 @@ export const createOrder = async (payload: {
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
   }>(response);
+  if (import.meta.env.DEV) {
+    console.debug("[API] createOrder raw response", data);
+  }
   return mapOrder(data);
 };
 
@@ -621,7 +730,7 @@ export const getActiveOrders = async (): Promise<Order[]> => {
       }>;
     }>
   >(response);
-  return data.map(mapOrder);
+  return Array.isArray(data) ? data.map(mapOrder) : [];
 };
 
 export const updateOrderStatus = async (orderId: number, statusValue: Order["status"]): Promise<Order> => {
@@ -691,6 +800,9 @@ export const getCustomerOrders = async (): Promise<
   const data = await handleJson<
     Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
   >(response);
+  if (!Array.isArray(data)) {
+    return [];
+  }
   return data.map((order) => ({
     id: order.id,
     orderNumber: order.order_number,
@@ -938,8 +1050,24 @@ const resolveRoleKey = (role: string) => {
 
 const mapEmployeeRoleLabel = (roleKey: string) => ROLE_LABELS[roleKey] ?? roleKey;
 
-export const getEmployees = async (): Promise<import("@/types/employee").Employee[]> => {
-  const response = await request("/api/employees/");
+export const getEmployees = async (filters?: {
+  search?: string;
+  role?: string;
+  status?: "active" | "inactive";
+}): Promise<import("@/types/employee").Employee[]> => {
+  const params = new URLSearchParams();
+  if (filters?.search) {
+    params.append("search", filters.search);
+  }
+  if (filters?.role) {
+    const roleKey = resolveRoleKey(filters.role) ?? filters.role;
+    params.append("role", roleKey);
+  }
+  if (filters?.status) {
+    params.append("status", filters.status);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await request(`/api/employees/${suffix}`);
   const data = await handleJson<Array<{
     id: number;
     full_name: string;
@@ -948,6 +1076,11 @@ export const getEmployees = async (): Promise<import("@/types/employee").Employe
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -960,18 +1093,40 @@ export const getEmployees = async (): Promise<import("@/types/employee").Employe
     phone: item.phone ?? "",
     branch: item.branch_name ?? "",
     status: item.status,
+    hasUser: item.has_user ?? Boolean(item.user_id),
+    userId: item.user_id ? String(item.user_id) : null,
+    userUsername: item.user_username ?? "",
+    userEmail: item.user_email ?? "",
+    userRole: item.user_role ? mapEmployeeRoleLabel(item.user_role) : "",
     daysWorked: item.days_worked ?? 0,
     hoursWorked: Number(item.hours_worked ?? 0),
     lateArrivals: item.late_arrivals ?? 0,
   }));
 };
 
+type EmployeePayload = Omit<
+  import("@/types/employee").Employee,
+  "id" | "daysWorked" | "hoursWorked" | "lateArrivals" | "hasUser"
+>;
+
 export const createEmployee = async (
-  payload: Omit<import("@/types/employee").Employee, "id" | "daysWorked" | "hoursWorked" | "lateArrivals">
+  payload: EmployeePayload & {
+    createUser?: boolean;
+    user?: {
+      username: string;
+      email?: string;
+      password: string;
+      role: string;
+    };
+  }
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = resolveRoleKey(payload.role);
   if (!roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
+  if (payload.user?.role && !userRoleKey) {
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
   const response = await request("/api/employees/", {
     method: "POST",
@@ -983,6 +1138,15 @@ export const createEmployee = async (
       role: roleKey,
       branch_name_input: payload.branch || null,
       status: payload.status ?? "active",
+      create_user: payload.createUser ?? false,
+      user: payload.user
+        ? {
+            username: payload.user.username,
+            email: payload.user.email || null,
+            password: payload.user.password,
+            role: userRoleKey ?? payload.user.role,
+          }
+        : undefined,
     }),
   });
   const data = await handleJson<{
@@ -993,6 +1157,11 @@ export const createEmployee = async (
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -1005,6 +1174,11 @@ export const createEmployee = async (
     phone: data.phone ?? "",
     branch: data.branch_name ?? payload.branch,
     status: data.status,
+    hasUser: data.has_user ?? Boolean(data.user_id),
+    userId: data.user_id ? String(data.user_id) : null,
+    userUsername: data.user_username ?? "",
+    userEmail: data.user_email ?? "",
+    userRole: data.user_role ? mapEmployeeRoleLabel(data.user_role) : "",
     daysWorked: data.days_worked ?? 0,
     hoursWorked: Number(data.hours_worked ?? 0),
     lateArrivals: data.late_arrivals ?? 0,
@@ -1013,11 +1187,23 @@ export const createEmployee = async (
 
 export const updateEmployee = async (
   id: string,
-  payload: Partial<import("@/types/employee").Employee>
+  payload: Partial<import("@/types/employee").Employee> & {
+    createUser?: boolean;
+    user?: {
+      username?: string;
+      email?: string;
+      password?: string;
+      role?: string;
+    };
+  }
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = payload.role ? resolveRoleKey(payload.role) : undefined;
   if (payload.role && !roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
+  if (payload.user?.role && !userRoleKey) {
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
   const response = await request(`/api/employees/${id}/`, {
     method: "PATCH",
@@ -1029,6 +1215,17 @@ export const updateEmployee = async (
       ...(roleKey ? { role: roleKey } : {}),
       ...(payload.branch !== undefined ? { branch_name_input: payload.branch } : {}),
       ...(payload.status !== undefined ? { status: payload.status } : {}),
+      ...(payload.createUser !== undefined ? { create_user: payload.createUser } : {}),
+      ...(payload.user
+        ? {
+            user: {
+              ...(payload.user.username !== undefined ? { username: payload.user.username } : {}),
+              ...(payload.user.email !== undefined ? { email: payload.user.email || null } : {}),
+              ...(payload.user.password ? { password: payload.user.password } : {}),
+              ...(payload.user.role ? { role: userRoleKey ?? payload.user.role } : {}),
+            },
+          }
+        : {}),
     }),
   });
   const data = await handleJson<{
@@ -1039,6 +1236,11 @@ export const updateEmployee = async (
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -1051,6 +1253,11 @@ export const updateEmployee = async (
     phone: data.phone ?? "",
     branch: data.branch_name ?? payload.branch ?? "",
     status: data.status,
+    hasUser: data.has_user ?? Boolean(data.user_id),
+    userId: data.user_id ? String(data.user_id) : null,
+    userUsername: data.user_username ?? "",
+    userEmail: data.user_email ?? "",
+    userRole: data.user_role ? mapEmployeeRoleLabel(data.user_role) : "",
     daysWorked: data.days_worked ?? 0,
     hoursWorked: Number(data.hours_worked ?? 0),
     lateArrivals: data.late_arrivals ?? 0,
@@ -1281,12 +1488,15 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
 };
 
 export const createPayment = async (payload: {
-  orderId: number;
+  orderId: number | string;
   method: PaymentMethod;
   amount: number;
   tipAmount?: number;
   reference?: string;
 }): Promise<Payment> => {
+  if (!payload.orderId) {
+    throw new Error("createPayment: missing orderId");
+  }
   const response = await request("/api/payments/", {
     method: "POST",
     body: JSON.stringify({

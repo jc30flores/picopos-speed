@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -7,19 +7,47 @@ import { getCustomerOrders } from "@/lib/api";
 const CustomerDisplay = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<Array<{ id: number; orderNumber: number; status: string; customerName?: string }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [retryToken, setRetryToken] = useState(0);
+  const pollDelayRef = useRef(5000);
 
   useEffect(() => {
-    const loadOrders = () => {
-      getCustomerOrders()
-        .then((data) => setOrders(data))
-        .catch((error) => {
-          console.error("Failed to load customer orders", error);
-        });
+    let timeoutId: number | undefined;
+    let isActive = true;
+
+    const loadOrders = async () => {
+      setIsLoading(true);
+      try {
+        const data = await getCustomerOrders();
+        if (!isActive) return;
+        setOrders(data);
+        setError(null);
+        pollDelayRef.current = 5000;
+      } catch (loadError) {
+        if (!isActive) return;
+        const message =
+          loadError instanceof Error ? loadError.message : "No se pudo cargar pedidos de clientes.";
+        setError(message);
+        pollDelayRef.current = Math.min(pollDelayRef.current * 2, 10000);
+      } finally {
+        if (!isActive) return;
+        setIsLoading(false);
+        timeoutId = window.setTimeout(loadOrders, pollDelayRef.current);
+      }
     };
+
     loadOrders();
-    const interval = setInterval(loadOrders, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      isActive = false;
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [retryToken]);
+
+  const handleRetry = () => {
+    pollDelayRef.current = 2000;
+    setRetryToken((prev) => prev + 1);
+  };
 
   const preparingOrders = orders.filter((o) => o.status === "preparing" || o.status === "new");
   const readyOrders = orders.filter((o) => o.status === "ready");
@@ -47,6 +75,22 @@ const CustomerDisplay = () => {
           <p className="text-xl text-primary-foreground/80">Estado de Pedidos</p>
         </div>
 
+        {error && (
+          <div className="mb-8 rounded-2xl border border-warning/60 bg-warning/20 p-4 text-warning">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <p className="text-lg font-semibold">Pantalla de clientes no sincronizada</p>
+              <p className="text-sm text-warning/90">{error}</p>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="rounded-full border border-warning px-4 py-1 text-sm font-semibold text-warning hover:bg-warning/10"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Preparing */}
           <div className="space-y-6">
@@ -58,7 +102,11 @@ const CustomerDisplay = () => {
             </div>
 
             <div className="space-y-4">
-              {preparingOrders.length === 0 ? (
+              {isLoading && preparingOrders.length === 0 ? (
+                <div className="text-center py-12 text-primary-foreground/50">
+                  <p className="text-lg">Cargando pedidos...</p>
+                </div>
+              ) : preparingOrders.length === 0 ? (
                 <div className="text-center py-12 text-primary-foreground/50">
                   <p className="text-lg">No hay pedidos en preparación</p>
                 </div>
@@ -90,7 +138,11 @@ const CustomerDisplay = () => {
             </div>
 
             <div className="space-y-4">
-              {readyOrders.length === 0 ? (
+              {isLoading && readyOrders.length === 0 ? (
+                <div className="text-center py-12 text-primary-foreground/50">
+                  <p className="text-lg">Cargando pedidos...</p>
+                </div>
+              ) : readyOrders.length === 0 ? (
                 <div className="text-center py-12 text-primary-foreground/50">
                   <p className="text-lg">No hay pedidos listos</p>
                 </div>

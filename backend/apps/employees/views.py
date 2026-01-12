@@ -1,3 +1,4 @@
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import generics
@@ -13,7 +14,13 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         queryset = Employee.objects.select_related("branch").all()
+        search = (self.request.query_params.get("search") or "").strip()
+        role = (self.request.query_params.get("role") or "").strip()
         status = self.request.query_params.get("status")
+        if search:
+            queryset = queryset.filter(Q(full_name__icontains=search) | Q(email__icontains=search))
+        if role:
+            queryset = queryset.filter(role=role)
         if status:
             queryset = queryset.filter(status=status)
         return queryset

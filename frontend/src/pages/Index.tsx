@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import {
   Dialog,
   DialogContent,
@@ -71,8 +72,19 @@ const POS = () => {
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
+  const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
+  const [checkoutDraft, setCheckoutDraft] = useState<{
+    items: CartItem[];
+    subtotal: number;
+    tax: number;
+    total: number;
+    taxRate: number;
+    serviceType: typeof serviceType;
+    createdAt: number;
+  } | null>(null);
 
   const loadMenuData = async () => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -156,37 +168,46 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const subtotal = total / (1 + taxRate);
-  const tax = total - subtotal;
+  const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
+  const paymentTotal =
+    checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+  const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
+  const isPaid = paymentStatus === "paid";
+  const paymentAmountValue = toNumber(paymentAmount);
+  const tipAmountValue = toNumber(tipAmount);
+  const checkoutTotal = checkoutDraft?.total ?? 0;
+  const paidTotal = paymentAmountValue + tipAmountValue;
+  const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
+  const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    setIsProcessingPayment(true);
-    try {
-      const order = await createOrder({
-        serviceType,
-        items: cart.map((item) => ({
-          productId: item.productId,
-          productName: item.name,
-          price: item.price,
-          quantity: item.quantity,
-          modifiers: item.modifiers,
-        })),
-      });
-      setActiveOrder(order);
-      setCart([]);
-      setPaymentAmount(order.remaining.toFixed(2));
-      setTipAmount("0");
-      setPaymentReference("");
-      setIsPaymentOpen(true);
-      toast.success(`Pedido #${order.orderNumber} creado · Total $${order.total.toFixed(2)}`);
-    } catch (error) {
-      console.error("Failed to create order", error);
-      toast.error("No se pudo crear el pedido. Intenta de nuevo.");
-    } finally {
-      setIsProcessingPayment(false);
+    const draftTotals = calculateCartTotals(cart, taxRate);
+    const draft = {
+      items: [...cart],
+      subtotal: draftTotals.subtotal,
+      tax: draftTotals.tax,
+      total: draftTotals.total,
+      taxRate,
+      serviceType,
+      createdAt: Date.now(),
+    };
+    const hasSameDraft =
+      checkoutDraft &&
+      checkoutDraft.taxRate === draft.taxRate &&
+      checkoutDraft.serviceType === draft.serviceType &&
+      checkoutDraft.total === draft.total &&
+      JSON.stringify(checkoutDraft.items) === JSON.stringify(draft.items);
+    setCheckoutDraft(draft);
+    if (!hasSameDraft) {
+      setActiveOrder(null);
+      setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
     }
+    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    setTipAmount("0");
+    setPaymentReference("");
+    setIsPaymentOpen(true);
   };
 
   const handleAddModifiers = () => {
@@ -218,10 +239,14 @@ const POS = () => {
   };
 
   const handleSubmitPayment = async () => {
-    if (!activeOrder) return;
-    const amountValue = Number(paymentAmount);
-    const tipValue = Number(tipAmount);
+    if (!checkoutDraft || checkoutDraft.items.length === 0) {
+      toast.error("No hay productos en el pedido");
+      return;
+    }
+    const amountValue = toNumber(paymentAmount);
+    const tipValue = toNumber(tipAmount);
     const totalPayment = amountValue + tipValue;
+    const remaining = toNumber(paymentTotal);
 
     if (!amountValue || amountValue <= 0) {
       toast.error("Ingresa un monto válido");
@@ -231,28 +256,68 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (totalPayment > activeOrder.remaining) {
+    if (totalPayment > remaining) {
       toast.error("El pago supera el saldo pendiente");
       return;
     }
 
     try {
       setIsProcessingPayment(true);
+      let order = activeOrder;
+      if (!order) {
+        if (createdOrderId) {
+          order = await getOrderById(createdOrderId);
+          setCreatedOrderNumber(order.orderNumber ?? null);
+        } else {
+          order = await createOrder({
+            serviceType: checkoutDraft.serviceType,
+            items: checkoutDraft.items.map((item) => ({
+              productId: item.productId,
+              productName: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              modifiers: item.modifiers,
+            })),
+          });
+          console.info("createOrder response", order);
+          const createdId =
+            (order as Order | undefined)?.id ??
+            (order as unknown as { order_id?: number }).order_id ??
+            (order as unknown as { pk?: number }).pk;
+          if (!createdId) {
+            throw new Error("createOrder did not return an id");
+          }
+          setCreatedOrderId(createdId);
+          setCreatedOrderNumber((order as Order | undefined)?.orderNumber ?? null);
+        }
+        setActiveOrder(order);
+      }
+      const orderId =
+        (order as Order | undefined)?.id ??
+        (order as unknown as { order_id?: number }).order_id ??
+        (order as unknown as { pk?: number }).pk;
+      if (!orderId) {
+        throw new Error("createOrder did not return an id");
+      }
       await createPayment({
-        orderId: activeOrder.id,
+        orderId,
         method: paymentMethod,
         amount: amountValue,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
       });
-      const refreshed = await getOrderById(activeOrder.id);
+      const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
-      setPaymentAmount(refreshed.remaining.toFixed(2));
+      setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success("Pago completado");
+        toast.success("Pago registrado. Enviado a cocina.");
         setIsPaymentOpen(false);
+        setCart([]);
+        setCheckoutDraft(null);
+        setCreatedOrderId(null);
+        setCreatedOrderNumber(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -450,36 +515,36 @@ const POS = () => {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal</span>
-                  <span>${subtotal.toFixed(2)}</span>
+                  <span>{formatMoney(subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
-                  <span>${tax.toFixed(2)}</span>
+                  <span>{formatMoney(tax)}</span>
                 </div>
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
-                  <span className="text-secondary">${total.toFixed(2)}</span>
+                  <span className="text-secondary">{formatMoney(total)}</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" disabled={cart.length === 0}>
-                  Guardar
+              <div className="grid grid-cols-1 gap-3">
+                <Button
+                  variant="default"
+                  className="w-full font-bold"
+                  size="lg"
+                  disabled={cart.length === 0 || isProcessingPayment}
+                  onClick={handleCheckout}
+                >
+                  Cobrar {formatMoney(total)}
                 </Button>
-                <Button variant="outline" onClick={() => setCart([])}>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setCart([])}
+                >
                   Cancelar
                 </Button>
               </div>
-              
-              <Button 
-                variant="default"
-                className="w-full font-bold"
-                size="lg"
-                disabled={cart.length === 0 || isProcessingPayment}
-                onClick={handleCheckout}
-              >
-                Cobrar ${total.toFixed(2)}
-              </Button>
             </div>
           </Card>
         </div>
@@ -490,87 +555,156 @@ const POS = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Cobrar pedido</DialogTitle>
-            <DialogDescription>Registra el pago del pedido en curso</DialogDescription>
+            <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
           </DialogHeader>
-          {activeOrder ? (
-            <div className="space-y-4">
-              <div className="rounded-md border p-3 space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span>Pedido</span>
-                  <span>#{activeOrder.orderNumber}</span>
+          {checkoutDraft ? (
+            <div className="space-y-5">
+              <div className="rounded-lg border bg-muted/30 p-4">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
+                <div className="mt-2 text-3xl font-bold text-secondary">
+                  {formatMoney(checkoutDraft.total)}
                 </div>
-                <div className="flex justify-between">
-                  <span>Total</span>
-                  <span>${activeOrder.total.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Pagado</span>
-                  <span>${activeOrder.totalPaid.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between font-semibold">
-                  <span>Pendiente</span>
-                  <span>${activeOrder.remaining.toFixed(2)}</span>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Incluye impuesto {(checkoutDraft.taxRate * 100).toFixed(0)}% (
+                  {formatMoney(checkoutDraft.tax)})
                 </div>
               </div>
 
               <div className="space-y-2">
-                <Label>Método</Label>
-                <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cash">Efectivo</SelectItem>
-                    <SelectItem value="card">Tarjeta</SelectItem>
-                    <SelectItem value="transfer">Transferencia</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label>Monto</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={paymentAmount}
-                    onChange={(e) => setPaymentAmount(e.target.value)}
-                  />
+                <div className="flex items-center justify-between text-sm font-semibold">
+                  <span>Detalle</span>
+                  <span className="text-xs text-muted-foreground">
+                    {activeOrder?.orderNumber
+                      ? `Pedido #${activeOrder.orderNumber}`
+                      : createdOrderNumber
+                        ? `Pedido #${createdOrderNumber}`
+                        : "Pedido (pendiente)"}
+                  </span>
                 </div>
-                <div className="space-y-2">
-                  <Label>Propina</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={tipAmount}
-                    onChange={(e) => setTipAmount(e.target.value)}
-                  />
+                <div className="rounded-md border">
+                  <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
+                    {checkoutDraft.items.map((item) => (
+                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 p-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{item.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {formatMoney(toNumber(item.price))} c/u
+                          </div>
+                        </div>
+                        <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
+                        <div className="text-right font-semibold">
+                          {formatMoney(toNumber(item.price) * toNumber(item.quantity))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {(paymentMethod === "card" || paymentMethod === "transfer") && (
-                <div className="space-y-2">
-                  <Label>Referencia</Label>
-                  <Input
-                    value={paymentReference}
-                    onChange={(e) => setPaymentReference(e.target.value)}
-                    placeholder="Opcional"
-                  />
+              <div className="rounded-md border p-3 text-sm">
+                <div className="mb-2 font-semibold">Resumen</div>
+                <div className="space-y-1 text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span>{formatMoney(checkoutDraft.subtotal)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
+                    <span>{formatMoney(checkoutDraft.tax)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-foreground">
+                    <span>Total</span>
+                    <span>{formatMoney(checkoutDraft.total)}</span>
+                  </div>
                 </div>
-              )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm font-semibold">Pago</div>
+                <div className="space-y-2">
+                  <Label>Método</Label>
+                  <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Efectivo</SelectItem>
+                      <SelectItem value="card">Tarjeta</SelectItem>
+                      <SelectItem value="transfer">Transferencia</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Monto recibido</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(e) => setPaymentAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Propina</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={tipAmount}
+                      onChange={(e) => setTipAmount(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                  <div className="space-y-2">
+                    <Label>Referencia</Label>
+                    <Input
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                      placeholder="Opcional"
+                    />
+                  </div>
+                )}
+
+                <div className="rounded-md border px-3 py-2 text-sm">
+                  {paidTotal === 0 && checkoutTotal > 0 && (
+                    <span className="text-muted-foreground">
+                      Pendiente: {formatMoney(checkoutTotal)}
+                    </span>
+                  )}
+                  {paidTotal > 0 && remainingTotal > 0 && (
+                    <span className="text-destructive">
+                      Pendiente: {formatMoney(remainingTotal)}
+                    </span>
+                  )}
+                  {paidTotal > 0 && remainingTotal === 0 && changeTotal === 0 && (
+                    <span className="text-muted-foreground">Listo: pago exacto</span>
+                  )}
+                  {paidTotal > 0 && changeTotal > 0 && (
+                    <span className="text-emerald-400">
+                      Cambio: {formatMoney(changeTotal)}
+                    </span>
+                  )}
+                </div>
+              </div>
 
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>
                   Cerrar
                 </Button>
-                <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment}>
+                <Button
+                  className="flex-1"
+                  onClick={handleSubmitPayment}
+                  disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0}
+                >
                   {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                 </Button>
               </div>
 
-              {activeOrder.paymentStatus === "paid" && (
+              {isPaid && (
                 <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>
                   Imprimir recibo
                 </Button>

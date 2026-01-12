@@ -4,10 +4,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, AlertCircle } from "lucide-react";
 import { Employee } from "@/types/employee";
 
 interface EmployeeProfileSheetProps {
@@ -61,57 +58,19 @@ export const EmployeeProfileSheet = ({
             </div>
           </div>
 
-          {/* Métricas del mes */}
-          <div>
-            <h3 className="font-semibold mb-3">Métricas del mes actual</h3>
-            <div className="grid grid-cols-1 gap-3">
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-primary/10">
-                      <Calendar className="h-4 w-4 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Días trabajados</p>
-                      <p className="text-xl font-bold">{employee.daysWorked}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-primary/10">
-                      <Clock className="h-4 w-4 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Horas trabajadas</p>
-                      <p className="text-xl font-bold">{employee.hoursWorked}h</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-destructive/10">
-                      <AlertCircle className="h-4 w-4 text-destructive" />
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Llegadas tarde</p>
-                      <p className="text-xl font-bold">{employee.lateArrivals}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+          <div className="space-y-3">
+            <h3 className="font-semibold">Acceso al sistema</h3>
+            <div>
+              <p className="text-sm text-muted-foreground">Usuario</p>
+              <p className="font-medium">
+                {employee.hasUser ? employee.userUsername || employee.userEmail || "Sí" : "No"}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Rol del sistema</p>
+              <p className="font-medium">{employee.hasUser ? employee.userRole || "—" : "—"}</p>
             </div>
           </div>
-
-          <Button className="w-full" variant="outline">
-            Ver asistencia detallada
-          </Button>
         </div>
       </SheetContent>
     </Sheet>

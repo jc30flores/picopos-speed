@@ -10,34 +10,54 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EmployeesTable } from "./EmployeesTable";
-import { EmployeeFormDialog } from "./EmployeeFormDialog";
+import { EmployeeFormDialog, EmployeeFormData } from "./EmployeeFormDialog";
 import { EmployeeProfileSheet } from "./EmployeeProfileSheet";
 import { Employee } from "@/types/employee";
 import { createEmployee, getEmployees, updateEmployee } from "@/lib/api";
 import { toast } from "sonner";
 
+const ROLE_OPTIONS = [
+  { value: "all", label: "Todos" },
+  { value: "cashier", label: "Cajero" },
+  { value: "kitchen", label: "Cocinero" },
+  { value: "manager", label: "Gerente" },
+  { value: "admin", label: "Administrador" },
+];
+
 export const EmployeesTab = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");
+  const [selectedRole, setSelectedRole] = useState("all");
+  const [selectedStatus, setSelectedStatus] = useState("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const loadEmployees = async () => {
     try {
-      const data = await getEmployees();
+      setIsLoading(true);
+      const data = await getEmployees({
+        search: searchQuery,
+        role: selectedRole !== "all" ? selectedRole : undefined,
+        status: selectedStatus !== "all" ? selectedStatus : undefined,
+      });
       setEmployees(data);
     } catch (error) {
       console.error("Failed to load employees", error);
-      toast.error("No se pudieron cargar los empleados");
+      toast.error(
+        error instanceof Error ? error.message : "No se pudieron cargar los empleados"
+      );
+    } finally {
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
     loadEmployees();
-  }, []);
+  }, [searchQuery, selectedRole, selectedStatus]);
 
   const branchOptions = useMemo(() => {
     const options = employees.map((employee) => employee.branch).filter(Boolean);
@@ -46,11 +66,8 @@ export const EmployeesTab = () => {
   }, [employees]);
 
   const filteredEmployees = employees.filter((emp) => {
-    const matchesSearch =
-      emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      emp.email.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesBranch = selectedBranch === "all" || emp.branch === selectedBranch;
-    return matchesSearch && matchesBranch;
+    return matchesBranch;
   });
 
   const handleOpenDialog = (employee?: Employee) => {
@@ -63,10 +80,31 @@ export const EmployeesTab = () => {
     setIsProfileOpen(true);
   };
 
-  const handleSaveEmployee = async (employeeData: Partial<Employee>) => {
+  const handleSaveEmployee = async (employeeData: EmployeeFormData) => {
+    const userIdentifier = employeeData.userIdentifier ?? "";
+    const userPassword = employeeData.userPassword ?? "";
+    const userRole = employeeData.userRole ?? "";
+    const createUser = employeeData.createUser ?? false;
+    const userPayload = createUser
+      ? {
+          username: userIdentifier,
+          email: userIdentifier.includes("@") ? userIdentifier : "",
+          password: userPassword,
+          role: userRole,
+        }
+      : undefined;
     try {
       if (editingEmployee) {
-        await updateEmployee(editingEmployee.id, employeeData);
+        await updateEmployee(editingEmployee.id, {
+          ...employeeData,
+          createUser,
+          user: userPayload
+            ? {
+                ...userPayload,
+                password: userPassword || undefined,
+              }
+            : undefined,
+        });
       } else {
         await createEmployee({
           name: employeeData.name ?? "",
@@ -75,22 +113,45 @@ export const EmployeesTab = () => {
           phone: employeeData.phone ?? "",
           branch: employeeData.branch ?? "",
           status: employeeData.status ?? "active",
+          createUser,
+          user: userPayload,
         });
       }
       await loadEmployees();
     } catch (error) {
       console.error("Failed to save employee", error);
-      toast.error("No se pudo guardar el empleado");
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el empleado");
     }
   };
 
-  const handleDeleteEmployee = async (id: string) => {
+  const handleDeleteEmployee = async (employee: Employee) => {
     try {
-      await updateEmployee(id, { status: "inactive" });
+      await updateEmployee(employee.id, {
+        status: employee.status === "active" ? "inactive" : "active",
+      });
       await loadEmployees();
     } catch (error) {
       console.error("Failed to deactivate employee", error);
-      toast.error("No se pudo desactivar el empleado");
+      toast.error("No se pudo actualizar el estado del empleado");
+    }
+  };
+
+  const handleResetPassword = async (employee: Employee, password: string) => {
+    try {
+      await updateEmployee(employee.id, {
+        createUser: true,
+        user: {
+          username: employee.userUsername ?? employee.email,
+          email: employee.userEmail ?? employee.email,
+          password,
+          role: employee.userRole ?? employee.role,
+        },
+      });
+      toast.success("Contraseña actualizada");
+      await loadEmployees();
+    } catch (error) {
+      console.error("Failed to reset password", error);
+      toast.error("No se pudo resetear la contraseña");
     }
   };
 
@@ -107,20 +168,42 @@ export const EmployeesTab = () => {
               className="pl-10"
             />
           </div>
+          <Select value={selectedRole} onValueChange={setSelectedRole}>
+            <SelectTrigger className="w-full sm:w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ROLE_OPTIONS.map((role) => (
+                <SelectItem key={role.value} value={role.value}>
+                  {role.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+            <SelectTrigger className="w-full sm:w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="active">Activo</SelectItem>
+              <SelectItem value="inactive">Inactivo</SelectItem>
+            </SelectContent>
+          </Select>
           <Select value={selectedBranch} onValueChange={setSelectedBranch}>
             <SelectTrigger className="w-full sm:w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todas</SelectItem>
-            {branchOptions.map((branch) => (
-              <SelectItem key={branch} value={branch}>
-                {branch}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
+              {branchOptions.map((branch) => (
+                <SelectItem key={branch} value={branch}>
+                  {branch}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Button onClick={() => handleOpenDialog()} className="w-full sm:w-auto">
           <Plus className="h-4 w-4" />
           Agregar Empleado
@@ -129,8 +212,10 @@ export const EmployeesTab = () => {
 
       <EmployeesTable
         employees={filteredEmployees}
+        isLoading={isLoading}
         onEdit={handleOpenDialog}
-        onDelete={handleDeleteEmployee}
+        onToggleStatus={handleDeleteEmployee}
+        onResetPassword={handleResetPassword}
         onViewProfile={handleOpenProfile}
       />
 

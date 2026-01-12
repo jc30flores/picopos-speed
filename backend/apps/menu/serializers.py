@@ -1,11 +1,26 @@
 from rest_framework import serializers
-from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount, DiscountRuleTarget
+from apps.menu.models import (
+    Category,
+    Product,
+    ModifierGroup,
+    Modifier,
+    Discount,
+    DiscountRuleTarget,
+    normalize_category_name,
+)
+from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ["id", "name", "is_active"]
+
+    def validate_name(self, value: str) -> str:
+        normalized = normalize_category_name(value)
+        if not normalized:
+            raise serializers.ValidationError("La categoría no puede estar vacía.")
+        return normalized
 
 
 class ModifierSerializer(serializers.ModelSerializer):
@@ -31,6 +46,8 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    image = serializers.CharField(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
         source="category", queryset=Category.objects.all(), write_only=True
     )
@@ -45,6 +62,7 @@ class ProductSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False,
     )
+    image_path = serializers.CharField(read_only=True)
     image_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -55,9 +73,11 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "category",
+            "category_name",
             "category_id",
             "category_id_display",
             "image",
+            "image_path",
             "image_url",
             "available",
             "modifier_groups",
@@ -65,12 +85,44 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_image_url(self, obj: Product) -> str | None:
+        if obj.image_path:
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(obj.image_path)
+            return obj.image_path
         if obj.image and hasattr(obj.image, "url"):
             request = self.context.get("request")
             if request:
                 return request.build_absolute_uri(obj.image.url)
             return obj.image.url
         return None
+
+    def update(self, instance, validated_data):
+        image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
+        validated_data.pop("image", None)
+        old_image = instance.image
+        instance = super().update(instance, validated_data)
+
+        if image_file:
+            saved = save_menu_image(image_file, instance.category.name)
+            instance.image = saved["image"]
+            instance.image_path = saved["image_path"]
+            instance.save(update_fields=["image", "image_path"])
+            if old_image and old_image != instance.image:
+                delete_menu_image_by_image_field(old_image)
+
+        return instance
+
+    def create(self, validated_data):
+        image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
+        validated_data.pop("image", None)
+        product = super().create(validated_data)
+        if image_file:
+            saved = save_menu_image(image_file, product.category.name)
+            product.image = saved["image"]
+            product.image_path = saved["image_path"]
+            product.save(update_fields=["image", "image_path"])
+        return product
 
 
 class DiscountSerializer(serializers.ModelSerializer):

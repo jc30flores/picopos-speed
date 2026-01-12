@@ -1,15 +1,32 @@
 from decimal import Decimal
 from datetime import timedelta
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 from apps.core.models import Branch
 from apps.employees.models import Employee, AttendanceRecord, Schedule
+from apps.users.models import UserProfile
+
+
+class EmployeeUserSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    password = serializers.CharField(write_only=True)
+    role = serializers.ChoiceField(choices=UserProfile.ROLE_CHOICES)
 
 
 class EmployeeSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True)
     branch_name_input = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    create_user = serializers.BooleanField(write_only=True, required=False, default=False)
+    user = EmployeeUserSerializer(write_only=True, required=False)
+    user_id = serializers.IntegerField(source="user.id", read_only=True)
+    user_username = serializers.CharField(source="user.username", read_only=True)
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_role = serializers.SerializerMethodField()
+    has_user = serializers.SerializerMethodField()
     days_worked = serializers.SerializerMethodField()
     hours_worked = serializers.SerializerMethodField()
     late_arrivals = serializers.SerializerMethodField()
@@ -26,6 +43,13 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "branch_name",
             "branch_name_input",
             "status",
+            "create_user",
+            "user",
+            "user_id",
+            "user_username",
+            "user_email",
+            "user_role",
+            "has_user",
             "created_at",
             "updated_at",
             "days_worked",
@@ -54,6 +78,15 @@ class EmployeeSerializer(serializers.ModelSerializer):
         month_start, month_end = self._current_month_range()
         return obj.attendance_records.filter(date__range=(month_start, month_end)).count()
 
+    def get_user_role(self, obj: Employee) -> str | None:
+        if not obj.user:
+            return None
+        profile = UserProfile.objects.filter(user=obj.user).first()
+        return profile.role if profile else None
+
+    def get_has_user(self, obj: Employee) -> bool:
+        return bool(obj.user_id)
+
     def get_hours_worked(self, obj: Employee) -> Decimal:
         month_start, month_end = self._current_month_range()
         total_minutes = 0
@@ -81,17 +114,95 @@ class EmployeeSerializer(serializers.ModelSerializer):
         month_end = next_month - timedelta(days=1)
         return month_start, month_end
 
+    @transaction.atomic
     def create(self, validated_data):
         branch = self._get_branch(validated_data)
         if branch is not None:
             validated_data["branch"] = branch
-        return super().create(validated_data)
+        create_user = validated_data.pop("create_user", False)
+        user_data = validated_data.pop("user", None)
+        employee = super().create(validated_data)
+        if create_user:
+            if not user_data:
+                raise serializers.ValidationError({"user": "User payload is required"})
+            employee.user = self._create_user(employee, user_data)
+            employee.save(update_fields=["user"])
+        return employee
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         branch = self._get_branch(validated_data)
         if branch is not None:
             validated_data["branch"] = branch
-        return super().update(instance, validated_data)
+        create_user = validated_data.pop("create_user", False)
+        user_data = validated_data.pop("user", None)
+        employee = super().update(instance, validated_data)
+        if employee.user and "status" in validated_data:
+            profile, _ = UserProfile.objects.get_or_create(
+                user=employee.user,
+                defaults={"role": "cashier", "is_active": employee.status == "active"},
+            )
+            profile.is_active = employee.status == "active"
+            profile.save(update_fields=["is_active"])
+        if create_user and not employee.user:
+            if not user_data:
+                raise serializers.ValidationError({"user": "User payload is required"})
+            employee.user = self._create_user(employee, user_data)
+            employee.save(update_fields=["user"])
+        elif user_data and employee.user:
+            self._update_user(employee, user_data)
+        return employee
+
+    def _create_user(self, employee: Employee, user_data: dict):
+        user_model = get_user_model()
+        username = user_data.get("username")
+        email = user_data.get("email") or ""
+        password = user_data.get("password")
+        role = user_data.get("role")
+        if not username:
+            raise serializers.ValidationError({"user": {"username": "Username is required"}})
+        if user_model.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError({"user": {"username": "Username already exists"}})
+        if email and user_model.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({"user": {"email": "Email already exists"}})
+        if not password or len(password) < 6:
+            raise serializers.ValidationError({"user": {"password": "Password must be at least 6 characters"}})
+        user = user_model.objects.create(username=username, email=email)
+        user.set_password(password)
+        user.save(update_fields=["password"])
+        UserProfile.objects.update_or_create(
+            user=user,
+            defaults={"role": role, "is_active": employee.status == "active"},
+        )
+        return user
+
+    def _update_user(self, employee: Employee, user_data: dict) -> None:
+        user = employee.user
+        if not user:
+            return
+        user_model = get_user_model()
+        username = user_data.get("username")
+        email = user_data.get("email")
+        password = user_data.get("password")
+        role = user_data.get("role")
+        if username and user_model.objects.filter(username__iexact=username).exclude(id=user.id).exists():
+            raise serializers.ValidationError({"user": {"username": "Username already exists"}})
+        if email and user_model.objects.filter(email__iexact=email).exclude(id=user.id).exists():
+            raise serializers.ValidationError({"user": {"email": "Email already exists"}})
+        if username is not None:
+            user.username = username
+        if email is not None:
+            user.email = email or ""
+        if password:
+            if len(password) < 6:
+                raise serializers.ValidationError({"user": {"password": "Password must be at least 6 characters"}})
+            user.set_password(password)
+        user.save()
+        if role:
+            profile, _ = UserProfile.objects.get_or_create(user=user, defaults={"role": role, "is_active": True})
+            profile.role = role
+            profile.is_active = employee.status == "active"
+            profile.save(update_fields=["role", "is_active"])
 
     def _get_branch(self, validated_data):
         branch_name = validated_data.pop("branch_name_input", None)

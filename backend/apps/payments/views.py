@@ -58,6 +58,9 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 payment.order_id,
                 {"order_id": payment.order_id},
             )
+            if payment.order.status != "preparing":
+                payment.order.status = "preparing"
+                payment.order.save(update_fields=["status", "updated_at"])
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")

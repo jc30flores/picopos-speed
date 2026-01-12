@@ -21,8 +21,8 @@ from apps.payments.models import Payment
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
-    order_number = serializers.IntegerField(source="order_number")
-    customer_name = serializers.CharField(source="customer_name")
+    order_number = serializers.IntegerField()
+    customer_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Order
@@ -32,6 +32,13 @@ class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
 class OrderCreateView(generics.CreateAPIView):
     serializer_class = OrderCreateSerializer
     permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
+        output = OrderSerializer(order, context={"request": request}).data
+        return Response(output, status=status.HTTP_201_CREATED)
 
 
 class OrderDetailView(generics.RetrieveAPIView):
@@ -53,7 +60,7 @@ class ActiveOrderListView(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            Order.objects.filter(status__in=["new", "preparing", "ready"])
+            Order.objects.filter(status__in=["preparing", "ready"])
             .prefetch_related("items__applied_modifiers")
             .order_by("created_at")
         )
@@ -91,7 +98,7 @@ class CustomerDisplayOrderListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        return Order.objects.filter(status__in=["new", "preparing", "ready"]).order_by("created_at")
+        return Order.objects.filter(status__in=["preparing", "ready"]).order_by("created_at")
 
 
 class OrderVoidView(generics.GenericAPIView):

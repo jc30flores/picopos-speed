@@ -8,28 +8,39 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Pencil, Trash2, Eye } from "lucide-react";
+import { KeyRound, Pencil, Power, Eye } from "lucide-react";
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
 
 interface EmployeesTableProps {
   employees: Employee[];
+  isLoading?: boolean;
   onEdit: (employee: Employee) => void;
-  onDelete: (id: string) => void;
+  onToggleStatus: (employee: Employee) => void;
+  onResetPassword: (employee: Employee, password: string) => void;
   onViewProfile: (employee: Employee) => void;
 }
 
 export const EmployeesTable = ({
   employees,
+  isLoading = false,
   onEdit,
-  onDelete,
+  onToggleStatus,
+  onResetPassword,
   onViewProfile,
 }: EmployeesTableProps) => {
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`¿Estás seguro de eliminar a ${name}?`)) {
-      onDelete(id);
-      toast.success("Empleado eliminado correctamente");
+  const handleToggleStatus = (employee: Employee) => {
+    const action = employee.status === "active" ? "desactivar" : "activar";
+    if (confirm(`¿Estás seguro de ${action} a ${employee.name}?`)) {
+      onToggleStatus(employee);
+      toast.success("Estado actualizado");
     }
+  };
+
+  const handleResetPassword = (employee: Employee) => {
+    const password = prompt(`Nueva contraseña para ${employee.name}`);
+    if (!password) return;
+    onResetPassword(employee, password);
   };
 
   return (
@@ -39,17 +50,23 @@ export const EmployeesTable = ({
           <TableRow>
             <TableHead>Nombre</TableHead>
             <TableHead className="hidden sm:table-cell">Puesto</TableHead>
-            <TableHead className="hidden md:table-cell">Email</TableHead>
-            <TableHead className="hidden lg:table-cell">Teléfono</TableHead>
+            <TableHead className="hidden md:table-cell">Usuario</TableHead>
+            <TableHead className="hidden lg:table-cell">Rol del sistema</TableHead>
             <TableHead>Estado</TableHead>
             <TableHead className="text-right">Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {employees.length === 0 ? (
+          {isLoading ? (
             <TableRow>
               <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                No se encontraron empleados
+                Cargando empleados...
+              </TableCell>
+            </TableRow>
+          ) : employees.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                No hay empleados registrados
               </TableCell>
             </TableRow>
           ) : (
@@ -57,8 +74,12 @@ export const EmployeesTable = ({
               <TableRow key={employee.id}>
                 <TableCell className="font-medium">{employee.name}</TableCell>
                 <TableCell className="hidden sm:table-cell">{employee.role}</TableCell>
-                <TableCell className="hidden md:table-cell">{employee.email}</TableCell>
-                <TableCell className="hidden lg:table-cell">{employee.phone}</TableCell>
+                <TableCell className="hidden md:table-cell">
+                  {employee.hasUser ? "Sí" : "No"}
+                </TableCell>
+                <TableCell className="hidden lg:table-cell">
+                  {employee.hasUser ? employee.userRole || "—" : "—"}
+                </TableCell>
                 <TableCell>
                   <Badge variant={employee.status === "active" ? "default" : "secondary"}>
                     {employee.status === "active" ? "Activo" : "Inactivo"}
@@ -74,6 +95,16 @@ export const EmployeesTable = ({
                     >
                       <Eye className="h-4 w-4" />
                     </Button>
+                    {employee.hasUser && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleResetPassword(employee)}
+                        title="Resetear contraseña"
+                      >
+                        <KeyRound className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -85,10 +116,10 @@ export const EmployeesTable = ({
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => handleDelete(employee.id, employee.name)}
-                      title="Eliminar"
+                      onClick={() => handleToggleStatus(employee)}
+                      title={employee.status === "active" ? "Desactivar" : "Activar"}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Power className="h-4 w-4" />
                     </Button>
                   </div>
                 </TableCell>

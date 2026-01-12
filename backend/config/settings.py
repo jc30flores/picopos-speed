@@ -96,8 +96,11 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "static"
 
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MENU_IMAGE_ROOT = BASE_DIR / "menu_image"
+MENU_IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
+
+MEDIA_URL = "/menu_image/"
+MEDIA_ROOT = MENU_IMAGE_ROOT
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

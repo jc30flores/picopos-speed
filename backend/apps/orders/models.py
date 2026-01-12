@@ -5,6 +5,7 @@ from apps.menu.models import Product
 
 class Order(models.Model):
     STATUS_CHOICES = [
+        ("waiting_payment", "Waiting Payment"),
         ("new", "New"),
         ("preparing", "Preparing"),
         ("ready", "Ready"),
@@ -28,7 +29,7 @@ class Order(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="orders")
     service_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT, related_name="orders")
     table = models.ForeignKey(Table, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="new")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting_payment")
     customer_name = models.CharField(max_length=120, blank=True)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)

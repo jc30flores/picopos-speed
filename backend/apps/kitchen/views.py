@@ -9,4 +9,8 @@ class KitchenOrderListView(generics.ListAPIView):
     permission_classes = [IsKitchenOrManagerOrAdmin]
 
     def get_queryset(self):
-        return KitchenOrderView.objects.select_related("order", "service_type").prefetch_related("order__items")
+        return (
+            KitchenOrderView.objects.filter(status="preparing")
+            .select_related("order", "service_type")
+            .prefetch_related("order__items")
+        )
