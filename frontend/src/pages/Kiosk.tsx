@@ -117,7 +117,7 @@ const Kiosk = () => {
   const canContinue = () => {
     if (!selectedProduct?.modifierGroups) return true;
     
-    return selectedProduct.modifierGroups.every((groupId: string) => {
+    return selectedProduct.modifierGroups.every((groupId: number) => {
       const group = modifierGroups.find((g) => g.id === groupId);
       if (!group) return true;
       
@@ -222,7 +222,8 @@ const Kiosk = () => {
                 onClick={() => handleProductSelect(product)}
               >
                 {(() => {
-                  const imageSrc = getProductImageSrc(product);
+                  const imageSrc =
+                    product.image_url ?? product.imageUrl ?? getProductImageSrc(product);
                   if (!imageSrc || imageErrors[product.id]) {
                     return (
                       <div className="relative mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">

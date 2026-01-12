@@ -30,6 +30,8 @@ export type Product = {
   category: string;
   categoryName?: string | null;
   categoryId: number;
+  image_url?: string | null;
+  image_path?: string | null;
   image?: string | null;
   imagePath?: string | null;
   imageUrl?: string | null;
@@ -348,9 +350,11 @@ export const getProducts = async (): Promise<Product[]> => {
     category: item.category,
     categoryName: item.category_name ?? item.category,
     categoryId: item.category_id_display ?? 0,
+    image_url: item.image_url ?? null,
+    image_path: item.image_path ?? null,
     image: item.image,
     imagePath: item.image_path ?? null,
-    imageUrl: item.image_url ?? undefined,
+    imageUrl: item.image_url ?? null,
     available: item.available,
     modifierGroups: item.modifier_groups,
   }));
