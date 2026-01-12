@@ -697,6 +697,9 @@ export const createOrder = async (payload: {
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
   }>(response);
+  if (import.meta.env.DEV) {
+    console.debug("[API] createOrder raw response", data);
+  }
   return mapOrder(data);
 };
 

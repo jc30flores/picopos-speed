@@ -33,6 +33,13 @@ class OrderCreateView(generics.CreateAPIView):
     serializer_class = OrderCreateSerializer
     permission_classes = [IsCashierOrManagerOrAdmin]
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
+        output = OrderSerializer(order, context={"request": request}).data
+        return Response(output, status=status.HTTP_201_CREATED)
+
 
 class OrderDetailView(generics.RetrieveAPIView):
     queryset = Order.objects.all()

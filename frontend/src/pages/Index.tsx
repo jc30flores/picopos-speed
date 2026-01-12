@@ -73,6 +73,7 @@ const POS = () => {
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
+  const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
@@ -201,6 +202,7 @@ const POS = () => {
     if (!hasSameDraft) {
       setActiveOrder(null);
       setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
     }
     setPaymentAmount(toNumber(draft.total).toFixed(2));
     setTipAmount("0");
@@ -265,6 +267,7 @@ const POS = () => {
       if (!order) {
         if (createdOrderId) {
           order = await getOrderById(createdOrderId);
+          setCreatedOrderNumber(order.orderNumber ?? null);
         } else {
           order = await createOrder({
             serviceType: checkoutDraft.serviceType,
@@ -277,16 +280,22 @@ const POS = () => {
             })),
           });
           console.info("createOrder response", order);
-          const createdId = (order as Order | undefined)?.id ?? (order as unknown as { order_id?: number }).order_id ?? (order as unknown as { pk?: number }).pk;
+          const createdId =
+            (order as Order | undefined)?.id ??
+            (order as unknown as { order_id?: number }).order_id ??
+            (order as unknown as { pk?: number }).pk;
           if (!createdId) {
             throw new Error("createOrder did not return an id");
           }
           setCreatedOrderId(createdId);
+          setCreatedOrderNumber((order as Order | undefined)?.orderNumber ?? null);
         }
         setActiveOrder(order);
       }
       const orderId =
-        (order as Order | undefined)?.id ?? (order as unknown as { order_id?: number }).order_id ?? (order as unknown as { pk?: number }).pk;
+        (order as Order | undefined)?.id ??
+        (order as unknown as { order_id?: number }).order_id ??
+        (order as unknown as { pk?: number }).pk;
       if (!orderId) {
         throw new Error("createOrder did not return an id");
       }
@@ -308,6 +317,7 @@ const POS = () => {
         setCart([]);
         setCheckoutDraft(null);
         setCreatedOrderId(null);
+        setCreatedOrderNumber(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -564,7 +574,11 @@ const POS = () => {
                 <div className="flex items-center justify-between text-sm font-semibold">
                   <span>Detalle</span>
                   <span className="text-xs text-muted-foreground">
-                    {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : "Pedido (pendiente)"}
+                    {activeOrder?.orderNumber
+                      ? `Pedido #${activeOrder.orderNumber}`
+                      : createdOrderNumber
+                        ? `Pedido #${createdOrderNumber}`
+                        : "Pedido (pendiente)"}
                   </span>
                 </div>
                 <div className="rounded-md border">
