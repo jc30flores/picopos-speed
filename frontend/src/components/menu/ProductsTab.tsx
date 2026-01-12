@@ -20,7 +20,7 @@ export const ProductsTab = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
 
-  const loadMenuData = async () => {
+  const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
       getProducts(),
@@ -29,6 +29,10 @@ export const ProductsTab = () => {
     setCategories(categoriesResponse);
     setProducts(productsResponse);
     setModifierGroups(modifierGroupsResponse);
+    if (productId) {
+      const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
+      setSelectedProduct(updatedProduct);
+    }
   };
 
   useEffect(() => {
