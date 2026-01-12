@@ -13,11 +13,11 @@ import {
   getCategories,
   getModifierGroups,
   getProducts,
-  resolveImageUrl,
   Category,
   ModifierGroup,
   Product,
 } from "@/lib/api";
+import { getProductImageSrc } from "@/lib/media";
 import { ProductImagePreviewModal } from "@/components/kiosk/ProductImagePreviewModal";
 import { toast } from "sonner";
 
@@ -222,7 +222,7 @@ const Kiosk = () => {
                 onClick={() => handleProductSelect(product)}
               >
                 {(() => {
-                  const imageSrc = resolveImageUrl(product.imageUrl ?? product.imagePath);
+                  const imageSrc = getProductImageSrc(product);
                   if (!imageSrc || imageErrors[product.id]) {
                     return (
                       <div className="relative mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">
