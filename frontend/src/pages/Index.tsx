@@ -72,6 +72,7 @@ const POS = () => {
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
@@ -180,7 +181,6 @@ const POS = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    setIsProcessingPayment(true);
     const draftTotals = calculateCartTotals(cart, taxRate);
     const draft = {
       items: [...cart],
@@ -191,31 +191,21 @@ const POS = () => {
       serviceType,
       createdAt: Date.now(),
     };
+    const hasSameDraft =
+      checkoutDraft &&
+      checkoutDraft.taxRate === draft.taxRate &&
+      checkoutDraft.serviceType === draft.serviceType &&
+      checkoutDraft.total === draft.total &&
+      JSON.stringify(checkoutDraft.items) === JSON.stringify(draft.items);
     setCheckoutDraft(draft);
-    try {
-      const order = await createOrder({
-        serviceType,
-        items: draft.items.map((item) => ({
-          productId: item.productId,
-          productName: item.name,
-          price: item.price,
-          quantity: item.quantity,
-          modifiers: item.modifiers,
-        })),
-      });
-      setActiveOrder(order);
-      setPaymentAmount(toNumber(draft.total).toFixed(2));
-      setTipAmount("0");
-      setPaymentReference("");
-      setIsPaymentOpen(true);
-    } catch (error) {
-      console.error("Failed to create order", error);
-      setCheckoutDraft(null);
+    if (!hasSameDraft) {
       setActiveOrder(null);
-      toast.error("No se pudo crear el pedido. Intenta de nuevo.");
-    } finally {
-      setIsProcessingPayment(false);
+      setCreatedOrderId(null);
     }
+    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    setTipAmount("0");
+    setPaymentReference("");
+    setIsPaymentOpen(true);
   };
 
   const handleAddModifiers = () => {
@@ -247,7 +237,10 @@ const POS = () => {
   };
 
   const handleSubmitPayment = async () => {
-    if (!activeOrder) return;
+    if (!checkoutDraft || checkoutDraft.items.length === 0) {
+      toast.error("No hay productos en el pedido");
+      return;
+    }
     const amountValue = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
     const totalPayment = amountValue + tipValue;
@@ -268,14 +261,33 @@ const POS = () => {
 
     try {
       setIsProcessingPayment(true);
+      let order = activeOrder;
+      if (!order) {
+        if (createdOrderId) {
+          order = await getOrderById(createdOrderId);
+        } else {
+          order = await createOrder({
+            serviceType: checkoutDraft.serviceType,
+            items: checkoutDraft.items.map((item) => ({
+              productId: item.productId,
+              productName: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              modifiers: item.modifiers,
+            })),
+          });
+          setCreatedOrderId(order.id);
+        }
+        setActiveOrder(order);
+      }
       await createPayment({
-        orderId: activeOrder.id,
+        orderId: order.id,
         method: paymentMethod,
         amount: amountValue,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
       });
-      const refreshed = await getOrderById(activeOrder.id);
+      const refreshed = await getOrderById(order.id);
       setActiveOrder(refreshed);
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
@@ -285,6 +297,7 @@ const POS = () => {
         setIsPaymentOpen(false);
         setCart([]);
         setCheckoutDraft(null);
+        setCreatedOrderId(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -522,7 +535,7 @@ const POS = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Cobrar pedido</DialogTitle>
-            <DialogDescription>Registra el pago del pedido en curso</DialogDescription>
+            <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
           </DialogHeader>
           {checkoutDraft ? (
             <div className="space-y-5">
@@ -541,7 +554,7 @@ const POS = () => {
                 <div className="flex items-center justify-between text-sm font-semibold">
                   <span>Detalle</span>
                   <span className="text-xs text-muted-foreground">
-                    {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : "Pedido sin número"}
+                    {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : "Pedido (pendiente)"}
                   </span>
                 </div>
                 <div className="rounded-md border">
