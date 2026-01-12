@@ -99,7 +99,7 @@ STATIC_ROOT = BASE_DIR / "static"
 MENU_IMAGE_ROOT = BASE_DIR / "menu_image"
 MENU_IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
-MEDIA_URL = "/menu_image/"
+MEDIA_URL = "/media/"
 MEDIA_ROOT = MENU_IMAGE_ROOT
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

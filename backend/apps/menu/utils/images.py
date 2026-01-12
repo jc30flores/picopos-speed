@@ -37,7 +37,7 @@ def save_menu_image(file_obj, category_name: str) -> dict:
     rel = f"{category}/{filename}"
     return {
         "image": rel,
-        "image_path": f"/menu_image/{rel}",
+        "image_path": f"{settings.MEDIA_URL.rstrip('/')}/{rel}",
         "abs_path": abs_path,
     }
 

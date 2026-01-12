@@ -223,6 +223,9 @@ const Kiosk = () => {
               >
                 {(() => {
                   const imageSrc = resolveImageUrl(product.imagePath ?? product.imageUrl);
+                  if (import.meta.env.DEV) {
+                    console.debug("product image", product.id, imageSrc);
+                  }
                   if (!imageSrc || imageErrors[product.id]) {
                     return (
                       <div className="relative mb-4 flex h-32 items-center justify-center rounded-md bg-muted text-sm text-muted-foreground">

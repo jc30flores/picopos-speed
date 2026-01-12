@@ -42,7 +42,16 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
   const base = API_BASE_URL.replace(/\/api\/?$/, "");
   const trimmedPath = imagePath.replace(/^\/+/, "");
-  const normalizedPath = `/${trimmedPath}`.replace(/^\/api\//, "/");
+  const normalizedPath = `/${trimmedPath}`;
+  if (normalizedPath.startsWith("/api/")) {
+    return normalizedPath.replace(/^\/api/, "");
+  }
+  if (normalizedPath.startsWith("/menu_image/")) {
+    return normalizedPath.replace("/menu_image/", "/media/", 1);
+  }
+  if (normalizedPath.startsWith("/media/")) {
+    return normalizedPath;
+  }
   return `${base}${normalizedPath}`;
 };
 
