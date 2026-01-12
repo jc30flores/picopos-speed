@@ -57,6 +57,40 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
   return normalizedPath;
 };
 
+const normalizeImageUrl = (item: {
+  image_url?: string | null;
+  imageUrl?: string | null;
+  image_path?: string | null;
+  imagePath?: string | null;
+  image?: string | null;
+}): string | null => {
+  const direct = item.image_url ?? item.imageUrl ?? null;
+  if (typeof direct === "string" && direct.trim()) {
+    const trimmed = direct.trim();
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+
+  const path = item.image_path ?? item.imagePath ?? null;
+  if (typeof path === "string" && path.trim()) {
+    const trimmed = path.trim();
+    if (trimmed.startsWith("/menu_image/")) {
+      return trimmed.replace("/menu_image/", "/media/menu_image/", 1);
+    }
+    if (trimmed.startsWith("/media/")) {
+      return trimmed;
+    }
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+
+  const image = item.image ?? null;
+  if (typeof image === "string" && image.trim()) {
+    const trimmed = image.trim().replace(/^\/+/, "");
+    return `/media/menu_image/${trimmed}`;
+  }
+
+  return null;
+};
+
 export type Discount = {
   id: number;
   name: string;
@@ -342,22 +376,25 @@ export const getProducts = async (): Promise<Product[]> => {
     available: boolean;
     modifier_groups: number[];
   }>>(response);
-  return data.map((item) => ({
-    id: item.id,
-    name: item.name,
-    description: item.description,
-    price: Number(item.price),
-    category: item.category,
-    categoryName: item.category_name ?? item.category,
-    categoryId: item.category_id_display ?? 0,
-    image_url: item.image_url ?? null,
-    image_path: item.image_path ?? null,
-    image: item.image,
-    imagePath: item.image_path ?? null,
-    imageUrl: item.image_url ?? null,
-    available: item.available,
-    modifierGroups: item.modifier_groups,
-  }));
+  return data.map((item) => {
+    const normalizedImageUrl = normalizeImageUrl(item);
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      price: Number(item.price),
+      category: item.category,
+      categoryName: item.category_name ?? item.category,
+      categoryId: item.category_id_display ?? 0,
+      image_url: normalizedImageUrl,
+      image_path: item.image_path ?? null,
+      image: item.image,
+      imagePath: item.image_path ?? null,
+      imageUrl: normalizedImageUrl,
+      available: item.available,
+      modifierGroups: item.modifier_groups,
+    };
+  });
 };
 
 export const createProduct = async (payload: {
