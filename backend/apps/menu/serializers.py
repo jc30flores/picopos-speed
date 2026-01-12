@@ -95,9 +95,6 @@ class ProductSerializer(serializers.ModelSerializer):
             return None
         if url.startswith("/menu_image/"):
             url = url.replace("/menu_image/", "/media/", 1)
-        request = self.context.get("request")
-        if request:
-            return request.build_absolute_uri(url)
         return url
 
     def update(self, instance, validated_data):

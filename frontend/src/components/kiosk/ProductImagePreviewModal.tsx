@@ -20,7 +20,7 @@ export const ProductImagePreviewModal = ({ open, item, onClose }: ProductImagePr
 
   if (!open || !item) return null;
 
-  const imageSrc = resolveImageUrl(item.imagePath ?? item.imageUrl);
+  const imageSrc = resolveImageUrl(item.imageUrl ?? item.imagePath);
 
   return (
     <div
