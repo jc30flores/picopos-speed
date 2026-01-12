@@ -8,7 +8,52 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, Category, ModifierGroup, Product } from "@/lib/api";
+import { toast } from "sonner";
+
+interface InlineStatusToggleProps {
+  product: Product;
+  onUpdated: (updated: Product) => void;
+}
+
+const InlineStatusToggle = ({ product, onUpdated }: InlineStatusToggleProps) => {
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const handleToggle = async () => {
+    if (isUpdating) return;
+    const nextValue = !product.available;
+    setIsUpdating(true);
+    try {
+      const updated = await updateProductAvailability(product.id, nextValue);
+      onUpdated(updated);
+    } catch (error) {
+      console.error("Failed to update product availability", error);
+      toast.error("No se pudo cambiar el estado");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleToggle}
+      disabled={isUpdating}
+      className="inline-flex"
+      aria-pressed={product.available}
+    >
+      <Badge
+        variant={product.available ? "default" : "outline"}
+        className={cn(
+          "transition-opacity",
+          isUpdating ? "opacity-60" : "cursor-pointer hover:opacity-80"
+        )}
+      >
+        {product.available ? "Activo" : "Inactivo"}
+      </Badge>
+    </button>
+  );
+};
 
 export const ProductsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -20,7 +65,7 @@ export const ProductsTab = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
 
-  const loadMenuData = async () => {
+  const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
       getProducts(),
@@ -29,6 +74,10 @@ export const ProductsTab = () => {
     setCategories(categoriesResponse);
     setProducts(productsResponse);
     setModifierGroups(modifierGroupsResponse);
+    if (productId) {
+      const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
+      setSelectedProduct(updatedProduct);
+    }
   };
 
   useEffect(() => {
@@ -53,6 +102,11 @@ export const ProductsTab = () => {
   const handleEditProduct = (product: Product) => {
     setEditingProduct(product);
     setShowProductForm(true);
+  };
+
+  const handleStatusUpdated = (updated: Product) => {
+    setProducts((prev) => prev.map((product) => (product.id === updated.id ? updated : product)));
+    setSelectedProduct((prev) => (prev?.id === updated.id ? updated : prev));
   };
 
   return (
@@ -129,9 +183,7 @@ export const ProductsTab = () => {
                       ${product.price.toFixed(2)}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={product.available ? "default" : "outline"}>
-                        {product.available ? "Activo" : "Inactivo"}
-                      </Badge>
+                      <InlineStatusToggle product={product} onUpdated={handleStatusUpdated} />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

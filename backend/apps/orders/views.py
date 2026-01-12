@@ -31,7 +31,14 @@ class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
 
 class OrderCreateView(generics.CreateAPIView):
     serializer_class = OrderCreateSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get_permissions(self):
+        source = ""
+        if hasattr(self.request, "data"):
+            source = str(self.request.data.get("source", "")).strip().lower()
+        if source == "kiosk":
+            return [AllowAny()]
+        return [IsCashierOrManagerOrAdmin()]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

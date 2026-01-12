@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Edit, Trash2, X } from "lucide-react";
+import { Plus, Edit, Trash2, X, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -8,12 +8,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
-import { ModifierGroup, Product } from "@/lib/api";
+import { ModifierGroup, Product, updateProductModifierGroups } from "@/lib/api";
+import { toast } from "sonner";
 
 interface ModifierPanelProps {
   selectedProduct: Product | null;
   modifierGroups: ModifierGroup[];
-  onModifierGroupsUpdated: () => Promise<void>;
+  onModifierGroupsUpdated: (productId?: number) => Promise<void>;
 }
 
 export const ModifierPanel = ({
@@ -33,14 +34,32 @@ export const ModifierPanel = ({
     }
   }, [selectedProduct]);
 
-  const handleAssignGroups = () => {
-    setAssignedGroups([...new Set([...assignedGroups, ...selectedForAssign])]);
-    setShowAssignDialog(false);
-    setSelectedForAssign([]);
+  const handleAssignGroups = async () => {
+    if (!selectedProduct) return;
+    const nextGroupIds = [...new Set([...assignedGroups, ...selectedForAssign])];
+    try {
+      await updateProductModifierGroups(selectedProduct.id, nextGroupIds);
+      await onModifierGroupsUpdated(selectedProduct.id);
+      setShowAssignDialog(false);
+      setSelectedForAssign([]);
+      toast.success("Grupos asignados correctamente");
+    } catch (error) {
+      console.error("Failed to assign modifier groups", error);
+      toast.error("No se pudieron asignar los grupos");
+    }
   };
 
-  const handleRemoveGroup = (groupId: number) => {
-    setAssignedGroups(assignedGroups.filter(id => id !== groupId));
+  const handleRemoveGroup = async (groupId: number) => {
+    if (!selectedProduct) return;
+    const nextGroupIds = assignedGroups.filter((id) => id !== groupId);
+    try {
+      await updateProductModifierGroups(selectedProduct.id, nextGroupIds);
+      await onModifierGroupsUpdated(selectedProduct.id);
+      toast.success("Grupo removido correctamente");
+    } catch (error) {
+      console.error("Failed to remove modifier group", error);
+      toast.error("No se pudo remover el grupo");
+    }
   };
 
   const handleNewGroup = () => {
@@ -65,8 +84,8 @@ export const ModifierPanel = ({
     );
   }
 
-  const assignedGroupObjects = modifierGroups.filter(g =>
-    assignedGroups.includes(g.id)
+  const assignedGroupObjects = modifierGroups.filter((group) =>
+    assignedGroups.includes(group.id)
   );
 
   return (
@@ -217,7 +236,7 @@ export const ModifierPanel = ({
                     if (checked && !assignedGroups.includes(group.id)) {
                       setSelectedForAssign([...selectedForAssign, group.id]);
                     } else {
-                      setSelectedForAssign(selectedForAssign.filter(id => id !== group.id));
+                      setSelectedForAssign(selectedForAssign.filter((id) => id !== group.id));
                     }
                   }}
                   disabled={assignedGroups.includes(group.id)}
@@ -261,6 +280,3 @@ export const ModifierPanel = ({
     </div>
   );
 };
-
-// Settings icon import
-import { Settings } from "lucide-react";

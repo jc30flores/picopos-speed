@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Discount } from "@/types/menu";
 import { Category, ServiceType, createDiscount, updateDiscount } from "@/lib/api";
+import { Clock } from "lucide-react";
 
 interface DiscountFormDialogProps {
   open: boolean;
@@ -35,15 +36,31 @@ export const DiscountFormDialog = ({
   const [description, setDescription] = useState("");
   const [active, setActive] = useState(true);
   const [type, setType] = useState<"percent" | "fixed">("percent");
-  const [value, setValue] = useState(0);
+  const [value, setValue] = useState("");
   const [appliesTo, setAppliesTo] = useState<"order" | "categories" | "products">("order");
   const [targetCategories, setTargetCategories] = useState<string[]>([]);
   const [days, setDays] = useState<number[]>([]);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [serviceTypes, setServiceTypes] = useState<("dine-in" | "takeout" | "delivery" | "kiosk")[]>([]);
-  const [minAmount, setMinAmount] = useState(0);
+  const [minAmount, setMinAmount] = useState("");
   const [autoApply, setAutoApply] = useState(true);
+  const startTimeRef = useRef<HTMLInputElement>(null);
+  const endTimeRef = useRef<HTMLInputElement>(null);
+
+  const focusTimeInput = (ref: React.RefObject<HTMLInputElement>) => {
+    const input = ref.current;
+    if (!input) return;
+    input.focus();
+    if ("showPicker" in input) {
+      (input as HTMLInputElement & { showPicker?: () => void }).showPicker?.();
+    }
+  };
+
+  const parseNumber = (raw: string) => {
+    const parsed = Number(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
 
   useEffect(() => {
     if (editingDiscount) {
@@ -51,14 +68,14 @@ export const DiscountFormDialog = ({
       setDescription(editingDiscount.description || "");
       setActive(editingDiscount.active);
       setType(editingDiscount.type);
-      setValue(editingDiscount.value);
+      setValue(String(editingDiscount.value));
       setAppliesTo(editingDiscount.appliesTo);
       setTargetCategories(editingDiscount.targetCategories || []);
       setDays(editingDiscount.days);
       setStartTime(editingDiscount.startTime || "");
       setEndTime(editingDiscount.endTime || "");
       setServiceTypes(editingDiscount.serviceTypes);
-      setMinAmount(editingDiscount.minAmount || 0);
+      setMinAmount(editingDiscount.minAmount ? String(editingDiscount.minAmount) : "");
       setAutoApply(editingDiscount.autoApply);
     } else {
       // Reset form
@@ -66,14 +83,14 @@ export const DiscountFormDialog = ({
       setDescription("");
       setActive(true);
       setType("percent");
-      setValue(0);
+      setValue("");
       setAppliesTo("order");
       setTargetCategories([]);
       setDays([]);
       setStartTime("");
       setEndTime("");
       setServiceTypes([]);
-      setMinAmount(0);
+      setMinAmount("");
       setAutoApply(true);
     }
   }, [editingDiscount, open]);
@@ -104,12 +121,14 @@ export const DiscountFormDialog = ({
 
   const getPreviewText = () => {
     const parts: string[] = [];
+    const valueNumber = parseNumber(value);
+    const minAmountNumber = parseNumber(minAmount);
     
     // Value
     if (type === "percent") {
-      parts.push(`${value}% de descuento`);
+      parts.push(`${valueNumber}% de descuento`);
     } else {
-      parts.push(`$${value} de descuento`);
+      parts.push(`$${valueNumber} de descuento`);
     }
     
     // Applies to
@@ -139,17 +158,18 @@ export const DiscountFormDialog = ({
     if (services.length > 0) parts.push(`para ${services.join(", ")}`);
     
     // Min amount
-    if (minAmount > 0) {
-      parts.push(`cuando el ticket sea ≥ $${minAmount}`);
+    if (minAmountNumber > 0) {
+      parts.push(`cuando el ticket sea ≥ $${minAmountNumber}`);
     }
     
     return `Este descuento aplicará ${parts.join(" ")}.`;
   };
 
   const isValid = () => {
+    const valueNumber = parseNumber(value);
     return (
       name.trim() !== "" &&
-      value > 0 &&
+      valueNumber > 0 &&
       days.length > 0 &&
       serviceTypes.length > 0 &&
       (appliesTo !== "categories" || targetCategories.length > 0)
@@ -164,13 +184,15 @@ export const DiscountFormDialog = ({
     const serviceTypeKeys = availableServiceTypes
       .filter((service) => serviceTypes.includes(service.key as any))
       .map((service) => service.key);
+    const valueNumber = parseNumber(value);
+    const minAmountNumber = parseNumber(minAmount);
 
     const payload = {
       id: editingDiscount ? Number(editingDiscount.id) : 0,
       name,
       description,
       type,
-      value,
+      value: valueNumber,
       appliesTo,
       targetCategoryIds: categoryIds,
       targetProductIds: [],
@@ -178,7 +200,7 @@ export const DiscountFormDialog = ({
       startTime: startTime || null,
       endTime: endTime || null,
       serviceTypes: serviceTypeKeys,
-      minAmount,
+      minAmount: minAmountNumber,
       autoApply,
       isActive: active,
     };
@@ -272,7 +294,8 @@ export const DiscountFormDialog = ({
                 max={type === "fixed" ? undefined : 100}
                 step={type === "fixed" ? 0.01 : 1}
                 value={value}
-                onChange={(e) => setValue(parseFloat(e.target.value) || 0)}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="0"
                 className="mt-1"
               />
             </div>
@@ -347,23 +370,45 @@ export const DiscountFormDialog = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label htmlFor="start-time">Desde</Label>
-                  <Input
-                    id="start-time"
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="mt-1"
-                  />
+                  <div className="relative mt-1">
+                    <Input
+                      ref={startTimeRef}
+                      id="start-time"
+                      type="time"
+                      value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)}
+                      className="pr-12 time-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => focusTimeInput(startTimeRef)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-1 text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label="Seleccionar hora de inicio"
+                    >
+                      <Clock className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <Label htmlFor="end-time">Hasta</Label>
-                  <Input
-                    id="end-time"
-                    type="time"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                    className="mt-1"
-                  />
+                  <div className="relative mt-1">
+                    <Input
+                      ref={endTimeRef}
+                      id="end-time"
+                      type="time"
+                      value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)}
+                      className="pr-12 time-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => focusTimeInput(endTimeRef)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-1 text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label="Seleccionar hora de fin"
+                    >
+                      <Clock className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -391,7 +436,8 @@ export const DiscountFormDialog = ({
                   min={0}
                   step={0.01}
                   value={minAmount}
-                  onChange={(e) => setMinAmount(parseFloat(e.target.value) || 0)}
+                  onChange={(e) => setMinAmount(e.target.value)}
+                  placeholder="0"
                   className="mt-1"
                 />
               </div>

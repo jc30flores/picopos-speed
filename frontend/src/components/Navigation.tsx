@@ -1,5 +1,5 @@
-import { Link, useLocation } from "react-router-dom";
-import { Moon, Sun, ChevronDown } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { LogOut, Moon, Sun, ChevronDown } from "lucide-react";
 import galloLogo from "@/assets/gallo-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,7 +9,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
 
 const navItems = [
   { label: "POS", path: "/" },
@@ -23,6 +25,8 @@ const navItems = [
 
 export const Navigation = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
@@ -38,6 +42,14 @@ export const Navigation = () => {
     setTheme(newTheme);
     localStorage.setItem("theme", newTheme);
     document.documentElement.classList.toggle("dark", newTheme === "dark");
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      navigate("/login");
+    }
   };
 
   return (
@@ -106,21 +118,22 @@ export const Navigation = () => {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* User Avatar */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-full shrink-0">
-                  <div className="w-7 h-7 lg:w-8 lg:h-8 bg-gradient-accent rounded-full flex items-center justify-center">
-                    <span className="text-xs lg:text-sm font-semibold text-primary">JD</span>
-                  </div>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem>Juan Díaz</DropdownMenuItem>
-                <DropdownMenuItem>Configuración</DropdownMenuItem>
-                <DropdownMenuItem className="text-danger">Cerrar Sesión</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleLogout}
+                    className="rounded-lg shrink-0 text-foreground hover:bg-muted"
+                    aria-label="Cerrar sesión"
+                  >
+                    <LogOut className="h-4 w-4 lg:h-5 lg:w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Cerrar sesión</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
       </div>

@@ -6,7 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "pico-de-gallo-pos.cuskatech.com"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -96,11 +96,12 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "static"
 
-MENU_IMAGE_ROOT = BASE_DIR / "menu_image"
-MENU_IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
-MEDIA_URL = "/menu_image/"
-MEDIA_ROOT = MENU_IMAGE_ROOT
+MENU_IMAGE_ROOT = MEDIA_ROOT / "menu_image"
+MENU_IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -118,6 +119,7 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
+    "https://pico-de-gallo-pos.cuskatech.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -125,7 +127,15 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
+    "http://localhost:9102",
+    "https://pico-de-gallo-pos.cuskatech.com",
 ]
+
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"

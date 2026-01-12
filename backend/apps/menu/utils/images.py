@@ -34,10 +34,10 @@ def save_menu_image(file_obj, category_name: str) -> dict:
         for chunk in file_obj.chunks():
             destination.write(chunk)
 
-    rel = f"{category}/{filename}"
+    rel = f"menu_image/{category}/{filename}"
     return {
         "image": rel,
-        "image_path": f"/menu_image/{rel}",
+        "image_path": f"{settings.MEDIA_URL.rstrip('/')}/{rel}",
         "abs_path": abs_path,
     }
 
@@ -45,7 +45,10 @@ def save_menu_image(file_obj, category_name: str) -> dict:
 def delete_menu_image_by_image_field(image_value: str) -> None:
     if not image_value:
         return
-    abs_path = os.path.join(str(settings.MENU_IMAGE_ROOT), image_value)
+    normalized = image_value
+    if normalized.startswith("menu_image/"):
+        normalized = normalized.replace("menu_image/", "", 1)
+    abs_path = os.path.join(str(settings.MENU_IMAGE_ROOT), normalized)
     if os.path.isfile(abs_path):
         try:
             os.remove(abs_path)

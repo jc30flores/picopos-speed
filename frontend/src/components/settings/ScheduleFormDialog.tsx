@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Schedule } from "@/types/employee";
 import { toast } from "sonner";
+import { Clock } from "lucide-react";
 
 interface ScheduleFormDialogProps {
   open: boolean;
@@ -52,6 +53,17 @@ export const ScheduleFormDialog = ({
     exitTime: "",
     allowsOvertime: false,
   });
+  const entryInputRef = useRef<HTMLInputElement>(null);
+  const exitInputRef = useRef<HTMLInputElement>(null);
+
+  const focusTimeInput = (ref: React.RefObject<HTMLInputElement>) => {
+    const input = ref.current;
+    if (!input) return;
+    input.focus();
+    if ("showPicker" in input) {
+      (input as HTMLInputElement & { showPicker?: () => void }).showPicker?.();
+    }
+  };
 
   useEffect(() => {
     if (schedule) {
@@ -179,25 +191,49 @@ export const ScheduleFormDialog = ({
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label htmlFor="entry">Hora de entrada *</Label>
-              <Input
-                id="entry"
-                type="time"
-                value={formData.entryTime}
-                onChange={(e) =>
-                  setFormData({ ...formData, entryTime: e.target.value })
-                }
-              />
+              <div className="relative">
+                <Input
+                  ref={entryInputRef}
+                  id="entry"
+                  type="time"
+                  value={formData.entryTime}
+                  onChange={(e) =>
+                    setFormData({ ...formData, entryTime: e.target.value })
+                  }
+                  className="pr-12 time-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => focusTimeInput(entryInputRef)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-1 text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Seleccionar hora de entrada"
+                >
+                  <Clock className="h-4 w-4" />
+                </button>
+              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="exit">Hora de salida *</Label>
-              <Input
-                id="exit"
-                type="time"
-                value={formData.exitTime}
-                onChange={(e) =>
-                  setFormData({ ...formData, exitTime: e.target.value })
-                }
-              />
+              <div className="relative">
+                <Input
+                  ref={exitInputRef}
+                  id="exit"
+                  type="time"
+                  value={formData.exitTime}
+                  onChange={(e) =>
+                    setFormData({ ...formData, exitTime: e.target.value })
+                  }
+                  className="pr-12 time-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => focusTimeInput(exitInputRef)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-1 text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Seleccionar hora de salida"
+                >
+                  <Clock className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
 

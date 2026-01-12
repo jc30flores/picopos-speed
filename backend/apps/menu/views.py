@@ -1,6 +1,7 @@
 import os
+import logging
 from rest_framework import generics, status
-from rest_framework.permissions import SAFE_METHODS
+from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.conf import settings
@@ -14,6 +15,8 @@ from apps.menu.serializers import (
     ModifierGroupSerializer,
     DiscountSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryListCreateView(generics.ListCreateAPIView):
@@ -30,7 +33,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
 
     def create(self, request, *args, **kwargs):
@@ -59,7 +62,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
 
     def perform_create(self, serializer):
@@ -74,8 +77,31 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
-            return [IsAuthenticatedAndActive()]
+            return [AllowAny()]
         return [IsAdminOrManager()]
+
+    def perform_update(self, serializer):
+        product = serializer.save()
+        modifier_group_ids = []
+        if hasattr(self.request.data, "getlist"):
+            modifier_group_ids = self.request.data.getlist("modifier_group_ids")
+        elif "modifier_group_ids" in self.request.data:
+            modifier_group_ids = self.request.data.get("modifier_group_ids") or []
+        logger.info(
+            "Product updated",
+            extra={
+                "product_id": product.id,
+                "modifier_group_ids": modifier_group_ids,
+                "user_id": getattr(self.request.user, "id", None),
+            },
+        )
+        log_audit(
+            self.request,
+            "menu.product.update",
+            "Product",
+            product.id,
+            {"name": product.name, "modifier_group_ids": modifier_group_ids},
+        )
 
 
 class MenuImageHealthView(APIView):

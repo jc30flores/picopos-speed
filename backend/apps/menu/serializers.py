@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.conf import settings
 from apps.menu.models import (
     Category,
     Product,
@@ -85,17 +86,19 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_image_url(self, obj: Product) -> str | None:
+        url = None
         if obj.image_path:
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(obj.image_path)
-            return obj.image_path
-        if obj.image and hasattr(obj.image, "url"):
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(obj.image.url)
-            return obj.image.url
-        return None
+            url = obj.image_path
+        elif obj.image:
+            image_value = obj.image
+            if not image_value.startswith("menu_image/"):
+                image_value = f"menu_image/{image_value}"
+            url = f"{settings.MEDIA_URL.rstrip('/')}/{image_value}"
+        if not url:
+            return None
+        if url.startswith("/menu_image/"):
+            url = url.replace("/menu_image/", "/media/menu_image/", 1)
+        return url
 
     def update(self, instance, validated_data):
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
