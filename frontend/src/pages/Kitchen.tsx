@@ -201,7 +201,8 @@ const Kitchen = () => {
                   )}
                   {order.status === "preparing" && (
                     <Button
-                      className="flex-1 bg-gradient-accent"
+                      className="flex-1"
+                      variant="default"
                       onClick={() => handleStatusUpdate(order.id, "ready")}
                     >
                       Marcar Listo
