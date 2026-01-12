@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -30,11 +31,19 @@ const ROLE_KEY_BY_LABEL = ROLE_OPTIONS.reduce((acc, option) => {
   return acc;
 }, {} as Record<string, string>);
 
+export interface EmployeeFormData extends Partial<Employee> {
+  createUser?: boolean;
+  userIdentifier?: string;
+  userPassword?: string;
+  userPasswordConfirm?: string;
+  userRole?: string;
+}
+
 interface EmployeeFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   employee: Employee | null;
-  onSave: (data: Partial<Employee>) => void;
+  onSave: (data: EmployeeFormData) => void;
   branches?: string[];
 }
 
@@ -52,6 +61,11 @@ export const EmployeeFormDialog = ({
     phone: "",
     branch: "",
     status: "active" as "active" | "inactive",
+    createUser: false,
+    userIdentifier: "",
+    userPassword: "",
+    userPasswordConfirm: "",
+    userRole: "",
   });
 
   useEffect(() => {
@@ -63,6 +77,11 @@ export const EmployeeFormDialog = ({
         phone: employee.phone,
         branch: employee.branch,
         status: employee.status,
+        createUser: employee.hasUser ?? false,
+        userIdentifier: employee.userUsername ?? employee.userEmail ?? "",
+        userPassword: "",
+        userPasswordConfirm: "",
+        userRole: ROLE_KEY_BY_LABEL[employee.userRole?.toLowerCase() ?? ""] ?? "",
       });
     } else {
       setFormData({
@@ -72,6 +91,11 @@ export const EmployeeFormDialog = ({
         phone: "",
         branch: "",
         status: "active",
+        createUser: false,
+        userIdentifier: "",
+        userPassword: "",
+        userPasswordConfirm: "",
+        userRole: "",
       });
     }
   }, [employee, open]);
@@ -85,10 +109,40 @@ export const EmployeeFormDialog = ({
       toast.error("Selecciona un puesto válido");
       return;
     }
+    if (formData.createUser) {
+      if (!formData.userIdentifier) {
+        toast.error("Completa los datos de acceso");
+        return;
+      }
+      if (!ROLE_OPTIONS.some((role) => role.value === formData.userRole)) {
+        toast.error("Selecciona un rol del sistema válido");
+        return;
+      }
+      if (!employee?.hasUser) {
+        if (!formData.userPassword || !formData.userPasswordConfirm) {
+          toast.error("Completa la contraseña para crear el usuario");
+          return;
+        }
+      }
+      if (formData.userPassword || formData.userPasswordConfirm) {
+        if (formData.userPassword.length < 6) {
+          toast.error("La contraseña debe tener al menos 6 caracteres");
+          return;
+        }
+        if (formData.userPassword !== formData.userPasswordConfirm) {
+          toast.error("Las contraseñas no coinciden");
+          return;
+        }
+      }
+    }
 
     onSave(formData);
     toast.success(
-      employee ? "Empleado actualizado correctamente" : "Empleado agregado correctamente"
+      employee
+        ? "Empleado actualizado correctamente"
+        : formData.createUser
+          ? "Empleado y usuario creados correctamente"
+          : "Empleado creado correctamente"
     );
     onOpenChange(false);
   };
@@ -102,6 +156,12 @@ export const EmployeeFormDialog = ({
           </DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-4">
+          <div className="space-y-1">
+            <p className="text-sm font-semibold">Datos del empleado</p>
+            <p className="text-xs text-muted-foreground">
+              Información básica para administrar al personal.
+            </p>
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="name">Nombre *</Label>
             <Input
@@ -171,6 +231,76 @@ export const EmployeeFormDialog = ({
                 <SelectItem value="inactive">Inactivo</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2 border-t border-border pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold">Acceso al sistema</p>
+                <p className="text-xs text-muted-foreground">
+                  Este usuario podrá iniciar sesión en el sistema.
+                </p>
+              </div>
+              <Switch
+                checked={formData.createUser}
+                onCheckedChange={(checked) => setFormData({ ...formData, createUser: checked })}
+              />
+            </div>
+
+            {formData.createUser && (
+              <div className="grid gap-3 pt-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="userIdentifier">Usuario / Email de acceso *</Label>
+                  <Input
+                    id="userIdentifier"
+                    value={formData.userIdentifier}
+                    onChange={(e) => setFormData({ ...formData, userIdentifier: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="userPassword">
+                    {employee?.hasUser ? "Contraseña (opcional)" : "Contraseña *"}
+                  </Label>
+                  <Input
+                    id="userPassword"
+                    type="password"
+                    value={formData.userPassword}
+                    onChange={(e) => setFormData({ ...formData, userPassword: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="userPasswordConfirm">
+                    {employee?.hasUser ? "Confirmar contraseña" : "Confirmar contraseña *"}
+                  </Label>
+                  <Input
+                    id="userPasswordConfirm"
+                    type="password"
+                    value={formData.userPasswordConfirm}
+                    onChange={(e) =>
+                      setFormData({ ...formData, userPasswordConfirm: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="userRole">Rol del sistema *</Label>
+                  <Select
+                    value={formData.userRole}
+                    onValueChange={(value) => setFormData({ ...formData, userRole: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccionar rol" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ROLE_OPTIONS.map((role) => (
+                        <SelectItem key={role.value} value={role.value}>
+                          {role.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex justify-end gap-2">

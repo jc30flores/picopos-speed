@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from apps.core.models import Branch
 
@@ -18,6 +19,13 @@ class Employee(models.Model):
     email = models.EmailField(unique=True, null=True, blank=True)
     phone = models.CharField(max_length=40, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="employee",
+    )
     branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="employees")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     created_at = models.DateTimeField(auto_now_add=True)

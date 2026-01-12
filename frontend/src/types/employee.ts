@@ -6,6 +6,11 @@ export interface Employee {
   phone: string;
   branch: string;
   status: "active" | "inactive";
+  hasUser: boolean;
+  userId?: string | null;
+  userUsername?: string;
+  userEmail?: string;
+  userRole?: string;
   daysWorked: number;
   hoursWorked: number;
   lateArrivals: number;

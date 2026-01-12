@@ -1076,6 +1076,11 @@ export const getEmployees = async (filters?: {
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -1088,18 +1093,40 @@ export const getEmployees = async (filters?: {
     phone: item.phone ?? "",
     branch: item.branch_name ?? "",
     status: item.status,
+    hasUser: item.has_user ?? Boolean(item.user_id),
+    userId: item.user_id ? String(item.user_id) : null,
+    userUsername: item.user_username ?? "",
+    userEmail: item.user_email ?? "",
+    userRole: item.user_role ? mapEmployeeRoleLabel(item.user_role) : "",
     daysWorked: item.days_worked ?? 0,
     hoursWorked: Number(item.hours_worked ?? 0),
     lateArrivals: item.late_arrivals ?? 0,
   }));
 };
 
+type EmployeePayload = Omit<
+  import("@/types/employee").Employee,
+  "id" | "daysWorked" | "hoursWorked" | "lateArrivals" | "hasUser"
+>;
+
 export const createEmployee = async (
-  payload: Omit<import("@/types/employee").Employee, "id" | "daysWorked" | "hoursWorked" | "lateArrivals">
+  payload: EmployeePayload & {
+    createUser?: boolean;
+    user?: {
+      username: string;
+      email?: string;
+      password: string;
+      role: string;
+    };
+  }
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = resolveRoleKey(payload.role);
   if (!roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
+  if (payload.user?.role && !userRoleKey) {
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
   const response = await request("/api/employees/", {
     method: "POST",
@@ -1111,6 +1138,15 @@ export const createEmployee = async (
       role: roleKey,
       branch_name_input: payload.branch || null,
       status: payload.status ?? "active",
+      create_user: payload.createUser ?? false,
+      user: payload.user
+        ? {
+            username: payload.user.username,
+            email: payload.user.email || null,
+            password: payload.user.password,
+            role: userRoleKey ?? payload.user.role,
+          }
+        : undefined,
     }),
   });
   const data = await handleJson<{
@@ -1121,6 +1157,11 @@ export const createEmployee = async (
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -1133,6 +1174,11 @@ export const createEmployee = async (
     phone: data.phone ?? "",
     branch: data.branch_name ?? payload.branch,
     status: data.status,
+    hasUser: data.has_user ?? Boolean(data.user_id),
+    userId: data.user_id ? String(data.user_id) : null,
+    userUsername: data.user_username ?? "",
+    userEmail: data.user_email ?? "",
+    userRole: data.user_role ? mapEmployeeRoleLabel(data.user_role) : "",
     daysWorked: data.days_worked ?? 0,
     hoursWorked: Number(data.hours_worked ?? 0),
     lateArrivals: data.late_arrivals ?? 0,
@@ -1141,11 +1187,23 @@ export const createEmployee = async (
 
 export const updateEmployee = async (
   id: string,
-  payload: Partial<import("@/types/employee").Employee>
+  payload: Partial<import("@/types/employee").Employee> & {
+    createUser?: boolean;
+    user?: {
+      username?: string;
+      email?: string;
+      password?: string;
+      role?: string;
+    };
+  }
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = payload.role ? resolveRoleKey(payload.role) : undefined;
   if (payload.role && !roleKey) {
     throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+  }
+  const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
+  if (payload.user?.role && !userRoleKey) {
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
   }
   const response = await request(`/api/employees/${id}/`, {
     method: "PATCH",
@@ -1157,6 +1215,17 @@ export const updateEmployee = async (
       ...(roleKey ? { role: roleKey } : {}),
       ...(payload.branch !== undefined ? { branch_name_input: payload.branch } : {}),
       ...(payload.status !== undefined ? { status: payload.status } : {}),
+      ...(payload.createUser !== undefined ? { create_user: payload.createUser } : {}),
+      ...(payload.user
+        ? {
+            user: {
+              ...(payload.user.username !== undefined ? { username: payload.user.username } : {}),
+              ...(payload.user.email !== undefined ? { email: payload.user.email || null } : {}),
+              ...(payload.user.password ? { password: payload.user.password } : {}),
+              ...(payload.user.role ? { role: userRoleKey ?? payload.user.role } : {}),
+            },
+          }
+        : {}),
     }),
   });
   const data = await handleJson<{
@@ -1167,6 +1236,11 @@ export const updateEmployee = async (
     role: string;
     branch_name: string | null;
     status: "active" | "inactive";
+    user_id?: number | null;
+    user_username?: string | null;
+    user_email?: string | null;
+    user_role?: string | null;
+    has_user?: boolean;
     days_worked: number;
     hours_worked: string;
     late_arrivals: number;
@@ -1179,6 +1253,11 @@ export const updateEmployee = async (
     phone: data.phone ?? "",
     branch: data.branch_name ?? payload.branch ?? "",
     status: data.status,
+    hasUser: data.has_user ?? Boolean(data.user_id),
+    userId: data.user_id ? String(data.user_id) : null,
+    userUsername: data.user_username ?? "",
+    userEmail: data.user_email ?? "",
+    userRole: data.user_role ? mapEmployeeRoleLabel(data.user_role) : "",
     daysWorked: data.days_worked ?? 0,
     hoursWorked: Number(data.hours_worked ?? 0),
     lateArrivals: data.late_arrivals ?? 0,
