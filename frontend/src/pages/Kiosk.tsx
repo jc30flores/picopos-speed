@@ -8,15 +8,26 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { getCategories, getModifierGroups, getProducts, resolveImageUrl, Category, ModifierGroup, Product } from "@/lib/api";
+import {
+  createOrder,
+  getCategories,
+  getModifierGroups,
+  getProducts,
+  resolveImageUrl,
+  Category,
+  ModifierGroup,
+  Product,
+} from "@/lib/api";
 import { ProductImagePreviewModal } from "@/components/kiosk/ProductImagePreviewModal";
+import { toast } from "sonner";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
 interface CartItem {
   id: string;
+  productId: number;
   name: string;
-  price: number;
+  basePrice: number;
   quantity: number;
   modifiers: Array<{ name: string; price: number }>;
 }
@@ -28,7 +39,8 @@ const Kiosk = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
-  const [orderNumber] = useState(Math.floor(Math.random() * 900) + 100);
+  const [orderNumber, setOrderNumber] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
@@ -70,15 +82,13 @@ const Kiosk = () => {
   };
 
   const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
-    const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
-    const totalPrice = product.price + modifierPrice;
-
     setCart([
       ...cart,
       {
         id: `${product.id}-${Date.now()}`,
+        productId: product.id,
         name: product.name,
-        price: totalPrice,
+        basePrice: product.price,
         quantity: 1,
         modifiers,
       },
@@ -88,6 +98,8 @@ const Kiosk = () => {
   const handleAddModifiers = () => {
     const selectedMods: Array<{ name: string; price: number }> = [];
     
+    if (!selectedProduct) return;
+
     selectedProduct.modifierGroups.forEach((groupId: number) => {
       const group = modifierGroups.find((g) => g.id === groupId);
       if (group && selectedModifiers[groupId]) {
@@ -114,7 +126,38 @@ const Kiosk = () => {
     });
   };
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const getItemTotal = (item: CartItem) => {
+    const modifiersTotal = item.modifiers.reduce((sum, mod) => sum + mod.price, 0);
+    return (item.basePrice + modifiersTotal) * item.quantity;
+  };
+
+  const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
+
+  const handleSubmitOrder = async () => {
+    if (cart.length === 0) return;
+    setIsSubmitting(true);
+    try {
+      const order = await createOrder({
+        serviceType: "kiosk",
+        source: "kiosk",
+        channel: "kiosk",
+        items: cart.map((item) => ({
+          productId: item.productId,
+          productName: item.name,
+          price: item.basePrice,
+          quantity: item.quantity,
+          modifiers: item.modifiers,
+        })),
+      });
+      setOrderNumber(order.orderNumber);
+      setStep("complete");
+    } catch (error) {
+      console.error("Failed to create kiosk order", error);
+      toast.error("No se pudo enviar el pedido, intenta de nuevo");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
 
   if (step === "category") {
@@ -366,7 +409,9 @@ const Kiosk = () => {
                       </div>
                     )}
                   </div>
-                  <div className="text-2xl font-bold text-secondary">${item.price.toFixed(2)}</div>
+                  <div className="text-2xl font-bold text-secondary">
+                    ${getItemTotal(item).toFixed(2)}
+                  </div>
                 </div>
               </Card>
             ))}
@@ -392,6 +437,7 @@ const Kiosk = () => {
               variant="default"
               className="text-lg sm:text-xl py-6 sm:py-8 w-full"
               onClick={() => setStep("payment")}
+              disabled={cart.length === 0}
             >
               <span className="truncate">Proceder al Pago</span>
             </Button>
@@ -408,12 +454,26 @@ const Kiosk = () => {
           <h1 className="text-4xl font-bold mb-8">Método de Pago</h1>
 
           <div className="grid gap-6 mb-8">
-            <Card className="p-8 cursor-pointer hover-lift" onClick={() => setStep("complete")}>
+            <Card
+              className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")}
+              onClick={() => {
+                if (!isSubmitting) {
+                  handleSubmitOrder();
+                }
+              }}
+            >
               <h3 className="text-2xl font-bold">💳 Pagar con Tarjeta</h3>
               <p className="text-muted-foreground mt-2">Inserta o acerca tu tarjeta</p>
             </Card>
 
-            <Card className="p-8 cursor-pointer hover-lift" onClick={() => setStep("complete")}>
+            <Card
+              className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")}
+              onClick={() => {
+                if (!isSubmitting) {
+                  handleSubmitOrder();
+                }
+              }}
+            >
               <h3 className="text-2xl font-bold">💵 Pagar en Caja</h3>
               <p className="text-muted-foreground mt-2">Dirígete a caja para pagar</p>
             </Card>
@@ -423,6 +483,7 @@ const Kiosk = () => {
             variant="outline"
             size="lg"
             onClick={() => setStep("review")}
+            disabled={isSubmitting}
           >
             <ArrowLeft className="mr-2" />
             Volver
@@ -446,7 +507,7 @@ const Kiosk = () => {
               Tu número de pedido es:
             </p>
             <div className="text-6xl sm:text-7xl md:text-9xl font-black text-secondary mb-6 sm:mb-8 break-all">
-              #{orderNumber}
+              #{orderNumber ?? "..."}
             </div>
             <p className="text-lg sm:text-xl text-muted-foreground break-words">
               Por favor espera a que tu pedido esté listo
@@ -460,6 +521,7 @@ const Kiosk = () => {
               setStep("category");
               setCart([]);
               setSelectedCategory("");
+              setOrderNumber(null);
             }}
           >
             Finalizar

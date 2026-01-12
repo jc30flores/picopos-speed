@@ -685,6 +685,8 @@ const mapOrder = (order: {
 export const createOrder = async (payload: {
   serviceType: Order["serviceType"];
   customerName?: string;
+  source?: "kiosk" | "pos";
+  channel?: "kiosk" | "pos";
   items: Array<{
     productId: number;
     productName: string;
@@ -699,6 +701,8 @@ export const createOrder = async (payload: {
     body: JSON.stringify({
       service_type_key: payload.serviceType,
       customer_name: payload.customerName ?? "",
+      source: payload.source,
+      channel: payload.channel,
       items: payload.items.map((item) => ({
         product_id: item.productId,
         product_name_snapshot: item.productName,

@@ -112,6 +112,8 @@ class OrderCreateSerializer(serializers.Serializer):
     service_type_key = serializers.CharField(required=False, allow_blank=True)
     table_id = serializers.PrimaryKeyRelatedField(queryset=Table.objects.all(), required=False, allow_null=True)
     customer_name = serializers.CharField(required=False, allow_blank=True)
+    source = serializers.CharField(required=False, allow_blank=True)
+    channel = serializers.CharField(required=False, allow_blank=True)
     items = OrderItemInputSerializer(many=True)
 
     def _next_order_number(self, branch: Branch) -> int:
@@ -123,6 +125,8 @@ class OrderCreateSerializer(serializers.Serializer):
         items_data = validated_data.pop("items")
         service_type_id = validated_data.pop("service_type_id", None)
         service_type_key = (validated_data.pop("service_type_key", None) or "").strip() or None
+        source = (validated_data.pop("source", "") or "").strip().lower()
+        validated_data.pop("channel", None)
         branch = validated_data.pop("branch_id", None)
         if branch is None:
             branch = Branch.objects.first()
@@ -139,11 +143,12 @@ class OrderCreateSerializer(serializers.Serializer):
         service_type_key = service_type.key
 
         order_number = self._next_order_number(branch)
+        status = "preparing" if source == "kiosk" or service_type_key == "kiosk" else "waiting_payment"
         order = Order.objects.create(
             branch=branch,
             order_number=order_number,
             service_type=service_type,
-            status="waiting_payment",
+            status=status,
             **validated_data,
         )
 
