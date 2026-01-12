@@ -14,21 +14,24 @@ import { toast } from "sonner";
 
 interface EmployeesTableProps {
   employees: Employee[];
+  isLoading?: boolean;
   onEdit: (employee: Employee) => void;
-  onDelete: (id: string) => void;
+  onToggleStatus: (employee: Employee) => void;
   onViewProfile: (employee: Employee) => void;
 }
 
 export const EmployeesTable = ({
   employees,
+  isLoading = false,
   onEdit,
-  onDelete,
+  onToggleStatus,
   onViewProfile,
 }: EmployeesTableProps) => {
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`¿Estás seguro de eliminar a ${name}?`)) {
-      onDelete(id);
-      toast.success("Empleado eliminado correctamente");
+  const handleToggleStatus = (employee: Employee) => {
+    const action = employee.status === "active" ? "desactivar" : "activar";
+    if (confirm(`¿Estás seguro de ${action} a ${employee.name}?`)) {
+      onToggleStatus(employee);
+      toast.success("Estado actualizado");
     }
   };
 
@@ -46,7 +49,13 @@ export const EmployeesTable = ({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {employees.length === 0 ? (
+          {isLoading ? (
+            <TableRow>
+              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                Cargando empleados...
+              </TableCell>
+            </TableRow>
+          ) : employees.length === 0 ? (
             <TableRow>
               <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                 No se encontraron empleados
@@ -85,8 +94,8 @@ export const EmployeesTable = ({
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => handleDelete(employee.id, employee.name)}
-                      title="Eliminar"
+                      onClick={() => handleToggleStatus(employee)}
+                      title={employee.status === "active" ? "Desactivar" : "Activar"}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

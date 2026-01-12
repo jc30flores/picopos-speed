@@ -18,6 +18,18 @@ import {
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
 
+const ROLE_OPTIONS = [
+  { value: "cashier", label: "Cajero" },
+  { value: "kitchen", label: "Cocinero" },
+  { value: "manager", label: "Gerente" },
+  { value: "admin", label: "Administrador" },
+];
+
+const ROLE_KEY_BY_LABEL = ROLE_OPTIONS.reduce((acc, option) => {
+  acc[option.label.toLowerCase()] = option.value;
+  return acc;
+}, {} as Record<string, string>);
+
 interface EmployeeFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,7 +59,7 @@ export const EmployeeFormDialog = ({
       setFormData({
         name: employee.name,
         email: employee.email,
-        role: employee.role,
+        role: ROLE_KEY_BY_LABEL[employee.role.toLowerCase()] ?? employee.role,
         phone: employee.phone,
         branch: employee.branch,
         status: employee.status,
@@ -67,6 +79,10 @@ export const EmployeeFormDialog = ({
   const handleSubmit = () => {
     if (!formData.name || !formData.email || !formData.role || !formData.branch) {
       toast.error("Por favor completa todos los campos obligatorios");
+      return;
+    }
+    if (!ROLE_OPTIONS.some((role) => role.value === formData.role)) {
+      toast.error("Selecciona un puesto válido");
       return;
     }
 
@@ -105,11 +121,21 @@ export const EmployeeFormDialog = ({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="role">Puesto *</Label>
-            <Input
-              id="role"
+            <Select
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-            />
+              onValueChange={(value) => setFormData({ ...formData, role: value })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Seleccionar puesto" />
+              </SelectTrigger>
+              <SelectContent>
+                {ROLE_OPTIONS.map((role) => (
+                  <SelectItem key={role.value} value={role.value}>
+                    {role.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="phone">Teléfono</Label>

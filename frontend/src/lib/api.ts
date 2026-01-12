@@ -1050,8 +1050,24 @@ const resolveRoleKey = (role: string) => {
 
 const mapEmployeeRoleLabel = (roleKey: string) => ROLE_LABELS[roleKey] ?? roleKey;
 
-export const getEmployees = async (): Promise<import("@/types/employee").Employee[]> => {
-  const response = await request("/api/employees/");
+export const getEmployees = async (filters?: {
+  search?: string;
+  role?: string;
+  status?: "active" | "inactive";
+}): Promise<import("@/types/employee").Employee[]> => {
+  const params = new URLSearchParams();
+  if (filters?.search) {
+    params.append("search", filters.search);
+  }
+  if (filters?.role) {
+    const roleKey = resolveRoleKey(filters.role) ?? filters.role;
+    params.append("role", roleKey);
+  }
+  if (filters?.status) {
+    params.append("status", filters.status);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await request(`/api/employees/${suffix}`);
   const data = await handleJson<Array<{
     id: number;
     full_name: string;
