@@ -149,146 +149,57 @@ export const EmployeeFormDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
-          <DialogTitle>
-            {employee ? "Editar Empleado" : "Nuevo Empleado"}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="grid gap-4 py-4">
-          <div className="space-y-1">
-            <p className="text-sm font-semibold">Datos del empleado</p>
-            <p className="text-xs text-muted-foreground">
-              Información básica para administrar al personal.
-            </p>
+      <DialogContent className="w-[95vw] max-w-[860px] max-h-[calc(100dvh-2rem)] p-0 overflow-hidden">
+        <div className="flex h-full flex-col">
+          <div className="border-b border-border px-5 py-4">
+            <DialogHeader>
+              <DialogTitle>
+                {employee ? "Editar Empleado" : "Nuevo Empleado"}
+              </DialogTitle>
+            </DialogHeader>
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="name">Nombre *</Label>
-            <Input
-              id="name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="email">Email *</Label>
-            <Input
-              id="email"
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="role">Puesto *</Label>
-            <Select
-              value={formData.role}
-              onValueChange={(value) => setFormData({ ...formData, role: value })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar puesto" />
-              </SelectTrigger>
-              <SelectContent>
-                {ROLE_OPTIONS.map((role) => (
-                  <SelectItem key={role.value} value={role.value}>
-                    {role.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="phone">Teléfono</Label>
-            <Input
-              id="phone"
-              value={formData.phone}
-              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="branch">Sucursal *</Label>
-            <Select value={formData.branch} onValueChange={(value) => setFormData({ ...formData, branch: value })}>
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar sucursal" />
-              </SelectTrigger>
-              <SelectContent>
-                {branches.map((branch) => (
-                  <SelectItem key={branch} value={branch}>
-                    {branch}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="status">Estado</Label>
-            <Select value={formData.status} onValueChange={(value: "active" | "inactive") => setFormData({ ...formData, status: value })}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="active">Activo</SelectItem>
-                <SelectItem value="inactive">Inactivo</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2 border-t border-border pt-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold">Acceso al sistema</p>
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+            <div className="grid gap-4">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold">Datos del empleado</p>
                 <p className="text-xs text-muted-foreground">
-                  Este usuario podrá iniciar sesión en el sistema.
+                  Información básica para administrar al personal.
                 </p>
               </div>
-              <Switch
-                checked={formData.createUser}
-                onCheckedChange={(checked) => setFormData({ ...formData, createUser: checked })}
-              />
-            </div>
-
-            {formData.createUser && (
-              <div className="grid gap-3 pt-2">
-                <div className="grid gap-2">
-                  <Label htmlFor="userIdentifier">Usuario / Email de acceso *</Label>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="grid gap-2 md:col-span-2">
+                  <Label htmlFor="name">Nombre *</Label>
                   <Input
-                    id="userIdentifier"
-                    value={formData.userIdentifier}
-                    onChange={(e) => setFormData({ ...formData, userIdentifier: e.target.value })}
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="userPassword">
-                    {employee?.hasUser ? "Contraseña (opcional)" : "Contraseña *"}
-                  </Label>
+                  <Label htmlFor="email">Email *</Label>
                   <Input
-                    id="userPassword"
-                    type="password"
-                    value={formData.userPassword}
-                    onChange={(e) => setFormData({ ...formData, userPassword: e.target.value })}
+                    id="email"
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="userPasswordConfirm">
-                    {employee?.hasUser ? "Confirmar contraseña" : "Confirmar contraseña *"}
-                  </Label>
+                  <Label htmlFor="phone">Teléfono</Label>
                   <Input
-                    id="userPasswordConfirm"
-                    type="password"
-                    value={formData.userPasswordConfirm}
-                    onChange={(e) =>
-                      setFormData({ ...formData, userPasswordConfirm: e.target.value })
-                    }
+                    id="phone"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="userRole">Rol del sistema *</Label>
+                  <Label htmlFor="role">Puesto *</Label>
                   <Select
-                    value={formData.userRole}
-                    onValueChange={(value) => setFormData({ ...formData, userRole: value })}
+                    value={formData.role}
+                    onValueChange={(value) => setFormData({ ...formData, role: value })}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Seleccionar rol" />
+                      <SelectValue placeholder="Seleccionar puesto" />
                     </SelectTrigger>
                     <SelectContent>
                       {ROLE_OPTIONS.map((role) => (
@@ -299,15 +210,128 @@ export const EmployeeFormDialog = ({
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="branch">Sucursal *</Label>
+                  <Select
+                    value={formData.branch}
+                    onValueChange={(value) => setFormData({ ...formData, branch: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccionar sucursal" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {branches.map((branch) => (
+                        <SelectItem key={branch} value={branch}>
+                          {branch}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="status">Estado</Label>
+                  <Select
+                    value={formData.status}
+                    onValueChange={(value: "active" | "inactive") =>
+                      setFormData({ ...formData, status: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Activo</SelectItem>
+                      <SelectItem value="inactive">Inactivo</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            )}
+
+              <div className="space-y-2 border-t border-border pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">Acceso al sistema</p>
+                    <p className="text-xs text-muted-foreground">
+                      Este usuario podrá iniciar sesión en el sistema.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.createUser}
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, createUser: checked })
+                    }
+                  />
+                </div>
+
+                {formData.createUser && (
+                  <div className="grid gap-3 pt-2 md:grid-cols-2">
+                    <div className="grid gap-2 md:col-span-2">
+                      <Label htmlFor="userIdentifier">Usuario / Email de acceso *</Label>
+                      <Input
+                        id="userIdentifier"
+                        value={formData.userIdentifier}
+                        onChange={(e) =>
+                          setFormData({ ...formData, userIdentifier: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="userPassword">
+                        {employee?.hasUser ? "Contraseña (opcional)" : "Contraseña *"}
+                      </Label>
+                      <Input
+                        id="userPassword"
+                        type="password"
+                        value={formData.userPassword}
+                        onChange={(e) =>
+                          setFormData({ ...formData, userPassword: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="userPasswordConfirm">
+                        {employee?.hasUser ? "Confirmar contraseña" : "Confirmar contraseña *"}
+                      </Label>
+                      <Input
+                        id="userPasswordConfirm"
+                        type="password"
+                        value={formData.userPasswordConfirm}
+                        onChange={(e) =>
+                          setFormData({ ...formData, userPasswordConfirm: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="grid gap-2 md:col-span-2">
+                      <Label htmlFor="userRole">Rol del sistema *</Label>
+                      <Select
+                        value={formData.userRole}
+                        onValueChange={(value) => setFormData({ ...formData, userRole: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Seleccionar rol" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ROLE_OPTIONS.map((role) => (
+                            <SelectItem key={role.value} value={role.value}>
+                              {role.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
-          </Button>
-          <Button onClick={handleSubmit}>Guardar</Button>
+          <div className="sticky bottom-0 border-t border-border bg-background px-5 py-4">
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={handleSubmit}>Guardar</Button>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
