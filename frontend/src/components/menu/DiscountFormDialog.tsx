@@ -377,7 +377,7 @@ export const DiscountFormDialog = ({
                       type="time"
                       value={startTime}
                       onChange={(e) => setStartTime(e.target.value)}
-                      className="pr-12"
+                      className="pr-12 time-input"
                     />
                     <button
                       type="button"
@@ -398,7 +398,7 @@ export const DiscountFormDialog = ({
                       type="time"
                       value={endTime}
                       onChange={(e) => setEndTime(e.target.value)}
-                      className="pr-12"
+                      className="pr-12 time-input"
                     />
                     <button
                       type="button"

@@ -135,6 +135,17 @@ All colors MUST be HSL.
     @apply bg-background text-foreground font-sans antialiased;
   }
 
+  .time-input {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+  }
+
+  .time-input::-webkit-calendar-picker-indicator {
+    opacity: 0;
+    display: none;
+  }
+
   /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 8px;

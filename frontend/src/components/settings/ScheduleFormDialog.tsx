@@ -200,7 +200,7 @@ export const ScheduleFormDialog = ({
                   onChange={(e) =>
                     setFormData({ ...formData, entryTime: e.target.value })
                   }
-                  className="pr-12"
+                  className="pr-12 time-input"
                 />
                 <button
                   type="button"
@@ -223,7 +223,7 @@ export const ScheduleFormDialog = ({
                   onChange={(e) =>
                     setFormData({ ...formData, exitTime: e.target.value })
                   }
-                  className="pr-12"
+                  className="pr-12 time-input"
                 />
                 <button
                   type="button"
