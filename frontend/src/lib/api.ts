@@ -1,4 +1,4 @@
-export const API_BASE_URL = "http://localhost:8102";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 
 export type Category = {
   id: number;
@@ -40,7 +40,7 @@ export type Product = {
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
   if (!imagePath) return null;
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
-  const base = import.meta.env.VITE_API_URL || API_BASE_URL;
+  const base = API_BASE_URL;
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
   return `${base}${normalizedPath}`;
 };
