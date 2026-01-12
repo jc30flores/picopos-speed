@@ -502,6 +502,46 @@ export const updateProductModifierGroups = async (
   };
 };
 
+export const updateProductAvailability = async (
+  productId: number,
+  available: boolean,
+): Promise<Product> => {
+  const formData = new FormData();
+  formData.append("available", available ? "true" : "false");
+  const response = await request(`/api/menu/products/${productId}/`, {
+    method: "PATCH",
+    body: formData,
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    description: string;
+    price: string;
+    category: string;
+    category_name?: string;
+    category_id_display?: number;
+    image: string | null;
+    image_path?: string | null;
+    image_url: string | null;
+    available: boolean;
+    modifier_groups: number[];
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    category: data.category,
+    categoryName: data.category_name ?? data.category,
+    categoryId: data.category_id_display ?? 0,
+    image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: data.image_url ?? undefined,
+    available: data.available,
+    modifierGroups: data.modifier_groups,
+  };
+};
+
 export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
   const response = await request("/api/menu/modifier-groups/");
   const data = await handleJson<Array<{
