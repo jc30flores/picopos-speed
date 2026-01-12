@@ -126,6 +126,7 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
+    "http://localhost:9102",
     "https://pico-de-gallo-pos.cuskatech.com",
 ]
 
