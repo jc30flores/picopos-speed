@@ -41,7 +41,8 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
   if (!imagePath) return null;
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
   const base = API_BASE_URL.replace(/\/api\/?$/, "");
-  const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  const trimmedPath = imagePath.replace(/^\/+/, "");
+  const normalizedPath = `/${trimmedPath}`.replace(/^\/api\//, "/");
   return `${base}${normalizedPath}`;
 };
 
