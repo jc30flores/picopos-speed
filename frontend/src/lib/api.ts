@@ -1390,12 +1390,15 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
 };
 
 export const createPayment = async (payload: {
-  orderId: number;
+  orderId: number | string;
   method: PaymentMethod;
   amount: number;
   tipAmount?: number;
   reference?: string;
 }): Promise<Payment> => {
+  if (!payload.orderId) {
+    throw new Error("createPayment: missing orderId");
+  }
   const response = await request("/api/payments/", {
     method: "POST",
     body: JSON.stringify({

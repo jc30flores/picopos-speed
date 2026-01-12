@@ -276,18 +276,28 @@ const POS = () => {
               modifiers: item.modifiers,
             })),
           });
-          setCreatedOrderId(order.id);
+          console.info("createOrder response", order);
+          const createdId = (order as Order | undefined)?.id ?? (order as unknown as { order_id?: number }).order_id ?? (order as unknown as { pk?: number }).pk;
+          if (!createdId) {
+            throw new Error("createOrder did not return an id");
+          }
+          setCreatedOrderId(createdId);
         }
         setActiveOrder(order);
       }
+      const orderId =
+        (order as Order | undefined)?.id ?? (order as unknown as { order_id?: number }).order_id ?? (order as unknown as { pk?: number }).pk;
+      if (!orderId) {
+        throw new Error("createOrder did not return an id");
+      }
       await createPayment({
-        orderId: order.id,
+        orderId,
         method: paymentMethod,
         amount: amountValue,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
       });
-      const refreshed = await getOrderById(order.id);
+      const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
