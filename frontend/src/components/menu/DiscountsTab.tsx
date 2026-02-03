@@ -49,6 +49,7 @@ export const DiscountsTab = () => {
         .map((id) => mapCategories.get(id))
         .filter(Boolean) as string[],
       targetProducts: [],
+      targetProductIds: discount.targetProductIds ?? [],
       days: discount.daysOfWeek ?? [],
       startTime: discount.startTime ?? undefined,
       endTime: discount.endTime ?? undefined,

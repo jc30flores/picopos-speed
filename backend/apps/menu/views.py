@@ -58,7 +58,32 @@ class ProductListCreateView(generics.ListCreateAPIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
-        return Product.objects.select_related("category").prefetch_related("modifier_groups")
+        queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
+        query = self.request.query_params.get("search") or self.request.query_params.get("q")
+        if query:
+            queryset = queryset.filter(name__icontains=query.strip())
+        category_id = self.request.query_params.get("category_id") or self.request.query_params.get("categoryId")
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        ids_param = self.request.query_params.get("ids")
+        if ids_param:
+            ids = [int(item) for item in ids_param.split(",") if item.strip().isdigit()]
+            if ids:
+                queryset = queryset.filter(id__in=ids)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = request.query_params.get("page")
+        limit = request.query_params.get("limit")
+        if limit and limit.isdigit():
+            limit_value = int(limit)
+            if limit_value > 0:
+                page_value = int(page) if page and page.isdigit() else 1
+                offset = max(page_value - 1, 0) * limit_value
+                queryset = queryset[offset : offset + limit_value]
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:

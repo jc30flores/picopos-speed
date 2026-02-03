@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Discount } from "@/types/menu";
-import { Category, ServiceType, createDiscount, updateDiscount } from "@/lib/api";
-import { Clock } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Category, Product, ServiceType, createDiscount, getProducts, updateDiscount } from "@/lib/api";
+import { Clock, X } from "lucide-react";
 
 interface DiscountFormDialogProps {
   open: boolean;
@@ -45,6 +46,16 @@ export const DiscountFormDialog = ({
   const [serviceTypes, setServiceTypes] = useState<("dine-in" | "takeout" | "delivery" | "kiosk")[]>([]);
   const [minAmount, setMinAmount] = useState("");
   const [autoApply, setAutoApply] = useState(true);
+  const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Record<number, Product>>({});
+  const [productSearch, setProductSearch] = useState("");
+  const [debouncedProductSearch, setDebouncedProductSearch] = useState("");
+  const [productCategoryId, setProductCategoryId] = useState<string>("all");
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productPage, setProductPage] = useState(1);
+  const [hasMoreProducts, setHasMoreProducts] = useState(true);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productsError, setProductsError] = useState<string | null>(null);
   const startTimeRef = useRef<HTMLInputElement>(null);
   const endTimeRef = useRef<HTMLInputElement>(null);
 
@@ -63,6 +74,73 @@ export const DiscountFormDialog = ({
   };
 
   useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedProductSearch(productSearch.trim());
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [productSearch]);
+
+  useEffect(() => {
+    if (!open || appliesTo !== "products") return;
+    if (selectedProductIds.length === 0) return;
+    const missingIds = selectedProductIds.filter((id) => !selectedProducts[id]);
+    if (missingIds.length === 0) return;
+    getProducts({ ids: missingIds })
+      .then((results) => {
+        setSelectedProducts((prev) => {
+          const next = { ...prev };
+          results.forEach((product) => {
+            next[product.id] = product;
+          });
+          return next;
+        });
+      })
+      .catch((error) => {
+        console.error("Failed to load selected products", error);
+      });
+  }, [open, appliesTo, selectedProductIds, selectedProducts]);
+
+  useEffect(() => {
+    if (!open || appliesTo !== "products") return;
+    setProductPage(1);
+    setHasMoreProducts(true);
+    setProducts([]);
+  }, [open, appliesTo, debouncedProductSearch, productCategoryId]);
+
+  useEffect(() => {
+    if (!open || appliesTo !== "products") return;
+    const loadProducts = async () => {
+      setProductsLoading(true);
+      setProductsError(null);
+      try {
+        const response = await getProducts({
+          search: debouncedProductSearch,
+          categoryId: productCategoryId === "all" ? undefined : Number(productCategoryId),
+          page: productPage,
+          limit: 20,
+        });
+        setProducts((prev) => (productPage === 1 ? response : [...prev, ...response]));
+        setHasMoreProducts(response.length === 20);
+        setSelectedProducts((prev) => {
+          const next = { ...prev };
+          response.forEach((product) => {
+            if (selectedProductIds.includes(product.id)) {
+              next[product.id] = product;
+            }
+          });
+          return next;
+        });
+      } catch (error) {
+        console.error("Failed to load products", error);
+        setProductsError("No pudimos cargar los productos.");
+      } finally {
+        setProductsLoading(false);
+      }
+    };
+    loadProducts();
+  }, [open, appliesTo, debouncedProductSearch, productCategoryId, productPage, selectedProductIds]);
+
+  useEffect(() => {
     if (editingDiscount) {
       setName(editingDiscount.name);
       setDescription(editingDiscount.description || "");
@@ -77,6 +155,7 @@ export const DiscountFormDialog = ({
       setServiceTypes(editingDiscount.serviceTypes);
       setMinAmount(editingDiscount.minAmount ? String(editingDiscount.minAmount) : "");
       setAutoApply(editingDiscount.autoApply);
+      setSelectedProductIds(editingDiscount.targetProductIds ?? []);
     } else {
       // Reset form
       setName("");
@@ -92,7 +171,17 @@ export const DiscountFormDialog = ({
       setServiceTypes([]);
       setMinAmount("");
       setAutoApply(true);
+      setSelectedProductIds([]);
     }
+    setSelectedProducts({});
+    setProductSearch("");
+    setDebouncedProductSearch("");
+    setProductCategoryId("all");
+    setProducts([]);
+    setProductPage(1);
+    setHasMoreProducts(true);
+    setProductsLoading(false);
+    setProductsError(null);
   }, [editingDiscount, open]);
 
   const toggleDay = (dayIndex: number) => {
@@ -119,6 +208,33 @@ export const DiscountFormDialog = ({
     }
   };
 
+  const selectedProductList = useMemo(
+    () =>
+      selectedProductIds.map((id) => ({
+        id,
+        name: selectedProducts[id]?.name ?? `Producto #${id}`,
+      })),
+    [selectedProductIds, selectedProducts]
+  );
+
+  const toggleProductSelection = (product: Product) => {
+    setSelectedProductIds((prev) => {
+      if (prev.includes(product.id)) {
+        return prev.filter((id) => id !== product.id);
+      }
+      return [...prev, product.id];
+    });
+    setSelectedProducts((prev) => ({ ...prev, [product.id]: product }));
+  };
+
+  const removeSelectedProduct = (productId: number) => {
+    setSelectedProductIds((prev) => prev.filter((id) => id !== productId));
+  };
+
+  const clearSelectedProducts = () => {
+    setSelectedProductIds([]);
+  };
+
   const getPreviewText = () => {
     const parts: string[] = [];
     const valueNumber = parseNumber(value);
@@ -136,6 +252,8 @@ export const DiscountFormDialog = ({
       parts.push("en el ticket completo");
     } else if (appliesTo === "categories" && targetCategories.length > 0) {
       parts.push(`en ${targetCategories.join(", ")}`);
+    } else if (appliesTo === "products" && selectedProductIds.length > 0) {
+      parts.push("en productos seleccionados");
     }
     
     // Days
@@ -172,7 +290,8 @@ export const DiscountFormDialog = ({
       valueNumber > 0 &&
       days.length > 0 &&
       serviceTypes.length > 0 &&
-      (appliesTo !== "categories" || targetCategories.length > 0)
+      (appliesTo !== "categories" || targetCategories.length > 0) &&
+      (appliesTo !== "products" || selectedProductIds.length > 0)
     );
   };
 
@@ -195,7 +314,7 @@ export const DiscountFormDialog = ({
       value: valueNumber,
       appliesTo,
       targetCategoryIds: categoryIds,
-      targetProductIds: [],
+      targetProductIds: selectedProductIds,
       daysOfWeek: days,
       startTime: startTime || null,
       endTime: endTime || null,
@@ -341,6 +460,170 @@ export const DiscountFormDialog = ({
                       {category.name}
                     </Badge>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {appliesTo === "products" && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <h4 className="font-semibold">Productos</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Selecciona los productos a los que se aplicará el descuento.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+                  <div>
+                    <Label htmlFor="product-search">Buscar productos</Label>
+                    <Input
+                      id="product-search"
+                      placeholder="Buscar productos…"
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Categoría</Label>
+                    <Select value={productCategoryId} onValueChange={setProductCategoryId}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Todas las categorías" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todas las categorías</SelectItem>
+                        {categories.map((category) => (
+                          <SelectItem key={category.id} value={String(category.id)}>
+                            {category.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    {selectedProductIds.length} seleccionados
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const newIds = products.map((product) => product.id);
+                        setSelectedProductIds((prev) => {
+                          const next = [...prev];
+                          newIds.forEach((id) => {
+                            if (!next.includes(id)) next.push(id);
+                          });
+                          return next;
+                        });
+                        setSelectedProducts((prev) => {
+                          const next = { ...prev };
+                          products.forEach((product) => {
+                            next[product.id] = product;
+                          });
+                          return next;
+                        });
+                      }}
+                      disabled={products.length === 0}
+                    >
+                      Seleccionar visibles
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearSelectedProducts}
+                      disabled={selectedProductIds.length === 0}
+                    >
+                      Limpiar selección
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-md border border-border">
+                  <div className="max-h-64 overflow-y-auto divide-y divide-border">
+                    {productsLoading && (
+                      <div className="p-4 text-sm text-muted-foreground">Cargando productos…</div>
+                    )}
+                    {productsError && (
+                      <div className="p-4 text-sm text-destructive">{productsError}</div>
+                    )}
+                    {!productsLoading && !productsError && products.length === 0 && (
+                      <div className="p-4 text-sm text-muted-foreground">
+                        No se encontraron productos.
+                      </div>
+                    )}
+                    {!productsError &&
+                      products.map((product) => (
+                        <label
+                          key={product.id}
+                          className="flex items-start gap-3 p-3 text-sm hover:bg-muted/40"
+                        >
+                          <Checkbox
+                            checked={selectedProductIds.includes(product.id)}
+                            onCheckedChange={() => toggleProductSelection(product)}
+                          />
+                          <div>
+                            <div className="font-medium">{product.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {product.categoryName ?? product.category}
+                              {product.price ? ` · $${product.price.toFixed(2)}` : ""}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                  </div>
+                  <div className="flex items-center justify-between border-t border-border p-2">
+                    <span className="text-xs text-muted-foreground">
+                      {products.length} resultados
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setProductPage((prev) => prev + 1)}
+                      disabled={!hasMoreProducts || productsLoading}
+                    >
+                      {hasMoreProducts ? "Cargar más" : "Sin más resultados"}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Seleccionados ({selectedProductIds.length})</Label>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedProductList.length === 0 && (
+                      <span className="text-sm text-muted-foreground">
+                        Aún no has seleccionado productos.
+                      </span>
+                    )}
+                    {selectedProductList.map((product) => (
+                      <Badge
+                        key={product.id}
+                        variant="secondary"
+                        className="flex items-center gap-1 pr-1"
+                      >
+                        <span>{product.name}</span>
+                        <button
+                          type="button"
+                          className="rounded-full p-1 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => removeSelectedProduct(product.id)}
+                          aria-label={`Quitar ${product.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                  {selectedProductIds.length === 0 && (
+                    <p className="text-sm text-destructive">Selecciona al menos un producto.</p>
+                  )}
                 </div>
               </div>
             )}

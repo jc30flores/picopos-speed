@@ -9,6 +9,7 @@ export interface Discount {
   appliesTo: 'order' | 'categories' | 'products';
   targetCategories?: string[];
   targetProducts?: string[];
+  targetProductIds?: number[];
   days: number[]; // 0-6 (Mon-Sun)
   startTime?: string;
   endTime?: string;

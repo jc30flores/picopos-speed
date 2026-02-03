@@ -360,8 +360,21 @@ export const createCategory = async (name: string): Promise<Category> => {
   };
 };
 
-export const getProducts = async (): Promise<Product[]> => {
-  const response = await request("/menu/products/");
+export const getProducts = async (options?: {
+  search?: string;
+  categoryId?: number;
+  page?: number;
+  limit?: number;
+  ids?: number[];
+}): Promise<Product[]> => {
+  const params = new URLSearchParams();
+  if (options?.search) params.set("search", options.search);
+  if (options?.categoryId) params.set("category_id", String(options.categoryId));
+  if (options?.page) params.set("page", String(options.page));
+  if (options?.limit) params.set("limit", String(options.limit));
+  if (options?.ids?.length) params.set("ids", options.ids.join(","));
+  const query = params.toString();
+  const response = await request(`/menu/products/${query ? `?${query}` : ""}`);
   const data = await handleJson<Array<{
     id: number;
     name: string;

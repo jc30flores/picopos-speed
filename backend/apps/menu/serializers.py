@@ -160,6 +160,28 @@ class DiscountSerializer(serializers.ModelSerializer):
             "target_product_ids_display",
         ]
 
+    def validate(self, attrs):
+        applies_to = attrs.get("applies_to")
+        if applies_to is None and self.instance:
+            applies_to = self.instance.applies_to
+
+        target_product_ids = attrs.get("target_product_ids")
+        if applies_to == "products":
+            if target_product_ids is None and self.instance:
+                target_product_ids = list(
+                    self.instance.targets.filter(product__isnull=False).values_list("product_id", flat=True)
+                )
+            if not target_product_ids:
+                raise serializers.ValidationError(
+                    {"target_product_ids": "Selecciona al menos un producto."}
+                )
+            existing_count = Product.objects.filter(id__in=target_product_ids).count()
+            if existing_count != len(set(target_product_ids)):
+                raise serializers.ValidationError(
+                    {"target_product_ids": "Algunos productos seleccionados no existen."}
+                )
+        return attrs
+
     def get_target_category_ids_display(self, obj: Discount):
         return list(obj.targets.filter(category__isnull=False).values_list("category_id", flat=True))
 
