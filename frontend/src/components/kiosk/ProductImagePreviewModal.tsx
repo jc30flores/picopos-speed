@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Eye, X } from "lucide-react";
-import { resolveImageUrl, Product } from "@/lib/api";
+import { Product } from "@/lib/api";
+import { getProductImageSrc } from "@/lib/media";
 
 interface ProductImagePreviewModalProps {
   open: boolean;
@@ -20,7 +21,7 @@ export const ProductImagePreviewModal = ({ open, item, onClose }: ProductImagePr
 
   if (!open || !item) return null;
 
-  const imageSrc = resolveImageUrl(item.imageUrl ?? item.imagePath);
+  const imageSrc = getProductImageSrc(item);
 
   return (
     <div
