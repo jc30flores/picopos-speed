@@ -26,6 +26,8 @@
 ### Core endpoints
 
 - `GET /api/core/tax-config/active/` → active tax rate (IVA 13%)
+- `GET /api/core/feature-flags/` → lista de funciones avanzadas
+- `PATCH /api/core/feature-flags/{id}/` → activar/desactivar funciones
 
 ### Auth endpoints
 
@@ -151,6 +153,19 @@ curl -b cookies.txt -c cookies.txt \
 - manager: menu/settings/reports access
 - cashier: POS/orders access
 - kitchen: kitchen screen and order status updates
+
+### Feature flags (módulos avanzados)
+
+Los módulos nuevos se activan desde **Configuración > Funciones** o mediante la API. Flags disponibles:
+
+- `FF_CUSTOMERS_LOYALTY`
+- `FF_INVENTORY`
+- `FF_SHIFTS_CASH`
+- `FF_ADV_PERMISSIONS`
+- `FF_REFUNDS`
+- `FF_ADV_REPORTS`
+- `FF_MULTI_BRANCH_ENFORCE`
+- `FF_PUBLIC_API_WEBHOOKS`
 
 ### Create admin user
 

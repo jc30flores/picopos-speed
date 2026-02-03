@@ -120,6 +120,14 @@ export type TaxConfig = {
   rate: number;
 };
 
+export type FeatureFlag = {
+  id: number;
+  key: string;
+  label: string;
+  description?: string;
+  isEnabled: boolean;
+};
+
 export type OrderItem = {
   id: number;
   productName: string;
@@ -344,6 +352,50 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
     name: item.name,
     isActive: item.is_active,
   }));
+};
+
+export const getFeatureFlags = async (): Promise<FeatureFlag[]> => {
+  const response = await request("/core/feature-flags/");
+  const data = await handleJson<
+    Array<{
+      id: number;
+      key: string;
+      label: string;
+      description: string;
+      is_enabled: boolean;
+    }>
+  >(response);
+  return data.map((flag) => ({
+    id: flag.id,
+    key: flag.key,
+    label: flag.label,
+    description: flag.description,
+    isEnabled: flag.is_enabled,
+  }));
+};
+
+export const updateFeatureFlag = async (
+  id: number,
+  payload: { isEnabled: boolean }
+): Promise<FeatureFlag> => {
+  const response = await request(`/core/feature-flags/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_enabled: payload.isEnabled }),
+  });
+  const data = await handleJson<{
+    id: number;
+    key: string;
+    label: string;
+    description: string;
+    is_enabled: boolean;
+  }>(response);
+  return {
+    id: data.id,
+    key: data.key,
+    label: data.label,
+    description: data.description,
+    isEnabled: data.is_enabled,
+  };
 };
 
 export const createCategory = async (name: string): Promise<Category> => {

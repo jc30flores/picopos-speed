@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction, connection
-from apps.core.models import Branch, TaxConfig, ServiceType, Table
+from apps.core.models import Branch, FeatureFlag, TaxConfig, ServiceType, Table
 
 
 DEFAULT_BRANCHES = [
@@ -16,6 +16,49 @@ DEFAULT_SERVICE_TYPES = [
     {"key": "kiosk", "label": "Kiosk"},
 ]
 
+DEFAULT_FEATURE_FLAGS = [
+    {
+        "key": "FF_CUSTOMERS_LOYALTY",
+        "label": "Clientes y lealtad",
+        "description": "Habilita el módulo de clientes, puntos y recompensas.",
+    },
+    {
+        "key": "FF_INVENTORY",
+        "label": "Inventario avanzado",
+        "description": "Activa inventario, movimientos y proveedores.",
+    },
+    {
+        "key": "FF_SHIFTS_CASH",
+        "label": "Turnos y caja",
+        "description": "Requiere apertura/cierre de caja y movimientos.",
+    },
+    {
+        "key": "FF_ADV_PERMISSIONS",
+        "label": "Roles y permisos avanzados",
+        "description": "Habilita permisos finos, PIN supervisor y auditoría avanzada.",
+    },
+    {
+        "key": "FF_REFUNDS",
+        "label": "Reembolsos y anulaciones avanzadas",
+        "description": "Habilita flujos avanzados de devoluciones y reembolsos.",
+    },
+    {
+        "key": "FF_ADV_REPORTS",
+        "label": "Reportes gerenciales",
+        "description": "Activa reportes avanzados y exportación.",
+    },
+    {
+        "key": "FF_MULTI_BRANCH_ENFORCE",
+        "label": "Multi-sucursal estricto",
+        "description": "Forza el scoping por sucursal en todos los módulos.",
+    },
+    {
+        "key": "FF_PUBLIC_API_WEBHOOKS",
+        "label": "API pública y webhooks",
+        "description": "Habilita integraciones con API externa y webhooks.",
+    },
+]
+
 
 
 class Command(BaseCommand):
@@ -25,7 +68,13 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write("Initializing database...")
         existing_tables = set(connection.introspection.table_names())
-        required_tables = {"core_branch", "core_servicetype", "core_taxconfig", "core_table"}
+        required_tables = {
+            "core_branch",
+            "core_featureflag",
+            "core_servicetype",
+            "core_taxconfig",
+            "core_table",
+        }
         missing_tables = required_tables - existing_tables
         if missing_tables:
             raise CommandError(
@@ -51,5 +100,15 @@ class Command(BaseCommand):
             name="IVA",
             defaults={"rate": 0.13, "is_active": True},
         )
+
+        for flag in DEFAULT_FEATURE_FLAGS:
+            FeatureFlag.objects.get_or_create(
+                key=flag["key"],
+                defaults={
+                    "label": flag["label"],
+                    "description": flag["description"],
+                    "is_enabled": False,
+                },
+            )
 
         self.stdout.write(self.style.SUCCESS("Initialization complete."))
