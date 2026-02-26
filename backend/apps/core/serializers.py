@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.core.models import ServiceType, TaxConfig
+from apps.core.models import FeatureFlag, ServiceType, TaxConfig
 
 
 class ServiceTypeSerializer(serializers.ModelSerializer):
@@ -12,3 +12,9 @@ class TaxConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaxConfig
         fields = ["id", "name", "rate", "is_active"]
+
+
+class FeatureFlagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureFlag
+        fields = ["id", "key", "label", "description", "is_enabled"]

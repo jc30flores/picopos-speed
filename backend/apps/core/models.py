@@ -80,3 +80,17 @@ class AuditLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} ({self.entity_type}:{self.entity_id})"
+
+
+class FeatureFlag(models.Model):
+    key = models.CharField(max_length=80, unique=True)
+    label = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    is_enabled = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["key"]
+        indexes = [models.Index(fields=["key"])]
+
+    def __str__(self) -> str:
+        return f"{self.key} ({'on' if self.is_enabled else 'off'})"

@@ -20,7 +20,7 @@ const navItems = [
   { label: "Pedidos Clientes", path: "/customer-display" },
   { label: "Menú & Descuentos", path: "/menu" },
   { label: "Reportes & Historial", path: "/reports-history" },
-  { label: "Control de Empleados", path: "/settings" },
+  { label: "Configuración", path: "/settings" },
 ];
 
 export const Navigation = () => {
