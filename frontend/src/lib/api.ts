@@ -36,6 +36,7 @@ export type Product = {
   imagePath?: string | null;
   imageUrl?: string | null;
   available: boolean;
+  requiresKitchen: boolean;
   modifierGroups: number[];
 };
 
@@ -439,6 +440,7 @@ export const getProducts = async (options?: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>>(response);
   return data.map((item) => {
@@ -457,6 +459,7 @@ export const getProducts = async (options?: {
       imagePath: item.image_path ?? null,
       imageUrl: normalizedImageUrl,
       available: item.available,
+      requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
     };
   });
@@ -469,6 +472,7 @@ export const createProduct = async (payload: {
   categoryId: number;
   image?: File | null;
   available: boolean;
+  requiresKitchen: boolean;
   modifierGroupIds?: number[];
 }): Promise<Product> => {
   const formData = new FormData();
@@ -477,6 +481,7 @@ export const createProduct = async (payload: {
   formData.append("price", payload.price.toString());
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
+  formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -500,6 +505,7 @@ export const createProduct = async (payload: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -514,6 +520,7 @@ export const createProduct = async (payload: {
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -527,6 +534,7 @@ export const updateProduct = async (
     categoryId: number;
     image?: File | null;
     available: boolean;
+    requiresKitchen: boolean;
     modifierGroupIds?: number[];
   }
 ): Promise<Product> => {
@@ -536,6 +544,7 @@ export const updateProduct = async (
   formData.append("price", payload.price.toString());
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
+  formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -559,6 +568,7 @@ export const updateProduct = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -573,6 +583,7 @@ export const updateProduct = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -599,6 +610,7 @@ export const updateProductModifierGroups = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -613,6 +625,7 @@ export const updateProductModifierGroups = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -639,6 +652,7 @@ export const updateProductAvailability = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -653,6 +667,7 @@ export const updateProductAvailability = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -847,7 +862,7 @@ export const createOrder = async (payload: {
     productName: string;
     price: number;
     quantity: number;
-    modifiers: Array<{ name: string; price: number }>;
+    modifiers: Array<{ id?: number; name: string; price: number }>;
   }>;
 }): Promise<Order> => {
   const response = await request("/orders/", {
@@ -858,12 +873,14 @@ export const createOrder = async (payload: {
       customer_name: payload.customerName ?? "",
       source: payload.source,
       channel: payload.channel,
+      fast_pos_mode: payload.channel === "pos",
       items: payload.items.map((item) => ({
         product_id: item.productId,
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
         modifiers: item.modifiers.map((modifier) => ({
+          id: modifier.id,
           name: modifier.name,
           price: modifier.price,
         })),

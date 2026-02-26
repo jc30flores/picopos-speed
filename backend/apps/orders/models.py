@@ -17,6 +17,7 @@ class Order(models.Model):
         ("partial", "Partial"),
         ("paid", "Paid"),
     ]
+    CHANNEL_CHOICES = [("pos", "POS"), ("kiosk", "Kiosk"), ("online", "Online")]
     FINANCIAL_STATUS_CHOICES = [
         ("open", "Open"),
         ("paid", "Paid"),
@@ -31,6 +32,8 @@ class Order(models.Model):
     table = models.ForeignKey(Table, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting_payment")
     customer_name = models.CharField(max_length=120, blank=True)
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default="pos")
+    requires_kitchen = models.BooleanField(default=False)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -53,6 +56,7 @@ class Order(models.Model):
             models.Index(fields=["created_at"]),
             models.Index(fields=["service_type"]),
             models.Index(fields=["branch", "order_number"]),
+            models.Index(fields=["channel", "requires_kitchen", "status"]),
         ]
         unique_together = ("branch", "order_number")
 
@@ -151,3 +155,24 @@ class AppliedDiscount(models.Model):
 
     def __str__(self) -> str:
         return self.discount_name_snapshot
+
+
+class OrderInvoice(models.Model):
+    HACIENDA_STATUS_CHOICES = [("pending", "Pending"), ("sent", "Sent"), ("failed", "Failed")]
+
+    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name="invoice")
+    status = models.CharField(max_length=20, choices=HACIENDA_STATUS_CHOICES, default="pending")
+    dte_number = models.CharField(max_length=80, blank=True)
+    generation_code = models.CharField(max_length=120, blank=True)
+    hacienda_payload = models.JSONField(default=dict, blank=True)
+    hacienda_response = models.JSONField(default=dict, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["status", "updated_at"])]
+
+    def __str__(self) -> str:
+        return f"Invoice {self.order_id} ({self.status})"

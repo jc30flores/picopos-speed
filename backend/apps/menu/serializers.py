@@ -81,6 +81,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "image_path",
             "image_url",
             "available",
+            "requires_kitchen",
             "modifier_groups",
             "modifier_group_ids",
         ]

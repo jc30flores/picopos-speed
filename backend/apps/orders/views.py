@@ -67,7 +67,7 @@ class ActiveOrderListView(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            Order.objects.filter(status__in=["preparing", "ready"])
+            Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True)
             .prefetch_related("items__applied_modifiers")
             .order_by("created_at")
         )
@@ -105,7 +105,7 @@ class CustomerDisplayOrderListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        return Order.objects.filter(status__in=["preparing", "ready"]).order_by("created_at")
+        return Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True).order_by("created_at")
 
 
 class OrderVoidView(generics.GenericAPIView):

@@ -259,3 +259,10 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## POS rápido, ruteo de cocina y DTE
+
+- **`requiresKitchen` en productos**: ahora cada producto tiene el flag `requires_kitchen` (`requiresKitchen` en frontend). Si está activo, la orden se enruta a cocina/customer display cuando aplica.
+- **Qué cuenta como “extra de pago”**: en POS rápido solo se muestran modificadores con `price > 0` (por grupo/opción). Los grupos gratis/obligatorios no se muestran en caja.
+- **Defaults en grupos requeridos (POS rápido)**: si un grupo requerido no se muestra y no recibe selección manual, el backend autocompleta con la primera opción activa del grupo para permitir guardar el ítem.
+- **Fallo de Hacienda (DTE)**: al completar el pago, se crea/actualiza `OrderInvoice` y se intenta envío. Si falla, la venta no se pierde; queda `failed` con `hacienda_payload`, `hacienda_response` y `last_error` para reintentos.

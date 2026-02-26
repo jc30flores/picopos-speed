@@ -3,8 +3,8 @@ from django.db import transaction
 from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
-from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount
-from apps.menu.models import Product, Discount
+from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice
+from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
 
@@ -63,6 +63,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "created_at",
             "items",
             "discounts_applied",
+            "channel",
+            "requires_kitchen",
         ]
 
     def get_discounts_applied(self, obj: Order):
@@ -94,8 +96,10 @@ class OrderSerializer(serializers.ModelSerializer):
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):
-    name = serializers.CharField()
-    price = serializers.DecimalField(max_digits=8, decimal_places=2)
+    id = serializers.IntegerField(required=False)
+    name = serializers.CharField(required=False, allow_blank=True)
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False)
+
 
 
 class OrderItemInputSerializer(serializers.Serializer):
@@ -114,11 +118,40 @@ class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True)
     source = serializers.CharField(required=False, allow_blank=True)
     channel = serializers.CharField(required=False, allow_blank=True)
+    fast_pos_mode = serializers.BooleanField(required=False, default=False)
     items = OrderItemInputSerializer(many=True)
 
     def _next_order_number(self, branch: Branch) -> int:
         latest = Order.objects.filter(branch=branch).order_by("-order_number").first()
         return (latest.order_number + 1) if latest else 100
+
+    def _resolve_modifier_payload(self, product: Product, modifiers, fast_pos_mode: bool, channel: str):
+        selected = []
+        by_group = {}
+        for raw in modifiers or []:
+            mod_id = raw.get("id") if isinstance(raw, dict) else None
+            name = raw.get("name") if isinstance(raw, dict) else None
+            price = raw.get("price") if isinstance(raw, dict) else None
+            modifier = None
+            if mod_id:
+                modifier = Modifier.objects.filter(id=mod_id, group__products=product).select_related("group").first()
+            if modifier is None and name:
+                modifier = Modifier.objects.filter(name=name, group__products=product).select_related("group").first()
+            if modifier is None:
+                continue
+            by_group.setdefault(modifier.group_id, []).append(modifier)
+            selected.append({"name": modifier.name, "price": modifier.price})
+
+        if channel == "pos" and fast_pos_mode:
+            for group in product.modifier_groups.filter(required=True).prefetch_related("modifiers"):
+                if by_group.get(group.id):
+                    continue
+                default_modifier = group.modifiers.filter(is_active=True).order_by("id").first()
+                if not default_modifier:
+                    continue
+                selected.append({"name": default_modifier.name, "price": default_modifier.price})
+
+        return selected
 
     @transaction.atomic
     def create(self, validated_data):
@@ -126,7 +159,8 @@ class OrderCreateSerializer(serializers.Serializer):
         service_type_id = validated_data.pop("service_type_id", None)
         service_type_key = (validated_data.pop("service_type_key", None) or "").strip() or None
         source = (validated_data.pop("source", "") or "").strip().lower()
-        validated_data.pop("channel", None)
+        channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
+        fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
         branch = validated_data.pop("branch_id", None)
         if branch is None:
             branch = Branch.objects.first()
@@ -149,6 +183,7 @@ class OrderCreateSerializer(serializers.Serializer):
             order_number=order_number,
             service_type=service_type,
             status=status,
+            channel=channel if channel in {"pos", "kiosk", "online"} else "pos",
             **validated_data,
         )
 
@@ -174,6 +209,7 @@ class OrderCreateSerializer(serializers.Serializer):
         for item_data in items_data:
             modifiers = item_data.pop("modifiers", [])
             product = item_data.pop("product_id")
+            modifiers = self._resolve_modifier_payload(product, modifiers, fast_pos_mode, channel)
             price_snapshot = item_data["price_snapshot"]
             quantity = item_data["quantity"]
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
@@ -244,7 +280,15 @@ class OrderCreateSerializer(serializers.Serializer):
         order.tax = tax
         order.total = total
         order.discount_total = discount_total
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total"])
+        order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
+        if order.requires_kitchen and order.status == "preparing":
+            from apps.kitchen.models import KitchenOrderView
+            KitchenOrderView.objects.get_or_create(
+                order=order,
+                defaults={"service_type": service_type, "status": "preparing"},
+            )
+        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "requires_kitchen", "updated_at"])
+
 
         for discount in filtered_discounts:
             amount = discount_totals.get(discount.id)

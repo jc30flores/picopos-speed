@@ -37,6 +37,7 @@ export const ProductFormDialog = ({
   const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
   const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
+  const [requiresKitchen, setRequiresKitchen] = useState(false);
 
   useEffect(() => {
     if (editingProduct) {
@@ -48,6 +49,7 @@ export const ProductFormDialog = ({
       setImageFile(null);
       setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
+      setRequiresKitchen(editingProduct.requiresKitchen);
     } else {
       setName("");
       setDescription("");
@@ -57,6 +59,7 @@ export const ProductFormDialog = ({
       setImageFile(null);
       setExistingImageUrl(null);
       setAvailable(true);
+      setRequiresKitchen(false);
     }
   }, [editingProduct, open]);
 
@@ -127,6 +130,7 @@ export const ProductFormDialog = ({
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
+        requiresKitchen,
       });
     } else {
       await createProduct({
@@ -136,6 +140,7 @@ export const ProductFormDialog = ({
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
+        requiresKitchen,
       });
     }
     await onSaved();
@@ -296,6 +301,17 @@ export const ProductFormDialog = ({
                 onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
                 className="mt-1"
               />
+            </div>
+
+            <div className="flex items-center space-x-2 pt-6">
+              <Checkbox
+                id="requires-kitchen"
+                checked={requiresKitchen}
+                onCheckedChange={(checked) => setRequiresKitchen(checked as boolean)}
+              />
+              <Label htmlFor="requires-kitchen" className="cursor-pointer">
+                Va a cocina
+              </Label>
             </div>
 
             <div className="flex items-center space-x-2 pt-6">

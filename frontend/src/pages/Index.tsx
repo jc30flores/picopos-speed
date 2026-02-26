@@ -50,7 +50,7 @@ interface CartItem {
   name: string;
   price: number;
   quantity: number;
-  modifiers: Array<{ name: string; price: number }>;
+  modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
 const POS = () => {
@@ -59,6 +59,7 @@ const POS = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
   const [showModifierDialog, setShowModifierDialog] = useState(false);
+  const [showExtrasPrompt, setShowExtrasPrompt] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [products, setProducts] = useState<Product[]>([]);
@@ -114,17 +115,45 @@ const POS = () => {
     return matchesCategory && matchesSearch && product.available;
   });
 
-  const handleProductClick = (product: Product) => {
-    if (product.modifierGroups && product.modifierGroups.length > 0) {
-      setSelectedProduct(product);
-      setSelectedModifiers({});
-      setShowModifierDialog(true);
-    } else {
-      addToCart(product, []);
-    }
+  const getPaidModifierGroups = (product: Product | null) => {
+    if (!product?.modifierGroups?.length) return [] as ModifierGroup[];
+    return product.modifierGroups
+      .map((groupId) => modifierGroups.find((group) => group.id === groupId))
+      .filter((group): group is ModifierGroup => Boolean(group))
+      .filter((group) => group.modifiers.some((modifier) => modifier.price > 0));
   };
 
-  const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
+  const handleProductClick = (product: Product) => {
+    const paidGroups = getPaidModifierGroups(product);
+    if (paidGroups.length === 0) {
+      addToCart(product, [], true);
+      return;
+    }
+    setSelectedProduct(product);
+    setSelectedModifiers({});
+    setShowExtrasPrompt(true);
+  };
+
+  const openCheckoutFromItems = (items: CartItem[]) => {
+    if (items.length === 0) return;
+    const draftTotals = calculateCartTotals(items, taxRate);
+    const draft = {
+      items: [...items],
+      subtotal: draftTotals.subtotal,
+      tax: draftTotals.tax,
+      total: draftTotals.total,
+      taxRate,
+      serviceType,
+      createdAt: Date.now(),
+    };
+    setCheckoutDraft(draft);
+    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    setTipAmount("0");
+    setPaymentReference("");
+    setIsPaymentOpen(true);
+  };
+
+  const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>, autoCheckout = false) => {
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = product.price + modifierPrice;
 
@@ -134,12 +163,12 @@ const POS = () => {
         JSON.stringify(item.modifiers) === JSON.stringify(modifiers)
     );
 
+    let nextCart: CartItem[];
     if (existingItemIndex >= 0) {
-      const newCart = [...cart];
-      newCart[existingItemIndex].quantity += 1;
-      setCart(newCart);
+      nextCart = [...cart];
+      nextCart[existingItemIndex].quantity += 1;
     } else {
-      setCart([
+      nextCart = [
         ...cart,
         {
           id: `${product.id}-${Date.now()}`,
@@ -149,9 +178,11 @@ const POS = () => {
           quantity: 1,
           modifiers,
         },
-      ]);
+      ];
     }
+    setCart(nextCart);
     setShowModifierDialog(false);
+    if (autoCheckout) openCheckoutFromItems(nextCart);
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
@@ -213,24 +244,25 @@ const POS = () => {
   const handleAddModifiers = () => {
     const selectedMods: Array<{ name: string; price: number }> = [];
     
-    selectedProduct.modifierGroups.forEach((groupId: string) => {
-      const group = modifierGroups.find((g) => g.id === groupId);
+    getPaidModifierGroups(selectedProduct).forEach((group) => {
+      const groupId = String(group.id);
       if (group && selectedModifiers[groupId]) {
         selectedModifiers[groupId].forEach((modId) => {
           const mod = group.modifiers.find((m) => String(m.id) === modId);
-          if (mod) selectedMods.push({ name: mod.name, price: mod.price });
+          if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
         });
       }
     });
 
-    addToCart(selectedProduct, selectedMods);
+    addToCart(selectedProduct, selectedMods, true);
   };
 
   const canAddToCart = () => {
-    if (!selectedProduct?.modifierGroups) return true;
-    
-    return selectedProduct.modifierGroups.every((groupId: string) => {
-      const group = modifierGroups.find((g) => g.id === groupId);
+    const paidGroups = getPaidModifierGroups(selectedProduct);
+    if (!paidGroups.length) return true;
+
+    return paidGroups.every((group) => {
+      const groupId = String(group.id);
       if (!group) return true;
       
       const selectedCount = selectedModifiers[groupId]?.length || 0;
@@ -271,6 +303,8 @@ const POS = () => {
         } else {
           order = await createOrder({
             serviceType: checkoutDraft.serviceType,
+            source: "pos",
+            channel: "pos",
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
               productName: item.name,
@@ -312,7 +346,7 @@ const POS = () => {
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success("Pago registrado. Enviado a cocina.");
+        toast.success(refreshed.requiresKitchen ? "Pago y factura registrados. Enviado a cocina." : "Pago y factura registrados. Orden entregada.");
         setIsPaymentOpen(false);
         setCart([]);
         setCheckoutDraft(null);
@@ -724,26 +758,56 @@ const POS = () => {
         onReprint={handleReprint}
       />
 
+
+      <Dialog open={showExtrasPrompt} onOpenChange={setShowExtrasPrompt}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>¿Lleva extras?</DialogTitle>
+            <DialogDescription>{selectedProduct?.name}</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!selectedProduct) return;
+                addToCart(selectedProduct, [], true);
+                setShowExtrasPrompt(false);
+              }}
+            >
+              No
+            </Button>
+            <Button
+              onClick={() => {
+                setShowExtrasPrompt(false);
+                setShowModifierDialog(true);
+              }}
+            >
+              Sí
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Modifier Dialog */}
       <Dialog open={showModifierDialog} onOpenChange={setShowModifierDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Personalizar {selectedProduct?.name}</DialogTitle>
             <DialogDescription>
-              Selecciona tus opciones favoritas
+              Selecciona únicamente extras de pago
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-6">
-            {selectedProduct?.modifierGroups?.map((groupId: number) => {
-              const group = modifierGroups.find((g) => g.id === groupId);
+            {getPaidModifierGroups(selectedProduct).map((group) => {
+              const groupId = String(group.id);
               if (!group) return null;
 
               const selectedCount = selectedModifiers[groupId]?.length || 0;
               const isValid = selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
 
               return (
-                <div key={groupId} className="space-y-3">
+                <div key={group.id} className="space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold">
                       {group.name}

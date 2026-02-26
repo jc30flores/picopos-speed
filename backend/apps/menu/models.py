@@ -77,6 +77,7 @@ class Product(models.Model):
     image = models.CharField(max_length=255, blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
+    requires_kitchen = models.BooleanField(default=False)
     modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
 
     class Meta:
