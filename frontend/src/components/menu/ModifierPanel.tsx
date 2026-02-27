@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Edit, Trash2, X, Settings } from "lucide-react";
+import { Plus, Edit, Trash2, X, Settings, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
-import { ModifierGroup, Product, updateProductModifierGroups } from "@/lib/api";
+import { ModifierGroup, Product, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
 
 interface ModifierPanelProps {
@@ -27,6 +27,8 @@ export const ModifierPanel = ({
   const [showGroupFormDialog, setShowGroupFormDialog] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ModifierGroup | null>(null);
   const [selectedForAssign, setSelectedForAssign] = useState<number[]>([]);
+  const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -88,6 +90,32 @@ export const ModifierPanel = ({
     assignedGroups.includes(group.id)
   );
 
+  const orderedAssignedGroups = [...assignedGroupObjects].sort(
+    (a, b) => assignedGroups.indexOf(a.id) - assignedGroups.indexOf(b.id)
+  );
+
+  const handleDropGroup = async (targetGroupId: number) => {
+    if (!selectedProduct || draggingGroupId === null || draggingGroupId === targetGroupId) return;
+    const current = [...assignedGroups];
+    const from = current.indexOf(draggingGroupId);
+    const to = current.indexOf(targetGroupId);
+    if (from < 0 || to < 0) return;
+    current.splice(from, 1);
+    current.splice(to, 0, draggingGroupId);
+    const previous = [...assignedGroups];
+    setAssignedGroups(current);
+    setIsSavingOrder(true);
+    try {
+      await reorderProductModifierGroups(selectedProduct.id, current);
+    } catch (error) {
+      setAssignedGroups(previous);
+      toast.error("No se pudo guardar el orden");
+    } finally {
+      setIsSavingOrder(false);
+      setDraggingGroupId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card className="p-6">
@@ -122,11 +150,23 @@ export const ModifierPanel = ({
             </div>
           ) : (
             <div className="space-y-2">
-              {assignedGroupObjects.map((group) => (
+              {orderedAssignedGroups.map((group) => (
                 <div
                   key={group.id}
-                  className="flex items-center justify-between p-3 border rounded-lg"
+                  className="flex items-center justify-between gap-2 p-3 border rounded-lg"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => handleDropGroup(group.id)}
                 >
+                  <button
+                    type="button"
+                    className="text-muted-foreground"
+                    draggable={!isSavingOrder}
+                    onDragStart={() => setDraggingGroupId(group.id)}
+                    onDragEnd={() => setDraggingGroupId(null)}
+                    title="Arrastrar para reordenar"
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
                   <div>
                     <div className="font-semibold">{group.name}</div>
                     <div className="text-sm text-muted-foreground">

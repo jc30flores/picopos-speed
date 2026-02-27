@@ -11,6 +11,7 @@ export type Modifier = {
   name: string;
   price: number;
   isActive?: boolean;
+  sortOrder?: number;
 };
 
 export type ModifierGroup = {
@@ -36,6 +37,7 @@ export type Product = {
   imagePath?: string | null;
   imageUrl?: string | null;
   available: boolean;
+  isArchived?: boolean;
   requiresKitchen: boolean;
   modifierGroups: number[];
 };
@@ -414,6 +416,14 @@ export const createCategory = async (name: string): Promise<Category> => {
   };
 };
 
+export const deleteCategory = async (categoryId: number): Promise<void> => {
+  const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const data = await response.json().catch(() => ({ detail: "No se pudo eliminar la categoría" }));
+    throw new Error(data.detail || "No se pudo eliminar la categoría");
+  }
+};
+
 export const getProducts = async (options?: {
   search?: string;
   categoryId?: number;
@@ -441,6 +451,7 @@ export const getProducts = async (options?: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>>(response);
@@ -460,6 +471,7 @@ export const getProducts = async (options?: {
       imagePath: item.image_path ?? null,
       imageUrl: normalizedImageUrl,
       available: item.available,
+      isArchived: Boolean(item.is_archived),
       requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
     };
@@ -506,6 +518,7 @@ export const createProduct = async (payload: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
@@ -521,6 +534,7 @@ export const createProduct = async (payload: {
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
@@ -535,6 +549,7 @@ export const updateProduct = async (
     categoryId: number;
     image?: File | null;
     available: boolean;
+    is_archived?: boolean;
     requiresKitchen: boolean;
     modifierGroupIds?: number[];
   }
@@ -584,9 +599,20 @@ export const updateProduct = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
+};
+
+export const deleteProduct = async (productId: number): Promise<{ detail?: string }> => {
+  const response = await request(`/menu/products/${productId}/`, { method: "DELETE" });
+  if (response.status === 204) return {};
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "No se pudo eliminar el producto");
+  }
+  return data;
 };
 
 export const updateProductModifierGroups = async (
@@ -611,6 +637,7 @@ export const updateProductModifierGroups = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
@@ -626,9 +653,20 @@ export const updateProductModifierGroups = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
+};
+
+export const reorderProductModifierGroups = async (
+  productId: number,
+  orderedIds: number[],
+): Promise<void> => {
+  await request(`/menu/products/${productId}/modifier-groups/reorder/`, {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  }).then(handleJson);
 };
 
 export const updateProductAvailability = async (
@@ -653,6 +691,7 @@ export const updateProductAvailability = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
@@ -668,6 +707,7 @@ export const updateProductAvailability = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
@@ -694,8 +734,16 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
       name: modifier.name,
       price: Number(modifier.price),
       isActive: modifier.is_active,
+      sortOrder: modifier.sort_order,
     })),
   }));
+};
+
+export const reorderModifierGroupOptions = async (groupId: number, orderedIds: number[]): Promise<void> => {
+  await request(`/menu/modifier-groups/${groupId}/options/reorder/`, {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  }).then(handleJson);
 };
 
 export const createModifierGroup = async (payload: {
@@ -866,9 +914,6 @@ export const createOrder = async (payload: {
     modifiers: Array<{ id?: number; name: string; price: number }>;
   }>;
 }): Promise<Order> => {
-  if (import.meta.env.DEV) {
-    console.debug("[API] createOrder payload", payload);
-  }
   const response = await request("/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1729,9 +1774,6 @@ export const createPayment = async (payload: {
       reference: payload.reference ?? "",
     }),
   });
-  if (import.meta.env.DEV) {
-    console.debug("[API] createPayment payload", payload);
-  }
   const data = await handleJson<{
     id: number;
     order: number;

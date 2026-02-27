@@ -27,7 +27,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class ModifierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Modifier
-        fields = ["id", "name", "price", "is_active"]
+        fields = ["id", "name", "price", "is_active", "sort_order"]
 
 
 class ModifierGroupSerializer(serializers.ModelSerializer):
@@ -40,7 +40,8 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
         group = ModifierGroup.objects.create(**validated_data)
-        for modifier_data in modifiers_data:
+        for index, modifier_data in enumerate(modifiers_data):
+            modifier_data.setdefault("sort_order", index)
             Modifier.objects.create(group=group, **modifier_data)
         return group
 
@@ -53,9 +54,7 @@ class ProductSerializer(serializers.ModelSerializer):
         source="category", queryset=Category.objects.all(), write_only=True
     )
     category_id_display = serializers.IntegerField(source="category.id", read_only=True)
-    modifier_groups = serializers.PrimaryKeyRelatedField(
-        many=True, read_only=True
-    )
+    modifier_groups = serializers.SerializerMethodField()
     modifier_group_ids = serializers.PrimaryKeyRelatedField(
         many=True,
         source="modifier_groups",
@@ -81,10 +80,17 @@ class ProductSerializer(serializers.ModelSerializer):
             "image_path",
             "image_url",
             "available",
+            "is_archived",
             "requires_kitchen",
             "modifier_groups",
             "modifier_group_ids",
         ]
+
+    def get_modifier_groups(self, obj: Product):
+        ids = list(obj.modifier_groups.values_list("id", flat=True))
+        ordered = [group_id for group_id in obj.modifier_group_order if group_id in ids]
+        remaining = [group_id for group_id in ids if group_id not in ordered]
+        return ordered + remaining
 
     def get_image_url(self, obj: Product) -> str | None:
         url = None
@@ -102,10 +108,14 @@ class ProductSerializer(serializers.ModelSerializer):
         return url
 
     def update(self, instance, validated_data):
+        modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
         old_image = instance.image
         instance = super().update(instance, validated_data)
+        if modifier_groups is not None:
+            instance.modifier_group_order = [group.id for group in modifier_groups]
+            instance.save(update_fields=["modifier_group_order"])
 
         if image_file:
             saved = save_menu_image(image_file, instance.category.name)
@@ -118,9 +128,13 @@ class ProductSerializer(serializers.ModelSerializer):
         return instance
 
     def create(self, validated_data):
+        modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
         product = super().create(validated_data)
+        if modifier_groups is not None:
+            product.modifier_group_order = [group.id for group in modifier_groups]
+            product.save(update_fields=["modifier_group_order"])
         if image_file:
             saved = save_menu_image(image_file, product.category.name)
             product.image = saved["image"]

@@ -54,6 +54,12 @@ interface CartItem {
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
+const getPaidExtrasLines = (item: CartItem) =>
+  (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
+    name: modifier.name,
+    price: modifier.price,
+  }));
+
 const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
@@ -621,12 +627,22 @@ const POS = () => {
                 <div className="rounded-md border">
                   <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
                     {checkoutDraft.items.map((item) => (
-                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 p-2">
+                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                         <div className="min-w-0">
                           <div className="truncate font-medium">{item.name}</div>
                           <div className="text-xs text-muted-foreground">
                             {formatMoney(toNumber(item.price))} c/u
                           </div>
+                          {getPaidExtrasLines(item).length > 0 && (
+                            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                              {getPaidExtrasLines(item).map((extra, index) => (
+                                <div key={`${item.id}-${extra.name}-${index}`} className="flex justify-between gap-2 pl-3">
+                                  <span>+ {extra.name}</span>
+                                  <span>{formatMoney(extra.price)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
                         <div className="text-right font-semibold">

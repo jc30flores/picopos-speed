@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, Plus, Edit, Settings } from "lucide-react";
+import { Search, Plus, Edit, Settings, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, Category, ModifierGroup, Product } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
 interface InlineStatusToggleProps {
@@ -64,6 +65,8 @@ export const ProductsTab = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
 
   const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -109,6 +112,30 @@ export const ProductsTab = () => {
     setSelectedProduct((prev) => (prev?.id === updated.id ? updated : prev));
   };
 
+  const handleDeleteProduct = async () => {
+    if (!productToDelete) return;
+    try {
+      const result = await deleteProduct(productToDelete.id);
+      await loadMenuData();
+      toast.success(result.detail || "Producto eliminado");
+      setProductToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el producto");
+    }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (!categoryToDelete) return;
+    try {
+      await deleteCategory(categoryToDelete.id);
+      await loadMenuData();
+      toast.success("Categoría eliminada");
+      setCategoryToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar la categoría");
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {/* Left: Products Table (60%) */}
@@ -139,17 +166,32 @@ export const ProductsTab = () => {
 
             <div className="flex gap-2 flex-wrap">
               {categoryNames.map((cat) => (
-                <Badge
-                  key={cat}
-                  variant={selectedCategory === cat ? "default" : "outline"}
-                  className={cn(
-                    "cursor-pointer transition-all hover:scale-105",
-                    selectedCategory === cat && "bg-primary text-primary-foreground"
+                <div key={cat} className="inline-flex items-center gap-1">
+                  <Badge
+                    variant={selectedCategory === cat ? "default" : "outline"}
+                    className={cn(
+                      "cursor-pointer transition-all hover:scale-105",
+                      selectedCategory === cat && "bg-primary text-primary-foreground"
+                    )}
+                    onClick={() => setSelectedCategory(cat)}
+                  >
+                    {cat}
+                  </Badge>
+                  {cat !== "Todos" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => {
+                        const category = categories.find((item) => item.name === cat);
+                        if (category) setCategoryToDelete(category);
+                      }}
+                      title="Eliminar categoría"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
                   )}
-                  onClick={() => setSelectedCategory(cat)}
-                >
-                  {cat}
-                </Badge>
+                </div>
               ))}
             </div>
           </div>
@@ -203,6 +245,14 @@ export const ProductsTab = () => {
                           <Settings className="h-4 w-4 mr-1" />
                           Modificadores
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProductToDelete(product)}
+                          title="Eliminar producto"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -230,6 +280,36 @@ export const ProductsTab = () => {
         categories={categories}
         onSaved={loadMenuData}
       />
+
+      <Dialog open={Boolean(productToDelete)} onOpenChange={(open) => !open && setProductToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar producto: {productToDelete?.name}</DialogTitle>
+            <DialogDescription>
+              Si el producto tiene ventas históricas, se archivará para preservar integridad.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProductToDelete(null)}>Cancelar</Button>
+            <Button variant="destructive" onClick={handleDeleteProduct}>Eliminar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => !open && setCategoryToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar categoría: {categoryToDelete?.name}</DialogTitle>
+            <DialogDescription>
+              Solo se puede eliminar si no tiene productos activos asociados.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCategoryToDelete(null)}>Cancelar</Button>
+            <Button variant="destructive" onClick={handleDeleteCategory}>Eliminar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -1,6 +1,7 @@
 import os
 import logging
 from rest_framework import generics, status
+from django.db import transaction
 from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,7 +9,7 @@ from django.conf import settings
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
 from rest_framework.parsers import MultiPartParser, FormParser
-from apps.menu.models import Category, Product, ModifierGroup, Discount
+from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount
 from apps.menu.serializers import (
     CategorySerializer,
     ProductSerializer,
@@ -70,6 +71,9 @@ class ProductListCreateView(generics.ListCreateAPIView):
             ids = [int(item) for item in ids_param.split(",") if item.strip().isdigit()]
             if ids:
                 queryset = queryset.filter(id__in=ids)
+        include_archived = self.request.query_params.get("include_archived") in {"1", "true", "True"}
+        if not include_archived:
+            queryset = queryset.filter(is_archived=False)
         return queryset
 
     def list(self, request, *args, **kwargs):
@@ -95,7 +99,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
         log_audit(self.request, "menu.product.create", "Product", product.id, {"name": product.name})
 
 
-class ProductDetailView(generics.RetrieveUpdateAPIView):
+class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProductSerializer
     parser_classes = [MultiPartParser, FormParser]
     queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
@@ -128,6 +132,33 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
             {"name": product.name, "modifier_group_ids": modifier_group_ids},
         )
 
+    def destroy(self, request, *args, **kwargs):
+        product = self.get_object()
+        referenced = product.order_items.exists()
+        if referenced:
+            product.is_archived = True
+            product.available = False
+            product.save(update_fields=["is_archived", "available", "updated_at"] if hasattr(product, "updated_at") else ["is_archived", "available"])
+            return Response({"detail": "Producto archivado porque tiene historial de ventas."}, status=status.HTTP_200_OK)
+        product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CategoryDetailView(generics.DestroyAPIView):
+    serializer_class = CategorySerializer
+    queryset = Category.objects.all()
+    permission_classes = [IsAdminOrManager]
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.products.filter(is_archived=False).exists():
+            return Response(
+                {"detail": "No se puede eliminar; primero mueve o elimina los productos."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        category.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class MenuImageHealthView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
@@ -152,6 +183,40 @@ class ModifierGroupListCreateView(generics.ListCreateAPIView):
         if self.request.method in SAFE_METHODS:
             return [IsAuthenticatedAndActive()]
         return [IsAdminOrManager()]
+
+
+class ProductModifierGroupsReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def patch(self, request, product_id: int):
+        ordered_ids = request.data.get("ordered_ids") or []
+        product = Product.objects.prefetch_related("modifier_groups").filter(id=product_id).first()
+        if not product:
+            return Response({"detail": "Producto no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        existing_ids = list(product.modifier_groups.values_list("id", flat=True))
+        if sorted(existing_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids inválido para este producto"}, status=status.HTTP_400_BAD_REQUEST)
+        product.modifier_group_order = ordered_ids
+        product.save(update_fields=["modifier_group_order"])
+        return Response({"ordered_ids": ordered_ids}, status=status.HTTP_200_OK)
+
+
+class ModifierGroupOptionsReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def patch(self, request, group_id: int):
+        ordered_ids = request.data.get("ordered_ids") or []
+        group = ModifierGroup.objects.prefetch_related("modifiers").filter(id=group_id).first()
+        if not group:
+            return Response({"detail": "Grupo no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        existing_ids = list(group.modifiers.values_list("id", flat=True))
+        if sorted(existing_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids inválido para este grupo"}, status=status.HTTP_400_BAD_REQUEST)
+        for idx, modifier_id in enumerate(ordered_ids):
+            Modifier.objects.filter(id=modifier_id, group=group).update(sort_order=idx)
+        return Response({"ordered_ids": ordered_ids}, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         group = serializer.save()

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { GripVertical, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { createModifierGroup, ModifierGroup } from "@/lib/api";
+import { createModifierGroup, ModifierGroup, reorderModifierGroupOptions } from "@/lib/api";
 
 interface ModifierOption {
   id: string;
@@ -34,6 +34,8 @@ export const ModifierGroupFormDialog = ({
   const [minSelection, setMinSelection] = useState(0);
   const [maxSelection, setMaxSelection] = useState(1);
   const [options, setOptions] = useState<ModifierOption[]>([]);
+  const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
 
   useEffect(() => {
     if (editingGroup) {
@@ -104,6 +106,29 @@ export const ModifierGroupFormDialog = ({
     });
     await onSaved();
     onOpenChange(false);
+  };
+
+  const handleDropOption = async (targetOptionId: string) => {
+    if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
+    const current = [...options];
+    const from = current.findIndex((opt) => opt.id === draggingOptionId);
+    const to = current.findIndex((opt) => opt.id === targetOptionId);
+    if (from < 0 || to < 0) return;
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+    const previous = [...options];
+    setOptions(current);
+    if (!editingGroup) return;
+    const orderedIds = current.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
+    setIsSavingOrder(true);
+    try {
+      await reorderModifierGroupOptions(editingGroup.id, orderedIds);
+    } catch (error) {
+      setOptions(previous);
+    } finally {
+      setIsSavingOrder(false);
+      setDraggingOptionId(null);
+    }
   };
 
   return (
@@ -192,8 +217,23 @@ export const ModifierGroupFormDialog = ({
             ) : (
               <div className="space-y-3">
                 {options.map((option, index) => (
-                  <Card key={option.id} className="p-4">
+                  <Card
+                    key={option.id}
+                    className="p-4"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => handleDropOption(option.id)}
+                  >
                     <div className="flex gap-3">
+                      <button
+                        type="button"
+                        className="text-muted-foreground"
+                        draggable={!isSavingOrder}
+                        onDragStart={() => setDraggingOptionId(option.id)}
+                        onDragEnd={() => setDraggingOptionId(null)}
+                        title="Arrastrar para reordenar"
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </button>
                       <div className="flex-1 space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <div>
