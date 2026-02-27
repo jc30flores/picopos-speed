@@ -58,10 +58,8 @@ const POS = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
-  const [showModifierDialog, setShowModifierDialog] = useState(false);
-  const [showExtrasPrompt, setShowExtrasPrompt] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
+  const [isCheckoutExtrasOpen, setIsCheckoutExtrasOpen] = useState(false);
+  const [checkoutExtraSelections, setCheckoutExtraSelections] = useState<Record<string, Record<string, string[]>>>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
@@ -124,14 +122,7 @@ const POS = () => {
   };
 
   const handleProductClick = (product: Product) => {
-    const paidGroups = getPaidModifierGroups(product);
-    if (paidGroups.length === 0) {
-      addToCart(product, [], true);
-      return;
-    }
-    setSelectedProduct(product);
-    setSelectedModifiers({});
-    setShowExtrasPrompt(true);
+    addToCart(product, []);
   };
 
   const openCheckoutFromItems = (items: CartItem[]) => {
@@ -153,7 +144,7 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>, autoCheckout = false) => {
+  const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = product.price + modifierPrice;
 
@@ -181,8 +172,6 @@ const POS = () => {
       ];
     }
     setCart(nextCart);
-    setShowModifierDialog(false);
-    if (autoCheckout) openCheckoutFromItems(nextCart);
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
@@ -211,8 +200,49 @@ const POS = () => {
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
 
+  const buildCartWithSelectedExtras = () => {
+    return cart.map((item) => {
+      const product = products.find((candidate) => candidate.id === item.productId) ?? null;
+      const paidGroups = getPaidModifierGroups(product);
+      const itemSelection = checkoutExtraSelections[item.id] ?? {};
+      const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
+
+      paidGroups.forEach((group) => {
+        const selectedIds = itemSelection[String(group.id)] ?? [];
+        selectedIds.forEach((modId) => {
+          const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
+          if (mod) {
+            selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
+          }
+        });
+      });
+
+      const extraPrice = selectedMods.reduce((sum, mod) => sum + mod.price, 0);
+      const basePrice = products.find((candidate) => candidate.id === item.productId)?.price ?? item.price;
+
+      return {
+        ...item,
+        price: basePrice + extraPrice,
+        modifiers: selectedMods,
+      };
+    });
+  };
+
+  const hasPaidExtrasInCart = () =>
+    cart.some((item) => {
+      const product = products.find((candidate) => candidate.id === item.productId) ?? null;
+      return getPaidModifierGroups(product).length > 0;
+    });
+
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+
+    if (hasPaidExtrasInCart()) {
+      setCheckoutExtraSelections({});
+      setIsCheckoutExtrasOpen(true);
+      return;
+    }
+
     const draftTotals = calculateCartTotals(cart, taxRate);
     const draft = {
       items: [...cart],
@@ -241,33 +271,10 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const handleAddModifiers = () => {
-    const selectedMods: Array<{ name: string; price: number }> = [];
-    
-    getPaidModifierGroups(selectedProduct).forEach((group) => {
-      const groupId = String(group.id);
-      if (group && selectedModifiers[groupId]) {
-        selectedModifiers[groupId].forEach((modId) => {
-          const mod = group.modifiers.find((m) => String(m.id) === modId);
-          if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
-        });
-      }
-    });
-
-    addToCart(selectedProduct, selectedMods, true);
-  };
-
-  const canAddToCart = () => {
-    const paidGroups = getPaidModifierGroups(selectedProduct);
-    if (!paidGroups.length) return true;
-
-    return paidGroups.every((group) => {
-      const groupId = String(group.id);
-      if (!group) return true;
-      
-      const selectedCount = selectedModifiers[groupId]?.length || 0;
-      return selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
-    });
+  const continueCheckoutWithExtras = () => {
+    const cartWithExtras = buildCartWithSelectedExtras();
+    setIsCheckoutExtrasOpen(false);
+    openCheckoutFromItems(cartWithExtras);
   };
 
   const handleSubmitPayment = async () => {
@@ -758,133 +765,114 @@ const POS = () => {
         onReprint={handleReprint}
       />
 
-
-      <Dialog open={showExtrasPrompt} onOpenChange={setShowExtrasPrompt}>
-        <DialogContent className="max-w-sm">
+      <Dialog open={isCheckoutExtrasOpen} onOpenChange={setIsCheckoutExtrasOpen}>
+        <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
           <DialogHeader>
-            <DialogTitle>¿Lleva extras?</DialogTitle>
-            <DialogDescription>{selectedProduct?.name}</DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (!selectedProduct) return;
-                addToCart(selectedProduct, [], true);
-                setShowExtrasPrompt(false);
-              }}
-            >
-              No
-            </Button>
-            <Button
-              onClick={() => {
-                setShowExtrasPrompt(false);
-                setShowModifierDialog(true);
-              }}
-            >
-              Sí
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modifier Dialog */}
-      <Dialog open={showModifierDialog} onOpenChange={setShowModifierDialog}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Personalizar {selectedProduct?.name}</DialogTitle>
+            <DialogTitle>Extras (opcional)</DialogTitle>
             <DialogDescription>
-              Selecciona únicamente extras de pago
+              Selecciona extras de pago por producto antes de cobrar.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6">
-            {getPaidModifierGroups(selectedProduct).map((group) => {
-              const groupId = String(group.id);
-              if (!group) return null;
+          <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
+            {cart.map((item) => {
+              const product = products.find((candidate) => candidate.id === item.productId) ?? null;
+              const paidGroups = getPaidModifierGroups(product);
+              if (!paidGroups.length) return null;
 
-              const selectedCount = selectedModifiers[groupId]?.length || 0;
-              const isValid = selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
+              const itemSelection = checkoutExtraSelections[item.id] ?? {};
 
               return (
-                <div key={group.id} className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">
-                      {group.name}
-                      {group.required && <span className="text-danger ml-1">*</span>}
-                    </h3>
-                    <Badge variant={isValid ? "default" : "destructive"}>
-                      {selectedCount}/{group.maxSelection} seleccionados
-                    </Badge>
-                  </div>
-
-                  {group.maxSelection === 1 ? (
-                    <RadioGroup
-                      value={selectedModifiers[groupId]?.[0] || ""}
-                      onValueChange={(value) =>
-                        setSelectedModifiers({ ...selectedModifiers, [groupId]: [value] })
-                      }
-                    >
-                      {group.modifiers.map((mod) => (
-                        <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
-                          <RadioGroupItem value={String(mod.id)} id={String(mod.id)} />
-                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
-                            {mod.name}
-                          </Label>
-                          {mod.price > 0 && (
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          )}
-                        </div>
-                      ))}
-                    </RadioGroup>
-                  ) : (
-                    <div className="space-y-2">
-                      {group.modifiers.map((mod) => (
-                        <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
-                          <Checkbox
-                            id={String(mod.id)}
-                            checked={selectedModifiers[groupId]?.includes(String(mod.id)) || false}
-                            onCheckedChange={(checked) => {
-                              const current = selectedModifiers[groupId] || [];
-                              if (checked && current.length < group.maxSelection) {
-                                setSelectedModifiers({
-                                  ...selectedModifiers,
-                                  [groupId]: [...current, String(mod.id)],
-                                });
-                              } else if (!checked) {
-                                setSelectedModifiers({
-                                  ...selectedModifiers,
-                                  [groupId]: current.filter((id) => id !== String(mod.id)),
-                                });
+                <div key={item.id} className="rounded-xl border border-border/70 p-3">
+                  <p className="mb-2 text-sm font-semibold">{item.name} x{item.quantity}</p>
+                  <div className="space-y-3">
+                    {paidGroups.map((group) => {
+                      const groupId = String(group.id);
+                      const selectedValues = itemSelection[groupId] ?? [];
+                      return (
+                        <div key={`${item.id}-${group.id}`} className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">{group.name}</Label>
+                          {group.maxSelection === 1 ? (
+                            <RadioGroup
+                              value={selectedValues[0] || ""}
+                              onValueChange={(value) =>
+                                setCheckoutExtraSelections((prev) => ({
+                                  ...prev,
+                                  [item.id]: {
+                                    ...(prev[item.id] ?? {}),
+                                    [groupId]: value ? [value] : [],
+                                  },
+                                }))
                               }
-                            }}
-                            disabled={
-                              !selectedModifiers[groupId]?.includes(String(mod.id)) &&
-                              (selectedModifiers[groupId]?.length || 0) >= group.maxSelection
-                            }
-                          />
-                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
-                            {mod.name}
-                          </Label>
-                          {mod.price > 0 && (
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                            >
+                              {group.modifiers
+                                .filter((mod) => mod.price > 0)
+                                .map((mod) => (
+                                  <div key={`${item.id}-${mod.id}`} className="flex items-center gap-2 rounded-md p-1">
+                                    <RadioGroupItem id={`${item.id}-${mod.id}`} value={String(mod.id)} />
+                                    <Label htmlFor={`${item.id}-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                                      {mod.name}
+                                    </Label>
+                                    <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                                  </div>
+                                ))}
+                            </RadioGroup>
+                          ) : (
+                            <div className="space-y-1">
+                              {group.modifiers
+                                .filter((mod) => mod.price > 0)
+                                .map((mod) => (
+                                  <div key={`${item.id}-${mod.id}`} className="flex items-center gap-2 rounded-md p-1">
+                                    <Checkbox
+                                      id={`${item.id}-${mod.id}`}
+                                      checked={selectedValues.includes(String(mod.id))}
+                                      onCheckedChange={(checked) => {
+                                        const current = selectedValues;
+                                        if (checked && current.length >= group.maxSelection) return;
+                                        setCheckoutExtraSelections((prev) => ({
+                                          ...prev,
+                                          [item.id]: {
+                                            ...(prev[item.id] ?? {}),
+                                            [groupId]: checked
+                                              ? [...current, String(mod.id)]
+                                              : current.filter((id) => id !== String(mod.id)),
+                                          },
+                                        }));
+                                      }}
+                                    />
+                                    <Label htmlFor={`${item.id}-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                                      {mod.name}
+                                    </Label>
+                                    <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                                  </div>
+                                ))}
+                            </div>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
           </div>
 
-          <Button
-            className="w-full"
-            onClick={handleAddModifiers}
-            disabled={!canAddToCart()}
-          >
-            Agregar al Pedido
-          </Button>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <Button
+              variant="outline"
+              className="h-12"
+              onClick={() => {
+                setCheckoutExtraSelections({});
+                setIsCheckoutExtrasOpen(false);
+                openCheckoutFromItems(cart);
+              }}
+            >
+              No
+            </Button>
+            <Button className="h-12" onClick={continueCheckoutWithExtras}>
+              Sí
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
