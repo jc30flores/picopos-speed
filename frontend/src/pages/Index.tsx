@@ -58,8 +58,9 @@ const POS = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
-  const [isCheckoutExtrasOpen, setIsCheckoutExtrasOpen] = useState(false);
-  const [checkoutExtraSelections, setCheckoutExtraSelections] = useState<Record<string, Record<string, string[]>>>({});
+  const [isExtrasOpen, setIsExtrasOpen] = useState(false);
+  const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
+  const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
@@ -122,7 +123,14 @@ const POS = () => {
   };
 
   const handleProductClick = (product: Product) => {
-    addToCart(product, []);
+    const paidGroups = getPaidModifierGroups(product);
+    if (!paidGroups.length) {
+      addToCart(product, []);
+      return;
+    }
+    setPendingProduct(product);
+    setSelectedModifiers({});
+    setIsExtrasOpen(true);
   };
 
   const openCheckoutFromItems = (items: CartItem[]) => {
@@ -200,48 +208,8 @@ const POS = () => {
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
 
-  const buildCartWithSelectedExtras = () => {
-    return cart.map((item) => {
-      const product = products.find((candidate) => candidate.id === item.productId) ?? null;
-      const paidGroups = getPaidModifierGroups(product);
-      const itemSelection = checkoutExtraSelections[item.id] ?? {};
-      const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
-
-      paidGroups.forEach((group) => {
-        const selectedIds = itemSelection[String(group.id)] ?? [];
-        selectedIds.forEach((modId) => {
-          const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
-          if (mod) {
-            selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
-          }
-        });
-      });
-
-      const extraPrice = selectedMods.reduce((sum, mod) => sum + mod.price, 0);
-      const basePrice = products.find((candidate) => candidate.id === item.productId)?.price ?? item.price;
-
-      return {
-        ...item,
-        price: basePrice + extraPrice,
-        modifiers: selectedMods,
-      };
-    });
-  };
-
-  const hasPaidExtrasInCart = () =>
-    cart.some((item) => {
-      const product = products.find((candidate) => candidate.id === item.productId) ?? null;
-      return getPaidModifierGroups(product).length > 0;
-    });
-
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-
-    if (hasPaidExtrasInCart()) {
-      setCheckoutExtraSelections({});
-      setIsCheckoutExtrasOpen(true);
-      return;
-    }
 
     const draftTotals = calculateCartTotals(cart, taxRate);
     const draft = {
@@ -271,10 +239,36 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const continueCheckoutWithExtras = () => {
-    const cartWithExtras = buildCartWithSelectedExtras();
-    setIsCheckoutExtrasOpen(false);
-    openCheckoutFromItems(cartWithExtras);
+  const handleAddPendingProductWithoutExtras = () => {
+    if (!pendingProduct) return;
+    addToCart(pendingProduct, []);
+    setIsExtrasOpen(false);
+    setPendingProduct(null);
+    setSelectedModifiers({});
+  };
+
+  const handleAddPendingProductWithExtras = () => {
+    if (!pendingProduct) return;
+    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
+    getPaidModifierGroups(pendingProduct).forEach((group) => {
+      const groupId = String(group.id);
+      (selectedModifiers[groupId] ?? []).forEach((modId) => {
+        const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
+        if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
+      });
+    });
+    addToCart(pendingProduct, selectedMods);
+    setIsExtrasOpen(false);
+    setPendingProduct(null);
+    setSelectedModifiers({});
+  };
+
+  const closeExtrasDialog = (open: boolean) => {
+    setIsExtrasOpen(open);
+    if (!open) {
+      setPendingProduct(null);
+      setSelectedModifiers({});
+    }
   };
 
   const handleSubmitPayment = async () => {
@@ -765,112 +759,80 @@ const POS = () => {
         onReprint={handleReprint}
       />
 
-      <Dialog open={isCheckoutExtrasOpen} onOpenChange={setIsCheckoutExtrasOpen}>
+      <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
         <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
           <DialogHeader>
             <DialogTitle>Extras (opcional)</DialogTitle>
             <DialogDescription>
-              Selecciona extras de pago por producto antes de cobrar.
+              {pendingProduct ? `Selecciona extras de pago para ${pendingProduct.name}.` : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-            {cart.map((item) => {
-              const product = products.find((candidate) => candidate.id === item.productId) ?? null;
-              const paidGroups = getPaidModifierGroups(product);
-              if (!paidGroups.length) return null;
-
-              const itemSelection = checkoutExtraSelections[item.id] ?? {};
-
+            {getPaidModifierGroups(pendingProduct).map((group) => {
+              const groupId = String(group.id);
+              const selectedValues = selectedModifiers[groupId] ?? [];
               return (
-                <div key={item.id} className="rounded-xl border border-border/70 p-3">
-                  <p className="mb-2 text-sm font-semibold">{item.name} x{item.quantity}</p>
-                  <div className="space-y-3">
-                    {paidGroups.map((group) => {
-                      const groupId = String(group.id);
-                      const selectedValues = itemSelection[groupId] ?? [];
-                      return (
-                        <div key={`${item.id}-${group.id}`} className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">{group.name}</Label>
-                          {group.maxSelection === 1 ? (
-                            <RadioGroup
-                              value={selectedValues[0] || ""}
-                              onValueChange={(value) =>
-                                setCheckoutExtraSelections((prev) => ({
+                <div key={group.id} className="rounded-xl border border-border/70 p-3">
+                  <Label className="mb-2 block text-sm font-semibold">{group.name}</Label>
+                  {group.maxSelection === 1 ? (
+                    <RadioGroup
+                      value={selectedValues[0] || ""}
+                      onValueChange={(value) =>
+                        setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }))
+                      }
+                    >
+                      {group.modifiers
+                        .filter((mod) => mod.price > 0)
+                        .map((mod) => (
+                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                            <RadioGroupItem id={`pending-${mod.id}`} value={String(mod.id)} />
+                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                              {mod.name}
+                            </Label>
+                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </div>
+                        ))}
+                    </RadioGroup>
+                  ) : (
+                    <div className="space-y-1">
+                      {group.modifiers
+                        .filter((mod) => mod.price > 0)
+                        .map((mod) => (
+                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                            <Checkbox
+                              id={`pending-${mod.id}`}
+                              checked={selectedValues.includes(String(mod.id))}
+                              onCheckedChange={(checked) => {
+                                const current = selectedValues;
+                                if (checked && current.length >= group.maxSelection) return;
+                                setSelectedModifiers((prev) => ({
                                   ...prev,
-                                  [item.id]: {
-                                    ...(prev[item.id] ?? {}),
-                                    [groupId]: value ? [value] : [],
-                                  },
-                                }))
-                              }
-                            >
-                              {group.modifiers
-                                .filter((mod) => mod.price > 0)
-                                .map((mod) => (
-                                  <div key={`${item.id}-${mod.id}`} className="flex items-center gap-2 rounded-md p-1">
-                                    <RadioGroupItem id={`${item.id}-${mod.id}`} value={String(mod.id)} />
-                                    <Label htmlFor={`${item.id}-${mod.id}`} className="flex-1 cursor-pointer text-sm">
-                                      {mod.name}
-                                    </Label>
-                                    <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                                  </div>
-                                ))}
-                            </RadioGroup>
-                          ) : (
-                            <div className="space-y-1">
-                              {group.modifiers
-                                .filter((mod) => mod.price > 0)
-                                .map((mod) => (
-                                  <div key={`${item.id}-${mod.id}`} className="flex items-center gap-2 rounded-md p-1">
-                                    <Checkbox
-                                      id={`${item.id}-${mod.id}`}
-                                      checked={selectedValues.includes(String(mod.id))}
-                                      onCheckedChange={(checked) => {
-                                        const current = selectedValues;
-                                        if (checked && current.length >= group.maxSelection) return;
-                                        setCheckoutExtraSelections((prev) => ({
-                                          ...prev,
-                                          [item.id]: {
-                                            ...(prev[item.id] ?? {}),
-                                            [groupId]: checked
-                                              ? [...current, String(mod.id)]
-                                              : current.filter((id) => id !== String(mod.id)),
-                                          },
-                                        }));
-                                      }}
-                                    />
-                                    <Label htmlFor={`${item.id}-${mod.id}`} className="flex-1 cursor-pointer text-sm">
-                                      {mod.name}
-                                    </Label>
-                                    <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                                  [groupId]: checked
+                                    ? [...current, String(mod.id)]
+                                    : current.filter((id) => id !== String(mod.id)),
+                                }));
+                              }}
+                            />
+                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                              {mod.name}
+                            </Label>
+                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
 
           <div className="grid grid-cols-2 gap-3 pt-2">
-            <Button
-              variant="outline"
-              className="h-12"
-              onClick={() => {
-                setCheckoutExtraSelections({});
-                setIsCheckoutExtrasOpen(false);
-                openCheckoutFromItems(cart);
-              }}
-            >
-              No
+            <Button variant="outline" className="h-12" onClick={handleAddPendingProductWithoutExtras}>
+              Sin extras
             </Button>
-            <Button className="h-12" onClick={continueCheckoutWithExtras}>
-              Sí
+            <Button className="h-12" onClick={handleAddPendingProductWithExtras}>
+              Agregar
             </Button>
           </div>
         </DialogContent>
