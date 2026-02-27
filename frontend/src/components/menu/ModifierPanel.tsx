@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
 import { ModifierGroup, Product, deleteModifierGroup, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
@@ -30,18 +32,40 @@ export const ModifierPanel = ({
   const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [groupToDelete, setGroupToDelete] = useState<ModifierGroup | null>(null);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [assignedGroupVisibility, setAssignedGroupVisibility] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (selectedProduct) {
       setAssignedGroups(selectedProduct.modifierGroups ?? []);
+      const visibility = (selectedProduct.modifierGroupLinks ?? []).reduce<Record<number, boolean>>((acc, link) => {
+        acc[link.groupId] = Boolean(link.showInPos);
+        return acc;
+      }, {});
+      setAssignedGroupVisibility(visibility);
     }
   }, [selectedProduct]);
+
+  const defaultShowInPos = (groupId: number) => {
+    const group = modifierGroups.find((candidate) => candidate.id === groupId);
+    if (!group) return false;
+    return group.modifiers.some((modifier) => modifier.price > 0);
+  };
 
   const handleAssignGroups = async () => {
     if (!selectedProduct) return;
     const nextGroupIds = [...new Set([...assignedGroups, ...selectedForAssign])];
+    const links = nextGroupIds.map((groupId) => ({
+      groupId,
+      showInPos: assignedGroupVisibility[groupId] ?? defaultShowInPos(groupId),
+    }));
     try {
-      await updateProductModifierGroups(selectedProduct.id, nextGroupIds);
+      await updateProductModifierGroups(selectedProduct.id, nextGroupIds, links);
+      setAssignedGroupVisibility((prev) => {
+        const next = { ...prev };
+        for (const link of links) next[link.groupId] = link.showInPos;
+        return next;
+      });
       await onModifierGroupsUpdated(selectedProduct.id);
       setShowAssignDialog(false);
       setSelectedForAssign([]);
@@ -54,12 +78,38 @@ export const ModifierPanel = ({
   const handleRemoveGroup = async (groupId: number) => {
     if (!selectedProduct) return;
     const nextGroupIds = assignedGroups.filter((id) => id !== groupId);
+    const links = nextGroupIds.map((id) => ({
+      groupId: id,
+      showInPos: assignedGroupVisibility[id] ?? defaultShowInPos(id),
+    }));
     try {
-      await updateProductModifierGroups(selectedProduct.id, nextGroupIds);
+      await updateProductModifierGroups(selectedProduct.id, nextGroupIds, links);
+      setAssignedGroupVisibility((prev) => {
+        const next = { ...prev };
+        delete next[groupId];
+        return next;
+      });
       await onModifierGroupsUpdated(selectedProduct.id);
       toast.success("Grupo removido correctamente");
     } catch (error) {
       toast.error("No se pudo remover el grupo");
+    }
+  };
+
+  const handleToggleShowInPos = async (groupId: number, showInPos: boolean) => {
+    if (!selectedProduct) return;
+    const previous = assignedGroupVisibility[groupId] ?? defaultShowInPos(groupId);
+    setAssignedGroupVisibility((prev) => ({ ...prev, [groupId]: showInPos }));
+    const links = assignedGroups.map((id) => ({
+      groupId: id,
+      showInPos: id === groupId ? showInPos : (assignedGroupVisibility[id] ?? defaultShowInPos(id)),
+    }));
+    try {
+      await updateProductModifierGroups(selectedProduct.id, assignedGroups, links);
+      await onModifierGroupsUpdated(selectedProduct.id);
+    } catch {
+      setAssignedGroupVisibility((prev) => ({ ...prev, [groupId]: previous }));
+      toast.error("No se pudo actualizar visibilidad POS del grupo");
     }
   };
 
@@ -103,6 +153,10 @@ export const ModifierPanel = ({
 
   const orderedAssignedGroups = [...assignedGroupObjects].sort(
     (a, b) => assignedGroups.indexOf(a.id) - assignedGroups.indexOf(b.id)
+  );
+
+  const filteredModifierGroups = modifierGroups.filter((group) =>
+    group.name.toLowerCase().includes(groupSearch.toLowerCase())
   );
 
   const handleDropGroup = async (targetGroupId: number) => {
@@ -197,6 +251,14 @@ export const ModifierPanel = ({
                       {group.required && " · Obligatorio"}
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor={`show-pos-${group.id}`} className="text-xs text-muted-foreground">POS</Label>
+                    <Switch
+                      id={`show-pos-${group.id}`}
+                      checked={assignedGroupVisibility[group.id] ?? defaultShowInPos(group.id)}
+                      onCheckedChange={(checked) => handleToggleShowInPos(group.id, checked)}
+                    />
+                  </div>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -226,6 +288,13 @@ export const ModifierPanel = ({
           </Button>
         </div>
 
+        <Input
+          placeholder="Buscar grupo…"
+          value={groupSearch}
+          onChange={(event) => setGroupSearch(event.target.value)}
+          className="mb-4"
+        />
+
         <div className="border rounded-lg overflow-hidden">
           <Table>
             <TableHeader>
@@ -237,7 +306,7 @@ export const ModifierPanel = ({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {modifierGroups.map((group) => (
+              {filteredModifierGroups.map((group) => (
                 <TableRow key={group.id}>
                   <TableCell>
                     <div>

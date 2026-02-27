@@ -46,6 +46,8 @@ export type Product = {
   disposableApplyTo?: string[];
   requiresKitchen: boolean;
   modifierGroups: number[];
+  modifierGroupsPos?: number[];
+  modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
 };
 
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
@@ -473,6 +475,8 @@ export const getProducts = async (options?: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>>(response);
   return data.map((item) => {
     const normalizedImageUrl = normalizeImageUrl(item);
@@ -495,6 +499,11 @@ export const getProducts = async (options?: {
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
+      modifierGroupsPos: item.modifier_groups_pos ?? [],
+      modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
+        groupId: link.group_id,
+        showInPos: Boolean(link.show_in_pos),
+      })),
     };
   });
 };
@@ -548,6 +557,8 @@ export const createProduct = async (payload: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
@@ -566,6 +577,11 @@ export const createProduct = async (payload: {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 
@@ -619,6 +635,8 @@ export const updateProduct = async (
     available: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
@@ -635,6 +653,11 @@ export const updateProduct = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 
@@ -651,12 +674,18 @@ export const deleteProduct = async (productId: number): Promise<{ detail?: strin
 export const updateProductModifierGroups = async (
   productId: number,
   modifierGroupIds: number[],
+  modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>,
 ): Promise<Product> => {
-  const formData = new FormData();
-  modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
   const response = await request(`/menu/products/${productId}/`, {
     method: "PATCH",
-    body: formData,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      modifier_group_ids: modifierGroupIds,
+      modifier_group_links: (modifierGroupLinks ?? []).map((link) => ({
+        group_id: link.groupId,
+        show_in_pos: link.showInPos,
+      })),
+    }),
   });
   const data = await handleJson<{
     id: number;
@@ -675,6 +704,8 @@ export const updateProductModifierGroups = async (
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
@@ -693,6 +724,11 @@ export const updateProductModifierGroups = async (
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 

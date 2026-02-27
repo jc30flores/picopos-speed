@@ -116,6 +116,41 @@ class AdminMenuOpsTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_modifier_group_name_is_normalized_to_uppercase(self):
+        response = self.client.post(
+            "/api/menu/modifier-groups/",
+            {
+                "name": "  salsas   premium ",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [{"name": "  salsa verde ", "price": "0.00", "is_active": True}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["name"], "SALSAS PREMIUM")
+        self.assertEqual(response.data["modifiers"][0]["name"], "SALSA VERDE")
+
+    def test_modifier_group_duplicate_case_insensitive_returns_400(self):
+        ModifierGroup.objects.create(name="SALSAS", required=False)
+
+        response = self.client.post(
+            "/api/menu/modifier-groups/",
+            {
+                "name": "  salsas ",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [{"name": "ROJA", "price": "0.00", "is_active": True}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Ya existe un grupo de modificadores con ese nombre.", str(response.data))
+
     def test_delete_modifier_group_assigned_to_product_unassigns_and_deletes(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
         group = ModifierGroup.objects.create(name="Extras", required=False)

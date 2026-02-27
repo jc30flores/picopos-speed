@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from "react";
+import { Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface KioskImageProps {
@@ -82,9 +83,9 @@ export const KioskImage = memo(
               onPreview();
             }}
             className="absolute right-3 top-3 z-30 rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white shadow-lg transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            aria-label={`Ampliar imagen de ${alt}`}
+            aria-label="Vista previa"
           >
-            Ampliar
+            <Eye className="h-4 w-4" />
           </button>
         )}
       </div>

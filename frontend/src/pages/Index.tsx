@@ -135,17 +135,17 @@ const POS = () => {
     return matchesCategory && matchesSearch && product.available;
   });
 
-  const getPaidModifierGroups = (product: Product | null) => {
-    if (!product?.modifierGroups?.length) return [] as ModifierGroup[];
-    return product.modifierGroups
+  const getPosModifierGroups = (product: Product | null) => {
+    const visibleGroupIds = product?.modifierGroupsPos ?? product?.modifierGroups ?? [];
+    if (!visibleGroupIds.length) return [] as ModifierGroup[];
+    return visibleGroupIds
       .map((groupId) => modifierGroups.find((group) => group.id === groupId))
-      .filter((group): group is ModifierGroup => Boolean(group))
-      .filter((group) => group.modifiers.some((modifier) => modifier.price > 0));
+      .filter((group): group is ModifierGroup => Boolean(group));
   };
 
   const handleProductClick = (product: Product) => {
-    const paidGroups = getPaidModifierGroups(product);
-    if (!paidGroups.length) {
+    const visibleGroups = getPosModifierGroups(product);
+    if (!visibleGroups.length) {
       addToCart(product, []);
       return;
     }
@@ -287,7 +287,7 @@ const POS = () => {
   const handleAddPendingProductWithExtras = () => {
     if (!pendingProduct) return;
     const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
-    getPaidModifierGroups(pendingProduct).forEach((group) => {
+    getPosModifierGroups(pendingProduct).forEach((group) => {
       const groupId = String(group.id);
       (selectedModifiers[groupId] ?? []).forEach((modId) => {
         const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
@@ -815,7 +815,7 @@ const POS = () => {
           </DialogHeader>
 
           <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-            {getPaidModifierGroups(pendingProduct).map((group) => {
+            {getPosModifierGroups(pendingProduct).map((group) => {
               const groupId = String(group.id);
               const selectedValues = selectedModifiers[groupId] ?? [];
               return (

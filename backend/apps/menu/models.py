@@ -10,6 +10,11 @@ def normalize_category_name(name: str | None) -> str:
     return (name or "").strip().upper()
 
 
+def normalize_modifier_label(name: str | None) -> str:
+    collapsed = re.sub(r"\s+", " ", (name or "").strip())
+    return collapsed.upper()
+
+
 def product_image_upload_to(instance: "Product", filename: str) -> str:
     extension = os.path.splitext(filename)[1].lower().lstrip(".")
     category_name = normalize_category_name(
@@ -56,6 +61,11 @@ class ModifierGroup(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def save(self, *args, **kwargs) -> None:
+        if self.name:
+            self.name = normalize_modifier_label(self.name)
+        super().save(*args, **kwargs)
+
 
 class Modifier(models.Model):
     group = models.ForeignKey(ModifierGroup, on_delete=models.CASCADE, related_name="modifiers")
@@ -73,6 +83,21 @@ class Modifier(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def save(self, *args, **kwargs) -> None:
+        if self.name:
+            self.name = normalize_modifier_label(self.name)
+        super().save(*args, **kwargs)
+
+
+class ProductModifierGroup(models.Model):
+    product = models.ForeignKey("Product", on_delete=models.CASCADE)
+    modifier_group = models.ForeignKey(ModifierGroup, on_delete=models.CASCADE, db_column="modifiergroup_id")
+    show_in_pos = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "menu_product_modifier_groups"
+        unique_together = (("product", "modifier_group"),)
+
 
 class Product(models.Model):
     name = models.CharField(max_length=160)
@@ -86,7 +111,13 @@ class Product(models.Model):
     disposable_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
-    modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
+    modifier_groups = models.ManyToManyField(
+        ModifierGroup,
+        blank=True,
+        related_name="products",
+        through="ProductModifierGroup",
+        through_fields=("product", "modifier_group"),
+    )
     modifier_group_order = models.JSONField(default=list, blank=True)
 
     class Meta:

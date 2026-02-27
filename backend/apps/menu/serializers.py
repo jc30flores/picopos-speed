@@ -5,11 +5,13 @@ import json
 from apps.menu.models import (
     Category,
     Product,
+    ProductModifierGroup,
     ModifierGroup,
     Modifier,
     Discount,
     DiscountRuleTarget,
     normalize_category_name,
+    normalize_modifier_label,
 )
 from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 
@@ -43,6 +45,17 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
         model = ModifierGroup
         fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
 
+    def validate_name(self, value: str) -> str:
+        normalized = normalize_modifier_label(value)
+        if not normalized:
+            raise serializers.ValidationError("El nombre del grupo es obligatorio.")
+        query = ModifierGroup.objects.filter(name__iexact=normalized)
+        if self.instance:
+            query = query.exclude(id=self.instance.id)
+        if query.exists():
+            raise serializers.ValidationError("Ya existe un grupo de modificadores con ese nombre.")
+        return normalized
+
     def _coerce_modifier_id(self, value):
         if value in (None, "", 0, "0"):
             return None
@@ -54,12 +67,12 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
     def _validate_modifier_payload(self, group: ModifierGroup, modifiers_data: list[dict]):
         normalized_names: set[str] = set()
         for item in modifiers_data:
-            name = (item.get("name") or "").strip()
+            name = normalize_modifier_label(item.get("name"))
             if not name:
                 raise serializers.ValidationError({"modifiers": "Todas las opciones deben tener nombre."})
             lower = name.lower()
             if lower in normalized_names:
-                raise serializers.ValidationError({"modifiers": f"La opción '{name}' está duplicada en el grupo."})
+                raise serializers.ValidationError({"modifiers": "Ya existe una opción con ese nombre en este grupo."})
             normalized_names.add(lower)
 
     def _sync_modifiers(self, group: ModifierGroup, modifiers_data: list[dict]):
@@ -69,7 +82,7 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
 
         for index, modifier_data in enumerate(modifiers_data):
             modifier_id = self._coerce_modifier_id(modifier_data.get("id"))
-            option_name = (modifier_data.get("name") or "").strip()
+            option_name = normalize_modifier_label(modifier_data.get("name"))
             payload = {
                 "name": option_name,
                 "price": modifier_data.get("price", 0),
@@ -83,7 +96,7 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({"modifiers": f"La opción con id {modifier_id} no pertenece a este grupo."})
                 conflict_qs = group.modifiers.filter(name__iexact=option_name).exclude(id=modifier_id)
                 if conflict_qs.exists():
-                    raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
+                    raise serializers.ValidationError({"modifiers": "Ya existe una opción con ese nombre en este grupo."})
                 for key, value in payload.items():
                     setattr(modifier, key, value)
                 modifier.save(update_fields=["name", "price", "is_active", "sort_order"])
@@ -93,10 +106,7 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
             if group.modifiers.filter(name__iexact=option_name).exists():
                 raise serializers.ValidationError(
                     {
-                        "modifiers": (
-                            f"La opción '{option_name}' ya existe en este grupo. "
-                            "Incluye el campo 'id' para actualizar opciones existentes."
-                        )
+                        "modifiers": "Ya existe una opción con ese nombre en este grupo."
                     }
                 )
             created = Modifier.objects.create(group=group, **payload)
@@ -170,6 +180,8 @@ class ProductSerializer(serializers.ModelSerializer):
     )
     category_id_display = serializers.IntegerField(source="category.id", read_only=True)
     modifier_groups = serializers.SerializerMethodField()
+    modifier_groups_pos = serializers.SerializerMethodField()
+    modifier_group_links = serializers.SerializerMethodField()
     modifier_group_ids = serializers.PrimaryKeyRelatedField(
         many=True,
         source="modifier_groups",
@@ -200,6 +212,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "disposable_apply_to",
             "requires_kitchen",
             "modifier_groups",
+            "modifier_groups_pos",
+            "modifier_group_links",
             "modifier_group_ids",
         ]
 
@@ -208,6 +222,66 @@ class ProductSerializer(serializers.ModelSerializer):
         ordered = [group_id for group_id in obj.modifier_group_order if group_id in ids]
         remaining = [group_id for group_id in ids if group_id not in ordered]
         return ordered + remaining
+
+    def get_modifier_groups_pos(self, obj: Product):
+        ids = list(
+            ProductModifierGroup.objects.filter(product=obj, show_in_pos=True).values_list("modifier_group_id", flat=True)
+        )
+        ordered = [group_id for group_id in obj.modifier_group_order if group_id in ids]
+        remaining = [group_id for group_id in ids if group_id not in ordered]
+        return ordered + remaining
+
+    def get_modifier_group_links(self, obj: Product):
+        assignments = ProductModifierGroup.objects.filter(product=obj)
+        by_group_id = {assignment.modifier_group_id: assignment for assignment in assignments}
+        ordered_ids = self.get_modifier_groups(obj)
+        return [
+            {
+                "group_id": group_id,
+                "show_in_pos": bool(by_group_id.get(group_id).show_in_pos) if by_group_id.get(group_id) else False,
+            }
+            for group_id in ordered_ids
+        ]
+
+    def _default_show_in_pos(self, group: ModifierGroup) -> bool:
+        return group.modifiers.filter(price__gt=0).exists()
+
+    def _sync_product_modifier_groups(self, instance: Product, modifier_groups):
+        desired_ids = [group.id for group in (modifier_groups or [])]
+        existing = {link.modifier_group_id: link for link in ProductModifierGroup.objects.filter(product=instance)}
+        for group in modifier_groups or []:
+            link = existing.get(group.id)
+            if link is None:
+                ProductModifierGroup.objects.create(
+                    product=instance,
+                    modifier_group=group,
+                    show_in_pos=self._default_show_in_pos(group),
+                )
+        stale_ids = set(existing.keys()) - set(desired_ids)
+        if stale_ids:
+            ProductModifierGroup.objects.filter(product=instance, modifier_group_id__in=stale_ids).delete()
+
+    def _update_show_in_pos_links(self, instance: Product):
+        request = self.context.get("request")
+        if not request:
+            return
+        raw_links = request.data.get("modifier_group_links")
+        if not raw_links:
+            return
+        try:
+            parsed_links = json.loads(raw_links) if isinstance(raw_links, str) else raw_links
+        except Exception:
+            return
+        if not isinstance(parsed_links, list):
+            return
+        for item in parsed_links:
+            if not isinstance(item, dict):
+                continue
+            group_id = item.get("group_id")
+            show = item.get("show_in_pos")
+            if not isinstance(group_id, int):
+                continue
+            ProductModifierGroup.objects.filter(product=instance, modifier_group_id=group_id).update(show_in_pos=bool(show))
 
     def get_image_url(self, obj: Product) -> str | None:
         url = None
@@ -237,8 +311,10 @@ class ProductSerializer(serializers.ModelSerializer):
         old_image = instance.image
         instance = super().update(instance, validated_data)
         if modifier_groups is not None:
+            self._sync_product_modifier_groups(instance, modifier_groups)
             instance.modifier_group_order = [group.id for group in modifier_groups]
             instance.save(update_fields=["modifier_group_order"])
+        self._update_show_in_pos_links(instance)
 
         if image_file:
             saved = save_menu_image(image_file, instance.category.name)
@@ -262,8 +338,10 @@ class ProductSerializer(serializers.ModelSerializer):
         validated_data.pop("image", None)
         product = super().create(validated_data)
         if modifier_groups is not None:
+            self._sync_product_modifier_groups(product, modifier_groups)
             product.modifier_group_order = [group.id for group in modifier_groups]
             product.save(update_fields=["modifier_group_order"])
+        self._update_show_in_pos_links(product)
         if image_file:
             saved = save_menu_image(image_file, product.category.name)
             product.image = saved["image"]
