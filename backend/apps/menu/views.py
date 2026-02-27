@@ -222,7 +222,7 @@ class ModifierGroupListCreateView(generics.ListCreateAPIView):
 
 
 
-class ModifierGroupDetailView(generics.RetrieveUpdateAPIView):
+class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ModifierGroupSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     queryset = ModifierGroup.objects.prefetch_related("modifiers")
@@ -231,6 +231,13 @@ class ModifierGroupDetailView(generics.RetrieveUpdateAPIView):
         if self.request.method in SAFE_METHODS:
             return [IsAuthenticatedAndActive()]
         return [IsAdminOrManager()]
+
+    def destroy(self, request, *args, **kwargs):
+        group = self.get_object()
+        if group.products.exists():
+            return Response({"detail": "No se puede eliminar el grupo porque está asignado a productos."}, status=status.HTTP_409_CONFLICT)
+        group.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):

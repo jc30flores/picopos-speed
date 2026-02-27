@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
-import { ModifierGroup, Product, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
+import { ModifierGroup, Product, deleteModifierGroup, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
 
 interface ModifierPanelProps {
@@ -29,6 +29,7 @@ export const ModifierPanel = ({
   const [selectedForAssign, setSelectedForAssign] = useState<number[]>([]);
   const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<ModifierGroup | null>(null);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -72,6 +73,18 @@ export const ModifierPanel = ({
   const handleEditGroup = (group: ModifierGroup) => {
     setEditingGroup(group);
     setShowGroupFormDialog(true);
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!groupToDelete) return;
+    try {
+      await deleteModifierGroup(groupToDelete.id);
+      await onModifierGroupsUpdated(selectedProduct?.id);
+      toast.success("Grupo eliminado correctamente");
+      setGroupToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el grupo");
+    }
   };
 
   if (!selectedProduct) {
@@ -253,7 +266,7 @@ export const ModifierPanel = ({
                       >
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm">
+                      <Button variant="ghost" size="sm" onClick={() => setGroupToDelete(group)}>
                         <Trash2 className="h-4 w-4 text-danger" />
                       </Button>
                     </div>
@@ -318,6 +331,23 @@ export const ModifierPanel = ({
             >
               Confirmar
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+
+
+      <Dialog open={Boolean(groupToDelete)} onOpenChange={(open) => !open && setGroupToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar grupo</DialogTitle>
+            <DialogDescription>
+              ¿Seguro que deseas eliminar el grupo {groupToDelete?.name}? Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setGroupToDelete(null)}>Cancelar</Button>
+            <Button variant="destructive" className="flex-1" onClick={handleDeleteGroup}>Eliminar</Button>
           </div>
         </DialogContent>
       </Dialog>

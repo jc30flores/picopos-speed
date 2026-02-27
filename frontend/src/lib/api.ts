@@ -926,6 +926,15 @@ export const uploadModifierOptionImage = async (optionId: number, image: File): 
   }).then(handleJson);
 };
 
+
+export const deleteModifierGroup = async (groupId: number): Promise<void> => {
+  const response = await request(`/menu/modifier-groups/${groupId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const data = await response.json().catch(() => ({ detail: "No se pudo eliminar el grupo" }));
+    throw new Error(data.detail || "No se pudo eliminar el grupo");
+  }
+};
+
 export const getDiscounts = async (): Promise<Discount[]> => {
   const response = await request("/menu/discounts/");
   const data = await handleJson<Array<{

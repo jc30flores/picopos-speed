@@ -95,6 +95,8 @@ export const ModifierGroupFormDialog = ({
   };
 
   const removeOption = (id: string) => {
+    const confirmed = window.confirm("¿Eliminar esta opción del grupo?");
+    if (!confirmed) return;
     setOptions(options.filter((opt) => opt.id !== id));
   };
 

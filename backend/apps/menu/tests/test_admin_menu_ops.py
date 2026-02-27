@@ -49,3 +49,68 @@ class AdminMenuOpsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         m1.refresh_from_db(); m2.refresh_from_db()
         self.assertEqual((m2.sort_order, m1.sort_order), (0, 1))
+
+    def test_update_modifier_group_updates_existing_without_duplicates(self):
+        group = ModifierGroup.objects.create(name="Arroz", required=False)
+        m1 = Modifier.objects.create(group=group, name="Casero", price=Decimal("0.00"), sort_order=0)
+        m2 = Modifier.objects.create(group=group, name="Integral", price=Decimal("0.50"), sort_order=1)
+
+        response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {
+                "name": "Arroz",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [
+                    {"id": m1.id, "name": "Casero", "price": "0.00", "is_active": True},
+                    {"id": m2.id, "name": "Integral Premium", "price": "0.75", "is_active": True},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(Modifier.objects.filter(group=group).count(), 2)
+        self.assertTrue(Modifier.objects.filter(group=group, name="Integral Premium").exists())
+
+    def test_update_modifier_group_removes_missing_options(self):
+        group = ModifierGroup.objects.create(name="Frijoles", required=False)
+        keep = Modifier.objects.create(group=group, name="Negros", price=Decimal("0.00"), sort_order=0)
+        Modifier.objects.create(group=group, name="Rojos", price=Decimal("0.00"), sort_order=1)
+
+        response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {
+                "name": "Frijoles",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [
+                    {"id": keep.id, "name": "Negros", "price": "0.00", "is_active": True},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(list(Modifier.objects.filter(group=group).values_list("name", flat=True)), ["Negros"])
+
+    def test_update_modifier_group_duplicate_name_returns_400(self):
+        group = ModifierGroup.objects.create(name="Salsas", required=False)
+        m1 = Modifier.objects.create(group=group, name="Verde", price=Decimal("0.00"), sort_order=0)
+        m2 = Modifier.objects.create(group=group, name="Roja", price=Decimal("0.00"), sort_order=1)
+
+        response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {
+                "name": "Salsas",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 2,
+                "modifiers": [
+                    {"id": m1.id, "name": "Verde", "price": "0.00", "is_active": True},
+                    {"id": m2.id, "name": "Verde", "price": "0.00", "is_active": True},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
