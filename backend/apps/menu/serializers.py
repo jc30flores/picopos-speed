@@ -1,5 +1,7 @@
 from rest_framework import serializers
+from django.db import transaction
 from django.conf import settings
+import json
 from apps.menu.models import (
     Category,
     Product,
@@ -25,24 +27,130 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class ModifierSerializer(serializers.ModelSerializer):
+    image_path = serializers.CharField(read_only=True)
+
     class Meta:
         model = Modifier
-        fields = ["id", "name", "price", "is_active"]
+        fields = ["id", "name", "price", "is_active", "sort_order", "image", "image_path"]
 
 
 class ModifierGroupSerializer(serializers.ModelSerializer):
     modifiers = ModifierSerializer(many=True)
+    image_path = serializers.CharField(read_only=True)
 
     class Meta:
         model = ModifierGroup
-        fields = ["id", "name", "required", "min_selection", "max_selection", "modifiers"]
+        fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
+
+    def _coerce_modifier_id(self, value):
+        if value in (None, "", 0, "0"):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({"modifiers": "ID de opción inválido."})
+
+    def _validate_modifier_payload(self, group: ModifierGroup, modifiers_data: list[dict]):
+        normalized_names: set[str] = set()
+        for item in modifiers_data:
+            name = (item.get("name") or "").strip()
+            if not name:
+                raise serializers.ValidationError({"modifiers": "Todas las opciones deben tener nombre."})
+            lower = name.lower()
+            if lower in normalized_names:
+                raise serializers.ValidationError({"modifiers": f"La opción '{name}' está duplicada en el grupo."})
+            normalized_names.add(lower)
+
+    def _sync_modifiers(self, group: ModifierGroup, modifiers_data: list[dict]):
+        self._validate_modifier_payload(group, modifiers_data)
+        existing = {modifier.id: modifier for modifier in group.modifiers.all()}
+        seen_ids: set[int] = set()
+
+        for index, modifier_data in enumerate(modifiers_data):
+            modifier_id = self._coerce_modifier_id(modifier_data.get("id"))
+            option_name = (modifier_data.get("name") or "").strip()
+            payload = {
+                "name": option_name,
+                "price": modifier_data.get("price", 0),
+                "is_active": modifier_data.get("is_active", True),
+                "sort_order": index,
+            }
+
+            if modifier_id is not None:
+                modifier = existing.get(modifier_id)
+                if not modifier:
+                    raise serializers.ValidationError({"modifiers": f"La opción con id {modifier_id} no pertenece a este grupo."})
+                conflict_qs = group.modifiers.filter(name__iexact=option_name).exclude(id=modifier_id)
+                if conflict_qs.exists():
+                    raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
+                for key, value in payload.items():
+                    setattr(modifier, key, value)
+                modifier.save(update_fields=["name", "price", "is_active", "sort_order"])
+                seen_ids.add(modifier_id)
+                continue
+
+            if group.modifiers.filter(name__iexact=option_name).exists():
+                raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
+            created = Modifier.objects.create(group=group, **payload)
+            seen_ids.add(created.id)
+
+        stale_ids = set(existing.keys()) - seen_ids
+        if stale_ids:
+            group.modifiers.filter(id__in=stale_ids).delete()
 
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
-        group = ModifierGroup.objects.create(**validated_data)
-        for modifier_data in modifiers_data:
-            Modifier.objects.create(group=group, **modifier_data)
-        return group
+        request = self.context.get("request")
+        group_image_file = request.FILES.get("group_image") if request else None
+
+        with transaction.atomic():
+            group = ModifierGroup.objects.create(**validated_data)
+            self._sync_modifiers(group, modifiers_data)
+
+            if group_image_file:
+                saved_group = save_menu_image(group_image_file, "MODIFIER_GROUPS")
+                group.image = saved_group["image"]
+                group.image_path = saved_group["image_path"]
+                group.save(update_fields=["image", "image_path"])
+
+            for index, modifier in enumerate(group.modifiers.order_by("sort_order", "id")):
+                option_image_file = request.FILES.get(f"option_image_{index}") if request else None
+                if option_image_file:
+                    saved_option = save_menu_image(option_image_file, "MODIFIERS")
+                    modifier.image = saved_option["image"]
+                    modifier.image_path = saved_option["image_path"]
+                    modifier.save(update_fields=["image", "image_path"])
+            return group
+
+    def update(self, instance, validated_data):
+        modifiers_data = validated_data.pop("modifiers", None)
+        request = self.context.get("request")
+        if modifiers_data is None and request is not None and "modifiers" in request.data:
+            raw_modifiers = request.data.get("modifiers")
+            if isinstance(raw_modifiers, str):
+                try:
+                    modifiers_data = json.loads(raw_modifiers)
+                except Exception:
+                    raise serializers.ValidationError({"modifiers": "Formato de opciones inválido."})
+            elif isinstance(raw_modifiers, list):
+                modifiers_data = raw_modifiers
+        group_image_file = request.FILES.get("image") if request else None
+
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+
+            if modifiers_data is not None:
+                self._sync_modifiers(instance, modifiers_data)
+
+            if group_image_file:
+                saved_group = save_menu_image(group_image_file, "MODIFIER_GROUPS")
+                instance.image = saved_group["image"]
+                instance.image_path = saved_group["image_path"]
+                instance.save(update_fields=["image", "image_path"])
+
+            return instance
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -53,9 +161,7 @@ class ProductSerializer(serializers.ModelSerializer):
         source="category", queryset=Category.objects.all(), write_only=True
     )
     category_id_display = serializers.IntegerField(source="category.id", read_only=True)
-    modifier_groups = serializers.PrimaryKeyRelatedField(
-        many=True, read_only=True
-    )
+    modifier_groups = serializers.SerializerMethodField()
     modifier_group_ids = serializers.PrimaryKeyRelatedField(
         many=True,
         source="modifier_groups",
@@ -81,9 +187,19 @@ class ProductSerializer(serializers.ModelSerializer):
             "image_path",
             "image_url",
             "available",
+            "is_archived",
+            "disposable_fee",
+            "disposable_apply_to",
+            "requires_kitchen",
             "modifier_groups",
             "modifier_group_ids",
         ]
+
+    def get_modifier_groups(self, obj: Product):
+        ids = list(obj.modifier_groups.values_list("id", flat=True))
+        ordered = [group_id for group_id in obj.modifier_group_order if group_id in ids]
+        remaining = [group_id for group_id in ids if group_id not in ordered]
+        return ordered + remaining
 
     def get_image_url(self, obj: Product) -> str | None:
         url = None
@@ -101,10 +217,20 @@ class ProductSerializer(serializers.ModelSerializer):
         return url
 
     def update(self, instance, validated_data):
+        disposable_apply_to = validated_data.get("disposable_apply_to")
+        if isinstance(disposable_apply_to, str):
+            try:
+                validated_data["disposable_apply_to"] = json.loads(disposable_apply_to)
+            except Exception:
+                validated_data["disposable_apply_to"] = []
+        modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
         old_image = instance.image
         instance = super().update(instance, validated_data)
+        if modifier_groups is not None:
+            instance.modifier_group_order = [group.id for group in modifier_groups]
+            instance.save(update_fields=["modifier_group_order"])
 
         if image_file:
             saved = save_menu_image(image_file, instance.category.name)
@@ -117,9 +243,19 @@ class ProductSerializer(serializers.ModelSerializer):
         return instance
 
     def create(self, validated_data):
+        disposable_apply_to = validated_data.get("disposable_apply_to")
+        if isinstance(disposable_apply_to, str):
+            try:
+                validated_data["disposable_apply_to"] = json.loads(disposable_apply_to)
+            except Exception:
+                validated_data["disposable_apply_to"] = []
+        modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
         product = super().create(validated_data)
+        if modifier_groups is not None:
+            product.modifier_group_order = [group.id for group in modifier_groups]
+            product.save(update_fields=["modifier_group_order"])
         if image_file:
             saved = save_menu_image(image_file, product.category.name)
             product.image = saved["image"]

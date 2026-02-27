@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
@@ -37,6 +38,9 @@ export const ProductFormDialog = ({
   const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
   const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
+  const [requiresKitchen, setRequiresKitchen] = useState(false);
+  const [disposableFee, setDisposableFee] = useState("0");
+  const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
 
   useEffect(() => {
     if (editingProduct) {
@@ -48,6 +52,9 @@ export const ProductFormDialog = ({
       setImageFile(null);
       setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
+      setRequiresKitchen(editingProduct.requiresKitchen);
+      setDisposableFee(String(editingProduct.disposableFee ?? 0));
+      setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
     } else {
       setName("");
       setDescription("");
@@ -57,6 +64,9 @@ export const ProductFormDialog = ({
       setImageFile(null);
       setExistingImageUrl(null);
       setAvailable(true);
+      setRequiresKitchen(false);
+      setDisposableFee("0");
+      setDisposableApplyTo([]);
     }
   }, [editingProduct, open]);
 
@@ -127,6 +137,9 @@ export const ProductFormDialog = ({
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
+        requiresKitchen,
+        disposableFee: Number(disposableFee || 0),
+        disposableApplyTo,
       });
     } else {
       await createProduct({
@@ -136,6 +149,9 @@ export const ProductFormDialog = ({
         categoryId: selectedCategoryId ?? 0,
         image: imageFile,
         available,
+        requiresKitchen,
+        disposableFee: Number(disposableFee || 0),
+        disposableApplyTo,
       });
     }
     await onSaved();
@@ -286,16 +302,58 @@ export const ProductFormDialog = ({
               </Popover>
             </div>
 
+            <ImageUploadField
+              id="product-image"
+              label="Imagen del producto"
+              file={imageFile}
+              previewUrl={localImageUrl ?? existingImageUrl}
+              onChange={setImageFile}
+            />
+
             <div>
-              <Label htmlFor="product-image">Imagen</Label>
+              <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
               <Input
-                id="product-image"
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+                id="disposable-fee"
+                type="number"
+                min="0"
+                step="0.01"
+                value={disposableFee}
+                onChange={(e) => setDisposableFee(e.target.value)}
                 className="mt-1"
               />
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <Label>Aplicar desechables en</Label>
+              {[
+                { key: "dine-in", label: "En local" },
+                { key: "takeout", label: "Para llevar" },
+                { key: "delivery", label: "Delivery" },
+              ].map((item) => (
+                <div key={item.key} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`disposable-${item.key}`}
+                    checked={disposableApplyTo.includes(item.key)}
+                    onCheckedChange={(checked) => {
+                      setDisposableApplyTo((prev) =>
+                        checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key)
+                      );
+                    }}
+                  />
+                  <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center space-x-2 pt-6">
+              <Checkbox
+                id="requires-kitchen"
+                checked={requiresKitchen}
+                onCheckedChange={(checked) => setRequiresKitchen(checked as boolean)}
+              />
+              <Label htmlFor="requires-kitchen" className="cursor-pointer">
+                Va a cocina
+              </Label>
             </div>
 
             <div className="flex items-center space-x-2 pt-6">

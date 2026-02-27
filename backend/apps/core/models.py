@@ -19,6 +19,7 @@ class Branch(models.Model):
 class TaxConfig(models.Model):
     name = models.CharField(max_length=80, default="IVA")
     rate = models.DecimalField(max_digits=5, decimal_places=4, default=0.13)
+    tax_included = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:

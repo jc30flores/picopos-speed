@@ -11,6 +11,9 @@ export type Modifier = {
   name: string;
   price: number;
   isActive?: boolean;
+  sortOrder?: number;
+  image?: string | null;
+  imagePath?: string | null;
 };
 
 export type ModifierGroup = {
@@ -19,6 +22,8 @@ export type ModifierGroup = {
   required: boolean;
   minSelection: number;
   maxSelection: number;
+  image?: string | null;
+  imagePath?: string | null;
   modifiers: Modifier[];
 };
 
@@ -36,6 +41,10 @@ export type Product = {
   imagePath?: string | null;
   imageUrl?: string | null;
   available: boolean;
+  isArchived?: boolean;
+  disposableFee?: number;
+  disposableApplyTo?: string[];
+  requiresKitchen: boolean;
   modifierGroups: number[];
 };
 
@@ -118,6 +127,7 @@ export type ServiceType = {
 
 export type TaxConfig = {
   rate: number;
+  taxIncluded: boolean;
 };
 
 export type FeatureFlag = {
@@ -169,6 +179,7 @@ export type Payment = {
   orderId: number;
   method: PaymentMethod;
   amount: number;
+  cashReceived?: number;
   tipAmount: number;
   reference?: string;
   receivedBy?: string | null;
@@ -412,6 +423,24 @@ export const createCategory = async (name: string): Promise<Category> => {
   };
 };
 
+export const updateCategory = async (categoryId: number, name: string): Promise<Category> => {
+  const response = await request(`/menu/categories/${categoryId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
+  return { id: data.id, name: data.name, isActive: data.is_active };
+};
+
+export const deleteCategory = async (categoryId: number): Promise<void> => {
+  const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const data = await response.json().catch(() => ({ detail: "No se pudo eliminar la categoría" }));
+    throw new Error(data.detail || "No se pudo eliminar la categoría");
+  }
+};
+
 export const getProducts = async (options?: {
   search?: string;
   categoryId?: number;
@@ -439,6 +468,10 @@ export const getProducts = async (options?: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>>(response);
   return data.map((item) => {
@@ -457,6 +490,10 @@ export const getProducts = async (options?: {
       imagePath: item.image_path ?? null,
       imageUrl: normalizedImageUrl,
       available: item.available,
+      isArchived: Boolean(item.is_archived),
+      disposableFee: Number(item.disposable_fee ?? 0),
+      disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
+      requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
     };
   });
@@ -469,6 +506,9 @@ export const createProduct = async (payload: {
   categoryId: number;
   image?: File | null;
   available: boolean;
+  requiresKitchen: boolean;
+  disposableFee?: number;
+  disposableApplyTo?: string[];
   modifierGroupIds?: number[];
 }): Promise<Product> => {
   const formData = new FormData();
@@ -477,6 +517,9 @@ export const createProduct = async (payload: {
   formData.append("price", payload.price.toString());
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
+  formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("disposable_fee", String(payload.disposableFee ?? 0));
+  formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -500,6 +543,10 @@ export const createProduct = async (payload: {
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -514,6 +561,10 @@ export const createProduct = async (payload: {
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -527,6 +578,10 @@ export const updateProduct = async (
     categoryId: number;
     image?: File | null;
     available: boolean;
+    is_archived?: boolean;
+    requiresKitchen: boolean;
+    disposableFee?: number;
+    disposableApplyTo?: string[];
     modifierGroupIds?: number[];
   }
 ): Promise<Product> => {
@@ -536,6 +591,9 @@ export const updateProduct = async (
   formData.append("price", payload.price.toString());
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
+  formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("disposable_fee", String(payload.disposableFee ?? 0));
+  formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -559,6 +617,7 @@ export const updateProduct = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -573,8 +632,20 @@ export const updateProduct = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
+};
+
+export const deleteProduct = async (productId: number): Promise<{ detail?: string }> => {
+  const response = await request(`/menu/products/${productId}/`, { method: "DELETE" });
+  if (response.status === 204) return {};
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "No se pudo eliminar el producto");
+  }
+  return data;
 };
 
 export const updateProductModifierGroups = async (
@@ -599,6 +670,10 @@ export const updateProductModifierGroups = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -613,8 +688,22 @@ export const updateProductModifierGroups = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
+};
+
+export const reorderProductModifierGroups = async (
+  productId: number,
+  orderedIds: number[],
+): Promise<void> => {
+  await request(`/menu/products/${productId}/modifier-groups/reorder/`, {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  }).then(handleJson);
 };
 
 export const updateProductAvailability = async (
@@ -639,6 +728,8 @@ export const updateProductAvailability = async (
     image_path?: string | null;
     image_url: string | null;
     available: boolean;
+    is_archived?: boolean;
+    requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
   return {
@@ -653,6 +744,8 @@ export const updateProductAvailability = async (
     imagePath: data.image_path ?? null,
     imageUrl: data.image_url ?? undefined,
     available: data.available,
+    isArchived: Boolean(data.is_archived),
+    requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -665,7 +758,9 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean }>;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null }>;
+    image?: string | null;
+    image_path?: string | null;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -673,13 +768,25 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: item.required,
     minSelection: item.min_selection,
     maxSelection: item.max_selection,
+    image: item.image ?? null,
+    imagePath: item.image_path ?? null,
     modifiers: item.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
       price: Number(modifier.price),
       isActive: modifier.is_active,
+      sortOrder: modifier.sort_order ?? 0,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
     })),
   }));
+};
+
+export const reorderModifierGroupOptions = async (groupId: number, orderedIds: number[]): Promise<void> => {
+  await request(`/menu/modifier-groups/${groupId}/options/reorder/`, {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  }).then(handleJson);
 };
 
 export const createModifierGroup = async (payload: {
@@ -687,10 +794,77 @@ export const createModifierGroup = async (payload: {
   required: boolean;
   minSelection: number;
   maxSelection: number;
-  modifiers: Array<{ name: string; price: number; isActive?: boolean }>;
+  image?: File | null;
+  modifiers: Array<{ name: string; price: number; isActive?: boolean; image?: File | null }>;
 }): Promise<ModifierGroup> => {
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  formData.append("required", payload.required ? "true" : "false");
+  formData.append("min_selection", String(payload.minSelection));
+  formData.append("max_selection", String(payload.maxSelection));
+  formData.append(
+    "modifiers",
+    JSON.stringify(
+      payload.modifiers.map((modifier) => ({
+        name: modifier.name,
+        price: modifier.price,
+        is_active: modifier.isActive ?? true,
+      }))
+    )
+  );
+  if (payload.image) formData.append("group_image", payload.image);
+  payload.modifiers.forEach((modifier, index) => {
+    if (modifier.image) {
+      formData.append(`option_image_${index}`, modifier.image);
+    }
+  });
+
   const response = await request("/menu/modifier-groups/", {
     method: "POST",
+    body: formData,
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    required: boolean;
+    min_selection: number;
+    max_selection: number;
+    image?: string | null;
+    image_path?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    required: data.required,
+    minSelection: data.min_selection,
+    maxSelection: data.max_selection,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    modifiers: data.modifiers.map((modifier) => ({
+      id: modifier.id,
+      name: modifier.name,
+      price: Number(modifier.price),
+      isActive: modifier.is_active,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
+    })),
+  };
+};
+
+
+export const updateModifierGroup = async (
+  groupId: number,
+  payload: {
+    name: string;
+    required: boolean;
+    minSelection: number;
+    maxSelection: number;
+    modifiers: Array<{ id?: number; name: string; price: number; isActive?: boolean }>;
+  }
+): Promise<ModifierGroup> => {
+  const response = await request(`/menu/modifier-groups/${groupId}/`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: payload.name,
@@ -698,6 +872,7 @@ export const createModifierGroup = async (payload: {
       min_selection: payload.minSelection,
       max_selection: payload.maxSelection,
       modifiers: payload.modifiers.map((modifier) => ({
+        ...(modifier.id ? { id: modifier.id } : {}),
         name: modifier.name,
         price: modifier.price,
         is_active: modifier.isActive ?? true,
@@ -710,7 +885,9 @@ export const createModifierGroup = async (payload: {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean }>;
+    image?: string | null;
+    image_path?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -718,13 +895,44 @@ export const createModifierGroup = async (payload: {
     required: data.required,
     minSelection: data.min_selection,
     maxSelection: data.max_selection,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
       price: Number(modifier.price),
       isActive: modifier.is_active,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
     })),
   };
+};
+
+export const uploadModifierGroupImage = async (groupId: number, image: File): Promise<void> => {
+  const formData = new FormData();
+  formData.append("image", image);
+  await request(`/menu/modifier-groups/${groupId}/`, {
+    method: "PATCH",
+    body: formData,
+  }).then(handleJson);
+};
+
+export const uploadModifierOptionImage = async (optionId: number, image: File): Promise<void> => {
+  const formData = new FormData();
+  formData.append("image", image);
+  await request(`/menu/modifier-options/${optionId}/`, {
+    method: "PATCH",
+    body: formData,
+  }).then(handleJson);
+};
+
+
+export const deleteModifierGroup = async (groupId: number): Promise<void> => {
+  const response = await request(`/menu/modifier-groups/${groupId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const data = await response.json().catch(() => ({ detail: "No se pudo eliminar el grupo" }));
+    throw new Error(data.detail || "No se pudo eliminar el grupo");
+  }
 };
 
 export const getDiscounts = async (): Promise<Discount[]> => {
@@ -779,8 +987,8 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
   if (cachedTaxConfig) return cachedTaxConfig;
   const response = await request("/core/tax-config/active/");
-  const data = await handleJson<{ rate: string }>(response);
-  cachedTaxConfig = { rate: Number(data.rate) };
+  const data = await handleJson<{ rate: string; tax_included?: boolean }>(response);
+  cachedTaxConfig = { rate: Number(data.rate), taxIncluded: data.tax_included !== false };
   return cachedTaxConfig;
 };
 
@@ -847,7 +1055,7 @@ export const createOrder = async (payload: {
     productName: string;
     price: number;
     quantity: number;
-    modifiers: Array<{ name: string; price: number }>;
+    modifiers: Array<{ id?: number; name: string; price: number }>;
   }>;
 }): Promise<Order> => {
   const response = await request("/orders/", {
@@ -858,12 +1066,14 @@ export const createOrder = async (payload: {
       customer_name: payload.customerName ?? "",
       source: payload.source,
       channel: payload.channel,
+      fast_pos_mode: payload.channel === "pos",
       items: payload.items.map((item) => ({
         product_id: item.productId,
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
         modifiers: item.modifiers.map((modifier) => ({
+          id: modifier.id,
           name: modifier.name,
           price: modifier.price,
         })),
@@ -1690,6 +1900,7 @@ export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
   amount: number;
+  cashReceived?: number;
   tipAmount?: number;
   reference?: string;
 }): Promise<Payment> => {
@@ -1702,6 +1913,7 @@ export const createPayment = async (payload: {
       order: payload.orderId,
       method: payload.method,
       amount: payload.amount,
+      cash_received: payload.cashReceived,
       tip_amount: payload.tipAmount ?? 0,
       reference: payload.reference ?? "",
     }),
@@ -1721,6 +1933,7 @@ export const createPayment = async (payload: {
     orderId: data.order,
     method: data.method,
     amount: Number(data.amount),
+    cashReceived: payload.cashReceived,
     tipAmount: Number(data.tip_amount),
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,

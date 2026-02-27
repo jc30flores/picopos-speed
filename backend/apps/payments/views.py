@@ -11,6 +11,7 @@ from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.payments.serializers import PaymentSerializer, RefundSerializer
 from apps.orders.serializers import OrderSerializer
+from apps.orders.services.checkout import create_order_and_invoice
 
 
 def _get_open_session(user):
@@ -58,9 +59,27 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 payment.order_id,
                 {"order_id": payment.order_id},
             )
-            if payment.order.status != "preparing":
-                payment.order.status = "preparing"
-                payment.order.save(update_fields=["status", "updated_at"])
+            if payment.order.requires_kitchen:
+                if payment.order.status != "preparing":
+                    payment.order.status = "preparing"
+                    payment.order.save(update_fields=["status", "updated_at"])
+                from apps.kitchen.models import KitchenOrderView
+                KitchenOrderView.objects.get_or_create(
+                    order=payment.order,
+                    defaults={"service_type": payment.order.service_type, "status": "preparing"},
+                )
+            else:
+                if payment.order.status != "delivered":
+                    payment.order.status = "delivered"
+                    payment.order.save(update_fields=["status", "updated_at"])
+            invoice_result = create_order_and_invoice(payment.order)
+            log_audit(
+                request,
+                "invoice.processed",
+                "OrderInvoice",
+                invoice_result.invoice_id,
+                {"order_id": payment.order_id, "status": invoice_result.hacienda_status},
+            )
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
@@ -73,7 +92,11 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 {"order_id": payment.order_id, "remaining": str(remaining)},
             )
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        data = dict(serializer.data)
+        if remaining <= 0 and hasattr(payment.order, "invoice"):
+            data["invoice_status"] = payment.order.invoice.status
+            data["invoice_id"] = payment.order.invoice.id
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class RefundListCreateView(generics.ListCreateAPIView):

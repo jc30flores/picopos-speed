@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, Plus, Edit, Settings } from "lucide-react";
+import { Search, Plus, Edit, Settings, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, Category, ModifierGroup, Product } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
 interface InlineStatusToggleProps {
@@ -64,6 +65,12 @@ export const ProductsTab = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
 
   const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -109,6 +116,58 @@ export const ProductsTab = () => {
     setSelectedProduct((prev) => (prev?.id === updated.id ? updated : prev));
   };
 
+  const handleDeleteProduct = async () => {
+    if (!productToDelete) return;
+    try {
+      const result = await deleteProduct(productToDelete.id);
+      await loadMenuData();
+      toast.success(result.detail || "Producto eliminado");
+      setProductToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el producto");
+    }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (!categoryToDelete) return;
+    try {
+      await deleteCategory(categoryToDelete.id);
+      await loadMenuData();
+      toast.success("Categoría eliminada");
+      setCategoryToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar la categoría");
+    }
+  };
+
+  const handleCreateCategory = async () => {
+    const normalized = newCategoryName.trim().toUpperCase();
+    if (!normalized) return;
+    try {
+      await createCategory(normalized);
+      setNewCategoryName("");
+      await loadMenuData();
+      toast.success("Categoría creada");
+    } catch (error) {
+      toast.error("No se pudo crear la categoría");
+    }
+  };
+
+  const handleUpdateCategory = async () => {
+    if (!editingCategoryId) return;
+    const normalized = editingCategoryName.trim().toUpperCase();
+    if (!normalized) return;
+    try {
+      await updateCategory(editingCategoryId, normalized);
+      setEditingCategoryId(null);
+      setEditingCategoryName("");
+      await loadMenuData();
+      toast.success("Categoría actualizada");
+    } catch {
+      toast.error("No se pudo actualizar la categoría");
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {/* Left: Products Table (60%) */}
@@ -116,14 +175,19 @@ export const ProductsTab = () => {
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">Productos del Menú</h2>
-            <Button
-              variant="default"
-              className="bg-secondary hover:bg-secondary/90"
-              onClick={handleNewProduct}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Nuevo Producto
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
+                Gestionar categorías
+              </Button>
+              <Button
+                variant="default"
+                className="bg-secondary hover:bg-secondary/90"
+                onClick={handleNewProduct}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Nuevo Producto
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -203,6 +267,14 @@ export const ProductsTab = () => {
                           <Settings className="h-4 w-4 mr-1" />
                           Modificadores
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProductToDelete(product)}
+                          title="Eliminar producto"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -230,6 +302,73 @@ export const ProductsTab = () => {
         categories={categories}
         onSaved={loadMenuData}
       />
+
+      <Dialog open={Boolean(productToDelete)} onOpenChange={(open) => !open && setProductToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar producto: {productToDelete?.name}</DialogTitle>
+            <DialogDescription>
+              Si el producto tiene ventas históricas, se archivará para preservar integridad.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProductToDelete(null)}>Cancelar</Button>
+            <Button variant="destructive" onClick={handleDeleteProduct}>Eliminar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => !open && setCategoryToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar categoría: {categoryToDelete?.name}</DialogTitle>
+            <DialogDescription>
+              Solo se puede eliminar si no tiene productos activos asociados.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCategoryToDelete(null)}>Cancelar</Button>
+            <Button variant="destructive" onClick={handleDeleteCategory}>Eliminar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCategoryManagerOpen} onOpenChange={setIsCategoryManagerOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Gestión de Categorías</DialogTitle>
+            <DialogDescription>Crear, editar y eliminar categorías desde un solo lugar.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
+              <Button onClick={handleCreateCategory}>Crear</Button>
+            </div>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {categories.map((category) => (
+                <div key={category.id} className="flex items-center gap-2 rounded-lg border p-2">
+                  {editingCategoryId === category.id ? (
+                    <>
+                      <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
+                      <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex-1 font-medium">{category.name}</div>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
+                        Editar
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setCategoryToDelete(category)}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

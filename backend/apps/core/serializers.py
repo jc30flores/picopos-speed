@@ -11,7 +11,7 @@ class ServiceTypeSerializer(serializers.ModelSerializer):
 class TaxConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaxConfig
-        fields = ["id", "name", "rate", "is_active"]
+        fields = ["id", "name", "rate", "tax_included", "is_active"]
 
 
 class FeatureFlagSerializer(serializers.ModelSerializer):

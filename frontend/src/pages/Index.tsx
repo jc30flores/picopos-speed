@@ -48,18 +48,39 @@ interface CartItem {
   id: string;
   productId: number;
   name: string;
+  basePrice: number;
   price: number;
   quantity: number;
-  modifiers: Array<{ name: string; price: number }>;
+  modifiers: Array<{ id?: number; name: string; price: number }>;
 }
+
+const getPaidExtrasLines = (item: CartItem) =>
+  (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
+    name: modifier.name,
+    price: modifier.price,
+  }));
+
+const getOrderDisposableTotal = (
+  items: CartItem[],
+  products: Product[],
+  serviceType: "dine-in" | "takeout" | "delivery"
+) =>
+  items.reduce((sum, item) => {
+    const product = products.find((candidate) => candidate.id === item.productId);
+    if (!product) return sum;
+    const applyTo = product.disposableApplyTo ?? [];
+    const fee = product.disposableFee ?? 0;
+    if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
+    return sum + fee * item.quantity;
+  }, 0);
 
 const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
-  const [showModifierDialog, setShowModifierDialog] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isExtrasOpen, setIsExtrasOpen] = useState(false);
+  const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -114,17 +135,48 @@ const POS = () => {
     return matchesCategory && matchesSearch && product.available;
   });
 
-  const handleProductClick = (product: Product) => {
-    if (product.modifierGroups && product.modifierGroups.length > 0) {
-      setSelectedProduct(product);
-      setSelectedModifiers({});
-      setShowModifierDialog(true);
-    } else {
-      addToCart(product, []);
-    }
+  const getPaidModifierGroups = (product: Product | null) => {
+    if (!product?.modifierGroups?.length) return [] as ModifierGroup[];
+    return product.modifierGroups
+      .map((groupId) => modifierGroups.find((group) => group.id === groupId))
+      .filter((group): group is ModifierGroup => Boolean(group))
+      .filter((group) => group.modifiers.some((modifier) => modifier.price > 0));
   };
 
-  const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
+  const handleProductClick = (product: Product) => {
+    const paidGroups = getPaidModifierGroups(product);
+    if (!paidGroups.length) {
+      addToCart(product, []);
+      return;
+    }
+    setPendingProduct(product);
+    setSelectedModifiers({});
+    setIsExtrasOpen(true);
+  };
+
+  const openCheckoutFromItems = (items: CartItem[]) => {
+    if (items.length === 0) return;
+    const draftItemsGross = calculateCartTotals(items, taxRate).total;
+    const draftDisposable = getOrderDisposableTotal(items, products, serviceType);
+    const draftTotal = draftItemsGross + draftDisposable;
+    const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
+    const draft = {
+      items: [...items],
+      subtotal: draftItemsGross,
+      tax: draftTaxIncluded,
+      total: draftTotal,
+      taxRate,
+      serviceType,
+      createdAt: Date.now(),
+    };
+    setCheckoutDraft(draft);
+    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    setTipAmount("0");
+    setPaymentReference("");
+    setIsPaymentOpen(true);
+  };
+
+  const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = product.price + modifierPrice;
 
@@ -134,24 +186,25 @@ const POS = () => {
         JSON.stringify(item.modifiers) === JSON.stringify(modifiers)
     );
 
+    let nextCart: CartItem[];
     if (existingItemIndex >= 0) {
-      const newCart = [...cart];
-      newCart[existingItemIndex].quantity += 1;
-      setCart(newCart);
+      nextCart = [...cart];
+      nextCart[existingItemIndex].quantity += 1;
     } else {
-      setCart([
+      nextCart = [
         ...cart,
         {
           id: `${product.id}-${Date.now()}`,
           productId: product.id,
           name: product.name,
+          basePrice: product.price,
           price: totalPrice,
           quantity: 1,
           modifiers,
         },
-      ]);
+      ];
     }
-    setShowModifierDialog(false);
+    setCart(nextCart);
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
@@ -168,7 +221,13 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
-  const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
+  const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+  const itemsGross = calculateCartTotals(
+    cart.map((item) => ({ ...item, price: item.price })),
+    taxRate
+  ).total;
+  const total = itemsGross + cartDisposableTotal;
+  const subtotal = itemsGross;
   const paymentTotal =
     checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
@@ -179,15 +238,22 @@ const POS = () => {
   const paidTotal = paymentAmountValue + tipAmountValue;
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
+  const checkoutDisposableTotal = checkoutDraft
+    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
+    : 0;
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    const draftTotals = calculateCartTotals(cart, taxRate);
+
+    const draftItemsGross = calculateCartTotals(cart, taxRate).total;
+    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const draftTotal = draftItemsGross + draftDisposableTotal;
+    const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...cart],
-      subtotal: draftTotals.subtotal,
-      tax: draftTotals.tax,
-      total: draftTotals.total,
+      subtotal: draftItemsGross,
+      tax: draftTaxIncluded,
+      total: draftTotal,
       taxRate,
       serviceType,
       createdAt: Date.now(),
@@ -210,32 +276,36 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const handleAddModifiers = () => {
-    const selectedMods: Array<{ name: string; price: number }> = [];
-    
-    selectedProduct.modifierGroups.forEach((groupId: string) => {
-      const group = modifierGroups.find((g) => g.id === groupId);
-      if (group && selectedModifiers[groupId]) {
-        selectedModifiers[groupId].forEach((modId) => {
-          const mod = group.modifiers.find((m) => String(m.id) === modId);
-          if (mod) selectedMods.push({ name: mod.name, price: mod.price });
-        });
-      }
-    });
-
-    addToCart(selectedProduct, selectedMods);
+  const handleAddPendingProductWithoutExtras = () => {
+    if (!pendingProduct) return;
+    addToCart(pendingProduct, []);
+    setIsExtrasOpen(false);
+    setPendingProduct(null);
+    setSelectedModifiers({});
   };
 
-  const canAddToCart = () => {
-    if (!selectedProduct?.modifierGroups) return true;
-    
-    return selectedProduct.modifierGroups.every((groupId: string) => {
-      const group = modifierGroups.find((g) => g.id === groupId);
-      if (!group) return true;
-      
-      const selectedCount = selectedModifiers[groupId]?.length || 0;
-      return selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
+  const handleAddPendingProductWithExtras = () => {
+    if (!pendingProduct) return;
+    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
+    getPaidModifierGroups(pendingProduct).forEach((group) => {
+      const groupId = String(group.id);
+      (selectedModifiers[groupId] ?? []).forEach((modId) => {
+        const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
+        if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
+      });
     });
+    addToCart(pendingProduct, selectedMods);
+    setIsExtrasOpen(false);
+    setPendingProduct(null);
+    setSelectedModifiers({});
+  };
+
+  const closeExtrasDialog = (open: boolean) => {
+    setIsExtrasOpen(open);
+    if (!open) {
+      setPendingProduct(null);
+      setSelectedModifiers({});
+    }
   };
 
   const handleSubmitPayment = async () => {
@@ -243,12 +313,11 @@ const POS = () => {
       toast.error("No hay productos en el pedido");
       return;
     }
-    const amountValue = toNumber(paymentAmount);
+    const amountReceived = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
-    const totalPayment = amountValue + tipValue;
     const remaining = toNumber(paymentTotal);
 
-    if (!amountValue || amountValue <= 0) {
+    if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
       return;
     }
@@ -256,8 +325,8 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (totalPayment > remaining) {
-      toast.error("El pago supera el saldo pendiente");
+    if (amountReceived < remaining) {
+      toast.error("El monto recibido debe cubrir el total de la orden");
       return;
     }
 
@@ -271,15 +340,16 @@ const POS = () => {
         } else {
           order = await createOrder({
             serviceType: checkoutDraft.serviceType,
+            source: "pos",
+            channel: "pos",
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
               productName: item.name,
-              price: item.price,
+              price: item.basePrice,
               quantity: item.quantity,
               modifiers: item.modifiers,
             })),
           });
-          console.info("createOrder response", order);
           const createdId =
             (order as Order | undefined)?.id ??
             (order as unknown as { order_id?: number }).order_id ??
@@ -302,7 +372,8 @@ const POS = () => {
       await createPayment({
         orderId,
         method: paymentMethod,
-        amount: amountValue,
+        amount: remaining,
+        cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
       });
@@ -312,7 +383,7 @@ const POS = () => {
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success("Pago registrado. Enviado a cocina.");
+        toast.success(refreshed.requiresKitchen ? "Pago y factura registrados. Enviado a cocina." : "Pago y factura registrados. Orden entregada.");
         setIsPaymentOpen(false);
         setCart([]);
         setCheckoutDraft(null);
@@ -514,13 +585,15 @@ const POS = () => {
             <div className="p-4 border-t space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span>Subtotal</span>
+                  <span>Subtotal (productos)</span>
                   <span>{formatMoney(subtotal)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
-                  <span>{formatMoney(tax)}</span>
-                </div>
+                {cartDisposableTotal > 0 && (
+                  <div className="flex justify-between">
+                    <span>Desechables</span>
+                    <span>{formatMoney(cartDisposableTotal)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
                   <span className="text-secondary">{formatMoney(total)}</span>
@@ -564,10 +637,6 @@ const POS = () => {
                 <div className="mt-2 text-3xl font-bold text-secondary">
                   {formatMoney(checkoutDraft.total)}
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Incluye impuesto {(checkoutDraft.taxRate * 100).toFixed(0)}% (
-                  {formatMoney(checkoutDraft.tax)})
-                </div>
               </div>
 
               <div className="space-y-2">
@@ -584,12 +653,22 @@ const POS = () => {
                 <div className="rounded-md border">
                   <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
                     {checkoutDraft.items.map((item) => (
-                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 p-2">
+                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                         <div className="min-w-0">
                           <div className="truncate font-medium">{item.name}</div>
                           <div className="text-xs text-muted-foreground">
                             {formatMoney(toNumber(item.price))} c/u
                           </div>
+                          {getPaidExtrasLines(item).length > 0 && (
+                            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                              {getPaidExtrasLines(item).map((extra, index) => (
+                                <div key={`${item.id}-${extra.name}-${index}`} className="flex justify-between gap-2 pl-3">
+                                  <span>+ {extra.name}</span>
+                                  <span>{formatMoney(extra.price)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
                         <div className="text-right font-semibold">
@@ -605,13 +684,15 @@ const POS = () => {
                 <div className="mb-2 font-semibold">Resumen</div>
                 <div className="space-y-1 text-muted-foreground">
                   <div className="flex justify-between">
-                    <span>Subtotal</span>
+                    <span>Subtotal (productos)</span>
                     <span>{formatMoney(checkoutDraft.subtotal)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
-                    <span>{formatMoney(checkoutDraft.tax)}</span>
-                  </div>
+                  {checkoutDisposableTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span>Desechables</span>
+                      <span>{formatMoney(checkoutDisposableTotal)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between font-semibold text-foreground">
                     <span>Total</span>
                     <span>{formatMoney(checkoutDraft.total)}</span>
@@ -643,9 +724,9 @@ const POS = () => {
                       min="0"
                       step="0.01"
                       value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
-                    />
-                  </div>
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                />
+              </div>
                   <div className="space-y-2">
                     <Label>Propina</Label>
                     <Input
@@ -724,89 +805,67 @@ const POS = () => {
         onReprint={handleReprint}
       />
 
-      {/* Modifier Dialog */}
-      <Dialog open={showModifierDialog} onOpenChange={setShowModifierDialog}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
+        <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
           <DialogHeader>
-            <DialogTitle>Personalizar {selectedProduct?.name}</DialogTitle>
+            <DialogTitle>Extras (opcional)</DialogTitle>
             <DialogDescription>
-              Selecciona tus opciones favoritas
+              {pendingProduct ? `Selecciona extras de pago para ${pendingProduct.name}.` : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6">
-            {selectedProduct?.modifierGroups?.map((groupId: number) => {
-              const group = modifierGroups.find((g) => g.id === groupId);
-              if (!group) return null;
-
-              const selectedCount = selectedModifiers[groupId]?.length || 0;
-              const isValid = selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
-
+          <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
+            {getPaidModifierGroups(pendingProduct).map((group) => {
+              const groupId = String(group.id);
+              const selectedValues = selectedModifiers[groupId] ?? [];
               return (
-                <div key={groupId} className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">
-                      {group.name}
-                      {group.required && <span className="text-danger ml-1">*</span>}
-                    </h3>
-                    <Badge variant={isValid ? "default" : "destructive"}>
-                      {selectedCount}/{group.maxSelection} seleccionados
-                    </Badge>
-                  </div>
-
+                <div key={group.id} className="rounded-xl border border-border/70 p-3">
+                  <Label className="mb-2 block text-sm font-semibold">{group.name}</Label>
                   {group.maxSelection === 1 ? (
                     <RadioGroup
-                      value={selectedModifiers[groupId]?.[0] || ""}
+                      value={selectedValues[0] || ""}
                       onValueChange={(value) =>
-                        setSelectedModifiers({ ...selectedModifiers, [groupId]: [value] })
+                        setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }))
                       }
                     >
-                      {group.modifiers.map((mod) => (
-                        <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
-                          <RadioGroupItem value={String(mod.id)} id={String(mod.id)} />
-                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
-                            {mod.name}
-                          </Label>
-                          {mod.price > 0 && (
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          )}
-                        </div>
-                      ))}
+                      {group.modifiers
+                        .filter((mod) => mod.price > 0)
+                        .map((mod) => (
+                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                            <RadioGroupItem id={`pending-${mod.id}`} value={String(mod.id)} />
+                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                              {mod.name}
+                            </Label>
+                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </div>
+                        ))}
                     </RadioGroup>
                   ) : (
-                    <div className="space-y-2">
-                      {group.modifiers.map((mod) => (
-                        <div key={mod.id} className="flex items-center space-x-2 p-2 rounded hover:bg-muted">
-                          <Checkbox
-                            id={String(mod.id)}
-                            checked={selectedModifiers[groupId]?.includes(String(mod.id)) || false}
-                            onCheckedChange={(checked) => {
-                              const current = selectedModifiers[groupId] || [];
-                              if (checked && current.length < group.maxSelection) {
-                                setSelectedModifiers({
-                                  ...selectedModifiers,
-                                  [groupId]: [...current, String(mod.id)],
-                                });
-                              } else if (!checked) {
-                                setSelectedModifiers({
-                                  ...selectedModifiers,
-                                  [groupId]: current.filter((id) => id !== String(mod.id)),
-                                });
-                              }
-                            }}
-                            disabled={
-                              !selectedModifiers[groupId]?.includes(String(mod.id)) &&
-                              (selectedModifiers[groupId]?.length || 0) >= group.maxSelection
-                            }
-                          />
-                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer">
-                            {mod.name}
-                          </Label>
-                          {mod.price > 0 && (
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          )}
-                        </div>
-                      ))}
+                    <div className="space-y-1">
+                      {group.modifiers
+                        .filter((mod) => mod.price > 0)
+                        .map((mod) => (
+                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                            <Checkbox
+                              id={`pending-${mod.id}`}
+                              checked={selectedValues.includes(String(mod.id))}
+                              onCheckedChange={(checked) => {
+                                const current = selectedValues;
+                                if (checked && current.length >= group.maxSelection) return;
+                                setSelectedModifiers((prev) => ({
+                                  ...prev,
+                                  [groupId]: checked
+                                    ? [...current, String(mod.id)]
+                                    : current.filter((id) => id !== String(mod.id)),
+                                }));
+                              }}
+                            />
+                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
+                              {mod.name}
+                            </Label>
+                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -814,13 +873,14 @@ const POS = () => {
             })}
           </div>
 
-          <Button
-            className="w-full"
-            onClick={handleAddModifiers}
-            disabled={!canAddToCart()}
-          >
-            Agregar al Pedido
-          </Button>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <Button variant="outline" className="h-12" onClick={handleAddPendingProductWithoutExtras}>
+              Sin extras
+            </Button>
+            <Button className="h-12" onClick={handleAddPendingProductWithExtras}>
+              Agregar
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

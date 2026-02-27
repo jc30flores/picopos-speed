@@ -15,6 +15,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "order",
             "method",
             "amount",
+            "cash_received",
             "tip_amount",
             "reference",
             "received_by",
@@ -37,11 +38,12 @@ class PaymentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Voided orders cannot accept payments")
 
         remaining = self._remaining_balance(order)
-        total_payment = amount + tip_amount
         if remaining <= 0:
             raise serializers.ValidationError("Order is already paid")
-        if total_payment > remaining:
+        if amount > remaining:
             raise serializers.ValidationError("Payment exceeds remaining balance")
+        if order.channel == "pos" and amount < remaining:
+            raise serializers.ValidationError("POS payments must be full amount")
 
         return attrs
 

@@ -3,6 +3,7 @@ export const getProductImageSrc = (product: {
   imageUrl?: unknown;
   image_path?: unknown;
   imagePath?: unknown;
+  image?: unknown;
 }): string | null => {
 
   const url =
@@ -10,6 +11,7 @@ export const getProductImageSrc = (product: {
     product.imageUrl ??
     product.image_path ??
     product.imagePath ??
+    product.image ??
     null;
 
   if (typeof url !== "string") return null;
