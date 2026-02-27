@@ -224,7 +224,7 @@ class ModifierGroupListCreateView(generics.ListCreateAPIView):
 
 class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ModifierGroupSerializer
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    parser_classes = [JSONParser]
     queryset = ModifierGroup.objects.prefetch_related("modifiers")
 
     def get_permissions(self):
@@ -238,6 +238,29 @@ class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
         group.products.clear()
         group.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ModifierGroupImageUploadView(generics.UpdateAPIView):
+    serializer_class = ModifierGroupSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    queryset = ModifierGroup.objects.prefetch_related("modifiers")
+
+    def get_permissions(self):
+        return [IsAdminOrManager()]
+
+    def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        image_file = request.FILES.get("image")
+        if not image_file:
+            return Response({"image": "Debes enviar un archivo en el campo 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.menu.utils.images import save_menu_image
+
+        saved = save_menu_image(image_file, "MODIFIER_GROUPS")
+        instance.image = saved["image"]
+        instance.image_path = saved["image_path"]
+        instance.save(update_fields=["image", "image_path"])
+        return Response(self.get_serializer(instance).data)
 
 
 class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):
@@ -261,6 +284,29 @@ class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):
             instance.save(update_fields=["image", "image_path"])
             return Response(self.get_serializer(instance).data)
         return super().patch(request, *args, **kwargs)
+
+
+class ModifierImageUploadView(generics.UpdateAPIView):
+    serializer_class = ModifierSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    queryset = Modifier.objects.select_related("group")
+
+    def get_permissions(self):
+        return [IsAdminOrManager()]
+
+    def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        image_file = request.FILES.get("image")
+        if not image_file:
+            return Response({"image": "Debes enviar un archivo en el campo 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.menu.utils.images import save_menu_image
+
+        saved = save_menu_image(image_file, "MODIFIERS")
+        instance.image = saved["image"]
+        instance.image_path = saved["image_path"]
+        instance.save(update_fields=["image", "image_path"])
+        return Response(self.get_serializer(instance).data)
 
 class ProductModifierGroupsReorderView(APIView):
     permission_classes = [IsAdminOrManager]

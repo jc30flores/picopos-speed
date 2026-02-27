@@ -136,12 +136,12 @@ class AdminMenuOpsTests(TestCase):
         option_image = SimpleUploadedFile("opcion.png", b"fakepngcontent", content_type="image/png")
 
         group_response = self.client.patch(
-            f"/api/menu/modifier-groups/{group.id}/",
+            f"/api/menu/modifier-groups/{group.id}/image/",
             {"image": group_image},
             format="multipart",
         )
         option_response = self.client.patch(
-            f"/api/menu/modifier-options/{option.id}/",
+            f"/api/menu/modifiers/{option.id}/image/",
             {"image": option_image},
             format="multipart",
         )
@@ -153,3 +153,24 @@ class AdminMenuOpsTests(TestCase):
         option.refresh_from_db()
         self.assertTrue(group.image_path)
         self.assertTrue(option.image_path)
+
+    def test_update_modifier_group_missing_existing_id_returns_clear_400(self):
+        group = ModifierGroup.objects.create(name="Guarniciones", required=False)
+        Modifier.objects.create(group=group, name="Chips", price=Decimal("0.00"), sort_order=0)
+
+        response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {
+                "name": "Guarniciones",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [
+                    {"name": "Chips", "price": "0.00", "is_active": True},
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Incluye el campo 'id'", str(response.data))

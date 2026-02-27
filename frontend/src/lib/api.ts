@@ -911,7 +911,7 @@ export const updateModifierGroup = async (
 export const uploadModifierGroupImage = async (groupId: number, image: File): Promise<void> => {
   const formData = new FormData();
   formData.append("image", image);
-  await request(`/menu/modifier-groups/${groupId}/`, {
+  await request(`/menu/modifier-groups/${groupId}/image/`, {
     method: "PATCH",
     body: formData,
   }).then(handleJson);
@@ -920,7 +920,7 @@ export const uploadModifierGroupImage = async (groupId: number, image: File): Pr
 export const uploadModifierOptionImage = async (optionId: number, image: File): Promise<void> => {
   const formData = new FormData();
   formData.append("image", image);
-  await request(`/menu/modifier-options/${optionId}/`, {
+  await request(`/menu/modifiers/${optionId}/image/`, {
     method: "PATCH",
     body: formData,
   }).then(handleJson);

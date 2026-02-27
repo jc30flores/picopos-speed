@@ -145,12 +145,16 @@ export const ModifierGroupFormDialog = ({
           await uploadModifierGroupImage(baseGroup.id, groupImageFile);
         }
 
-        for (let i = 0; i < options.length; i += 1) {
-          const optionFile = options[i].imageFile;
-          if (!optionFile) continue;
-          const savedOption = baseGroup.modifiers[i];
-          if (!savedOption?.id) continue;
-          await uploadModifierOptionImage(savedOption.id, optionFile);
+        const savedOptionsByName = new Map(
+          baseGroup.modifiers.map((modifier) => [modifier.name.trim().toLowerCase(), modifier.id])
+        );
+        for (const option of options) {
+          if (!option.imageFile) continue;
+          const existingId = Number.isFinite(Number(option.id)) ? Number(option.id) : null;
+          const savedId =
+            existingId ?? savedOptionsByName.get(option.name.trim().toLowerCase()) ?? null;
+          if (!savedId) continue;
+          await uploadModifierOptionImage(savedId, option.imageFile);
         }
       }
 

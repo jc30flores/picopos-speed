@@ -27,6 +27,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class ModifierSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
     image_path = serializers.CharField(read_only=True)
 
     class Meta:
@@ -90,7 +91,14 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
                 continue
 
             if group.modifiers.filter(name__iexact=option_name).exists():
-                raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
+                raise serializers.ValidationError(
+                    {
+                        "modifiers": (
+                            f"La opción '{option_name}' ya existe en este grupo. "
+                            "Incluye el campo 'id' para actualizar opciones existentes."
+                        )
+                    }
+                )
             created = Modifier.objects.create(group=group, **payload)
             seen_ids.add(created.id)
 
