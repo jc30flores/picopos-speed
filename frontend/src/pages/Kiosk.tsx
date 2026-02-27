@@ -53,6 +53,7 @@ const Kiosk = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<PreviewState>({ open: false, title: "" });
 
   useEffect(() => {
@@ -67,24 +68,21 @@ const Kiosk = () => {
       });
   }, []);
 
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategory(category);
-    setStep("products");
+  const categoriesForGrid = useMemo(() => categories.map((cat) => cat.name), [categories]);
+
+  const getSafeImage = (key: string, src: string | null) => {
+    if (!src || failedImages[key]) return null;
+    return src;
   };
 
-  const handleProductSelect = (product: Product) => {
-    setSelectedProduct(product);
-    setSelectedModifiers({});
-    if (product.modifierGroups && product.modifierGroups.length > 0) {
-      setStep("modifiers");
-    } else {
-      addToCart(product, []);
-      setStep("review");
-    }
+  const markImageFailed = (key: string) => {
+    setFailedImages((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    setPreview((current) => (current.imageSrc ? { ...current, open: false } : current));
   };
 
   const openPreview = (title: string, imageSrc?: string | null, subtitle?: string) => {
-    setPreview({ open: true, title, subtitle, imageSrc: imageSrc ?? null });
+    if (!imageSrc) return;
+    setPreview({ open: true, title, subtitle, imageSrc });
   };
 
   const addToCart = (product: Product, modifiers: Array<{ name: string; price: number }>) => {
@@ -101,19 +99,34 @@ const Kiosk = () => {
     ]);
   };
 
-  const handleAddModifiers = () => {
-    const selectedMods: Array<{ name: string; price: number }> = [];
+  const handleCategorySelect = (category: string) => {
+    setSelectedCategory(category);
+    setStep("products");
+  };
 
+  const handleProductSelect = (product: Product) => {
+    setSelectedProduct(product);
+    setSelectedModifiers({});
+    if (product.modifierGroups?.length) {
+      setStep("modifiers");
+      return;
+    }
+    addToCart(product, []);
+    setStep("review");
+  };
+
+  const handleAddModifiers = () => {
     if (!selectedProduct) return;
 
-    selectedProduct.modifierGroups.forEach((groupId: number) => {
+    const selectedMods: Array<{ name: string; price: number }> = [];
+    selectedProduct.modifierGroups.forEach((groupId) => {
       const group = modifierGroups.find((g) => g.id === groupId);
-      if (group && selectedModifiers[groupId]) {
-        selectedModifiers[groupId].forEach((modId) => {
-          const mod = group.modifiers.find((m) => String(m.id) === modId);
-          if (mod) selectedMods.push({ name: mod.name, price: mod.price });
-        });
-      }
+      const selectedInGroup = selectedModifiers[groupId] || [];
+      if (!group) return;
+      selectedInGroup.forEach((modId) => {
+        const mod = group.modifiers.find((m) => String(m.id) === modId);
+        if (mod) selectedMods.push({ name: mod.name, price: mod.price });
+      });
     });
 
     addToCart(selectedProduct, selectedMods);
@@ -122,28 +135,16 @@ const Kiosk = () => {
 
   const canContinue = () => {
     if (!selectedProduct?.modifierGroups) return true;
-
-    return selectedProduct.modifierGroups.every((groupId: number) => {
+    return selectedProduct.modifierGroups.every((groupId) => {
       const group = modifierGroups.find((g) => g.id === groupId);
       if (!group) return true;
-
       const selectedCount = selectedModifiers[groupId]?.length || 0;
       return selectedCount >= group.minSelection && selectedCount <= group.maxSelection;
     });
   };
 
-  const getItemTotal = (item: CartItem) => {
-    const modifiersTotal = item.modifiers.reduce((sum, mod) => sum + mod.price, 0);
-    return (item.basePrice + modifiersTotal) * item.quantity;
-  };
-
-  const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
-
-  const getModifierImageSrc = (image?: string | null, imagePath?: string | null) =>
-    getProductImageSrc({ image: image ?? null, imagePath: imagePath ?? null });
-
   const handleSubmitOrder = async () => {
-    if (cart.length === 0) return;
+    if (!cart.length) return;
     setIsSubmitting(true);
     try {
       const order = await createOrder({
@@ -168,22 +169,25 @@ const Kiosk = () => {
     }
   };
 
-  const categoriesForGrid = useMemo(() => categories.map((cat) => cat.name), [categories]);
+  const getModifierImageSrc = (image?: string | null, imagePath?: string | null) =>
+    getProductImageSrc({ image: image ?? null, imagePath: imagePath ?? null });
+
+  const getItemTotal = (item: CartItem) => {
+    const modifiersTotal = item.modifiers.reduce((sum, mod) => sum + mod.price, 0);
+    return (item.basePrice + modifiersTotal) * item.quantity;
+  };
+  const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
 
   const renderModifierTile = (group: ModifierGroup, mod: Modifier, singleSelection: boolean) => {
     const checked = selectedModifiers[group.id]?.includes(String(mod.id)) || false;
-    const disabled =
-      !singleSelection &&
-      !checked &&
-      (selectedModifiers[group.id]?.length || 0) >= group.maxSelection;
+    const disabled = !singleSelection && !checked && (selectedModifiers[group.id]?.length || 0) >= group.maxSelection;
+    const imageKey = `option-${mod.id}`;
+    const imageSrc = getSafeImage(imageKey, getModifierImageSrc(mod.image, mod.imagePath));
 
-    const imageSrc = getModifierImageSrc(mod.image, mod.imagePath);
-
-    const content = (
+    return (
       <div
         className={cn(
-          "flex min-h-[72px] items-center gap-3 rounded-2xl border p-3 md:p-4",
-          "transition-colors duration-150",
+          "flex min-h-[76px] items-center gap-3 rounded-2xl border p-3 md:p-4",
           checked ? "border-primary bg-primary/10" : "border-white/10 bg-card/40",
           disabled ? "opacity-60" : "hover:bg-muted/80",
         )}
@@ -198,10 +202,7 @@ const Kiosk = () => {
               onCheckedChange={(nextChecked) => {
                 const current = selectedModifiers[group.id] || [];
                 if (nextChecked && current.length < group.maxSelection) {
-                  setSelectedModifiers({
-                    ...selectedModifiers,
-                    [group.id]: [...current, String(mod.id)],
-                  });
+                  setSelectedModifiers({ ...selectedModifiers, [group.id]: [...current, String(mod.id)] });
                 } else if (!nextChecked) {
                   setSelectedModifiers({
                     ...selectedModifiers,
@@ -214,17 +215,20 @@ const Kiosk = () => {
           )}
         </div>
 
-        <div className="h-16 w-16 shrink-0">
-          <KioskImage
-            src={imageSrc}
-            alt={mod.name}
-            ratio="1 / 1"
-            className="h-full w-full rounded-xl"
-            imageClassName="p-1"
-            sizes="96px"
-            onPreview={() => openPreview(mod.name, imageSrc, group.name)}
-          />
-        </div>
+        {imageSrc ? (
+          <div className="h-[68px] w-[68px] shrink-0">
+            <KioskImage
+              src={imageSrc}
+              alt={mod.name}
+              ratio="1 / 1"
+              className="h-full w-full rounded-xl"
+              imageClassName="p-1"
+              sizes="96px"
+              onPreview={() => openPreview(mod.name, imageSrc, group.name)}
+              onImageError={() => markImageFailed(imageKey)}
+            />
+          </div>
+        ) : null}
 
         <Label
           htmlFor={singleSelection ? `radio-${group.id}-${mod.id}` : `check-${group.id}-${mod.id}`}
@@ -237,12 +241,6 @@ const Kiosk = () => {
         </Label>
       </div>
     );
-
-    if (singleSelection) {
-      return content;
-    }
-
-    return content;
   };
 
   if (step === "category") {
@@ -253,11 +251,7 @@ const Kiosk = () => {
             <ArrowLeft className="mr-2" />
             Volver
           </Button>
-
-          <h1 className="mb-8 text-center text-3xl font-bold break-words sm:text-4xl md:text-5xl">
-            Selecciona una Categoría
-          </h1>
-
+          <h1 className="mb-8 text-center text-3xl font-bold break-words sm:text-4xl md:text-5xl">Selecciona una Categoría</h1>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6">
             {categoriesForGrid.map((category) => (
               <Card
@@ -276,56 +270,59 @@ const Kiosk = () => {
 
   if (step === "products") {
     const productsForCategory = products.filter((p) => p.category === selectedCategory && p.available);
-
     return (
       <>
-      <div className="min-h-screen bg-background p-4 md:p-8">
-        <div className="mx-auto max-w-[1440px]">
-          <Button variant="outline" size="lg" onClick={() => setStep("category")} className="mb-6 text-lg">
-            <ArrowLeft className="mr-2" />
-            Volver
-          </Button>
+        <div className="min-h-screen bg-background p-4 md:p-8">
+          <div className="mx-auto max-w-[1440px]">
+            <Button variant="outline" size="lg" onClick={() => setStep("category")} className="mb-6 text-lg">
+              <ArrowLeft className="mr-2" />
+              Volver
+            </Button>
 
-          <h1 className="mb-8 text-center text-4xl font-bold md:text-5xl">{selectedCategory}</h1>
+            <h1 className="mb-8 text-center text-4xl font-bold md:text-5xl">{selectedCategory}</h1>
 
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
-            {productsForCategory.map((product) => {
-              const imageSrc = getProductImageSrc(product);
-              return (
-                <Card
-                  key={product.id}
-                  className="group cursor-pointer overflow-hidden rounded-3xl border-white/10 bg-card/70 p-0 shadow-lg transition-transform duration-150 hover:-translate-y-0.5 hover:shadow-2xl active:scale-[0.995]"
-                  onClick={() => handleProductSelect(product)}
-                >
-                  <div className="p-4 pb-2 md:p-5 md:pb-3">
-                    <KioskImage
-                      src={imageSrc}
-                      alt={product.name}
-                      ratio="16 / 10"
-                      loading="lazy"
-                      sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
-                      className="w-full rounded-2xl"
-                      placeholderLabel="Sin imagen"
-                      onPreview={() => openPreview(product.name, imageSrc, selectedCategory)}
-                    />
-                  </div>
-                  <div className="px-5 pb-5 pt-3">
-                    <h3 className="line-clamp-2 text-2xl font-extrabold leading-tight">{product.name}</h3>
-                    <p className="mt-2 text-3xl font-black text-secondary">${product.price.toFixed(2)}</p>
-                  </div>
-                </Card>
-              );
-            })}
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
+              {productsForCategory.map((product) => {
+                const imageKey = `product-${product.id}`;
+                const imageSrc = getSafeImage(imageKey, getProductImageSrc(product));
+                return (
+                  <Card
+                    key={product.id}
+                    className="group cursor-pointer overflow-hidden rounded-3xl border-white/10 bg-card/70 p-0 shadow-lg transition-transform duration-150 hover:-translate-y-0.5 hover:shadow-2xl active:scale-[0.995]"
+                    onClick={() => handleProductSelect(product)}
+                  >
+                    {imageSrc ? (
+                      <div className="p-4 pb-2 md:p-5 md:pb-3">
+                        <KioskImage
+                          src={imageSrc}
+                          alt={product.name}
+                          ratio="16 / 10"
+                          loading="lazy"
+                          sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
+                          className="w-full rounded-2xl"
+                          onPreview={() => openPreview(product.name, imageSrc, selectedCategory)}
+                          onImageError={() => markImageFailed(imageKey)}
+                        />
+                      </div>
+                    ) : null}
+                    <div className={cn("px-5 pb-5", imageSrc ? "pt-3" : "pt-5")}>
+                      <h3 className="line-clamp-2 text-2xl font-extrabold leading-tight">{product.name}</h3>
+                      <p className="mt-2 text-3xl font-black text-secondary">${product.price.toFixed(2)}</p>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
-      <KioskImageLightbox
-        open={preview.open}
-        title={preview.title}
-        subtitle={preview.subtitle}
-        imageSrc={preview.imageSrc}
-        onClose={() => setPreview({ open: false, title: "" })}
-      />
+
+        <KioskImageLightbox
+          open={preview.open}
+          title={preview.title}
+          subtitle={preview.subtitle}
+          imageSrc={preview.imageSrc}
+          onClose={() => setPreview({ open: false, title: "" })}
+        />
       </>
     );
   }
@@ -333,98 +330,103 @@ const Kiosk = () => {
   if (step === "modifiers") {
     return (
       <>
-      <div className="min-h-screen bg-background p-4 md:p-8">
-        <div className="mx-auto max-w-[1520px]">
-          <Button variant="outline" size="lg" onClick={() => setStep("products")} className="mb-6 text-lg">
-            <ArrowLeft className="mr-2" />
-            Volver
-          </Button>
+        <div className="min-h-screen bg-background p-4 md:p-8">
+          <div className="mx-auto max-w-[1520px]">
+            <Button variant="outline" size="lg" onClick={() => setStep("products")} className="mb-6 text-lg">
+              <ArrowLeft className="mr-2" />
+              Volver
+            </Button>
 
-          <h1 className="mb-2 text-center text-4xl font-bold md:text-5xl">Personaliza tu {selectedProduct?.name}</h1>
-          <p className="mb-8 text-center text-xl text-muted-foreground md:text-2xl">Selecciona tus opciones favoritas</p>
+            <h1 className="mb-2 text-center text-4xl font-bold md:text-5xl">Personaliza tu {selectedProduct?.name}</h1>
+            <p className="mb-8 text-center text-xl text-muted-foreground md:text-2xl">Selecciona tus opciones favoritas</p>
 
-          <div className="space-y-8">
-            {selectedProduct?.modifierGroups?.map((groupId: number) => {
-              const group = modifierGroups.find((g) => g.id === groupId);
-              if (!group) return null;
+            <div className="space-y-8">
+              {selectedProduct?.modifierGroups?.map((groupId: number) => {
+                const group = modifierGroups.find((g) => g.id === groupId);
+                if (!group) return null;
 
-              const selectedCount = selectedModifiers[groupId]?.length || 0;
-              const groupImageSrc = getModifierImageSrc(group.image, group.imagePath);
+                const selectedCount = selectedModifiers[groupId]?.length || 0;
+                const groupImageKey = `group-${group.id}`;
+                const groupImageSrc = getSafeImage(groupImageKey, getModifierImageSrc(group.image, group.imagePath));
 
-              return (
-                <Card key={groupId} className="rounded-3xl border-white/10 p-4 md:p-6">
-                  <div className="mb-5 flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-4">
-                      <div className="h-20 w-20 shrink-0 md:h-24 md:w-24">
-                        <KioskImage
-                          src={groupImageSrc}
-                          alt={group.name}
-                          ratio="1 / 1"
-                          className="h-full w-full rounded-2xl"
-                          imageClassName="p-2"
-                          sizes="96px"
-                          onPreview={() => openPreview(group.name, groupImageSrc, "Grupo de modificadores")}
-                        />
+                return (
+                  <Card key={groupId} className="rounded-3xl border-white/10 p-4 md:p-6">
+                    <div className="mb-5 flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-4">
+                        {groupImageSrc ? (
+                          <div className="h-20 w-20 shrink-0 md:h-24 md:w-24">
+                            <KioskImage
+                              src={groupImageSrc}
+                              alt={group.name}
+                              ratio="1 / 1"
+                              className="h-full w-full rounded-2xl"
+                              imageClassName="p-2"
+                              sizes="96px"
+                              onPreview={() => openPreview(group.name, groupImageSrc, "Grupo de modificadores")}
+                              onImageError={() => markImageFailed(groupImageKey)}
+                            />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0">
+                          <h3 className="text-2xl font-black leading-tight md:text-3xl">
+                            {group.name}
+                            {group.required && <span className="ml-1 text-danger">*</span>}
+                          </h3>
+                          <p className="mt-1 text-sm text-muted-foreground md:text-base">
+                            Selecciona entre {group.minSelection} y {group.maxSelection} opciones
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="text-2xl font-black leading-tight md:text-3xl">
-                          {group.name}
-                          {group.required && <span className="ml-1 text-danger">*</span>}
-                        </h3>
-                        <p className="mt-1 text-sm text-muted-foreground md:text-base">
-                          Selecciona entre {group.minSelection} y {group.maxSelection} opciones
-                        </p>
-                      </div>
+                      <Badge
+                        variant={selectedCount >= group.minSelection ? "default" : "destructive"}
+                        className="px-4 py-2 text-base font-bold md:text-lg"
+                      >
+                        {selectedCount}/{group.maxSelection}
+                      </Badge>
                     </div>
-                    <Badge
-                      variant={selectedCount >= group.minSelection ? "default" : "destructive"}
-                      className="px-4 py-2 text-base font-bold md:text-lg"
-                    >
-                      {selectedCount}/{group.maxSelection}
-                    </Badge>
-                  </div>
 
-                  {group.maxSelection === 1 ? (
-                    <RadioGroup
-                      value={selectedModifiers[groupId]?.[0] || ""}
-                      onValueChange={(value) => setSelectedModifiers({ ...selectedModifiers, [groupId]: [value] })}
-                    >
+                    {group.maxSelection === 1 ? (
+                      <RadioGroup
+                        value={selectedModifiers[groupId]?.[0] || ""}
+                        onValueChange={(value) => setSelectedModifiers({ ...selectedModifiers, [groupId]: [value] })}
+                      >
+                        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                          {group.modifiers.map((mod) => (
+                            <div key={mod.id}>{renderModifierTile(group, mod, true)}</div>
+                          ))}
+                        </div>
+                      </RadioGroup>
+                    ) : (
                       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                         {group.modifiers.map((mod) => (
-                          <div key={mod.id}>{renderModifierTile(group, mod, true)}</div>
+                          <div key={mod.id}>{renderModifierTile(group, mod, false)}</div>
                         ))}
                       </div>
-                    </RadioGroup>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                      {group.modifiers.map((mod) => (
-                        <div key={mod.id}>{renderModifierTile(group, mod, false)}</div>
-                      ))}
-                    </div>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
 
-          <Button
-            size="lg"
-            variant="default"
-            className="mt-8 w-full py-8 text-xl font-bold md:text-2xl"
-            onClick={handleAddModifiers}
-            disabled={!canContinue()}
-          >
-            Continuar
-          </Button>
+            <Button
+              size="lg"
+              variant="default"
+              className="mt-8 w-full py-8 text-xl font-bold md:text-2xl"
+              onClick={handleAddModifiers}
+              disabled={!canContinue()}
+            >
+              Continuar
+            </Button>
+          </div>
         </div>
-      </div>
-      <KioskImageLightbox
-        open={preview.open}
-        title={preview.title}
-        subtitle={preview.subtitle}
-        imageSrc={preview.imageSrc}
-        onClose={() => setPreview({ open: false, title: "" })}
-      />
+
+        <KioskImageLightbox
+          open={preview.open}
+          title={preview.title}
+          subtitle={preview.subtitle}
+          imageSrc={preview.imageSrc}
+          onClose={() => setPreview({ open: false, title: "" })}
+        />
       </>
     );
   }
@@ -462,7 +464,7 @@ const Kiosk = () => {
           </Card>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Button size="lg" variant="outline" className="text-lg sm:text-xl py-6 sm:py-8 w-full" onClick={() => setStep("category")}> 
+            <Button size="lg" variant="outline" className="text-lg sm:text-xl py-6 sm:py-8 w-full" onClick={() => setStep("category")}>
               <span className="truncate">Agregar Más</span>
             </Button>
             <Button
@@ -490,9 +492,7 @@ const Kiosk = () => {
             <Card
               className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")}
               onClick={() => {
-                if (!isSubmitting) {
-                  handleSubmitOrder();
-                }
+                if (!isSubmitting) handleSubmitOrder();
               }}
             >
               <h3 className="text-2xl font-bold">💳 Pagar con Tarjeta</h3>
@@ -502,9 +502,7 @@ const Kiosk = () => {
             <Card
               className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")}
               onClick={() => {
-                if (!isSubmitting) {
-                  handleSubmitOrder();
-                }
+                if (!isSubmitting) handleSubmitOrder();
               }}
             >
               <h3 className="text-2xl font-bold">💵 Pagar en Caja</h3>
@@ -548,7 +546,6 @@ const Kiosk = () => {
           Finalizar
         </Button>
       </Card>
-
     </div>
   );
 };

@@ -1,5 +1,4 @@
 import { memo, useEffect, useState } from "react";
-import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface KioskImageProps {
@@ -8,10 +7,10 @@ interface KioskImageProps {
   ratio?: string;
   className?: string;
   imageClassName?: string;
-  placeholderLabel?: string;
   loading?: "lazy" | "eager";
   sizes?: string;
   onPreview?: () => void;
+  onImageError?: () => void;
 }
 
 export const KioskImage = memo(
@@ -21,10 +20,10 @@ export const KioskImage = memo(
     ratio = "4 / 3",
     className,
     imageClassName,
-    placeholderLabel = "Sin imagen",
     loading = "lazy",
     sizes,
     onPreview,
+    onImageError,
   }: KioskImageProps) => {
     const [isLoading, setIsLoading] = useState(Boolean(src));
     const [hasError, setHasError] = useState(false);
@@ -34,7 +33,9 @@ export const KioskImage = memo(
       setIsLoading(Boolean(src));
     }, [src]);
 
-    const showImage = Boolean(src) && !hasError;
+    if (!src || hasError) {
+      return null;
+    }
 
     return (
       <div
@@ -45,37 +46,29 @@ export const KioskImage = memo(
         )}
         style={{ aspectRatio: ratio }}
       >
-        {showImage ? (
-          <>
-            <img
-              src={src ?? undefined}
-              alt=""
-              aria-hidden="true"
-              className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl opacity-40"
-            />
-            <img
-              src={src ?? undefined}
-              alt={alt}
-              loading={loading}
-              decoding="async"
-              sizes={sizes}
-              className={cn(
-                "relative z-10 h-full w-full object-contain p-2 md:p-3",
-                imageClassName,
-              )}
-              onLoad={() => setIsLoading(false)}
-              onError={() => {
-                setHasError(true);
-                setIsLoading(false);
-              }}
-            />
-          </>
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-muted to-muted/40 text-muted-foreground">
-            <ImageOff className="h-8 w-8" aria-hidden="true" />
-            <span className="text-sm font-medium">{placeholderLabel}</span>
-          </div>
-        )}
+        <img
+          src={src}
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl opacity-35"
+          loading={loading}
+          decoding="async"
+          sizes={sizes}
+        />
+        <img
+          src={src}
+          alt={alt}
+          loading={loading}
+          decoding="async"
+          sizes={sizes}
+          className={cn("relative z-10 h-full w-full object-contain p-2 md:p-3", imageClassName)}
+          onLoad={() => setIsLoading(false)}
+          onError={() => {
+            setHasError(true);
+            setIsLoading(false);
+            onImageError?.();
+          }}
+        />
 
         {isLoading && (
           <div className="absolute inset-0 z-20 animate-pulse bg-gradient-to-br from-white/10 via-white/5 to-transparent" />

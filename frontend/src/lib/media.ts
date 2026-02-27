@@ -1,26 +1,30 @@
-export const getProductImageSrc = (product: {
+export const getMediaUrl = (raw: unknown): string | null => {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const path = trimmed.replace(/^\/+/, "");
+  return `${window.location.origin}/${path}`.replace(/([^:]\/)\/+/g, "$1");
+};
+
+export const getEntityImageSrc = (entity: {
   image_url?: unknown;
   imageUrl?: unknown;
   image_path?: unknown;
   imagePath?: unknown;
   image?: unknown;
 }): string | null => {
-
-  const url =
-    product.image_url ??
-    product.imageUrl ??
-    product.image_path ??
-    product.imagePath ??
-    product.image ??
-    null;
-
-  if (typeof url !== "string") return null;
-
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-
-  // SIEMPRE devolver URL absoluta del navegador
-  if (trimmed.startsWith("http")) return trimmed;
-
-  return `${window.location.origin}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+  return (
+    getMediaUrl(entity.image_url) ??
+    getMediaUrl(entity.imageUrl) ??
+    getMediaUrl(entity.image_path) ??
+    getMediaUrl(entity.imagePath) ??
+    getMediaUrl(entity.image)
+  );
 };
+
+export const getProductImageSrc = getEntityImageSrc;

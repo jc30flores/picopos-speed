@@ -20,7 +20,7 @@ export const KioskImageLightbox = ({ open, title, subtitle, imageSrc, onClose }:
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !imageSrc) return null;
 
   return (
     <div
@@ -53,7 +53,6 @@ export const KioskImageLightbox = ({ open, title, subtitle, imageSrc, onClose }:
             loading="eager"
             className="h-full w-full rounded-2xl"
             imageClassName="p-4 md:p-8"
-            placeholderLabel="Imagen no disponible"
           />
         </div>
       </div>
