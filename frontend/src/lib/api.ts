@@ -12,6 +12,8 @@ export type Modifier = {
   price: number;
   isActive?: boolean;
   sortOrder?: number;
+  image?: string | null;
+  imagePath?: string | null;
 };
 
 export type ModifierGroup = {
@@ -20,6 +22,8 @@ export type ModifierGroup = {
   required: boolean;
   minSelection: number;
   maxSelection: number;
+  image?: string | null;
+  imagePath?: string | null;
   modifiers: Modifier[];
 };
 
@@ -38,6 +42,8 @@ export type Product = {
   imageUrl?: string | null;
   available: boolean;
   isArchived?: boolean;
+  disposableFee?: number;
+  disposableApplyTo?: string[];
   requiresKitchen: boolean;
   modifierGroups: number[];
 };
@@ -416,6 +422,16 @@ export const createCategory = async (name: string): Promise<Category> => {
   };
 };
 
+export const updateCategory = async (categoryId: number, name: string): Promise<Category> => {
+  const response = await request(`/menu/categories/${categoryId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
+  return { id: data.id, name: data.name, isActive: data.is_active };
+};
+
 export const deleteCategory = async (categoryId: number): Promise<void> => {
   const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
@@ -452,6 +468,8 @@ export const getProducts = async (options?: {
     image_url: string | null;
     available: boolean;
     is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>>(response);
@@ -472,6 +490,8 @@ export const getProducts = async (options?: {
       imageUrl: normalizedImageUrl,
       available: item.available,
       isArchived: Boolean(item.is_archived),
+      disposableFee: Number(item.disposable_fee ?? 0),
+      disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
     };
@@ -486,6 +506,8 @@ export const createProduct = async (payload: {
   image?: File | null;
   available: boolean;
   requiresKitchen: boolean;
+  disposableFee?: number;
+  disposableApplyTo?: string[];
   modifierGroupIds?: number[];
 }): Promise<Product> => {
   const formData = new FormData();
@@ -495,6 +517,8 @@ export const createProduct = async (payload: {
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("disposable_fee", String(payload.disposableFee ?? 0));
+  formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -519,6 +543,8 @@ export const createProduct = async (payload: {
     image_url: string | null;
     available: boolean;
     is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
@@ -535,6 +561,8 @@ export const createProduct = async (payload: {
     imageUrl: data.image_url ?? undefined,
     available: data.available,
     isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
@@ -551,6 +579,8 @@ export const updateProduct = async (
     available: boolean;
     is_archived?: boolean;
     requiresKitchen: boolean;
+    disposableFee?: number;
+    disposableApplyTo?: string[];
     modifierGroupIds?: number[];
   }
 ): Promise<Product> => {
@@ -561,6 +591,8 @@ export const updateProduct = async (
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("disposable_fee", String(payload.disposableFee ?? 0));
+  formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
     formData.append("image", payload.image);
   }
@@ -638,6 +670,8 @@ export const updateProductModifierGroups = async (
     image_url: string | null;
     available: boolean;
     is_archived?: boolean;
+    disposable_fee?: string;
+    disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
   }>(response);
@@ -654,6 +688,8 @@ export const updateProductModifierGroups = async (
     imageUrl: data.image_url ?? undefined,
     available: data.available,
     isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
   };
@@ -721,7 +757,9 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean }>;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null }>;
+    image?: string | null;
+    image_path?: string | null;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -729,12 +767,16 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: item.required,
     minSelection: item.min_selection,
     maxSelection: item.max_selection,
+    image: item.image ?? null,
+    imagePath: item.image_path ?? null,
     modifiers: item.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
       price: Number(modifier.price),
       isActive: modifier.is_active,
-      sortOrder: modifier.sort_order,
+      sortOrder: modifier.sort_order ?? 0,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
     })),
   }));
 };
@@ -751,7 +793,8 @@ export const createModifierGroup = async (payload: {
   required: boolean;
   minSelection: number;
   maxSelection: number;
-  modifiers: Array<{ name: string; price: number; isActive?: boolean }>;
+  image?: string | null;
+  modifiers: Array<{ name: string; price: number; isActive?: boolean; image?: string | null }>;
 }): Promise<ModifierGroup> => {
   const response = await request("/menu/modifier-groups/", {
     method: "POST",
@@ -761,10 +804,12 @@ export const createModifierGroup = async (payload: {
       required: payload.required,
       min_selection: payload.minSelection,
       max_selection: payload.maxSelection,
+      image: payload.image,
       modifiers: payload.modifiers.map((modifier) => ({
         name: modifier.name,
         price: modifier.price,
         is_active: modifier.isActive ?? true,
+        image: modifier.image,
       })),
     }),
   });
@@ -774,7 +819,9 @@ export const createModifierGroup = async (payload: {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean }>;
+    image?: string | null;
+    image_path?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -782,11 +829,15 @@ export const createModifierGroup = async (payload: {
     required: data.required,
     minSelection: data.min_selection,
     maxSelection: data.max_selection,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
       price: Number(modifier.price),
       isActive: modifier.is_active,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
     })),
   };
 };

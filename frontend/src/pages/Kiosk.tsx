@@ -133,6 +133,9 @@ const Kiosk = () => {
 
   const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
 
+  const getModifierImageSrc = (image?: string | null, imagePath?: string | null) =>
+    getProductImageSrc({ image: image ?? null, imagePath: imagePath ?? null });
+
   const handleSubmitOrder = async () => {
     if (cart.length === 0) return;
     setIsSubmitting(true);
@@ -301,11 +304,21 @@ const Kiosk = () => {
 
               return (
                 <Card key={groupId} className="p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-2xl font-bold">
-                      {group.name}
-                      {group.required && <span className="text-danger ml-1">*</span>}
-                    </h3>
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {getModifierImageSrc(group.image, group.imagePath) ? (
+                        <img
+                          src={getModifierImageSrc(group.image, group.imagePath) ?? undefined}
+                          alt={group.name}
+                          className="h-10 w-10 rounded-md object-cover"
+                          loading="lazy"
+                        />
+                      ) : null}
+                      <h3 className="text-2xl font-bold">
+                        {group.name}
+                        {group.required && <span className="text-danger ml-1">*</span>}
+                      </h3>
+                    </div>
                     <Badge variant={selectedCount >= group.minSelection ? "default" : "destructive"} className="text-lg px-4 py-1">
                       {selectedCount}/{group.maxSelection}
                     </Badge>
@@ -322,7 +335,15 @@ const Kiosk = () => {
                         {group.modifiers.map((mod) => (
                           <div key={mod.id} className="flex items-center space-x-3 p-4 rounded-lg border hover:bg-muted cursor-pointer">
                             <RadioGroupItem value={String(mod.id)} id={String(mod.id)} />
-                            <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer text-lg">
+                            {getModifierImageSrc(mod.image, mod.imagePath) ? (
+                              <img
+                                src={getModifierImageSrc(mod.image, mod.imagePath) ?? undefined}
+                                alt={mod.name}
+                                className="h-9 w-9 rounded object-cover"
+                                loading="lazy"
+                              />
+                            ) : null}
+                          <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer text-lg">
                               {mod.name}
                             </Label>
                             {mod.price > 0 && (
@@ -358,6 +379,14 @@ const Kiosk = () => {
                               (selectedModifiers[groupId]?.length || 0) >= group.maxSelection
                             }
                           />
+                          {getModifierImageSrc(mod.image, mod.imagePath) ? (
+                            <img
+                              src={getModifierImageSrc(mod.image, mod.imagePath) ?? undefined}
+                              alt={mod.name}
+                              className="h-9 w-9 rounded object-cover"
+                              loading="lazy"
+                            />
+                          ) : null}
                           <Label htmlFor={String(mod.id)} className="flex-1 cursor-pointer text-lg">
                             {mod.name}
                           </Label>

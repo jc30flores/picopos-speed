@@ -38,6 +38,8 @@ class Category(models.Model):
 
 class ModifierGroup(models.Model):
     name = models.CharField(max_length=120)
+    image = models.CharField(max_length=255, blank=True, null=True)
+    image_path = models.CharField(max_length=255, blank=True, null=True)
     required = models.BooleanField(default=False)
     min_selection = models.PositiveIntegerField(default=0)
     max_selection = models.PositiveIntegerField(default=1)
@@ -61,6 +63,8 @@ class Modifier(models.Model):
     price = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    image = models.CharField(max_length=255, blank=True, null=True)
+    image_path = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         ordering = ["sort_order", "name"]
@@ -79,6 +83,8 @@ class Product(models.Model):
     image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
     is_archived = models.BooleanField(default=False)
+    disposable_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
     modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
     modifier_group_order = models.JSONField(default=list, blank=True)

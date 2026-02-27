@@ -3,7 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
-from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice
+from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
@@ -39,6 +39,7 @@ class OrderSerializer(serializers.ModelSerializer):
     financial_status = serializers.CharField(read_only=True)
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     net_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    fees = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -51,6 +52,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "tax",
             "total",
             "discount_total",
+            "disposable_total",
             "payment_status",
             "financial_status",
             "total_paid",
@@ -65,6 +67,19 @@ class OrderSerializer(serializers.ModelSerializer):
             "discounts_applied",
             "channel",
             "requires_kitchen",
+            "fees",
+        ]
+
+    def get_fees(self, obj: Order):
+        return [
+            {
+                "type": fee.fee_type,
+                "name": fee.fee_name,
+                "unit_amount": fee.unit_amount,
+                "quantity": fee.quantity,
+                "total_amount": fee.total_amount,
+            }
+            for fee in obj.fees.all()
         ]
 
     def get_discounts_applied(self, obj: Order):
@@ -204,6 +219,7 @@ class OrderCreateSerializer(serializers.Serializer):
             filtered_discounts.append(discount)
 
         subtotal = Decimal("0")
+        disposable_total = Decimal("0")
         discount_totals = {}
 
         for item_data in items_data:
@@ -249,6 +265,19 @@ class OrderCreateSerializer(serializers.Serializer):
                     modifier_price_snapshot=modifier_data["price"],
                 )
 
+            if channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and service_type_key in (product.disposable_apply_to or []):
+                fee_total = (Decimal(product.disposable_fee) * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                disposable_total += fee_total
+                OrderFee.objects.create(
+                    order=order,
+                    order_item=order_item,
+                    fee_type="disposable",
+                    fee_name="Desechables",
+                    unit_amount=Decimal(product.disposable_fee),
+                    quantity=quantity,
+                    total_amount=fee_total,
+                )
+
         if subtotal > 0:
             for discount in filtered_discounts:
                 if discount.applies_to != "order":
@@ -267,6 +296,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     discount_totals[discount.id] = discount_totals.get(discount.id, Decimal("0")) + discount_amount
                     subtotal = max(subtotal - discount_amount, Decimal("0"))
 
+        subtotal += disposable_total
         discount_total = sum(discount_totals.values(), Decimal("0"))
         total = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -280,6 +310,7 @@ class OrderCreateSerializer(serializers.Serializer):
         order.tax = tax
         order.total = total
         order.discount_total = discount_total
+        order.disposable_total = disposable_total
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
         if order.requires_kitchen and order.status == "preparing":
             from apps.kitchen.models import KitchenOrderView
@@ -287,7 +318,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "requires_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "disposable_total", "requires_kitchen", "updated_at"])
 
 
         for discount in filtered_discounts:

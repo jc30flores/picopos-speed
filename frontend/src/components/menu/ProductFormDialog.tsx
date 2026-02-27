@@ -38,6 +38,8 @@ export const ProductFormDialog = ({
   const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
   const [requiresKitchen, setRequiresKitchen] = useState(false);
+  const [disposableFee, setDisposableFee] = useState("0");
+  const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
 
   useEffect(() => {
     if (editingProduct) {
@@ -50,6 +52,8 @@ export const ProductFormDialog = ({
       setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
       setRequiresKitchen(editingProduct.requiresKitchen);
+      setDisposableFee(String(editingProduct.disposableFee ?? 0));
+      setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
     } else {
       setName("");
       setDescription("");
@@ -60,6 +64,8 @@ export const ProductFormDialog = ({
       setExistingImageUrl(null);
       setAvailable(true);
       setRequiresKitchen(false);
+      setDisposableFee("0");
+      setDisposableApplyTo([]);
     }
   }, [editingProduct, open]);
 
@@ -131,6 +137,8 @@ export const ProductFormDialog = ({
         image: imageFile,
         available,
         requiresKitchen,
+        disposableFee: Number(disposableFee || 0),
+        disposableApplyTo,
       });
     } else {
       await createProduct({
@@ -141,6 +149,8 @@ export const ProductFormDialog = ({
         image: imageFile,
         available,
         requiresKitchen,
+        disposableFee: Number(disposableFee || 0),
+        disposableApplyTo,
       });
     }
     await onSaved();
@@ -301,6 +311,41 @@ export const ProductFormDialog = ({
                 onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
                 className="mt-1"
               />
+            </div>
+
+            <div>
+              <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
+              <Input
+                id="disposable-fee"
+                type="number"
+                min="0"
+                step="0.01"
+                value={disposableFee}
+                onChange={(e) => setDisposableFee(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <Label>Aplicar desechables en</Label>
+              {[
+                { key: "dine-in", label: "En local" },
+                { key: "takeout", label: "Para llevar" },
+                { key: "delivery", label: "Delivery" },
+              ].map((item) => (
+                <div key={item.key} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`disposable-${item.key}`}
+                    checked={disposableApplyTo.includes(item.key)}
+                    onCheckedChange={(checked) => {
+                      setDisposableApplyTo((prev) =>
+                        checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key)
+                      );
+                    }}
+                  />
+                  <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
+                </div>
+              ))}
             </div>
 
             <div className="flex items-center space-x-2 pt-6">

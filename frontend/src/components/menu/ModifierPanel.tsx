@@ -116,6 +116,17 @@ export const ModifierPanel = ({
     }
   };
 
+  const handleDragEnterGroup = (targetGroupId: number) => {
+    if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
+    const current = [...assignedGroups];
+    const from = current.indexOf(draggingGroupId);
+    const to = current.indexOf(targetGroupId);
+    if (from < 0 || to < 0) return;
+    current.splice(from, 1);
+    current.splice(to, 0, draggingGroupId);
+    setAssignedGroups(current);
+  };
+
   return (
     <div className="space-y-4">
       <Card className="p-6">
@@ -153,8 +164,9 @@ export const ModifierPanel = ({
               {orderedAssignedGroups.map((group) => (
                 <div
                   key={group.id}
-                  className="flex items-center justify-between gap-2 p-3 border rounded-lg"
+                  className={`flex items-center justify-between gap-2 rounded-lg border p-3 transition-all ${draggingGroupId === group.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                   onDragOver={(event) => event.preventDefault()}
+                  onDragEnter={() => handleDragEnterGroup(group.id)}
                   onDrop={() => handleDropGroup(group.id)}
                 >
                   <button
@@ -167,9 +179,9 @@ export const ModifierPanel = ({
                   >
                     <GripVertical className="h-4 w-4" />
                   </button>
-                  <div>
-                    <div className="font-semibold">{group.name}</div>
-                    <div className="text-sm text-muted-foreground">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold leading-5">{group.name}</div>
+                    <div className="text-sm leading-5 text-muted-foreground">
                       Min: {group.minSelection} · Max: {group.maxSelection}
                       {group.required && " · Obligatorio"}
                     </div>

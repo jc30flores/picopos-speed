@@ -38,6 +38,7 @@ class Order(models.Model):
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    disposable_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unpaid")
     financial_status = models.CharField(
         max_length=20,
@@ -155,6 +156,22 @@ class AppliedDiscount(models.Model):
 
     def __str__(self) -> str:
         return self.discount_name_snapshot
+
+
+class OrderFee(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="fees")
+    order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, related_name="fees", null=True, blank=True)
+    fee_type = models.CharField(max_length=40, default="disposable")
+    fee_name = models.CharField(max_length=120)
+    unit_amount = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    quantity = models.PositiveIntegerField(default=1)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    class Meta:
+        indexes = [models.Index(fields=["order", "fee_type"]) ]
+
+    def __str__(self) -> str:
+        return f"{self.fee_name} ({self.total_amount})"
 
 
 class OrderInvoice(models.Model):

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.conf import settings
+import json
 from apps.menu.models import (
     Category,
     Product,
@@ -25,17 +26,20 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class ModifierSerializer(serializers.ModelSerializer):
+    image_path = serializers.CharField(read_only=True)
+
     class Meta:
         model = Modifier
-        fields = ["id", "name", "price", "is_active", "sort_order"]
+        fields = ["id", "name", "price", "is_active", "sort_order", "image", "image_path"]
 
 
 class ModifierGroupSerializer(serializers.ModelSerializer):
     modifiers = ModifierSerializer(many=True)
+    image_path = serializers.CharField(read_only=True)
 
     class Meta:
         model = ModifierGroup
-        fields = ["id", "name", "required", "min_selection", "max_selection", "modifiers"]
+        fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
 
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
@@ -81,6 +85,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "image_url",
             "available",
             "is_archived",
+            "disposable_fee",
+            "disposable_apply_to",
             "requires_kitchen",
             "modifier_groups",
             "modifier_group_ids",
@@ -108,6 +114,12 @@ class ProductSerializer(serializers.ModelSerializer):
         return url
 
     def update(self, instance, validated_data):
+        disposable_apply_to = validated_data.get("disposable_apply_to")
+        if isinstance(disposable_apply_to, str):
+            try:
+                validated_data["disposable_apply_to"] = json.loads(disposable_apply_to)
+            except Exception:
+                validated_data["disposable_apply_to"] = []
         modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
@@ -128,6 +140,12 @@ class ProductSerializer(serializers.ModelSerializer):
         return instance
 
     def create(self, validated_data):
+        disposable_apply_to = validated_data.get("disposable_apply_to")
+        if isinstance(disposable_apply_to, str):
+            try:
+                validated_data["disposable_apply_to"] = json.loads(disposable_apply_to)
+            except Exception:
+                validated_data["disposable_apply_to"] = []
         modifier_groups = validated_data.get("modifier_groups")
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)

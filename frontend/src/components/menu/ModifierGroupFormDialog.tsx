@@ -14,6 +14,7 @@ interface ModifierOption {
   name: string;
   price: number;
   defaultSelected: boolean;
+  image?: string | null;
 }
 
 interface ModifierGroupFormDialogProps {
@@ -33,6 +34,7 @@ export const ModifierGroupFormDialog = ({
   const [required, setRequired] = useState(false);
   const [minSelection, setMinSelection] = useState(0);
   const [maxSelection, setMaxSelection] = useState(1);
+  const [groupImage, setGroupImage] = useState("");
   const [options, setOptions] = useState<ModifierOption[]>([]);
   const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
@@ -43,12 +45,14 @@ export const ModifierGroupFormDialog = ({
       setRequired(editingGroup.required);
       setMinSelection(editingGroup.minSelection);
       setMaxSelection(editingGroup.maxSelection);
+      setGroupImage(editingGroup.image ?? "");
       setOptions(
         editingGroup.modifiers.map((m) => ({
           id: m.id,
           name: m.name,
           price: m.price,
           defaultSelected: false,
+          image: m.image ?? "",
         }))
       );
     } else {
@@ -56,6 +60,7 @@ export const ModifierGroupFormDialog = ({
       setRequired(false);
       setMinSelection(0);
       setMaxSelection(1);
+      setGroupImage("");
       setOptions([]);
     }
   }, [editingGroup, open]);
@@ -68,6 +73,7 @@ export const ModifierGroupFormDialog = ({
         name: "",
         price: 0,
         defaultSelected: false,
+        image: "",
       },
     ]);
   };
@@ -99,9 +105,11 @@ export const ModifierGroupFormDialog = ({
       required,
       minSelection,
       maxSelection,
+      image: groupImage || null,
       modifiers: options.map((option) => ({
         name: option.name,
         price: option.price,
+        image: option.image || null,
       })),
     });
     await onSaved();
@@ -131,6 +139,17 @@ export const ModifierGroupFormDialog = ({
     }
   };
 
+  const handleDragEnterOption = (targetOptionId: string) => {
+    if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
+    const current = [...options];
+    const from = current.findIndex((opt) => opt.id === draggingOptionId);
+    const to = current.findIndex((opt) => opt.id === targetOptionId);
+    if (from < 0 || to < 0) return;
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+    setOptions(current);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -155,6 +174,20 @@ export const ModifierGroupFormDialog = ({
                 onChange={(e) => setName(e.target.value)}
                 className="mt-1"
               />
+            </div>
+
+            <div>
+              <Label htmlFor="group-image">Imagen del grupo (URL)</Label>
+              <Input
+                id="group-image"
+                placeholder="https://..."
+                value={groupImage}
+                onChange={(e) => setGroupImage(e.target.value)}
+                className="mt-1"
+              />
+              {groupImage ? (
+                <img src={groupImage} alt="Preview grupo" className="mt-2 h-12 w-12 rounded object-cover" />
+              ) : null}
             </div>
 
             <div className="flex items-center space-x-2">
@@ -219,8 +252,9 @@ export const ModifierGroupFormDialog = ({
                 {options.map((option, index) => (
                   <Card
                     key={option.id}
-                    className="p-4"
+                    className={`p-4 transition-all ${draggingOptionId === option.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                     onDragOver={(event) => event.preventDefault()}
+                    onDragEnter={() => handleDragEnterOption(option.id)}
                     onDrop={() => handleDropOption(option.id)}
                   >
                     <div className="flex gap-3">
@@ -265,6 +299,16 @@ export const ModifierGroupFormDialog = ({
                               className="mt-1"
                             />
                           </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Imagen opción (URL)</Label>
+                          <Input
+                            placeholder="https://..."
+                            value={option.image ?? ""}
+                            onChange={(e) => updateOption(option.id, "image", e.target.value)}
+                            className="mt-1"
+                          />
+                          {option.image ? <img src={option.image} alt={option.name || "opción"} className="mt-2 h-10 w-10 rounded object-cover" /> : null}
                         </div>
                         <div className="flex items-center space-x-2">
                           <Checkbox

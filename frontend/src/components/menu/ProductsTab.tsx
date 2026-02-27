@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, Category, ModifierGroup, Product } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -67,6 +67,10 @@ export const ProductsTab = () => {
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
 
   const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -136,6 +140,34 @@ export const ProductsTab = () => {
     }
   };
 
+  const handleCreateCategory = async () => {
+    const normalized = newCategoryName.trim().toUpperCase();
+    if (!normalized) return;
+    try {
+      await createCategory(normalized);
+      setNewCategoryName("");
+      await loadMenuData();
+      toast.success("Categoría creada");
+    } catch (error) {
+      toast.error("No se pudo crear la categoría");
+    }
+  };
+
+  const handleUpdateCategory = async () => {
+    if (!editingCategoryId) return;
+    const normalized = editingCategoryName.trim().toUpperCase();
+    if (!normalized) return;
+    try {
+      await updateCategory(editingCategoryId, normalized);
+      setEditingCategoryId(null);
+      setEditingCategoryName("");
+      await loadMenuData();
+      toast.success("Categoría actualizada");
+    } catch {
+      toast.error("No se pudo actualizar la categoría");
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {/* Left: Products Table (60%) */}
@@ -143,14 +175,19 @@ export const ProductsTab = () => {
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">Productos del Menú</h2>
-            <Button
-              variant="default"
-              className="bg-secondary hover:bg-secondary/90"
-              onClick={handleNewProduct}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Nuevo Producto
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
+                Gestionar categorías
+              </Button>
+              <Button
+                variant="default"
+                className="bg-secondary hover:bg-secondary/90"
+                onClick={handleNewProduct}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Nuevo Producto
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -166,32 +203,17 @@ export const ProductsTab = () => {
 
             <div className="flex gap-2 flex-wrap">
               {categoryNames.map((cat) => (
-                <div key={cat} className="inline-flex items-center gap-1">
-                  <Badge
-                    variant={selectedCategory === cat ? "default" : "outline"}
-                    className={cn(
-                      "cursor-pointer transition-all hover:scale-105",
-                      selectedCategory === cat && "bg-primary text-primary-foreground"
-                    )}
-                    onClick={() => setSelectedCategory(cat)}
-                  >
-                    {cat}
-                  </Badge>
-                  {cat !== "Todos" && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={() => {
-                        const category = categories.find((item) => item.name === cat);
-                        if (category) setCategoryToDelete(category);
-                      }}
-                      title="Eliminar categoría"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                    </Button>
+                <Badge
+                  key={cat}
+                  variant={selectedCategory === cat ? "default" : "outline"}
+                  className={cn(
+                    "cursor-pointer transition-all hover:scale-105",
+                    selectedCategory === cat && "bg-primary text-primary-foreground"
                   )}
-                </div>
+                  onClick={() => setSelectedCategory(cat)}
+                >
+                  {cat}
+                </Badge>
               ))}
             </div>
           </div>
@@ -308,6 +330,43 @@ export const ProductsTab = () => {
             <Button variant="outline" onClick={() => setCategoryToDelete(null)}>Cancelar</Button>
             <Button variant="destructive" onClick={handleDeleteCategory}>Eliminar</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCategoryManagerOpen} onOpenChange={setIsCategoryManagerOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Gestión de Categorías</DialogTitle>
+            <DialogDescription>Crear, editar y eliminar categorías desde un solo lugar.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
+              <Button onClick={handleCreateCategory}>Crear</Button>
+            </div>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {categories.map((category) => (
+                <div key={category.id} className="flex items-center gap-2 rounded-lg border p-2">
+                  {editingCategoryId === category.id ? (
+                    <>
+                      <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
+                      <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex-1 font-medium">{category.name}</div>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
+                        Editar
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setCategoryToDelete(category)}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

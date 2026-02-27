@@ -47,6 +47,13 @@ def render_kitchen_ticket(order: Order) -> dict:
             mod_line = f"  - {modifier.modifier_name_snapshot}"
             lines.append(_line(mod_line))
 
+    for fee in order.fees.all():
+        fee_total = Decimal(fee.total_amount)
+        name = f"{fee.quantity}x {fee.fee_name}"
+        price = _format_money(fee_total)
+        space = _width() - len(price) - 1
+        lines.append(f"{name[:space].ljust(space)} {price}")
+
     lines.append(_divider())
     lines.append(_line("Preparar con cuidado"))
     lines.append(_line("Gracias"))
@@ -95,6 +102,13 @@ def render_customer_ticket(order: Order) -> dict:
                 lines.append(f"{mod_line[:space].ljust(space)} {price_text}")
             else:
                 lines.append(_line(mod_line))
+
+    for fee in order.fees.all():
+        fee_total = Decimal(fee.total_amount)
+        name = f"{fee.quantity}x {fee.fee_name}"
+        price = _format_money(fee_total)
+        space = _width() - len(price) - 1
+        lines.append(f"{name[:space].ljust(space)} {price}")
 
     lines.append(_divider())
     lines.append(_line(f"Subtotal: {_format_money(order.subtotal)}"))

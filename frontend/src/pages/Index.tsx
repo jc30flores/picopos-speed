@@ -60,6 +60,20 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
+const getOrderDisposableTotal = (
+  items: CartItem[],
+  products: Product[],
+  serviceType: "dine-in" | "takeout" | "delivery"
+) =>
+  items.reduce((sum, item) => {
+    const product = products.find((candidate) => candidate.id === item.productId);
+    if (!product) return sum;
+    const applyTo = product.disposableApplyTo ?? [];
+    const fee = product.disposableFee ?? 0;
+    if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
+    return sum + fee * item.quantity;
+  }, 0);
+
 const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
@@ -204,7 +218,14 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
-  const { subtotal, tax, total } = calculateCartTotals(cart, taxRate);
+  const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+  const totalsWithDisposable = calculateCartTotals(
+    cart.map((item) => ({ ...item, price: item.price })),
+    taxRate
+  );
+  const total = totalsWithDisposable.total + cartDisposableTotal;
+  const subtotal = total / (1 + taxRate);
+  const tax = total - subtotal;
   const paymentTotal =
     checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
@@ -215,16 +236,23 @@ const POS = () => {
   const paidTotal = paymentAmountValue + tipAmountValue;
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
+  const checkoutDisposableTotal = checkoutDraft
+    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
+    : 0;
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
 
-    const draftTotals = calculateCartTotals(cart, taxRate);
+    const draftBase = calculateCartTotals(cart, taxRate);
+    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const draftTotal = draftBase.total + draftDisposableTotal;
+    const draftSubtotal = draftTotal / (1 + taxRate);
+    const draftTax = draftTotal - draftSubtotal;
     const draft = {
       items: [...cart],
-      subtotal: draftTotals.subtotal,
-      tax: draftTotals.tax,
-      total: draftTotals.total,
+      subtotal: draftSubtotal,
+      tax: draftTax,
+      total: draftTotal,
       taxRate,
       serviceType,
       createdAt: Date.now(),
@@ -321,7 +349,6 @@ const POS = () => {
               modifiers: item.modifiers,
             })),
           });
-          console.info("createOrder response", order);
           const createdId =
             (order as Order | undefined)?.id ??
             (order as unknown as { order_id?: number }).order_id ??
@@ -564,6 +591,12 @@ const POS = () => {
                   <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
                   <span>{formatMoney(tax)}</span>
                 </div>
+                {cartDisposableTotal > 0 && (
+                  <div className="flex justify-between">
+                    <span>Desechables</span>
+                    <span>{formatMoney(cartDisposableTotal)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
                   <span className="text-secondary">{formatMoney(total)}</span>
@@ -665,6 +698,12 @@ const POS = () => {
                     <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
                     <span>{formatMoney(checkoutDraft.tax)}</span>
                   </div>
+                  {checkoutDisposableTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span>Desechables</span>
+                      <span>{formatMoney(checkoutDisposableTotal)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between font-semibold text-foreground">
                     <span>Total</span>
                     <span>{formatMoney(checkoutDraft.total)}</span>
