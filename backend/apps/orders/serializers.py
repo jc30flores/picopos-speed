@@ -7,6 +7,7 @@ from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDisco
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
+from apps.orders.discount_engine import apply_discounts
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -89,6 +90,7 @@ class OrderSerializer(serializers.ModelSerializer):
                 "type": discount.discount_type_snapshot,
                 "value": discount.discount_value_snapshot,
                 "amount": discount.amount_discounted,
+                "breakdown": discount.breakdown,
             }
             for discount in obj.applied_discounts.all()
         ]
@@ -202,25 +204,13 @@ class OrderCreateSerializer(serializers.Serializer):
             **validated_data,
         )
 
-        discounts = Discount.objects.filter(is_active=True, auto_apply=True)
-        now = timezone.localtime(timezone.now())
-        day_of_week = now.weekday()
-        time_of_day = now.time()
+        discounts = list(Discount.objects.filter(is_active=True, auto_apply=True).prefetch_related("targets").order_by("priority", "id"))
 
-        filtered_discounts = []
-        for discount in discounts:
-            if discount.service_types and service_type_key not in discount.service_types:
-                continue
-            if discount.days_of_week and day_of_week not in discount.days_of_week:
-                continue
-            if discount.start_time and discount.end_time:
-                if not (discount.start_time <= time_of_day <= discount.end_time):
-                    continue
-            filtered_discounts.append(discount)
-
+        order_lines = []
         subtotal = Decimal("0")
         disposable_total = Decimal("0")
-        discount_totals = {}
+        product_totals: dict[int, Decimal] = {}
+        category_totals: dict[int, Decimal] = {}
 
         for item_data in items_data:
             modifiers = item_data.pop("modifiers", [])
@@ -229,33 +219,8 @@ class OrderCreateSerializer(serializers.Serializer):
             price_snapshot = item_data["price_snapshot"]
             quantity = item_data["quantity"]
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
-            item_total = (price_snapshot + modifiers_total) * quantity
-
-            line_discount_total = Decimal("0")
-            for discount in filtered_discounts:
-                if discount.applies_to == "products":
-                    if not discount.targets.filter(product_id=product.id).exists():
-                        continue
-                elif discount.applies_to == "categories":
-                    if not discount.targets.filter(category_id=product.category_id).exists():
-                        continue
-                else:
-                    continue
-                if discount.min_amount and item_total < discount.min_amount:
-                    continue
-
-                if discount.type == "percent":
-                    discount_amount = (item_total * (discount.value / Decimal("100"))).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
-                    )
-                else:
-                    discount_amount = min(discount.value, item_total)
-
-                line_discount_total += discount_amount
-                discount_totals[discount.id] = discount_totals.get(discount.id, Decimal("0")) + discount_amount
-
-            item_total_after_discount = max(item_total - line_discount_total, Decimal("0"))
-            subtotal += item_total_after_discount
+            line_total = (price_snapshot + modifiers_total) * quantity
+            line_key = f"line-{len(order_lines)}"
 
             order_item = OrderItem.objects.create(order=order, product=product, **item_data)
             for modifier_data in modifiers:
@@ -278,27 +243,39 @@ class OrderCreateSerializer(serializers.Serializer):
                     total_amount=fee_total,
                 )
 
-        if subtotal > 0:
-            for discount in filtered_discounts:
-                if discount.applies_to != "order":
-                    continue
-                if discount.min_amount and subtotal < discount.min_amount:
-                    continue
+            order_lines.append(
+                {
+                    "line_key": line_key,
+                    "order_item_id": order_item.id,
+                    "product_id": product.id,
+                    "category_id": product.category_id,
+                    "quantity": quantity,
+                    "price_snapshot": price_snapshot,
+                    "modifier_total": modifiers_total,
+                    "line_total": line_total,
+                }
+            )
+            subtotal += line_total
+            product_totals[product.id] = product_totals.get(product.id, Decimal("0")) + line_total
+            category_totals[product.category_id] = category_totals.get(product.category_id, Decimal("0")) + line_total
 
-                if discount.type == "percent":
-                    discount_amount = (subtotal * (discount.value / Decimal("100"))).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
-                    )
-                else:
-                    discount_amount = min(discount.value, subtotal)
+        eligible_discounts = []
+        for discount in discounts:
+            discount.target_product_ids = set(discount.targets.filter(product__isnull=False).values_list("product_id", flat=True))
+            discount.target_category_ids = set(discount.targets.filter(category__isnull=False).values_list("category_id", flat=True))
+            eligible_discounts.append(discount)
 
-                if discount_amount > 0:
-                    discount_totals[discount.id] = discount_totals.get(discount.id, Decimal("0")) + discount_amount
-                    subtotal = max(subtotal - discount_amount, Decimal("0"))
+        discount_result = apply_discounts(
+            order_lines,
+            eligible_discounts,
+            service_type_key=service_type_key,
+            disposable_total=disposable_total,
+        )
 
-        subtotal += disposable_total
+        discount_totals = discount_result["discount_totals"]
         discount_total = sum(discount_totals.values(), Decimal("0"))
-        total = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        subtotal_after_discounts = discount_result["subtotal_after_discounts"]
+        total = discount_result["final_subtotal"].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         tax_config = TaxConfig.objects.filter(is_active=True).order_by("-id").first()
         tax_rate = tax_config.rate if tax_config else Decimal("0.13")
@@ -319,8 +296,12 @@ class OrderCreateSerializer(serializers.Serializer):
             )
         order.save(update_fields=["subtotal", "tax", "total", "discount_total", "disposable_total", "requires_kitchen", "updated_at"])
 
+        breakdown_by_discount = {}
+        for entry in discount_result["applied_breakdown"]:
+            did = entry.get("discount_id")
+            breakdown_by_discount.setdefault(did, []).append(entry)
 
-        for discount in filtered_discounts:
+        for discount in eligible_discounts:
             amount = discount_totals.get(discount.id)
             if amount and amount > 0:
                 AppliedDiscount.objects.create(
@@ -329,6 +310,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     discount_type_snapshot=discount.type,
                     discount_value_snapshot=discount.value,
                     amount_discounted=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                    breakdown={"entries": breakdown_by_discount.get(discount.id, [])},
                 )
 
         return order

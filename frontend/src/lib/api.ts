@@ -106,7 +106,7 @@ export type Discount = {
   id: number;
   name: string;
   description?: string;
-  type: "percent" | "fixed";
+  type: "percent" | "fixed" | "bxgy";
   value: number;
   appliesTo: "order" | "categories" | "products";
   targetCategoryIds?: number[];
@@ -118,6 +118,9 @@ export type Discount = {
   minAmount?: number | null;
   autoApply: boolean;
   isActive: boolean;
+  priority?: number;
+  stackable?: boolean;
+  bxgyConfig?: Record<string, unknown>;
 };
 
 export type ServiceType = {
@@ -364,6 +367,9 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
     id: item.id,
     name: item.name,
     isActive: item.is_active,
+    priority: item.priority ?? 100,
+    stackable: Boolean(item.stackable),
+    bxgyConfig: item.bxgy_config ?? undefined,
   }));
 };
 
@@ -422,6 +428,9 @@ export const createCategory = async (name: string): Promise<Category> => {
     id: data.id,
     name: data.name,
     isActive: data.is_active,
+    priority: data.priority ?? 100,
+    stackable: Boolean(data.stackable),
+    bxgyConfig: data.bxgy_config ?? undefined,
   };
 };
 
@@ -989,6 +998,9 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -1006,6 +1018,9 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     minAmount: item.min_amount ? Number(item.min_amount) : null,
     autoApply: item.auto_apply,
     isActive: item.is_active,
+    priority: item.priority ?? 100,
+    stackable: Boolean(item.stackable),
+    bxgyConfig: item.bxgy_config ?? undefined,
   }));
 };
 
@@ -1377,6 +1392,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
       min_amount: payload.minAmount ?? null,
       auto_apply: payload.autoApply,
       is_active: payload.isActive,
+      priority: payload.priority ?? 100,
+      stackable: payload.stackable ?? false,
+      bxgy_config: payload.bxgyConfig ?? {},
     }),
   });
   const data = await handleJson<{
@@ -1395,6 +1413,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>(response);
   return {
     id: data.id,
@@ -1412,6 +1433,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     minAmount: data.min_amount ? Number(data.min_amount) : null,
     autoApply: data.auto_apply,
     isActive: data.is_active,
+    priority: data.priority ?? 100,
+    stackable: Boolean(data.stackable),
+    bxgyConfig: data.bxgy_config ?? undefined,
   };
 };
 
@@ -1434,6 +1458,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
       min_amount: payload.minAmount ?? null,
       auto_apply: payload.autoApply,
       is_active: payload.isActive,
+      priority: payload.priority ?? 100,
+      stackable: payload.stackable ?? false,
+      bxgy_config: payload.bxgyConfig ?? {},
     }),
   });
   const data = await handleJson<{
@@ -1452,6 +1479,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>(response);
   return {
     id: data.id,
@@ -1469,6 +1499,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     minAmount: data.min_amount ? Number(data.min_amount) : null,
     autoApply: data.auto_apply,
     isActive: data.is_active,
+    priority: data.priority ?? 100,
+    stackable: Boolean(data.stackable),
+    bxgyConfig: data.bxgy_config ?? undefined,
   };
 };
 
@@ -1831,6 +1864,9 @@ export const getSchedules = async (
     break_minutes: number;
     allows_overtime: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>>(response);
   return data.map((item) => ({
     id: String(item.id),

@@ -139,6 +139,7 @@ class Discount(models.Model):
     TYPE_CHOICES = [
         ("percent", "Percent"),
         ("fixed", "Fixed"),
+        ("bxgy", "Buy X Get Y"),
     ]
     APPLIES_CHOICES = [
         ("order", "Order"),
@@ -158,6 +159,9 @@ class Discount(models.Model):
     days_of_week = ArrayField(models.IntegerField(), default=list, blank=True)
     start_time = models.TimeField(blank=True, null=True)
     end_time = models.TimeField(blank=True, null=True)
+    priority = models.IntegerField(default=100)
+    stackable = models.BooleanField(default=False)
+    bxgy_config = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["name"]

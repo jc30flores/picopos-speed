@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Plus, Edit, Copy, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Discount } from "@/types/menu";
+import { BxgyConfig, Discount } from "@/types/menu";
 import { DiscountFormDialog } from "./DiscountFormDialog";
 import {
   getCategories,
@@ -57,11 +57,14 @@ export const DiscountsTab = () => {
       minAmount: discount.minAmount ?? 0,
       autoApply: discount.autoApply,
       active: discount.isActive,
+      priority: discount.priority ?? 100,
+      stackable: Boolean(discount.stackable),
+      bxgyConfig: (discount.bxgyConfig as BxgyConfig | undefined) ?? undefined,
     }));
     setDiscounts(mapped);
   };
 
-  const loadDiscountData = async () => {
+  const loadDiscountData = useCallback(async () => {
     const [categoriesResponse, serviceTypesResponse, discountsResponse] = await Promise.all([
       getCategories(),
       getServiceTypes(),
@@ -73,13 +76,13 @@ export const DiscountsTab = () => {
       discountsResponse,
       new Map(categoriesResponse.map((category) => [category.id, category.name]))
     );
-  };
+  }, []);
 
   useEffect(() => {
     loadDiscountData().catch((error) => {
       console.error("Failed to load discounts", error);
     });
-  }, []);
+  }, [loadDiscountData]);
 
   const filteredDiscounts = discounts.filter((discount) => {
     const matchesSearch = discount.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -95,6 +98,7 @@ export const DiscountsTab = () => {
     const types: Record<string, string> = {
       percent: "Porcentaje",
       fixed: "Monto fijo",
+      bxgy: "Compra X / Lleva Y",
     };
     return types[type] || type;
   };
@@ -193,6 +197,7 @@ export const DiscountsTab = () => {
               <SelectItem value="all">Todos los tipos</SelectItem>
               <SelectItem value="percent">Porcentaje</SelectItem>
               <SelectItem value="fixed">Monto fijo</SelectItem>
+              <SelectItem value="bxgy">Compra X / Lleva Y</SelectItem>
             </SelectContent>
           </Select>
 
@@ -240,6 +245,7 @@ export const DiscountsTab = () => {
                       <div className="text-sm font-semibold text-secondary mt-1">
                         {discount.type === "percent" && `${discount.value}%`}
                         {discount.type === "fixed" && `$${discount.value}`}
+                        {discount.type === "bxgy" && "BXGY"}
                       </div>
                     </div>
                   </TableCell>

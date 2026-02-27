@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.conf import settings
 import json
+from decimal import Decimal
 from apps.menu.models import (
     Category,
     Product,
@@ -376,11 +377,67 @@ class DiscountSerializer(serializers.ModelSerializer):
             "days_of_week",
             "start_time",
             "end_time",
+            "priority",
+            "stackable",
+            "bxgy_config",
             "target_category_ids",
             "target_product_ids",
             "target_category_ids_display",
             "target_product_ids_display",
         ]
+
+    def _validate_bxgy_config(self, config):
+        if not isinstance(config, dict):
+            raise serializers.ValidationError({"bxgy_config": "Configuración BXGY inválida."})
+        rules = config.get("rules")
+        if not isinstance(rules, list) or not rules:
+            raise serializers.ValidationError({"bxgy_config": "Debes agregar al menos una regla BXGY."})
+
+        signatures = set()
+        for idx, rule in enumerate(rules):
+            path = f"bxgy_config.rules[{idx}]"
+            if not isinstance(rule, dict):
+                raise serializers.ValidationError({"bxgy_config": f"{path} inválida."})
+            buy = rule.get("buy") or {}
+            get = rule.get("get") or {}
+            limits = rule.get("limits") or {}
+
+            buy_qty = int(buy.get("qty", 0) or 0)
+            get_qty = int(get.get("qty", 0) or 0)
+            if buy_qty < 1 or get_qty < 1:
+                raise serializers.ValidationError({"bxgy_config": "Las cantidades de compra y regalo deben ser mayores a 0."})
+
+            buy_selector = (buy.get("selector") or {})
+            get_selector = (get.get("selector") or {})
+            for selector, label in ((buy_selector, "compra"), (get_selector, "regalo")):
+                mode = selector.get("mode")
+                product_ids = selector.get("product_ids") or []
+                category_ids = selector.get("category_ids") or []
+                if mode not in {"products", "categories"}:
+                    raise serializers.ValidationError({"bxgy_config": f"Selector de {label} inválido."})
+                if mode == "products" and not product_ids:
+                    raise serializers.ValidationError({"bxgy_config": "Selecciona al menos un producto o categoría para la compra."})
+                if mode == "categories" and not category_ids:
+                    raise serializers.ValidationError({"bxgy_config": "Selecciona al menos un producto o categoría para la compra."})
+
+            reward = (get.get("reward") or {})
+            reward_type = reward.get("type")
+            reward_value = Decimal(str(reward.get("value", 0) or 0))
+            if reward_type not in {"percent", "fixed_amount", "fixed_price"}:
+                raise serializers.ValidationError({"bxgy_config": "Tipo de recompensa BXGY inválido."})
+            if reward_type == "percent" and (reward_value < 1 or reward_value > 100):
+                raise serializers.ValidationError({"bxgy_config": "El porcentaje de recompensa debe estar entre 1 y 100."})
+            if reward_type in {"fixed_amount", "fixed_price"} and reward_value < 0:
+                raise serializers.ValidationError({"bxgy_config": "El valor de recompensa debe ser mayor o igual a 0."})
+
+            max_apps = int(limits.get("max_applications_per_ticket", 0) or 0)
+            if max_apps < 1:
+                raise serializers.ValidationError({"bxgy_config": "El límite de aplicaciones por ticket debe ser mayor o igual a 1."})
+
+            signature = json.dumps(rule, sort_keys=True)
+            if signature in signatures:
+                raise serializers.ValidationError({"bxgy_config": "La regla ya existe / configuración duplicada."})
+            signatures.add(signature)
 
     def validate(self, attrs):
         applies_to = attrs.get("applies_to")
@@ -402,6 +459,12 @@ class DiscountSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"target_product_ids": "Algunos productos seleccionados no existen."}
                 )
+
+        discount_type = attrs.get("type") or (self.instance.type if self.instance else None)
+        bxgy_config = attrs.get("bxgy_config") if "bxgy_config" in attrs else (self.instance.bxgy_config if self.instance else {})
+        if discount_type == "bxgy":
+            self._validate_bxgy_config(bxgy_config)
+
         return attrs
 
     def get_target_category_ids_display(self, obj: Discount):

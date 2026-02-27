@@ -8,7 +8,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Discount } from "@/types/menu";
+import { BxgyConfig, Discount } from "@/types/menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Category, Product, ServiceType, createDiscount, getProducts, updateDiscount } from "@/lib/api";
 import { Clock, X } from "lucide-react";
@@ -25,6 +25,22 @@ interface DiscountFormDialogProps {
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const DAYS_SHORT = ["D", "L", "M", "X", "J", "V", "S"];
 
+type DiscountType = "percent" | "fixed" | "bxgy";
+type AppliesTo = "order" | "categories" | "products";
+type ServiceTypeKey = "dine-in" | "takeout" | "delivery" | "kiosk";
+type BxgyRewardType = "percent" | "fixed_amount" | "fixed_price";
+type BxgyApplyTo = "cheapest" | "most_expensive";
+
+const SERVICE_TYPE_KEYS: readonly ServiceTypeKey[] = ["dine-in", "takeout", "delivery", "kiosk"];
+const BXGY_REWARD_TYPES: readonly BxgyRewardType[] = ["percent", "fixed_amount", "fixed_price"];
+const BXGY_APPLY_TO: readonly BxgyApplyTo[] = ["cheapest", "most_expensive"];
+
+const isServiceTypeKey = (value: string): value is ServiceTypeKey => SERVICE_TYPE_KEYS.includes(value as ServiceTypeKey);
+const isDiscountType = (value: string): value is DiscountType => ["percent", "fixed", "bxgy"].includes(value);
+const isAppliesTo = (value: string): value is AppliesTo => ["order", "categories", "products"].includes(value);
+const isBxgyRewardType = (value: string): value is BxgyRewardType => BXGY_REWARD_TYPES.includes(value as BxgyRewardType);
+const isBxgyApplyTo = (value: string): value is BxgyApplyTo => BXGY_APPLY_TO.includes(value as BxgyApplyTo);
+
 export const DiscountFormDialog = ({
   open,
   onOpenChange,
@@ -36,16 +52,27 @@ export const DiscountFormDialog = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [active, setActive] = useState(true);
-  const [type, setType] = useState<"percent" | "fixed">("percent");
+  const [type, setType] = useState<DiscountType>("percent");
   const [value, setValue] = useState("");
-  const [appliesTo, setAppliesTo] = useState<"order" | "categories" | "products">("order");
+  const [appliesTo, setAppliesTo] = useState<AppliesTo>("order");
   const [targetCategories, setTargetCategories] = useState<string[]>([]);
   const [days, setDays] = useState<number[]>([]);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
-  const [serviceTypes, setServiceTypes] = useState<("dine-in" | "takeout" | "delivery" | "kiosk")[]>([]);
+  const [serviceTypes, setServiceTypes] = useState<ServiceTypeKey[]>([]);
   const [minAmount, setMinAmount] = useState("");
   const [autoApply, setAutoApply] = useState(true);
+
+  const [priority, setPriority] = useState(100);
+  const [stackable, setStackable] = useState(false);
+  const [bxgyBuyQty, setBxgyBuyQty] = useState(2);
+  const [bxgyGetQty, setBxgyGetQty] = useState(1);
+  const [bxgyRewardType, setBxgyRewardType] = useState<BxgyRewardType>("percent");
+  const [bxgyRewardValue, setBxgyRewardValue] = useState("100");
+  const [bxgyApplyTo, setBxgyApplyTo] = useState<BxgyApplyTo>("cheapest");
+  const [bxgyIncludeModifiers, setBxgyIncludeModifiers] = useState(false);
+  const [bxgyMaxApplications, setBxgyMaxApplications] = useState(1);
+  const [bxgyExcludeDisposables, setBxgyExcludeDisposables] = useState(true);
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Record<number, Product>>({});
   const [productSearch, setProductSearch] = useState("");
@@ -155,6 +182,18 @@ export const DiscountFormDialog = ({
       setServiceTypes(editingDiscount.serviceTypes);
       setMinAmount(editingDiscount.minAmount ? String(editingDiscount.minAmount) : "");
       setAutoApply(editingDiscount.autoApply);
+      setPriority(editingDiscount.priority ?? 100);
+      setStackable(Boolean(editingDiscount.stackable));
+      const bx = editingDiscount.bxgyConfig as BxgyConfig | undefined;
+      const firstRule = bx?.rules?.[0];
+      setBxgyBuyQty(Number(firstRule?.buy?.qty ?? 2));
+      setBxgyGetQty(Number(firstRule?.get?.qty ?? 1));
+      setBxgyRewardType(isBxgyRewardType(firstRule?.get?.reward?.type ?? "") ? firstRule!.get.reward.type : "percent");
+      setBxgyRewardValue(String(firstRule?.get?.reward?.value ?? 100));
+      setBxgyApplyTo(isBxgyApplyTo(firstRule?.get?.apply_to ?? "") ? firstRule!.get.apply_to : "cheapest");
+      setBxgyIncludeModifiers(Boolean(firstRule?.get?.include_paid_modifiers ?? firstRule?.get?.reward?.include_paid_modifiers));
+      setBxgyMaxApplications(Number(firstRule?.limits?.max_applications_per_ticket ?? 1));
+      setBxgyExcludeDisposables(Boolean(bx?.global?.exclude_disposables ?? true));
       setSelectedProductIds(editingDiscount.targetProductIds ?? []);
     } else {
       // Reset form
@@ -171,6 +210,16 @@ export const DiscountFormDialog = ({
       setServiceTypes([]);
       setMinAmount("");
       setAutoApply(true);
+      setPriority(100);
+      setStackable(false);
+      setBxgyBuyQty(2);
+      setBxgyGetQty(1);
+      setBxgyRewardType("percent");
+      setBxgyRewardValue("100");
+      setBxgyApplyTo("cheapest");
+      setBxgyIncludeModifiers(false);
+      setBxgyMaxApplications(1);
+      setBxgyExcludeDisposables(true);
       setSelectedProductIds([]);
     }
     setSelectedProducts({});
@@ -192,7 +241,7 @@ export const DiscountFormDialog = ({
     }
   };
 
-  const toggleServiceType = (service: "dine-in" | "takeout" | "delivery" | "kiosk") => {
+  const toggleServiceType = (service: ServiceTypeKey) => {
     if (serviceTypes.includes(service)) {
       setServiceTypes(serviceTypes.filter((s) => s !== service));
     } else {
@@ -241,7 +290,9 @@ export const DiscountFormDialog = ({
     const minAmountNumber = parseNumber(minAmount);
     
     // Value
-    if (type === "percent") {
+    if (type === "bxgy") {
+      parts.push(`Compra ${bxgyBuyQty} y lleva ${bxgyGetQty}`);
+    } else if (type === "percent") {
       parts.push(`${valueNumber}% de descuento`);
     } else {
       parts.push(`$${valueNumber} de descuento`);
@@ -287,11 +338,12 @@ export const DiscountFormDialog = ({
     const valueNumber = parseNumber(value);
     return (
       name.trim() !== "" &&
-      valueNumber > 0 &&
+      (type === "bxgy" || valueNumber > 0) &&
       days.length > 0 &&
       serviceTypes.length > 0 &&
       (appliesTo !== "categories" || targetCategories.length > 0) &&
-      (appliesTo !== "products" || selectedProductIds.length > 0)
+      (appliesTo !== "products" || selectedProductIds.length > 0) &&
+      (type !== "bxgy" || (bxgyBuyQty > 0 && bxgyGetQty > 0 && Number(bxgyRewardValue) >= 0 && bxgyMaxApplications > 0))
     );
   };
 
@@ -301,17 +353,56 @@ export const DiscountFormDialog = ({
       .filter((category) => targetCategories.includes(category.name))
       .map((category) => category.id);
     const serviceTypeKeys = availableServiceTypes
-      .filter((service) => serviceTypes.includes(service.key as any))
+      .filter((service) => isServiceTypeKey(service.key) && serviceTypes.includes(service.key))
       .map((service) => service.key);
     const valueNumber = parseNumber(value);
     const minAmountNumber = parseNumber(minAmount);
+
+    const bxgyConfig = type === "bxgy" ? {
+      rules: [
+        {
+          id: "rule-1",
+          buy: {
+            qty: bxgyBuyQty,
+            selector: {
+              mode: appliesTo === "categories" ? "categories" : "products",
+              product_ids: appliesTo === "products" ? selectedProductIds : [],
+              category_ids: appliesTo === "categories" ? categoryIds : [],
+            },
+          },
+          get: {
+            qty: bxgyGetQty,
+            selector: {
+              mode: appliesTo === "categories" ? "categories" : "products",
+              product_ids: appliesTo === "products" ? selectedProductIds : [],
+              category_ids: appliesTo === "categories" ? categoryIds : [],
+            },
+            reward: {
+              type: bxgyRewardType,
+              value: Number(bxgyRewardValue || 0),
+              include_paid_modifiers: bxgyIncludeModifiers,
+            },
+            apply_to: bxgyApplyTo,
+            include_paid_modifiers: bxgyIncludeModifiers,
+          },
+          limits: {
+            max_applications_per_ticket: bxgyMaxApplications,
+          },
+        },
+      ],
+      global: {
+        exclude_disposables: bxgyExcludeDisposables,
+        stacking: stackable ? "allow_with_stackables" : "none",
+        overlap_buy_get: false,
+      },
+    } : undefined;
 
     const payload = {
       id: editingDiscount ? Number(editingDiscount.id) : 0,
       name,
       description,
       type,
-      value: valueNumber,
+      value: type === "bxgy" ? 0 : valueNumber,
       appliesTo,
       targetCategoryIds: categoryIds,
       targetProductIds: selectedProductIds,
@@ -322,6 +413,9 @@ export const DiscountFormDialog = ({
       minAmount: minAmountNumber,
       autoApply,
       isActive: active,
+      priority,
+      stackable,
+      bxgyConfig,
     };
     if (editingDiscount && Number(editingDiscount.id) > 0) {
       await updateDiscount(Number(editingDiscount.id), payload);
@@ -386,8 +480,8 @@ export const DiscountFormDialog = ({
           {/* Section 2: Discount Type */}
           <Card className="p-4">
             <h3 className="font-semibold mb-3">Tipo de descuento</h3>
-            <RadioGroup value={type} onValueChange={(v: any) => setType(v)}>
-              <div className="grid grid-cols-2 gap-3">
+            <RadioGroup value={type} onValueChange={(value) => { if (isDiscountType(value)) setType(value); }}>
+              <div className="grid grid-cols-3 gap-3">
                 <div className="flex items-center space-x-2">
                   <RadioGroupItem value="percent" id="type-percent" />
                   <Label htmlFor="type-percent" className="cursor-pointer">
@@ -400,20 +494,27 @@ export const DiscountFormDialog = ({
                     Monto fijo
                   </Label>
                 </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="bxgy" id="type-bxgy" />
+                  <Label htmlFor="type-bxgy" className="cursor-pointer">
+                    Compra X / Lleva Y
+                  </Label>
+                </div>
               </div>
             </RadioGroup>
             <div className="mt-3">
               <Label htmlFor="discount-value">
-                {type === "fixed" ? "Monto del descuento" : "Porcentaje de descuento"}
+                {type === "fixed" ? "Monto del descuento" : type === "bxgy" ? "No aplica" : "Porcentaje de descuento"}
               </Label>
               <Input
                 id="discount-value"
                 type="number"
                 min={0}
-                max={type === "fixed" ? undefined : 100}
+                max={type === "fixed" ? undefined : type === "bxgy" ? 0 : 100}
                 step={type === "fixed" ? 0.01 : 1}
-                value={value}
+                value={type === "bxgy" ? "0" : value}
                 onChange={(e) => setValue(e.target.value)}
+                disabled={type === "bxgy"}
                 placeholder="0"
                 className="mt-1"
               />
@@ -423,7 +524,7 @@ export const DiscountFormDialog = ({
           {/* Section 3: Application */}
           <Card className="p-4">
             <h3 className="font-semibold mb-3">Aplicación</h3>
-            <RadioGroup value={appliesTo} onValueChange={(v: any) => setAppliesTo(v)}>
+            <RadioGroup value={appliesTo} onValueChange={(value) => { if (isAppliesTo(value)) setAppliesTo(value); }}>
               <div className="space-y-2">
                 <div className="flex items-center space-x-2">
                   <RadioGroupItem value="order" id="applies-order" />
@@ -629,6 +730,69 @@ export const DiscountFormDialog = ({
             )}
           </Card>
 
+          {type === "bxgy" && (
+            <Card className="p-4">
+              <h3 className="font-semibold mb-3">Regla Compra X / Lleva Y</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Cantidad de compra (X)</Label>
+                  <Input type="number" min={1} value={bxgyBuyQty} onChange={(e) => setBxgyBuyQty(Number(e.target.value) || 1)} className="mt-1" />
+                </div>
+                <div>
+                  <Label>Cantidad de regalo (Y)</Label>
+                  <Input type="number" min={1} value={bxgyGetQty} onChange={(e) => setBxgyGetQty(Number(e.target.value) || 1)} className="mt-1" />
+                </div>
+                <div>
+                  <Label>Recompensa</Label>
+                  <Select value={bxgyRewardType} onValueChange={(value) => { if (isBxgyRewardType(value)) setBxgyRewardType(value); }}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="percent">Porcentaje</SelectItem>
+                      <SelectItem value="fixed_amount">Monto fijo</SelectItem>
+                      <SelectItem value="fixed_price">Precio fijo</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Valor de recompensa</Label>
+                  <Input type="number" min={0} value={bxgyRewardValue} onChange={(e) => setBxgyRewardValue(e.target.value)} className="mt-1" />
+                </div>
+                <div>
+                  <Label>Aplicar al</Label>
+                  <Select value={bxgyApplyTo} onValueChange={(value) => { if (isBxgyApplyTo(value)) setBxgyApplyTo(value); }}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cheapest">Más barato</SelectItem>
+                      <SelectItem value="most_expensive">Más caro</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Máx. aplicaciones por ticket</Label>
+                  <Input type="number" min={1} value={bxgyMaxApplications} onChange={(e) => setBxgyMaxApplications(Number(e.target.value) || 1)} className="mt-1" />
+                </div>
+              </div>
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="bxgy-mods" checked={bxgyIncludeModifiers} onCheckedChange={(c) => setBxgyIncludeModifiers(Boolean(c))} />
+                  <Label htmlFor="bxgy-mods">Incluir modificadores de pago</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="bxgy-disposable" checked={bxgyExcludeDisposables} onCheckedChange={(c) => setBxgyExcludeDisposables(Boolean(c))} />
+                  <Label htmlFor="bxgy-disposable">Excluir desechables del descuento</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="discount-stackable" checked={stackable} onCheckedChange={(c) => setStackable(Boolean(c))} />
+                  <Label htmlFor="discount-stackable">Acumulable con otros descuentos</Label>
+                </div>
+                <div>
+                  <Label>Prioridad</Label>
+                  <Input type="number" value={priority} onChange={(e) => setPriority(Number(e.target.value) || 100)} className="mt-1 max-w-[180px]" />
+                </div>
+              </div>
+            </Card>
+          )}
+
           {/* Section 4: Conditions */}
           <Card className="p-4">
             <h3 className="font-semibold mb-3">Condiciones de activación</h3>
@@ -650,7 +814,7 @@ export const DiscountFormDialog = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <Label htmlFor="start-time">Desde</Label>
                   <div className="relative mt-1">
@@ -701,9 +865,9 @@ export const DiscountFormDialog = ({
                   {availableServiceTypes.map((service) => (
                     <Badge
                       key={service.id}
-                      variant={serviceTypes.includes(service.key as any) ? "default" : "outline"}
+                      variant={isServiceTypeKey(service.key) && serviceTypes.includes(service.key) ? "default" : "outline"}
                       className="cursor-pointer"
-                      onClick={() => toggleServiceType(service.key as any)}
+                      onClick={() => { if (isServiceTypeKey(service.key)) toggleServiceType(service.key); }}
                     >
                       {service.label}
                     </Badge>
