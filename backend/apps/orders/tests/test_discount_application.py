@@ -296,3 +296,100 @@ class DiscountApplicationTests(TestCase):
             self.assertTrue(serializer.is_valid(), serializer.errors)
             order = serializer.save()
         self.assertEqual(order.discount_total, Decimal("1.00"))
+
+    def test_bxgy_same_pool_qty_three_applies_once(self) -> None:
+        discount = Discount.objects.create(
+            name="2+1 taco",
+            description="",
+            type="bxgy",
+            value="0.00",
+            applies_to="products",
+            is_active=True,
+            auto_apply=True,
+            bxgy_config={
+                "rules": [
+                    {
+                        "id": "r1",
+                        "mode": "same_pool",
+                        "buy": {"qty": 2, "selector": {"mode": "products", "product_ids": [self.product_a.id], "category_ids": []}},
+                        "get": {
+                            "qty": 1,
+                            "selector": {"mode": "products", "product_ids": [self.product_a.id], "category_ids": []},
+                            "reward": {"type": "percent", "value": 100},
+                            "apply_to": "cheapest",
+                        },
+                        "limits": {"max_applications_per_ticket": 5},
+                    }
+                ],
+            },
+        )
+        DiscountRuleTarget.objects.create(discount=discount, product=self.product_a)
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "items": [
+                    {"product_id": self.product_a.id, "product_name_snapshot": self.product_a.name, "price_snapshot": "10.00", "quantity": 3, "modifiers": []},
+                ],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        self.assertEqual(order.discount_total, Decimal("10.00"))
+
+    def test_bxgy_separate_pool_deterministic_order(self) -> None:
+        discount = Discount.objects.create(
+            name="Compra taco lleva soda",
+            description="",
+            type="bxgy",
+            value="0.00",
+            applies_to="order",
+            is_active=True,
+            auto_apply=True,
+            bxgy_config={
+                "rules": [
+                    {
+                        "id": "r1",
+                        "mode": "separate_pool",
+                        "buy": {"qty": 2, "selector": {"mode": "products", "product_ids": [self.product_a.id], "category_ids": []}},
+                        "get": {
+                            "qty": 1,
+                            "selector": {"mode": "products", "product_ids": [self.product_c.id], "category_ids": []},
+                            "reward": {"type": "percent", "value": 100},
+                            "apply_to": "cheapest",
+                        },
+                        "limits": {"max_applications_per_ticket": 2},
+                    }
+                ],
+            },
+        )
+        DiscountRuleTarget.objects.create(discount=discount, product=self.product_a)
+        DiscountRuleTarget.objects.create(discount=discount, product=self.product_c)
+
+        payload_a = {
+            "branch_id": self.branch.id,
+            "service_type_key": self.service_type.key,
+            "items": [
+                {"product_id": self.product_a.id, "product_name_snapshot": self.product_a.name, "price_snapshot": "10.00", "quantity": 2, "modifiers": []},
+                {"product_id": self.product_c.id, "product_name_snapshot": self.product_c.name, "price_snapshot": "5.00", "quantity": 1, "modifiers": []},
+            ],
+        }
+        payload_b = {
+            "branch_id": self.branch.id,
+            "service_type_key": self.service_type.key,
+            "items": [
+                {"product_id": self.product_c.id, "product_name_snapshot": self.product_c.name, "price_snapshot": "5.00", "quantity": 1, "modifiers": []},
+                {"product_id": self.product_a.id, "product_name_snapshot": self.product_a.name, "price_snapshot": "10.00", "quantity": 2, "modifiers": []},
+            ],
+        }
+
+        serializer_a = OrderCreateSerializer(data=payload_a)
+        serializer_b = OrderCreateSerializer(data=payload_b)
+        self.assertTrue(serializer_a.is_valid(), serializer_a.errors)
+        self.assertTrue(serializer_b.is_valid(), serializer_b.errors)
+        order_a = serializer_a.save()
+        order_b = serializer_b.save()
+
+        self.assertEqual(order_a.discount_total, Decimal("5.00"))
+        self.assertEqual(order_b.discount_total, Decimal("5.00"))
+

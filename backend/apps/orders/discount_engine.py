@@ -165,9 +165,11 @@ def apply_discounts(lines: list[dict[str, Any]], discounts: list[Discount], *, s
                 get_qty = int(get.get("qty", 0) or 0)
                 if buy_qty < 1 or get_qty < 1:
                     continue
+
                 include_mods = bool((get.get("reward") or {}).get("include_paid_modifiers", get.get("include_paid_modifiers", False)))
                 buy_selector = buy.get("selector") or {}
-                get_selector = get.get("selector") or {}
+                mode = rule.get("mode") or "same_pool"
+                get_selector = (get.get("selector") or {}) if mode == "separate_pool" else buy_selector
                 reward = get.get("reward") or {}
                 apply_to = get.get("apply_to") or "cheapest"
                 max_apps = int(limits.get("max_applications_per_ticket", 1) or 1)
@@ -177,15 +179,69 @@ def apply_discounts(lines: list[dict[str, Any]], discounts: list[Discount], *, s
                 if not buy_candidates or not get_candidates:
                     continue
 
-                buy_candidates.sort(key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))
-                get_candidates.sort(key=lambda u: (u.unit_price(include_mods), u.line_item_id, u.unit_index))
-                if apply_to == "most_expensive":
-                    get_candidates.sort(key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))
+                price_key = lambda u: (u.unit_price(include_mods), u.line_item_id, u.unit_index)
+                get_asc = sorted(get_candidates, key=price_key)
+                get_desc = sorted(get_candidates, key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))
+                buy_desc = sorted(buy_candidates, key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))
+
+                if mode == "same_pool":
+                    pool = sorted(buy_candidates, key=price_key)
+                    available_pool = [u for u in pool if u.unit_id not in consumed_buy and u.unit_id not in consumed_get]
+                    possible = len(available_pool) // (buy_qty + get_qty)
+                    applications = min(possible, max_apps)
+                    if applications < 1:
+                        continue
+
+                    ranked_pool = sorted(available_pool, key=price_key)
+                    ranked_pool_desc = sorted(available_pool, key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))
+                    discount_units_needed = applications * get_qty
+                    discount_units = ranked_pool[:discount_units_needed] if apply_to == "cheapest" else ranked_pool_desc[:discount_units_needed]
+                    discount_unit_ids = {u.unit_id for u in discount_units}
+
+                    if len(discount_units) < discount_units_needed:
+                        continue
+
+                    remaining_pool = [u for u in available_pool if u.unit_id not in discount_unit_ids]
+                    buy_units_needed = applications * buy_qty
+                    selected_buy_units = sorted(remaining_pool, key=lambda u: (-u.unit_price(include_mods), u.line_item_id, u.unit_index))[:buy_units_needed]
+                    if len(selected_buy_units) < buy_units_needed:
+                        continue
+
+                    for unit in selected_buy_units:
+                        consumed_buy.add(unit.unit_id)
+
+                    for unit in discount_units:
+                        consumed_get.add(unit.unit_id)
+                        unit_price = unit.unit_price(include_mods)
+                        reward_type = reward.get("type")
+                        reward_value = Decimal(str(reward.get("value", 0) or 0))
+                        if reward_type == "percent":
+                            amount = q2(unit_price * (reward_value / Decimal("100")))
+                        elif reward_type == "fixed_amount":
+                            amount = q2(min(unit_price, reward_value))
+                        elif reward_type == "fixed_price":
+                            amount = q2(max(Decimal("0"), unit_price - reward_value))
+                        else:
+                            amount = Decimal("0")
+                        if amount > 0:
+                            line_discounts[unit.line_key] += amount
+                            register(
+                                discount,
+                                amount,
+                                {
+                                    "scope": "bxgy",
+                                    "mode": mode,
+                                    "rule_id": rule.get("id"),
+                                    "line_key": unit.line_key,
+                                    "unit_id": unit.unit_id,
+                                },
+                            )
+                    continue
 
                 applications = 0
                 while applications < max_apps:
-                    available_buy = [u for u in buy_candidates if u.unit_id not in consumed_buy and (overlap or u.unit_id not in consumed_get)]
-                    available_get = [u for u in get_candidates if u.unit_id not in consumed_get and (overlap or u.unit_id not in consumed_buy)]
+                    available_buy = [u for u in buy_desc if u.unit_id not in consumed_buy and (overlap or u.unit_id not in consumed_get)]
+                    available_get = [u for u in (get_asc if apply_to == "cheapest" else get_desc) if u.unit_id not in consumed_get and (overlap or u.unit_id not in consumed_buy)]
                     if len(available_buy) < buy_qty or len(available_get) < get_qty:
                         break
 
@@ -202,12 +258,11 @@ def apply_discounts(lines: list[dict[str, Any]], discounts: list[Discount], *, s
                         if reward_type == "percent":
                             amount = q2(unit_price * (reward_value / Decimal("100")))
                         elif reward_type == "fixed_amount":
-                            amount = min(unit_price, reward_value)
+                            amount = q2(min(unit_price, reward_value))
                         elif reward_type == "fixed_price":
-                            amount = max(Decimal("0"), unit_price - reward_value)
+                            amount = q2(max(Decimal("0"), unit_price - reward_value))
                         else:
                             amount = Decimal("0")
-                        amount = q2(amount)
                         if amount > 0:
                             line_discounts[unit.line_key] += amount
                             register(
@@ -215,6 +270,7 @@ def apply_discounts(lines: list[dict[str, Any]], discounts: list[Discount], *, s
                                 amount,
                                 {
                                     "scope": "bxgy",
+                                    "mode": mode,
                                     "rule_id": rule.get("id"),
                                     "line_key": unit.line_key,
                                     "unit_id": unit.unit_id,

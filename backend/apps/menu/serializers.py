@@ -386,6 +386,19 @@ class DiscountSerializer(serializers.ModelSerializer):
             "target_product_ids_display",
         ]
 
+    def _validate_selector(self, selector, *, error_message: str):
+        if not isinstance(selector, dict):
+            raise serializers.ValidationError({"bxgy_config": error_message})
+        mode = selector.get("mode")
+        product_ids = selector.get("product_ids") or []
+        category_ids = selector.get("category_ids") or []
+        if mode not in {"products", "categories"}:
+            raise serializers.ValidationError({"bxgy_config": error_message})
+        if mode == "products" and not product_ids:
+            raise serializers.ValidationError({"bxgy_config": error_message})
+        if mode == "categories" and not category_ids:
+            raise serializers.ValidationError({"bxgy_config": error_message})
+
     def _validate_bxgy_config(self, config):
         if not isinstance(config, dict):
             raise serializers.ValidationError({"bxgy_config": "Configuración BXGY inválida."})
@@ -402,33 +415,44 @@ class DiscountSerializer(serializers.ModelSerializer):
             get = rule.get("get") or {}
             limits = rule.get("limits") or {}
 
+            mode = rule.get("mode") or "same_pool"
+            if mode not in {"same_pool", "separate_pool"}:
+                raise serializers.ValidationError({"bxgy_config": "Modo BXGY inválido."})
+
             buy_qty = int(buy.get("qty", 0) or 0)
             get_qty = int(get.get("qty", 0) or 0)
-            if buy_qty < 1 or get_qty < 1:
-                raise serializers.ValidationError({"bxgy_config": "Las cantidades de compra y regalo deben ser mayores a 0."})
+            if buy_qty < 1:
+                raise serializers.ValidationError({"bxgy_config": "La cantidad de compra (X) debe ser mayor o igual a 1."})
+            if get_qty < 1:
+                raise serializers.ValidationError({"bxgy_config": "La cantidad de regalo (Y) debe ser mayor o igual a 1."})
 
-            buy_selector = (buy.get("selector") or {})
-            get_selector = (get.get("selector") or {})
-            for selector, label in ((buy_selector, "compra"), (get_selector, "regalo")):
-                mode = selector.get("mode")
-                product_ids = selector.get("product_ids") or []
-                category_ids = selector.get("category_ids") or []
-                if mode not in {"products", "categories"}:
-                    raise serializers.ValidationError({"bxgy_config": f"Selector de {label} inválido."})
-                if mode == "products" and not product_ids:
-                    raise serializers.ValidationError({"bxgy_config": "Selecciona al menos un producto o categoría para la compra."})
-                if mode == "categories" and not category_ids:
-                    raise serializers.ValidationError({"bxgy_config": "Selecciona al menos un producto o categoría para la compra."})
+            buy_selector = buy.get("selector") or {}
+            self._validate_selector(
+                buy_selector,
+                error_message="Selecciona al menos un producto o categoría para la compra.",
+            )
+
+            if mode == "separate_pool":
+                get_selector = get.get("selector") or {}
+                self._validate_selector(
+                    get_selector,
+                    error_message="Selecciona al menos un producto o categoría para el regalo (GET).",
+                )
+            else:
+                get["selector"] = buy_selector
+                rule["get"] = get
 
             reward = (get.get("reward") or {})
             reward_type = reward.get("type")
             reward_value = Decimal(str(reward.get("value", 0) or 0))
             if reward_type not in {"percent", "fixed_amount", "fixed_price"}:
                 raise serializers.ValidationError({"bxgy_config": "Tipo de recompensa BXGY inválido."})
-            if reward_type == "percent" and (reward_value < 1 or reward_value > 100):
+            if reward_type == "percent" and (reward_value <= 0 or reward_value > 100):
                 raise serializers.ValidationError({"bxgy_config": "El porcentaje de recompensa debe estar entre 1 y 100."})
-            if reward_type in {"fixed_amount", "fixed_price"} and reward_value < 0:
-                raise serializers.ValidationError({"bxgy_config": "El valor de recompensa debe ser mayor o igual a 0."})
+            if reward_type == "fixed_amount" and reward_value <= 0:
+                raise serializers.ValidationError({"bxgy_config": "El monto fijo debe ser mayor que 0."})
+            if reward_type == "fixed_price" and reward_value < 0:
+                raise serializers.ValidationError({"bxgy_config": "El precio fijo debe ser mayor o igual a 0."})
 
             max_apps = int(limits.get("max_applications_per_ticket", 0) or 0)
             if max_apps < 1:

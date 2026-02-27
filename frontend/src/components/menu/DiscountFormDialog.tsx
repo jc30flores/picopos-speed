@@ -30,6 +30,7 @@ type AppliesTo = "order" | "categories" | "products";
 type ServiceTypeKey = "dine-in" | "takeout" | "delivery" | "kiosk";
 type BxgyRewardType = "percent" | "fixed_amount" | "fixed_price";
 type BxgyApplyTo = "cheapest" | "most_expensive";
+type BxgyMode = "same_pool" | "separate_pool";
 
 const SERVICE_TYPE_KEYS: readonly ServiceTypeKey[] = ["dine-in", "takeout", "delivery", "kiosk"];
 const BXGY_REWARD_TYPES: readonly BxgyRewardType[] = ["percent", "fixed_amount", "fixed_price"];
@@ -66,6 +67,10 @@ export const DiscountFormDialog = ({
   const [priority, setPriority] = useState(100);
   const [stackable, setStackable] = useState(false);
   const [bxgyBuyQty, setBxgyBuyQty] = useState(2);
+  const [bxgyMode, setBxgyMode] = useState<BxgyMode>("same_pool");
+  const [bxgyGetAppliesTo, setBxgyGetAppliesTo] = useState<"categories" | "products">("products");
+  const [bxgyGetCategoryNames, setBxgyGetCategoryNames] = useState<string[]>([]);
+  const [bxgyGetProductIds, setBxgyGetProductIds] = useState<number[]>([]);
   const [bxgyGetQty, setBxgyGetQty] = useState(1);
   const [bxgyRewardType, setBxgyRewardType] = useState<BxgyRewardType>("percent");
   const [bxgyRewardValue, setBxgyRewardValue] = useState("100");
@@ -109,8 +114,9 @@ export const DiscountFormDialog = ({
 
   useEffect(() => {
     if (!open || appliesTo !== "products") return;
-    if (selectedProductIds.length === 0) return;
-    const missingIds = selectedProductIds.filter((id) => !selectedProducts[id]);
+    const idsToResolve = Array.from(new Set([...selectedProductIds, ...bxgyGetProductIds]));
+    if (idsToResolve.length === 0) return;
+    const missingIds = idsToResolve.filter((id) => !selectedProducts[id]);
     if (missingIds.length === 0) return;
     getProducts({ ids: missingIds })
       .then((results) => {
@@ -125,7 +131,7 @@ export const DiscountFormDialog = ({
       .catch((error) => {
         console.error("Failed to load selected products", error);
       });
-  }, [open, appliesTo, selectedProductIds, selectedProducts]);
+  }, [open, appliesTo, selectedProductIds, bxgyGetProductIds, selectedProducts]);
 
   useEffect(() => {
     if (!open || appliesTo !== "products") return;
@@ -187,6 +193,18 @@ export const DiscountFormDialog = ({
       const bx = editingDiscount.bxgyConfig as BxgyConfig | undefined;
       const firstRule = bx?.rules?.[0];
       setBxgyBuyQty(Number(firstRule?.buy?.qty ?? 2));
+      setBxgyMode((firstRule?.mode as BxgyMode) || "same_pool");
+      const getSelector = firstRule?.get?.selector;
+      if (getSelector?.mode === "categories") {
+        setBxgyGetAppliesTo("categories");
+        const categoryIdSet = new Set((getSelector.category_ids ?? []).map(String));
+        setBxgyGetCategoryNames(categories.filter((c) => categoryIdSet.has(String(c.id))).map((c) => c.name));
+        setBxgyGetProductIds([]);
+      } else {
+        setBxgyGetAppliesTo("products");
+        setBxgyGetProductIds(getSelector?.product_ids ?? []);
+        setBxgyGetCategoryNames([]);
+      }
       setBxgyGetQty(Number(firstRule?.get?.qty ?? 1));
       setBxgyRewardType(isBxgyRewardType(firstRule?.get?.reward?.type ?? "") ? firstRule!.get.reward.type : "percent");
       setBxgyRewardValue(String(firstRule?.get?.reward?.value ?? 100));
@@ -213,6 +231,10 @@ export const DiscountFormDialog = ({
       setPriority(100);
       setStackable(false);
       setBxgyBuyQty(2);
+      setBxgyMode("same_pool");
+      setBxgyGetAppliesTo("products");
+      setBxgyGetCategoryNames([]);
+      setBxgyGetProductIds([]);
       setBxgyGetQty(1);
       setBxgyRewardType("percent");
       setBxgyRewardValue("100");
@@ -231,7 +253,7 @@ export const DiscountFormDialog = ({
     setHasMoreProducts(true);
     setProductsLoading(false);
     setProductsError(null);
-  }, [editingDiscount, open]);
+  }, [editingDiscount, open, categories]);
 
   const toggleDay = (dayIndex: number) => {
     if (days.includes(dayIndex)) {
@@ -257,6 +279,23 @@ export const DiscountFormDialog = ({
     }
   };
 
+  const toggleGetCategory = (category: string) => {
+    if (bxgyGetCategoryNames.includes(category)) {
+      setBxgyGetCategoryNames(bxgyGetCategoryNames.filter((c) => c !== category));
+    } else {
+      setBxgyGetCategoryNames([...bxgyGetCategoryNames, category]);
+    }
+  };
+
+  const selectedGetProductList = useMemo(
+    () =>
+      bxgyGetProductIds.map((id) => ({
+        id,
+        name: selectedProducts[id]?.name ?? `Producto #${id}`,
+      })),
+    [bxgyGetProductIds, selectedProducts]
+  );
+
   const selectedProductList = useMemo(
     () =>
       selectedProductIds.map((id) => ({
@@ -265,6 +304,20 @@ export const DiscountFormDialog = ({
       })),
     [selectedProductIds, selectedProducts]
   );
+
+  const toggleGetProductSelection = (product: Product) => {
+    setBxgyGetProductIds((prev) => {
+      if (prev.includes(product.id)) {
+        return prev.filter((id) => id !== product.id);
+      }
+      return [...prev, product.id];
+    });
+    setSelectedProducts((prev) => ({ ...prev, [product.id]: product }));
+  };
+
+  const removeSelectedGetProduct = (productId: number) => {
+    setBxgyGetProductIds((prev) => prev.filter((id) => id !== productId));
+  };
 
   const toggleProductSelection = (product: Product) => {
     setSelectedProductIds((prev) => {
@@ -284,6 +337,10 @@ export const DiscountFormDialog = ({
     setSelectedProductIds([]);
   };
 
+  const clearGetProducts = () => {
+    setBxgyGetProductIds([]);
+  };
+
   const getPreviewText = () => {
     const parts: string[] = [];
     const valueNumber = parseNumber(value);
@@ -291,7 +348,11 @@ export const DiscountFormDialog = ({
     
     // Value
     if (type === "bxgy") {
-      parts.push(`Compra ${bxgyBuyQty} y lleva ${bxgyGetQty}`);
+      if (bxgyMode === "same_pool") {
+        parts.push(`Compra ${bxgyBuyQty} y lleva ${bxgyGetQty} del mismo pool`);
+      } else {
+        parts.push(`Compra ${bxgyBuyQty} y lleva ${bxgyGetQty} de un pool GET separado`);
+      }
     } else if (type === "percent") {
       parts.push(`${valueNumber}% de descuento`);
     } else {
@@ -343,7 +404,14 @@ export const DiscountFormDialog = ({
       serviceTypes.length > 0 &&
       (appliesTo !== "categories" || targetCategories.length > 0) &&
       (appliesTo !== "products" || selectedProductIds.length > 0) &&
-      (type !== "bxgy" || (bxgyBuyQty > 0 && bxgyGetQty > 0 && Number(bxgyRewardValue) >= 0 && bxgyMaxApplications > 0))
+      (type !== "bxgy" || (
+        appliesTo !== "order" &&
+        bxgyBuyQty > 0 &&
+        bxgyGetQty > 0 &&
+        Number(bxgyRewardValue) >= 0 &&
+        bxgyMaxApplications > 0 &&
+        (bxgyMode === "same_pool" || (bxgyGetAppliesTo === "categories" ? bxgyGetCategoryNames.length > 0 : bxgyGetProductIds.length > 0))
+      ))
     );
   };
 
@@ -358,10 +426,13 @@ export const DiscountFormDialog = ({
     const valueNumber = parseNumber(value);
     const minAmountNumber = parseNumber(minAmount);
 
+    const getCategoryIds = categories.filter((category) => bxgyGetCategoryNames.includes(category.name)).map((category) => category.id);
+
     const bxgyConfig = type === "bxgy" ? {
       rules: [
         {
           id: "rule-1",
+          mode: bxgyMode,
           buy: {
             qty: bxgyBuyQty,
             selector: {
@@ -372,11 +443,17 @@ export const DiscountFormDialog = ({
           },
           get: {
             qty: bxgyGetQty,
-            selector: {
-              mode: appliesTo === "categories" ? "categories" : "products",
-              product_ids: appliesTo === "products" ? selectedProductIds : [],
-              category_ids: appliesTo === "categories" ? categoryIds : [],
-            },
+            selector: bxgyMode === "same_pool"
+              ? {
+                  mode: appliesTo === "categories" ? "categories" : "products",
+                  product_ids: appliesTo === "products" ? selectedProductIds : [],
+                  category_ids: appliesTo === "categories" ? categoryIds : [],
+                }
+              : {
+                  mode: bxgyGetAppliesTo === "categories" ? "categories" : "products",
+                  product_ids: bxgyGetAppliesTo === "products" ? bxgyGetProductIds : [],
+                  category_ids: bxgyGetAppliesTo === "categories" ? getCategoryIds : [],
+                },
             reward: {
               type: bxgyRewardType,
               value: Number(bxgyRewardValue || 0),
@@ -527,7 +604,7 @@ export const DiscountFormDialog = ({
             <RadioGroup value={appliesTo} onValueChange={(value) => { if (isAppliesTo(value)) setAppliesTo(value); }}>
               <div className="space-y-2">
                 <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="order" id="applies-order" />
+                  <RadioGroupItem value="order" id="applies-order" disabled={type === "bxgy"} />
                   <Label htmlFor="applies-order" className="cursor-pointer">
                     Ticket completo
                   </Label>
@@ -546,6 +623,10 @@ export const DiscountFormDialog = ({
                 </div>
               </div>
             </RadioGroup>
+
+            {type === "bxgy" && appliesTo === "order" && (
+              <p className="mt-3 text-sm text-destructive">Para BXGY debes seleccionar categorías o productos para BUY.</p>
+            )}
 
             {appliesTo === "categories" && (
               <div className="mt-3">
@@ -731,8 +812,132 @@ export const DiscountFormDialog = ({
           </Card>
 
           {type === "bxgy" && (
-            <Card className="p-4">
-              <h3 className="font-semibold mb-3">Regla Compra X / Lleva Y</h3>
+            <Card className="p-4 space-y-4">
+              <h3 className="font-semibold">Regla Compra X / Lleva Y</h3>
+
+              <div className="space-y-2">
+                <h4 className="font-medium">¿De dónde sale el regalo (GET)?</h4>
+                <RadioGroup value={bxgyMode} onValueChange={(value) => setBxgyMode(value === "separate_pool" ? "separate_pool" : "same_pool")}>
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="same_pool" id="bxgy-mode-same" />
+                      <Label htmlFor="bxgy-mode-same" className="cursor-pointer">Del mismo grupo (mismo pool) — recomendado</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="separate_pool" id="bxgy-mode-separate" />
+                      <Label htmlFor="bxgy-mode-separate" className="cursor-pointer">De un grupo diferente (BUY y GET separados)</Label>
+                    </div>
+                  </div>
+                </RadioGroup>
+              </div>
+
+              {bxgyMode === "separate_pool" && (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <h4 className="font-medium">Productos que el cliente puede llevar como regalo (GET)</h4>
+                  <RadioGroup value={bxgyGetAppliesTo} onValueChange={(value) => setBxgyGetAppliesTo(value === "categories" ? "categories" : "products")}>
+                    <div className="flex gap-4">
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="products" id="bxgy-get-products" />
+                        <Label htmlFor="bxgy-get-products" className="cursor-pointer">Productos</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="categories" id="bxgy-get-categories" />
+                        <Label htmlFor="bxgy-get-categories" className="cursor-pointer">Categorías</Label>
+                      </div>
+                    </div>
+                  </RadioGroup>
+
+                  {bxgyGetAppliesTo === "categories" ? (
+                    <div className="flex gap-2 flex-wrap">
+                      {categories.map((category) => (
+                        <Badge
+                          key={category.id}
+                          variant={bxgyGetCategoryNames.includes(category.name) ? "default" : "outline"}
+                          className="cursor-pointer"
+                          onClick={() => toggleGetCategory(category.name)}
+                        >
+                          {category.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">{bxgyGetProductIds.length} seleccionados</span>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const newIds = products.map((product) => product.id);
+                              setBxgyGetProductIds((prev) => {
+                                const next = [...prev];
+                                newIds.forEach((id) => {
+                                  if (!next.includes(id)) next.push(id);
+                                });
+                                return next;
+                              });
+                              setSelectedProducts((prev) => {
+                                const next = { ...prev };
+                                products.forEach((product) => {
+                                  next[product.id] = product;
+                                });
+                                return next;
+                              });
+                            }}
+                            disabled={products.length === 0}
+                          >
+                            Seleccionar visibles
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={clearGetProducts} disabled={bxgyGetProductIds.length === 0}>
+                            Limpiar selección
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="max-h-44 overflow-y-auto rounded-md border">
+                        {products.map((product) => (
+                          <label
+                            key={`bxgy-get-${product.id}`}
+                            className="flex items-center justify-between gap-3 border-b px-3 py-2 text-sm last:border-b-0"
+                          >
+                            <div>
+                              <div className="font-medium">{product.name}</div>
+                              <div className="text-muted-foreground">${product.price.toFixed(2)}</div>
+                            </div>
+                            <Checkbox
+                              checked={bxgyGetProductIds.includes(product.id)}
+                              onCheckedChange={() => toggleGetProductSelection(product)}
+                            />
+                          </label>
+                        ))}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {selectedGetProductList.map((product) => (
+                          <Badge key={product.id} variant="secondary" className="flex items-center gap-1 pr-1">
+                            <span>{product.name}</span>
+                            <button
+                              type="button"
+                              className="rounded-full p-1 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              onClick={() => removeSelectedGetProduct(product.id)}
+                              aria-label={`Quitar ${product.name}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {bxgyMode === "separate_pool" && (bxgyGetAppliesTo === "categories" ? bxgyGetCategoryNames.length === 0 : bxgyGetProductIds.length === 0) && (
+                    <p className="text-sm text-destructive">Selecciona al menos un producto/categoría para el regalo (GET).</p>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Cantidad de compra (X)</Label>
@@ -742,6 +947,19 @@ export const DiscountFormDialog = ({
                   <Label>Cantidad de regalo (Y)</Label>
                   <Input type="number" min={1} value={bxgyGetQty} onChange={(e) => setBxgyGetQty(Number(e.target.value) || 1)} className="mt-1" />
                 </div>
+                <div>
+                  <Label>Máx. aplicaciones por ticket</Label>
+                  <Input type="number" min={1} value={bxgyMaxApplications} onChange={(e) => setBxgyMaxApplications(Number(e.target.value) || 1)} className="mt-1" />
+                </div>
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                {bxgyMode === "same_pool"
+                  ? "Requiere X+Y productos del mismo conjunto."
+                  : "Requiere X productos BUY y Y productos GET en el ticket."}
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Recompensa</Label>
                   <Select value={bxgyRewardType} onValueChange={(value) => { if (isBxgyRewardType(value)) setBxgyRewardType(value); }}>
@@ -767,12 +985,19 @@ export const DiscountFormDialog = ({
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Máx. aplicaciones por ticket</Label>
-                  <Input type="number" min={1} value={bxgyMaxApplications} onChange={(e) => setBxgyMaxApplications(Number(e.target.value) || 1)} className="mt-1" />
-                </div>
               </div>
-              <div className="mt-3 space-y-2">
+
+              <div className="rounded-lg border border-dashed p-3 text-sm">
+                <p className="font-medium">Vista previa de aplicación</p>
+                <p className="text-muted-foreground mt-1">
+                  {bxgyMode === "same_pool"
+                    ? `Compra ${bxgyBuyQty} y lleva ${bxgyGetQty} de los mismos productos seleccionados. Se descuenta el ${bxgyApplyTo === "cheapest" ? "más barato" : "más caro"}.`
+                    : `Compra ${bxgyBuyQty} de BUY y lleva ${bxgyGetQty} de GET. Se descuenta el ${bxgyApplyTo === "cheapest" ? "más barato" : "más caro"}.`}
+                </p>
+                <p className="text-muted-foreground mt-1">Aplicaciones máx por ticket: {bxgyMaxApplications}</p>
+              </div>
+
+              <div className="mt-1 space-y-2">
                 <div className="flex items-center space-x-2">
                   <Checkbox id="bxgy-mods" checked={bxgyIncludeModifiers} onCheckedChange={(c) => setBxgyIncludeModifiers(Boolean(c))} />
                   <Label htmlFor="bxgy-mods">Incluir modificadores de pago</Label>

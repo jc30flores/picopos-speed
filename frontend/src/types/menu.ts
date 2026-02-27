@@ -4,6 +4,7 @@
 export interface BxgyConfig {
   rules: Array<{
     id: string;
+    mode?: 'same_pool' | 'separate_pool';
     buy: { qty: number; selector: { mode: 'products' | 'categories'; product_ids: number[]; category_ids: number[] } };
     get: {
       qty: number;
