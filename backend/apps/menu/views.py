@@ -183,9 +183,35 @@ class MenuImageHealthView(APIView):
 
 class ModifierGroupListCreateView(generics.ListCreateAPIView):
     serializer_class = ModifierGroupSerializer
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
         return ModifierGroup.objects.prefetch_related("modifiers").order_by("name")
+
+    def create(self, request, *args, **kwargs):
+        modifiers_raw = request.data.get("modifiers")
+        modifiers = []
+        if isinstance(modifiers_raw, str):
+            import json
+            try:
+                modifiers = json.loads(modifiers_raw)
+            except Exception:
+                modifiers = []
+        elif isinstance(modifiers_raw, list):
+            modifiers = modifiers_raw
+
+        payload = {
+            "name": request.data.get("name"),
+            "required": request.data.get("required"),
+            "min_selection": request.data.get("min_selection"),
+            "max_selection": request.data.get("max_selection"),
+            "modifiers": modifiers,
+        }
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        group = serializer.save()
+        headers = self.get_success_headers(serializer.data)
+        return Response(self.get_serializer(group).data, status=status.HTTP_201_CREATED, headers=headers)
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:

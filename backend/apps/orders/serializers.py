@@ -303,11 +303,10 @@ class OrderCreateSerializer(serializers.Serializer):
         tax_config = TaxConfig.objects.filter(is_active=True).order_by("-id").first()
         tax_rate = tax_config.rate if tax_config else Decimal("0.13")
         divisor = Decimal("1.00") + tax_rate
-        subtotal_exclusive = (total / divisor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        tax = (total - subtotal_exclusive).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        tax_included = (total - (total / divisor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-        order.subtotal = subtotal_exclusive
-        order.tax = tax
+        order.subtotal = total
+        order.tax = tax_included
         order.total = total
         order.discount_total = discount_total
         order.disposable_total = disposable_total

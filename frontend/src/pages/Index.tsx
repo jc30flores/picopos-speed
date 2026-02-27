@@ -156,12 +156,15 @@ const POS = () => {
 
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
-    const draftTotals = calculateCartTotals(items, taxRate);
+    const draftItemsGross = calculateCartTotals(items, taxRate).total;
+    const draftDisposable = getOrderDisposableTotal(items, products, serviceType);
+    const draftTotal = draftItemsGross + draftDisposable;
+    const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...items],
-      subtotal: draftTotals.subtotal,
-      tax: draftTotals.tax,
-      total: draftTotals.total,
+      subtotal: draftItemsGross,
+      tax: draftTaxIncluded,
+      total: draftTotal,
       taxRate,
       serviceType,
       createdAt: Date.now(),
@@ -219,13 +222,13 @@ const POS = () => {
   };
 
   const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-  const totalsWithDisposable = calculateCartTotals(
+  const itemsGross = calculateCartTotals(
     cart.map((item) => ({ ...item, price: item.price })),
     taxRate
-  );
-  const total = totalsWithDisposable.total + cartDisposableTotal;
-  const subtotal = total / (1 + taxRate);
-  const tax = total - subtotal;
+  ).total;
+  const total = itemsGross + cartDisposableTotal;
+  const tax = total - total / (1 + taxRate);
+  const subtotal = itemsGross;
   const paymentTotal =
     checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
@@ -243,15 +246,14 @@ const POS = () => {
   const handleCheckout = async () => {
     if (cart.length === 0) return;
 
-    const draftBase = calculateCartTotals(cart, taxRate);
+    const draftItemsGross = calculateCartTotals(cart, taxRate).total;
     const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-    const draftTotal = draftBase.total + draftDisposableTotal;
-    const draftSubtotal = draftTotal / (1 + taxRate);
-    const draftTax = draftTotal - draftSubtotal;
+    const draftTotal = draftItemsGross + draftDisposableTotal;
+    const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...cart],
-      subtotal: draftSubtotal,
-      tax: draftTax,
+      subtotal: draftItemsGross,
+      tax: draftTaxIncluded,
       total: draftTotal,
       taxRate,
       serviceType,
@@ -584,11 +586,11 @@ const POS = () => {
             <div className="p-4 border-t space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span>Subtotal</span>
+                  <span>Subtotal (productos)</span>
                   <span>{formatMoney(subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Impuesto ({(taxRate * 100).toFixed(0)}%)</span>
+                  <span>IVA incluido ({(taxRate * 100).toFixed(0)}%)</span>
                   <span>{formatMoney(tax)}</span>
                 </div>
                 {cartDisposableTotal > 0 && (
@@ -641,7 +643,7 @@ const POS = () => {
                   {formatMoney(checkoutDraft.total)}
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Incluye impuesto {(checkoutDraft.taxRate * 100).toFixed(0)}% (
+                  IVA incluido {(checkoutDraft.taxRate * 100).toFixed(0)}% (
                   {formatMoney(checkoutDraft.tax)})
                 </div>
               </div>
@@ -691,11 +693,11 @@ const POS = () => {
                 <div className="mb-2 font-semibold">Resumen</div>
                 <div className="space-y-1 text-muted-foreground">
                   <div className="flex justify-between">
-                    <span>Subtotal</span>
+                    <span>Subtotal (productos)</span>
                     <span>{formatMoney(checkoutDraft.subtotal)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Impuesto ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
+                    <span>IVA incluido ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
                     <span>{formatMoney(checkoutDraft.tax)}</span>
                   </div>
                   {checkoutDisposableTotal > 0 && (

@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
@@ -301,17 +302,13 @@ export const ProductFormDialog = ({
               </Popover>
             </div>
 
-            <div>
-              <Label htmlFor="product-image">Imagen</Label>
-              <Input
-                id="product-image"
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
-                className="mt-1"
-              />
-            </div>
+            <ImageUploadField
+              id="product-image"
+              label="Imagen del producto"
+              file={imageFile}
+              previewUrl={localImageUrl ?? existingImageUrl}
+              onChange={setImageFile}
+            />
 
             <div>
               <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>

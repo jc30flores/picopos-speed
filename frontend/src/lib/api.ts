@@ -127,6 +127,7 @@ export type ServiceType = {
 
 export type TaxConfig = {
   rate: number;
+  taxIncluded: boolean;
 };
 
 export type FeatureFlag = {
@@ -793,25 +794,34 @@ export const createModifierGroup = async (payload: {
   required: boolean;
   minSelection: number;
   maxSelection: number;
-  image?: string | null;
-  modifiers: Array<{ name: string; price: number; isActive?: boolean; image?: string | null }>;
+  image?: File | null;
+  modifiers: Array<{ name: string; price: number; isActive?: boolean; image?: File | null }>;
 }): Promise<ModifierGroup> => {
-  const response = await request("/menu/modifier-groups/", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: payload.name,
-      required: payload.required,
-      min_selection: payload.minSelection,
-      max_selection: payload.maxSelection,
-      image: payload.image,
-      modifiers: payload.modifiers.map((modifier) => ({
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  formData.append("required", payload.required ? "true" : "false");
+  formData.append("min_selection", String(payload.minSelection));
+  formData.append("max_selection", String(payload.maxSelection));
+  formData.append(
+    "modifiers",
+    JSON.stringify(
+      payload.modifiers.map((modifier) => ({
         name: modifier.name,
         price: modifier.price,
         is_active: modifier.isActive ?? true,
-        image: modifier.image,
-      })),
-    }),
+      }))
+    )
+  );
+  if (payload.image) formData.append("group_image", payload.image);
+  payload.modifiers.forEach((modifier, index) => {
+    if (modifier.image) {
+      formData.append(`option_image_${index}`, modifier.image);
+    }
+  });
+
+  const response = await request("/menu/modifier-groups/", {
+    method: "POST",
+    body: formData,
   });
   const data = await handleJson<{
     id: number;
@@ -894,8 +904,8 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
   if (cachedTaxConfig) return cachedTaxConfig;
   const response = await request("/core/tax-config/active/");
-  const data = await handleJson<{ rate: string }>(response);
-  cachedTaxConfig = { rate: Number(data.rate) };
+  const data = await handleJson<{ rate: string; tax_included?: boolean }>(response);
+  cachedTaxConfig = { rate: Number(data.rate), taxIncluded: data.tax_included !== false };
   return cachedTaxConfig;
 };
 

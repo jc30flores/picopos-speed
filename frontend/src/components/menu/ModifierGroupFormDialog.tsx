@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ interface ModifierOption {
   price: number;
   defaultSelected: boolean;
   image?: string | null;
+  imageFile?: File | null;
 }
 
 interface ModifierGroupFormDialogProps {
@@ -35,6 +37,7 @@ export const ModifierGroupFormDialog = ({
   const [minSelection, setMinSelection] = useState(0);
   const [maxSelection, setMaxSelection] = useState(1);
   const [groupImage, setGroupImage] = useState("");
+  const [groupImageFile, setGroupImageFile] = useState<File | null>(null);
   const [options, setOptions] = useState<ModifierOption[]>([]);
   const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
@@ -45,14 +48,16 @@ export const ModifierGroupFormDialog = ({
       setRequired(editingGroup.required);
       setMinSelection(editingGroup.minSelection);
       setMaxSelection(editingGroup.maxSelection);
-      setGroupImage(editingGroup.image ?? "");
+      setGroupImage(editingGroup.imagePath ?? editingGroup.image ?? "");
+      setGroupImageFile(null);
       setOptions(
         editingGroup.modifiers.map((m) => ({
           id: m.id,
           name: m.name,
           price: m.price,
           defaultSelected: false,
-          image: m.image ?? "",
+          image: m.imagePath ?? m.image ?? "",
+          imageFile: null,
         }))
       );
     } else {
@@ -61,6 +66,7 @@ export const ModifierGroupFormDialog = ({
       setMinSelection(0);
       setMaxSelection(1);
       setGroupImage("");
+      setGroupImageFile(null);
       setOptions([]);
     }
   }, [editingGroup, open]);
@@ -74,6 +80,7 @@ export const ModifierGroupFormDialog = ({
         price: 0,
         defaultSelected: false,
         image: "",
+        imageFile: null,
       },
     ]);
   };
@@ -105,11 +112,11 @@ export const ModifierGroupFormDialog = ({
       required,
       minSelection,
       maxSelection,
-      image: groupImage || null,
+      image: groupImageFile ?? null,
       modifiers: options.map((option) => ({
         name: option.name,
         price: option.price,
-        image: option.image || null,
+        image: option.imageFile ?? null,
       })),
     });
     await onSaved();
@@ -176,19 +183,13 @@ export const ModifierGroupFormDialog = ({
               />
             </div>
 
-            <div>
-              <Label htmlFor="group-image">Imagen del grupo (URL)</Label>
-              <Input
-                id="group-image"
-                placeholder="https://..."
-                value={groupImage}
-                onChange={(e) => setGroupImage(e.target.value)}
-                className="mt-1"
-              />
-              {groupImage ? (
-                <img src={groupImage} alt="Preview grupo" className="mt-2 h-12 w-12 rounded object-cover" />
-              ) : null}
-            </div>
+            <ImageUploadField
+              id="group-image"
+              label="Imagen del grupo"
+              file={groupImageFile}
+              previewUrl={groupImage}
+              onChange={setGroupImageFile}
+            />
 
             <div className="flex items-center space-x-2">
               <Checkbox
@@ -300,16 +301,13 @@ export const ModifierGroupFormDialog = ({
                             />
                           </div>
                         </div>
-                        <div>
-                          <Label className="text-xs">Imagen opción (URL)</Label>
-                          <Input
-                            placeholder="https://..."
-                            value={option.image ?? ""}
-                            onChange={(e) => updateOption(option.id, "image", e.target.value)}
-                            className="mt-1"
-                          />
-                          {option.image ? <img src={option.image} alt={option.name || "opción"} className="mt-2 h-10 w-10 rounded object-cover" /> : null}
-                        </div>
+                        <ImageUploadField
+                          id={`option-image-${option.id}`}
+                          label="Imagen de la opción"
+                          file={option.imageFile ?? null}
+                          previewUrl={option.image ?? null}
+                          onChange={(file) => updateOption(option.id, "imageFile", file)}
+                        />
                         <div className="flex items-center space-x-2">
                           <Checkbox
                             id={`default-${option.id}`}

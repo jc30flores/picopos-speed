@@ -43,10 +43,26 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
+        request = self.context.get("request")
+        group_image_file = request.FILES.get("group_image") if request else None
+
         group = ModifierGroup.objects.create(**validated_data)
+
+        if group_image_file:
+            saved_group = save_menu_image(group_image_file, "MODIFIER_GROUPS")
+            group.image = saved_group["image"]
+            group.image_path = saved_group["image_path"]
+            group.save(update_fields=["image", "image_path"])
+
         for index, modifier_data in enumerate(modifiers_data):
             modifier_data.setdefault("sort_order", index)
-            Modifier.objects.create(group=group, **modifier_data)
+            option_image_file = request.FILES.get(f"option_image_{index}") if request else None
+            modifier = Modifier.objects.create(group=group, **modifier_data)
+            if option_image_file:
+                saved_option = save_menu_image(option_image_file, "MODIFIERS")
+                modifier.image = saved_option["image"]
+                modifier.image_path = saved_option["image_path"]
+                modifier.save(update_fields=["image", "image_path"])
         return group
 
 

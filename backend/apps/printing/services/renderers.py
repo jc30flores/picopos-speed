@@ -113,7 +113,7 @@ def render_customer_ticket(order: Order) -> dict:
     lines.append(_divider())
     lines.append(_line(f"Subtotal: {_format_money(order.subtotal)}"))
     lines.append(_line(f"Descuento: {_format_money(order.discount_total)}"))
-    lines.append(_line(f"Impuesto (13%): {_format_money(order.tax)}"))
+    lines.append(_line(f"IVA incluido (13%): {_format_money(order.tax)}"))
     lines.append(_line(f"Total: {_format_money(order.total)}"))
     lines.append(_divider())
 
