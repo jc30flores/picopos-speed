@@ -55,6 +55,7 @@ class PosFastFlowTests(TestCase):
         order = serializer.save()
         self.assertEqual(order.channel, "pos")
         self.assertTrue(order.requires_kitchen)
+        self.assertEqual(order.total, Decimal("8.50"))
 
         names = list(order.items.first().applied_modifiers.values_list("modifier_name_snapshot", flat=True))
         self.assertIn(free_default.name, names)

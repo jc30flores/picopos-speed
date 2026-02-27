@@ -48,6 +48,7 @@ interface CartItem {
   id: string;
   productId: number;
   name: string;
+  basePrice: number;
   price: number;
   quantity: number;
   modifiers: Array<{ id?: number; name: string; price: number }>;
@@ -173,6 +174,7 @@ const POS = () => {
           id: `${product.id}-${Date.now()}`,
           productId: product.id,
           name: product.name,
+          basePrice: product.price,
           price: totalPrice,
           quantity: 1,
           modifiers,
@@ -276,12 +278,11 @@ const POS = () => {
       toast.error("No hay productos en el pedido");
       return;
     }
-    const amountValue = toNumber(paymentAmount);
+    const amountReceived = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
-    const totalPayment = amountValue + tipValue;
     const remaining = toNumber(paymentTotal);
 
-    if (!amountValue || amountValue <= 0) {
+    if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
       return;
     }
@@ -289,8 +290,8 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (totalPayment > remaining) {
-      toast.error("El pago supera el saldo pendiente");
+    if (amountReceived < remaining) {
+      toast.error("El monto recibido debe cubrir el total de la orden");
       return;
     }
 
@@ -309,7 +310,7 @@ const POS = () => {
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
               productName: item.name,
-              price: item.price,
+              price: item.basePrice,
               quantity: item.quantity,
               modifiers: item.modifiers,
             })),
@@ -337,7 +338,8 @@ const POS = () => {
       await createPayment({
         orderId,
         method: paymentMethod,
-        amount: amountValue,
+        amount: remaining,
+        cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
       });
@@ -678,9 +680,9 @@ const POS = () => {
                       min="0"
                       step="0.01"
                       value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
-                    />
-                  </div>
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                />
+              </div>
                   <div className="space-y-2">
                     <Label>Propina</Label>
                     <Input

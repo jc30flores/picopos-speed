@@ -170,6 +170,7 @@ export type Payment = {
   orderId: number;
   method: PaymentMethod;
   amount: number;
+  cashReceived?: number;
   tipAmount: number;
   reference?: string;
   receivedBy?: string | null;
@@ -865,6 +866,9 @@ export const createOrder = async (payload: {
     modifiers: Array<{ id?: number; name: string; price: number }>;
   }>;
 }): Promise<Order> => {
+  if (import.meta.env.DEV) {
+    console.debug("[API] createOrder payload", payload);
+  }
   const response = await request("/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1707,6 +1711,7 @@ export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
   amount: number;
+  cashReceived?: number;
   tipAmount?: number;
   reference?: string;
 }): Promise<Payment> => {
@@ -1719,10 +1724,14 @@ export const createPayment = async (payload: {
       order: payload.orderId,
       method: payload.method,
       amount: payload.amount,
+      cash_received: payload.cashReceived,
       tip_amount: payload.tipAmount ?? 0,
       reference: payload.reference ?? "",
     }),
   });
+  if (import.meta.env.DEV) {
+    console.debug("[API] createPayment payload", payload);
+  }
   const data = await handleJson<{
     id: number;
     order: number;
@@ -1738,6 +1747,7 @@ export const createPayment = async (payload: {
     orderId: data.order,
     method: data.method,
     amount: Number(data.amount),
+    cashReceived: payload.cashReceived,
     tipAmount: Number(data.tip_amount),
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,
