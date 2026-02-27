@@ -157,7 +157,8 @@ export const ModifierGroupFormDialog = ({
       await onSaved();
       onOpenChange(false);
     } catch (error) {
-      toast.error("No se pudo guardar el grupo de modificadores");
+      const message = error instanceof Error ? error.message : "No se pudo guardar el grupo de modificadores";
+      toast.error(message || "No se pudo guardar el grupo de modificadores");
     } finally {
       setIsSaving(false);
     }

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
@@ -114,3 +115,41 @@ class AdminMenuOpsTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_delete_modifier_group_assigned_to_product_unassigns_and_deletes(self):
+        product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
+        group = ModifierGroup.objects.create(name="Extras", required=False)
+        product.modifier_groups.add(group)
+
+        response = self.client.delete(f"/api/menu/modifier-groups/{group.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ModifierGroup.objects.filter(id=group.id).exists())
+        product.refresh_from_db()
+        self.assertFalse(product.modifier_groups.filter(id=group.id).exists())
+
+    def test_upload_images_for_modifier_group_and_option(self):
+        group = ModifierGroup.objects.create(name="Salsas", required=False)
+        option = Modifier.objects.create(group=group, name="Verde", price=Decimal("0.00"), sort_order=0)
+
+        group_image = SimpleUploadedFile("grupo.png", b"fakepngcontent", content_type="image/png")
+        option_image = SimpleUploadedFile("opcion.png", b"fakepngcontent", content_type="image/png")
+
+        group_response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {"image": group_image},
+            format="multipart",
+        )
+        option_response = self.client.patch(
+            f"/api/menu/modifier-options/{option.id}/",
+            {"image": option_image},
+            format="multipart",
+        )
+
+        self.assertEqual(group_response.status_code, 200, group_response.data)
+        self.assertEqual(option_response.status_code, 200, option_response.data)
+
+        group.refresh_from_db()
+        option.refresh_from_db()
+        self.assertTrue(group.image_path)
+        self.assertTrue(option.image_path)

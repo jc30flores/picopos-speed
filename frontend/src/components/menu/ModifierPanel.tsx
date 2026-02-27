@@ -47,7 +47,6 @@ export const ModifierPanel = ({
       setSelectedForAssign([]);
       toast.success("Grupos asignados correctamente");
     } catch (error) {
-      console.error("Failed to assign modifier groups", error);
       toast.error("No se pudieron asignar los grupos");
     }
   };
@@ -60,7 +59,6 @@ export const ModifierPanel = ({
       await onModifierGroupsUpdated(selectedProduct.id);
       toast.success("Grupo removido correctamente");
     } catch (error) {
-      console.error("Failed to remove modifier group", error);
       toast.error("No se pudo remover el grupo");
     }
   };

@@ -232,10 +232,10 @@ class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
             return [IsAuthenticatedAndActive()]
         return [IsAdminOrManager()]
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         group = self.get_object()
-        if group.products.exists():
-            return Response({"detail": "No se puede eliminar el grupo porque está asignado a productos."}, status=status.HTTP_409_CONFLICT)
+        group.products.clear()
         group.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

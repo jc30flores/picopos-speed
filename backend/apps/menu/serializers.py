@@ -42,8 +42,16 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
         model = ModifierGroup
         fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
 
+    def _coerce_modifier_id(self, value):
+        if value in (None, "", 0, "0"):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({"modifiers": "ID de opción inválido."})
+
     def _validate_modifier_payload(self, group: ModifierGroup, modifiers_data: list[dict]):
-        normalized_names: list[str] = []
+        normalized_names: set[str] = set()
         for item in modifiers_data:
             name = (item.get("name") or "").strip()
             if not name:
@@ -51,43 +59,44 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
             lower = name.lower()
             if lower in normalized_names:
                 raise serializers.ValidationError({"modifiers": f"La opción '{name}' está duplicada en el grupo."})
-            normalized_names.append(lower)
-
-        for item in modifiers_data:
-            name = (item.get("name") or "").strip()
-            modifier_id = item.get("id")
-            conflict_qs = group.modifiers.filter(name__iexact=name)
-            if modifier_id:
-                conflict_qs = conflict_qs.exclude(id=modifier_id)
-            if conflict_qs.exists():
-                raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{name}' en este grupo."})
+            normalized_names.add(lower)
 
     def _sync_modifiers(self, group: ModifierGroup, modifiers_data: list[dict]):
         self._validate_modifier_payload(group, modifiers_data)
         existing = {modifier.id: modifier for modifier in group.modifiers.all()}
-        seen_ids = set()
+        seen_ids: set[int] = set()
 
         for index, modifier_data in enumerate(modifiers_data):
-            modifier_id = modifier_data.get("id")
+            modifier_id = self._coerce_modifier_id(modifier_data.get("id"))
+            option_name = (modifier_data.get("name") or "").strip()
             payload = {
-                "name": (modifier_data.get("name") or "").strip(),
+                "name": option_name,
                 "price": modifier_data.get("price", 0),
                 "is_active": modifier_data.get("is_active", True),
                 "sort_order": index,
             }
-            if modifier_id and modifier_id in existing:
-                modifier = existing[modifier_id]
+
+            if modifier_id is not None:
+                modifier = existing.get(modifier_id)
+                if not modifier:
+                    raise serializers.ValidationError({"modifiers": f"La opción con id {modifier_id} no pertenece a este grupo."})
+                conflict_qs = group.modifiers.filter(name__iexact=option_name).exclude(id=modifier_id)
+                if conflict_qs.exists():
+                    raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
                 for key, value in payload.items():
                     setattr(modifier, key, value)
                 modifier.save(update_fields=["name", "price", "is_active", "sort_order"])
                 seen_ids.add(modifier_id)
-            else:
-                modifier = Modifier.objects.create(group=group, **payload)
-                seen_ids.add(modifier.id)
+                continue
 
-        for modifier_id, modifier in existing.items():
-            if modifier_id not in seen_ids:
-                modifier.delete()
+            if group.modifiers.filter(name__iexact=option_name).exists():
+                raise serializers.ValidationError({"modifiers": f"Ya existe una opción con el nombre '{option_name}' en este grupo."})
+            created = Modifier.objects.create(group=group, **payload)
+            seen_ids.add(created.id)
+
+        stale_ids = set(existing.keys()) - seen_ids
+        if stale_ids:
+            group.modifiers.filter(id__in=stale_ids).delete()
 
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
@@ -116,6 +125,15 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         modifiers_data = validated_data.pop("modifiers", None)
         request = self.context.get("request")
+        if modifiers_data is None and request is not None and "modifiers" in request.data:
+            raw_modifiers = request.data.get("modifiers")
+            if isinstance(raw_modifiers, str):
+                try:
+                    modifiers_data = json.loads(raw_modifiers)
+                except Exception:
+                    raise serializers.ValidationError({"modifiers": "Formato de opciones inválido."})
+            elif isinstance(raw_modifiers, list):
+                modifiers_data = raw_modifiers
         group_image_file = request.FILES.get("image") if request else None
 
         with transaction.atomic():
