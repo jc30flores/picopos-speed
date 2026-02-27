@@ -227,7 +227,6 @@ const POS = () => {
     taxRate
   ).total;
   const total = itemsGross + cartDisposableTotal;
-  const tax = total - total / (1 + taxRate);
   const subtotal = itemsGross;
   const paymentTotal =
     checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
@@ -589,10 +588,6 @@ const POS = () => {
                   <span>Subtotal (productos)</span>
                   <span>{formatMoney(subtotal)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>IVA incluido ({(taxRate * 100).toFixed(0)}%)</span>
-                  <span>{formatMoney(tax)}</span>
-                </div>
                 {cartDisposableTotal > 0 && (
                   <div className="flex justify-between">
                     <span>Desechables</span>
@@ -641,10 +636,6 @@ const POS = () => {
                 <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
                 <div className="mt-2 text-3xl font-bold text-secondary">
                   {formatMoney(checkoutDraft.total)}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  IVA incluido {(checkoutDraft.taxRate * 100).toFixed(0)}% (
-                  {formatMoney(checkoutDraft.tax)})
                 </div>
               </div>
 
@@ -695,10 +686,6 @@ const POS = () => {
                   <div className="flex justify-between">
                     <span>Subtotal (productos)</span>
                     <span>{formatMoney(checkoutDraft.subtotal)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>IVA incluido ({(checkoutDraft.taxRate * 100).toFixed(0)}%)</span>
-                    <span>{formatMoney(checkoutDraft.tax)}</span>
                   </div>
                   {checkoutDisposableTotal > 0 && (
                     <div className="flex justify-between">

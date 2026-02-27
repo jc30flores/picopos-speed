@@ -41,12 +41,39 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
         model = ModifierGroup
         fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
 
+    def _sync_modifiers(self, group: ModifierGroup, modifiers_data: list[dict]):
+        existing = {modifier.id: modifier for modifier in group.modifiers.all()}
+        seen_ids = set()
+
+        for index, modifier_data in enumerate(modifiers_data):
+            modifier_id = modifier_data.get("id")
+            payload = {
+                "name": modifier_data.get("name", "").strip(),
+                "price": modifier_data.get("price", 0),
+                "is_active": modifier_data.get("is_active", True),
+                "sort_order": index,
+            }
+            if modifier_id and modifier_id in existing:
+                modifier = existing[modifier_id]
+                for key, value in payload.items():
+                    setattr(modifier, key, value)
+                modifier.save(update_fields=["name", "price", "is_active", "sort_order", "updated_at"] if hasattr(modifier, "updated_at") else ["name", "price", "is_active", "sort_order"])
+                seen_ids.add(modifier_id)
+            else:
+                modifier = Modifier.objects.create(group=group, **payload)
+                seen_ids.add(modifier.id)
+
+        for modifier_id, modifier in existing.items():
+            if modifier_id not in seen_ids:
+                modifier.delete()
+
     def create(self, validated_data):
         modifiers_data = validated_data.pop("modifiers", [])
         request = self.context.get("request")
         group_image_file = request.FILES.get("group_image") if request else None
 
         group = ModifierGroup.objects.create(**validated_data)
+        self._sync_modifiers(group, modifiers_data)
 
         if group_image_file:
             saved_group = save_menu_image(group_image_file, "MODIFIER_GROUPS")
@@ -54,16 +81,34 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
             group.image_path = saved_group["image_path"]
             group.save(update_fields=["image", "image_path"])
 
-        for index, modifier_data in enumerate(modifiers_data):
-            modifier_data.setdefault("sort_order", index)
+        for index, modifier in enumerate(group.modifiers.order_by("sort_order", "id")):
             option_image_file = request.FILES.get(f"option_image_{index}") if request else None
-            modifier = Modifier.objects.create(group=group, **modifier_data)
             if option_image_file:
                 saved_option = save_menu_image(option_image_file, "MODIFIERS")
                 modifier.image = saved_option["image"]
                 modifier.image_path = saved_option["image_path"]
                 modifier.save(update_fields=["image", "image_path"])
         return group
+
+    def update(self, instance, validated_data):
+        modifiers_data = validated_data.pop("modifiers", None)
+        request = self.context.get("request")
+        group_image_file = request.FILES.get("image") if request else None
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if modifiers_data is not None:
+            self._sync_modifiers(instance, modifiers_data)
+
+        if group_image_file:
+            saved_group = save_menu_image(group_image_file, "MODIFIER_GROUPS")
+            instance.image = saved_group["image"]
+            instance.image_path = saved_group["image_path"]
+            instance.save(update_fields=["image", "image_path"])
+
+        return instance
 
 
 class ProductSerializer(serializers.ModelSerializer):

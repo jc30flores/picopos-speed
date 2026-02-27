@@ -852,6 +852,80 @@ export const createModifierGroup = async (payload: {
   };
 };
 
+
+export const updateModifierGroup = async (
+  groupId: number,
+  payload: {
+    name: string;
+    required: boolean;
+    minSelection: number;
+    maxSelection: number;
+    modifiers: Array<{ id?: number; name: string; price: number; isActive?: boolean }>;
+  }
+): Promise<ModifierGroup> => {
+  const response = await request(`/menu/modifier-groups/${groupId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      required: payload.required,
+      min_selection: payload.minSelection,
+      max_selection: payload.maxSelection,
+      modifiers: payload.modifiers.map((modifier) => ({
+        ...(modifier.id ? { id: modifier.id } : {}),
+        name: modifier.name,
+        price: modifier.price,
+        is_active: modifier.isActive ?? true,
+      })),
+    }),
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    required: boolean;
+    min_selection: number;
+    max_selection: number;
+    image?: string | null;
+    image_path?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+  }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    required: data.required,
+    minSelection: data.min_selection,
+    maxSelection: data.max_selection,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    modifiers: data.modifiers.map((modifier) => ({
+      id: modifier.id,
+      name: modifier.name,
+      price: Number(modifier.price),
+      isActive: modifier.is_active,
+      image: modifier.image ?? null,
+      imagePath: modifier.image_path ?? null,
+    })),
+  };
+};
+
+export const uploadModifierGroupImage = async (groupId: number, image: File): Promise<void> => {
+  const formData = new FormData();
+  formData.append("image", image);
+  await request(`/menu/modifier-groups/${groupId}/`, {
+    method: "PATCH",
+    body: formData,
+  }).then(handleJson);
+};
+
+export const uploadModifierOptionImage = async (optionId: number, image: File): Promise<void> => {
+  const formData = new FormData();
+  formData.append("image", image);
+  await request(`/menu/modifier-options/${optionId}/`, {
+    method: "PATCH",
+    body: formData,
+  }).then(handleJson);
+};
+
 export const getDiscounts = async (): Promise<Discount[]> => {
   const response = await request("/menu/discounts/");
   const data = await handleJson<Array<{

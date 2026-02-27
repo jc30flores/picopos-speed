@@ -8,12 +8,13 @@ from rest_framework.views import APIView
 from django.conf import settings
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount
 from apps.menu.serializers import (
     CategorySerializer,
     ProductSerializer,
     ModifierGroupSerializer,
+    ModifierSerializer,
     DiscountSerializer,
 )
 
@@ -56,7 +57,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 
 class ProductListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
@@ -101,7 +102,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
 
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProductSerializer
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
 
     def get_permissions(self):
@@ -183,7 +184,7 @@ class MenuImageHealthView(APIView):
 
 class ModifierGroupListCreateView(generics.ListCreateAPIView):
     serializer_class = ModifierGroupSerializer
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         return ModifierGroup.objects.prefetch_related("modifiers").order_by("name")
@@ -218,6 +219,41 @@ class ModifierGroupListCreateView(generics.ListCreateAPIView):
             return [IsAuthenticatedAndActive()]
         return [IsAdminOrManager()]
 
+
+
+
+class ModifierGroupDetailView(generics.RetrieveUpdateAPIView):
+    serializer_class = ModifierGroupSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    queryset = ModifierGroup.objects.prefetch_related("modifiers")
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticatedAndActive()]
+        return [IsAdminOrManager()]
+
+
+class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):
+    serializer_class = ModifierSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    queryset = Modifier.objects.select_related("group")
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticatedAndActive()]
+        return [IsAdminOrManager()]
+
+    def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        image_file = request.FILES.get("image")
+        if image_file:
+            from apps.menu.utils.images import save_menu_image
+            saved = save_menu_image(image_file, "MODIFIERS")
+            instance.image = saved["image"]
+            instance.image_path = saved["image_path"]
+            instance.save(update_fields=["image", "image_path"])
+            return Response(self.get_serializer(instance).data)
+        return super().patch(request, *args, **kwargs)
 
 class ProductModifierGroupsReorderView(APIView):
     permission_classes = [IsAdminOrManager]
