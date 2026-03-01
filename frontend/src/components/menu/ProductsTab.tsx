@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Plus, Edit, Settings, Trash2, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -76,8 +76,11 @@ export const ProductsTab = () => {
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
+  const [isProductOrderMode, setIsProductOrderMode] = useState(false);
+  const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
+  const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
-  const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
+  const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
       getProducts(),
@@ -90,22 +93,23 @@ export const ProductsTab = () => {
       const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
       setSelectedProduct(updatedProduct);
     }
-  };
+  }, [selectedProduct?.id]);
 
   useEffect(() => {
     loadMenuData().catch((error) => {
       console.error("Failed to load menu data", error);
+      toast.error("No se pudo cargar el menú");
     });
-  }, []);
+  }, [loadMenuData]);
 
   const visibleCategories = categories.filter((cat) => !cat.isHidden && !cat.name.toUpperCase().includes("SIN CATEGORÍA"));
   const categoryNames = ["Todos", ...visibleCategories.map((cat) => cat.name)];
 
-  const filteredProducts = products.filter((product) => {
+  const filteredProducts = useMemo(() => products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
-  });
+  }), [products, searchQuery, selectedCategory]);
 
   const handleNewProduct = () => {
     setEditingProduct(null);
@@ -226,6 +230,48 @@ export const ProductsTab = () => {
     }
   };
 
+  const handleProductDrop = async (targetProductId: number) => {
+    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !isProductOrderMode) return;
+
+    const current = [...filteredProducts];
+    const from = current.findIndex((product) => product.id === draggingProductId);
+    const to = current.findIndex((product) => product.id === targetProductId);
+    if (from < 0 || to < 0) return;
+
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+
+    const previousProducts = [...products];
+    const currentCategoryId = selectedCategory === "Todos"
+      ? null
+      : categories.find((category) => category.name === selectedCategory)?.id ?? null;
+
+    setProducts((prev) => {
+      const byId = new Map(prev.map((product) => [product.id, product]));
+      current.forEach((product, index) => {
+        byId.set(product.id, { ...product, sortOrder: index });
+      });
+      return Array.from(byId.values());
+    });
+
+    setIsSavingProductOrder(true);
+    try {
+      await reorderProducts({
+        categoryId: currentCategoryId,
+        orderedIds: current.map((product) => product.id),
+      });
+      toast.success("Orden de productos guardado");
+      await loadMenuData();
+    } catch (error) {
+      setProducts(previousProducts);
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el orden de productos");
+    } finally {
+      setIsSavingProductOrder(false);
+      setDraggingProductId(null);
+    }
+  };
+
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {/* Left: Products Table (60%) */}
@@ -236,6 +282,13 @@ export const ProductsTab = () => {
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
                 Gestionar categorías
+              </Button>
+              <Button
+                variant={isProductOrderMode ? "default" : "outline"}
+                onClick={() => setIsProductOrderMode((prev) => !prev)}
+                disabled={selectedCategory === "Todos" || Boolean(searchQuery.trim()) || isSavingProductOrder}
+              >
+                {isProductOrderMode ? "Finalizar orden" : "Ordenar productos"}
               </Button>
               <Button
                 variant="default"
@@ -280,6 +333,7 @@ export const ProductsTab = () => {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10"></TableHead>
                   <TableHead>Producto</TableHead>
                   <TableHead>Categoría</TableHead>
                   <TableHead>Precio</TableHead>
@@ -289,7 +343,33 @@ export const ProductsTab = () => {
               </TableHeader>
               <TableBody>
                 {filteredProducts.map((product) => (
-                  <TableRow key={product.id}>
+                  <TableRow
+                    key={product.id}
+                    className={cn(isProductOrderMode && "cursor-move", draggingProductId === product.id && "opacity-60")}
+                    onDragOver={(event) => {
+                      if (!isProductOrderMode) return;
+                      event.preventDefault();
+                    }}
+                    onDrop={() => {
+                      handleProductDrop(product.id).catch((error) => {
+                        console.error("Error dropping product", error);
+                      });
+                    }}
+                  >
+                    <TableCell>
+                      <button
+                        type="button"
+                        className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted disabled:cursor-not-allowed"
+                        draggable={isProductOrderMode && !isSavingProductOrder}
+                        disabled={!isProductOrderMode || isSavingProductOrder}
+                        onDragStart={() => setDraggingProductId(product.id)}
+                        onDragEnd={() => setDraggingProductId(null)}
+                        aria-label={`Mover producto ${product.name}`}
+                        title={isProductOrderMode ? "Arrastrar para reordenar" : "Activa 'Ordenar productos'"}
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </button>
+                    </TableCell>
                     <TableCell>
                       <div>
                         <div className="font-semibold">{product.name}</div>

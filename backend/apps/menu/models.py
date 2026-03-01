@@ -106,6 +106,7 @@ class Product(models.Model):
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
+    sort_order = models.PositiveIntegerField(default=0, db_index=True)
     image = models.CharField(max_length=255, blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
@@ -123,7 +124,7 @@ class Product(models.Model):
     modifier_group_order = models.JSONField(default=list, blank=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["sort_order", "name", "id"]
         indexes = [models.Index(fields=["category", "available"])]
 
     def __str__(self) -> str:

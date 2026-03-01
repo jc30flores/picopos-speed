@@ -200,6 +200,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "price",
+            "sort_order",
             "category",
             "category_name",
             "category_id",

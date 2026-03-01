@@ -831,13 +831,15 @@ const POS = () => {
                       {group.modifiers
                         .filter((mod) => mod.price > 0)
                         .map((mod) => (
-                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                          <Label
+                            key={mod.id}
+                            htmlFor={`pending-${mod.id}`}
+                            className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
+                          >
                             <RadioGroupItem id={`pending-${mod.id}`} value={String(mod.id)} />
-                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
-                              {mod.name}
-                            </Label>
-                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          </div>
+                            <span className="flex-1 font-medium">{mod.name}</span>
+                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </Label>
                         ))}
                     </RadioGroup>
                   ) : (
@@ -845,7 +847,11 @@ const POS = () => {
                       {group.modifiers
                         .filter((mod) => mod.price > 0)
                         .map((mod) => (
-                          <div key={mod.id} className="flex items-center gap-2 rounded-md p-1">
+                          <Label
+                            key={mod.id}
+                            htmlFor={`pending-${mod.id}`}
+                            className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
+                          >
                             <Checkbox
                               id={`pending-${mod.id}`}
                               checked={selectedValues.includes(String(mod.id))}
@@ -860,11 +866,9 @@ const POS = () => {
                                 }));
                               }}
                             />
-                            <Label htmlFor={`pending-${mod.id}`} className="flex-1 cursor-pointer text-sm">
-                              {mod.name}
-                            </Label>
-                            <span className="text-xs text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          </div>
+                            <span className="flex-1 font-medium">{mod.name}</span>
+                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                          </Label>
                         ))}
                     </div>
                   )}

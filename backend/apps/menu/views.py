@@ -124,7 +124,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
         include_archived = self.request.query_params.get("include_archived") in {"1", "true", "True"}
         if not include_archived:
             queryset = queryset.filter(is_archived=False)
-        return queryset
+        return queryset.order_by("category__position", "category_id", "sort_order", "name", "id")
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -145,8 +145,44 @@ class ProductListCreateView(generics.ListCreateAPIView):
         return [IsAdminOrManager()]
 
     def perform_create(self, serializer):
-        product = serializer.save()
+        category = serializer.validated_data.get("category")
+        next_sort_order = (
+            Product.objects.filter(category=category)
+            .aggregate(max_sort=models.Max("sort_order"))
+            .get("max_sort")
+            or -1
+        ) + 1
+        product = serializer.save(sort_order=next_sort_order)
         log_audit(self.request, "menu.product.create", "Product", product.id, {"name": product.name})
+
+
+class ProductReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def post(self, request):
+        ordered_ids = request.data.get("ordered_ids") or []
+        category_id = request.data.get("category_id")
+
+        if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
+            return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(set(ordered_ids)) != len(ordered_ids):
+            return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_qs = Product.objects.filter(is_archived=False)
+        if category_id is not None:
+            base_qs = base_qs.filter(category_id=category_id)
+
+        expected_ids = list(base_qs.order_by("sort_order", "id").values_list("id", flat=True))
+        if sorted(expected_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids debe incluir todos los productos del filtro actual."}, status=status.HTTP_400_BAD_REQUEST)
+
+        products_by_id = {product.id: product for product in Product.objects.filter(id__in=ordered_ids)}
+        with transaction.atomic():
+            for index, product_id in enumerate(ordered_ids):
+                products_by_id[product_id].sort_order = index
+            Product.objects.bulk_update(products_by_id.values(), ["sort_order"])
+
+        return Response({"ok": True}, status=status.HTTP_200_OK)
 
 
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):

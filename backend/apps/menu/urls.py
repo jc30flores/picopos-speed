@@ -6,6 +6,7 @@ urlpatterns = [
     path("categories/reorder/", views.CategoryReorderView.as_view(), name="menu-categories-reorder"),
     path("categories/<int:pk>/", views.CategoryDetailView.as_view(), name="menu-categories-detail"),
     path("products/", views.ProductListCreateView.as_view(), name="menu-products"),
+    path("products/reorder/", views.ProductReorderView.as_view(), name="menu-products-reorder"),
     path("products/<int:pk>/", views.ProductDetailView.as_view(), name="menu-products-detail"),
     path("products/<int:product_id>/modifier-groups/reorder/", views.ProductModifierGroupsReorderView.as_view(), name="menu-product-modifier-groups-reorder"),
     path("image-health/", views.MenuImageHealthView.as_view(), name="menu-image-health"),

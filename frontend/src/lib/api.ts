@@ -34,6 +34,7 @@ export type Product = {
   name: string;
   description: string;
   price: number;
+  sortOrder?: number;
   category: string;
   categoryName?: string | null;
   categoryId: number;
@@ -488,6 +489,7 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -510,6 +512,7 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      sortOrder: Number(item.sort_order ?? 0),
       category: item.category,
       categoryName: item.category_name ?? item.category,
       categoryId: item.category_id_display ?? 0,
@@ -570,6 +573,7 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -590,6 +594,7 @@ export const createProduct = async (payload: {
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
@@ -651,6 +656,7 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -668,6 +674,7 @@ export const updateProduct = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
@@ -717,6 +724,7 @@ export const updateProductModifierGroups = async (
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -737,6 +745,7 @@ export const updateProductModifierGroups = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? 0,
@@ -782,6 +791,7 @@ export const updateProductAvailability = async (
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -798,6 +808,7 @@ export const updateProductAvailability = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? 0,
@@ -1272,23 +1283,30 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
   return mapOrder(data);
 };
 
-export const getCustomerOrders = async (): Promise<
-  Array<{ id: number; orderNumber: number; status: Order["status"]; customerName?: string; createdAt: Date }>
-> => {
-  const response = await request("/orders/customer-display/");
-  const data = await handleJson<
-    Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
+export const getCustomerOrders = async (
+  signal?: AbortSignal
+): Promise<Array<{ id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date }>> => {
+  const response = await request("/orders/customer-board/", { signal });
+  const raw = await handleJson<
+    | Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }>
+    | { results?: Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }> }
   >(response);
-  if (!Array.isArray(data)) {
-    return [];
-  }
-  return data.map((order) => ({
-    id: order.id,
-    orderNumber: order.order_number,
-    status: order.status,
-    customerName: order.customer_name || undefined,
-    createdAt: new Date(order.created_at),
-  }));
+  const list = Array.isArray(raw) ? raw : raw.results ?? [];
+  return list
+    .map((order) => {
+      const normalizedStatus = String(order.status || "").toLowerCase();
+      if (normalizedStatus !== "preparing" && normalizedStatus !== "ready") {
+        return null;
+      }
+      return {
+        id: order.id,
+        orderNumber: order.order_number,
+        status: normalizedStatus,
+        customerName: order.customer_name || undefined,
+        createdAt: new Date(order.created_at),
+      };
+    })
+    .filter((order): order is { id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date } => Boolean(order));
 };
 
 export const getSalesReport = async (filters?: {
@@ -2339,6 +2357,17 @@ export const markPrintJobPrinted = async (id: number): Promise<PrintJob> => {
 };
 
 
+
+
+export const reorderProducts = async (payload: { categoryId?: number | null; orderedIds: number[] }): Promise<void> => {
+  await request("/menu/products/reorder/", {
+    method: "POST",
+    body: JSON.stringify({
+      category_id: payload.categoryId ?? null,
+      ordered_ids: payload.orderedIds,
+    }),
+  });
+};
 export const reorderCategories = async (orderedIds: number[]): Promise<Category[]> => {
   const response = await request("/menu/categories/reorder/", {
     method: "PATCH",

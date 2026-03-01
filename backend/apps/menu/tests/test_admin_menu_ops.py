@@ -115,6 +115,35 @@ class AdminMenuOpsTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("duplicados", str(response.data).lower())
 
+
+    def test_reorder_products_within_category_persists_order(self):
+        p1 = Product.objects.create(name="A", description="", price=Decimal("1.00"), category=self.category, sort_order=0, available=True)
+        p2 = Product.objects.create(name="B", description="", price=Decimal("1.00"), category=self.category, sort_order=1, available=True)
+        p3 = Product.objects.create(name="C", description="", price=Decimal("1.00"), category=self.category, sort_order=2, available=True)
+
+        response = self.client.post(
+            "/api/menu/products/reorder/",
+            {"category_id": self.category.id, "ordered_ids": [p3.id, p1.id, p2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        ordered = self.client.get(f"/api/menu/products/?category_id={self.category.id}")
+        names = [item["name"] for item in ordered.data]
+        self.assertEqual(names, ["C", "A", "B"])
+
+    def test_reorder_products_rejects_duplicate_ids(self):
+        p1 = Product.objects.create(name="A", description="", price=Decimal("1.00"), category=self.category, sort_order=0, available=True)
+        p2 = Product.objects.create(name="B", description="", price=Decimal("1.00"), category=self.category, sort_order=1, available=True)
+
+        response = self.client.post(
+            "/api/menu/products/reorder/",
+            {"category_id": self.category.id, "ordered_ids": [p1.id, p2.id, p2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("duplicados", str(response.data).lower())
     def test_delete_product_with_history_archives(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
         branch = Branch.objects.create(name="B", code="B")

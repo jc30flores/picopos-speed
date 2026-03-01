@@ -14,33 +14,44 @@ const CustomerDisplay = () => {
 
   useEffect(() => {
     let timeoutId: number | undefined;
-    let isActive = true;
+    let isUnmounted = false;
+    let currentController: AbortController | null = null;
 
     const loadOrders = async () => {
+      currentController?.abort();
+      currentController = new AbortController();
       setIsLoading(true);
       try {
-        const data = await getCustomerOrders();
-        if (!isActive) return;
+        const data = await getCustomerOrders(currentController.signal);
+        if (isUnmounted) return;
         setOrders(data);
         setError(null);
         pollDelayRef.current = 5000;
       } catch (loadError) {
-        if (!isActive) return;
+        if (isUnmounted) return;
+        if (loadError instanceof DOMException && loadError.name === "AbortError") {
+          return;
+        }
         const message =
           loadError instanceof Error ? loadError.message : "No se pudo cargar pedidos de clientes.";
         setError(message);
         pollDelayRef.current = Math.min(pollDelayRef.current * 2, 10000);
       } finally {
-        if (!isActive) return;
-        setIsLoading(false);
-        timeoutId = window.setTimeout(loadOrders, pollDelayRef.current);
+        if (!isUnmounted) {
+          setIsLoading(false);
+          timeoutId = window.setTimeout(loadOrders, pollDelayRef.current);
+        }
       }
     };
 
-    loadOrders();
+    void loadOrders();
+
     return () => {
-      isActive = false;
-      if (timeoutId) window.clearTimeout(timeoutId);
+      isUnmounted = true;
+      currentController?.abort();
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [retryToken]);
 
@@ -49,7 +60,7 @@ const CustomerDisplay = () => {
     setRetryToken((prev) => prev + 1);
   };
 
-  const preparingOrders = orders.filter((o) => o.status === "preparing" || o.status === "new");
+  const preparingOrders = orders.filter((o) => o.status === "preparing");
   const readyOrders = orders.filter((o) => o.status === "ready");
 
   return (
