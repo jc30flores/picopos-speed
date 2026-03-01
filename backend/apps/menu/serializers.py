@@ -20,7 +20,7 @@ from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_i
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ["id", "name", "is_active"]
+        fields = ["id", "name", "is_active", "is_hidden"]
 
     def validate_name(self, value: str) -> str:
         normalized = normalize_category_name(value)

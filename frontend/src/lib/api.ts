@@ -4,6 +4,7 @@ export type Category = {
   id: number;
   name: string;
   isActive?: boolean;
+  isHidden?: boolean;
 };
 
 export type Modifier = {
@@ -368,15 +369,15 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
-  return data.map((item) => ({
-    id: item.id,
-    name: item.name,
-    isActive: item.is_active,
-    priority: item.priority ?? 100,
-    stackable: Boolean(item.stackable),
-    bxgyConfig: item.bxgy_config ?? undefined,
-  }));
+  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>>(response);
+  return data
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      isActive: item.is_active,
+      isHidden: Boolean(item.is_hidden),
+    }))
+    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
 
 export const getFeatureFlags = async (): Promise<FeatureFlag[]> => {
@@ -429,14 +430,12 @@ export const createCategory = async (name: string): Promise<Category> => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>(response);
   return {
     id: data.id,
     name: data.name,
     isActive: data.is_active,
-    priority: data.priority ?? 100,
-    stackable: Boolean(data.stackable),
-    bxgyConfig: data.bxgy_config ?? undefined,
+    isHidden: Boolean(data.is_hidden),
   };
 };
 
@@ -446,13 +445,16 @@ export const updateCategory = async (categoryId: number, name: string): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
-  return { id: data.id, name: data.name, isActive: data.is_active };
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>(response);
+  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden) };
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
   const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
+    if (response.status === 404) {
+      return;
+    }
     const data = await response.json().catch(() => ({ detail: "No se pudo eliminar la categoría" }));
     const error = new Error(data.detail || "No se pudo eliminar la categoría") as CategoryDeleteConflictError;
     error.status = response.status;
@@ -986,6 +988,9 @@ export const uploadModifierOptionImage = async (optionId: number, image: File): 
 export const deleteModifierGroup = async (groupId: number): Promise<void> => {
   const response = await request(`/menu/modifier-groups/${groupId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
+    if (response.status === 404) {
+      return;
+    }
     const data = await response.json().catch(() => ({ detail: "No se pudo eliminar el grupo" }));
     throw new Error(data.detail || "No se pudo eliminar el grupo");
   }

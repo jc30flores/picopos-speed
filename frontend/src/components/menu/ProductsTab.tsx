@@ -67,6 +67,7 @@ export const ProductsTab = () => {
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  const [isDeletingCategory, setIsDeletingCategory] = useState(false);
   const [categoryDeleteError, setCategoryDeleteError] = useState<string | null>(null);
   const [categoryDeleteActiveProducts, setCategoryDeleteActiveProducts] = useState<string[]>([]);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
@@ -95,7 +96,8 @@ export const ProductsTab = () => {
     });
   }, []);
 
-  const categoryNames = ["Todos", ...categories.map((cat) => cat.name)];
+  const visibleCategories = categories.filter((cat) => !cat.isHidden && !cat.name.toUpperCase().includes("SIN CATEGORÍA"));
+  const categoryNames = ["Todos", ...visibleCategories.map((cat) => cat.name)];
 
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
@@ -131,9 +133,14 @@ export const ProductsTab = () => {
   };
 
   const handleDeleteCategory = async () => {
-    if (!categoryToDelete) return;
+    if (!categoryToDelete || isDeletingCategory) return;
+    setIsDeletingCategory(true);
     try {
       await deleteCategory(categoryToDelete.id);
+      setCategories((prev) => prev.filter((category) => category.id !== categoryToDelete.id));
+      if (selectedCategory === categoryToDelete.name) {
+        setSelectedCategory("Todos");
+      }
       await loadMenuData();
       toast.success("Categoría eliminada");
       setCategoryDeleteError(null);
@@ -144,6 +151,8 @@ export const ProductsTab = () => {
       setCategoryDeleteError(conflictError.message || "No se pudo eliminar la categoría");
       setCategoryDeleteActiveProducts(conflictError.activeProducts ?? []);
       toast.error(conflictError.message || "No se pudo eliminar la categoría");
+    } finally {
+      setIsDeletingCategory(false);
     }
   };
 
@@ -208,13 +217,13 @@ export const ProductsTab = () => {
               />
             </div>
 
-            <div className="flex gap-2 flex-wrap">
+            <div className="flex gap-2.5 overflow-x-auto pb-1">
               {categoryNames.map((cat) => (
                 <Badge
                   key={cat}
                   variant={selectedCategory === cat ? "default" : "outline"}
                   className={cn(
-                    "cursor-pointer transition-all hover:scale-105",
+                    "cursor-pointer transition-all whitespace-nowrap rounded-full px-4 py-2 text-sm min-h-10 inline-flex items-center",
                     selectedCategory === cat && "bg-primary text-primary-foreground"
                   )}
                   onClick={() => setSelectedCategory(cat)}
@@ -325,7 +334,7 @@ export const ProductsTab = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => { if (!open) { setCategoryToDelete(null); setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); } }}>
+      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => { if (!open) { setCategoryToDelete(null); setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); setIsDeletingCategory(false); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Eliminar categoría: {categoryToDelete?.name}</DialogTitle>
@@ -347,7 +356,7 @@ export const ProductsTab = () => {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCategoryToDelete(null)}>Cancelar</Button>
-            <Button variant="destructive" onClick={handleDeleteCategory}>Eliminar</Button>
+            <Button variant="destructive" onClick={handleDeleteCategory} disabled={isDeletingCategory}>{isDeletingCategory ? "Eliminando..." : "Eliminar"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -364,7 +373,7 @@ export const ProductsTab = () => {
               <Button onClick={handleCreateCategory}>Crear</Button>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {categories.map((category) => (
+              {visibleCategories.map((category) => (
                 <div key={category.id} className="flex items-center gap-2 rounded-lg border p-2">
                   {editingCategoryId === category.id ? (
                     <>

@@ -450,13 +450,13 @@ const POS = () => {
                   />
                 </div>
                 
-                <div className="flex gap-2 flex-wrap">
-                  {["Todos", ...categories.map((cat) => cat.name)].map((cat) => (
+                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                  {["Todos", ...categories.filter((cat) => !cat.isHidden && !cat.name.toUpperCase().includes("SIN CATEGORÍA")).map((cat) => cat.name)].map((cat) => (
                     <Badge
                       key={cat}
                       variant={selectedCategory === cat ? "default" : "outline"}
                       className={cn(
-                        "cursor-pointer transition-all hover:scale-105",
+                        "cursor-pointer transition-all whitespace-nowrap rounded-full px-4 py-2 text-sm min-h-10 inline-flex items-center",
                         selectedCategory === cat && "bg-primary text-primary-foreground"
                       )}
                       onClick={() => setSelectedCategory(cat)}

@@ -59,6 +59,7 @@ class AdminMenuOpsTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Category.objects.filter(id=self.category.id).exists())
         fallback = Category.objects.get(name="SIN CATEGORÍA")
+        self.assertTrue(fallback.is_hidden)
         self.assertEqual(Product.objects.filter(category=fallback, is_archived=True).count(), 2)
 
     def test_delete_category_without_products_returns_204(self):
@@ -66,6 +67,25 @@ class AdminMenuOpsTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Category.objects.filter(id=self.category.id).exists())
+
+
+    def test_list_categories_hides_system_categories_by_default(self):
+        Category.objects.create(name="SIN CATEGORÍA (ARCHIVADOS)", is_hidden=True)
+
+        response = self.client.get("/api/menu/categories/")
+
+        self.assertEqual(response.status_code, 200)
+        names = [item["name"] for item in response.data]
+        self.assertNotIn("SIN CATEGORÍA (ARCHIVADOS)", names)
+
+    def test_list_categories_include_hidden_for_admin(self):
+        Category.objects.create(name="SIN CATEGORÍA (ARCHIVADOS)", is_hidden=True)
+
+        response = self.client.get("/api/menu/categories/?include_hidden=1")
+
+        self.assertEqual(response.status_code, 200)
+        names = [item["name"] for item in response.data]
+        self.assertIn("SIN CATEGORÍA (ARCHIVADOS)", names)
 
     def test_delete_product_with_history_archives(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)

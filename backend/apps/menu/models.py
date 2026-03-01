@@ -28,6 +28,7 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
     is_active = models.BooleanField(default=True)
+    is_hidden = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["name"]

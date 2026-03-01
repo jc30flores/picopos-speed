@@ -27,6 +27,17 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         queryset = Category.objects.filter(is_active=True)
+        include_hidden = self.request.query_params.get("include_hidden") in {"1", "true", "True"}
+        user = getattr(self.request, "user", None)
+        can_view_hidden = bool(
+            include_hidden
+            and user
+            and user.is_authenticated
+            and getattr(user, "role", None) in {"admin", "manager"}
+        )
+        if not can_view_hidden:
+            queryset = queryset.filter(is_hidden=False)
+
         query = self.request.query_params.get("q")
         if query:
             normalized = query.strip().upper()
@@ -175,7 +186,10 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
                     fallback_name = "SIN CATEGORÍA"
                     if category.name == fallback_name:
                         fallback_name = "SIN CATEGORÍA (ARCHIVADOS)"
-                    fallback_category, _ = Category.objects.get_or_create(name=fallback_name)
+                    fallback_category, _ = Category.objects.get_or_create(name=fallback_name, defaults={"is_hidden": True})
+                    if not fallback_category.is_hidden:
+                        fallback_category.is_hidden = True
+                        fallback_category.save(update_fields=["is_hidden"])
                     inactive_products_qs.update(category=fallback_category)
                 category.delete()
         except ProtectedError:
