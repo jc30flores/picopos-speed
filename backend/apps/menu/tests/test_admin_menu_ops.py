@@ -87,6 +87,34 @@ class AdminMenuOpsTests(TestCase):
         names = [item["name"] for item in response.data]
         self.assertIn("SIN CATEGORÍA (ARCHIVADOS)", names)
 
+
+    def test_reorder_categories_persists_order(self):
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+        c3 = Category.objects.create(name="POSTRES", position=2)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [c3.id, self.category.id, c2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        ordered = self.client.get("/api/menu/categories/")
+        names = [item["name"] for item in ordered.data]
+        self.assertEqual(names, ["POSTRES", "COMIDA", "BEBIDAS"])
+
+    def test_reorder_categories_with_duplicates_returns_400(self):
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [self.category.id, c2.id, c2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("duplicados", str(response.data).lower())
+
     def test_delete_product_with_history_archives(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
         branch = Branch.objects.create(name="B", code="B")

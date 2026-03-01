@@ -2,6 +2,7 @@ import os
 import logging
 from rest_framework import generics, status
 from django.db import transaction
+from django.db import models
 from django.db.models.deletion import ProtectedError
 from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
@@ -43,7 +44,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
             normalized = query.strip().upper()
             if normalized:
                 queryset = queryset.filter(name__icontains=normalized)
-        return queryset.order_by("name")
+        return queryset.order_by("position", "id")
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -54,10 +55,15 @@ class CategoryListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         name = serializer.validated_data["name"]
-        category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True})
+        next_position = (Category.objects.aggregate(max_position=models.Max("position")).get("max_position") or -1) + 1
+        category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True, "position": next_position})
         if not category.is_active:
             category.is_active = True
-            category.save(update_fields=["is_active"])
+            update_fields = ["is_active"]
+            if category.position != next_position:
+                category.position = next_position
+                update_fields.append("position")
+            category.save(update_fields=update_fields)
         if created:
             log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
         response_serializer = self.get_serializer(category)
@@ -65,6 +71,37 @@ class CategoryListCreateView(generics.ListCreateAPIView):
             response_serializer.data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+
+class CategoryReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def patch(self, request):
+        ordered_ids = request.data.get("ordered_ids") or []
+        if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
+            return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(set(ordered_ids)) != len(ordered_ids):
+            return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        expected_ids = list(
+            Category.objects.filter(is_active=True, is_hidden=False)
+            .order_by("position", "id")
+            .values_list("id", flat=True)
+        )
+        if sorted(expected_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids debe incluir todas las categorías activas visibles."}, status=status.HTTP_400_BAD_REQUEST)
+
+        categories = {category.id: category for category in Category.objects.filter(id__in=ordered_ids)}
+        with transaction.atomic():
+            for index, category_id in enumerate(ordered_ids):
+                categories[category_id].position = index
+            Category.objects.bulk_update(categories.values(), ["position"])
+
+        serialized = CategorySerializer(
+            Category.objects.filter(id__in=ordered_ids).order_by("position", "id"),
+            many=True,
+        )
+        return Response(serialized.data, status=status.HTTP_200_OK)
 
 
 class ProductListCreateView(generics.ListCreateAPIView):

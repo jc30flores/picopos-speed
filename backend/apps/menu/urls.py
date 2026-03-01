@@ -3,6 +3,7 @@ from apps.menu import views
 
 urlpatterns = [
     path("categories/", views.CategoryListCreateView.as_view(), name="menu-categories"),
+    path("categories/reorder/", views.CategoryReorderView.as_view(), name="menu-categories-reorder"),
     path("categories/<int:pk>/", views.CategoryDetailView.as_view(), name="menu-categories-detail"),
     path("products/", views.ProductListCreateView.as_view(), name="menu-products"),
     path("products/<int:pk>/", views.ProductDetailView.as_view(), name="menu-products-detail"),

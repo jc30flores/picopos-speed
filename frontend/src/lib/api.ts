@@ -5,6 +5,7 @@ export type Category = {
   name: string;
   isActive?: boolean;
   isHidden?: boolean;
+  position?: number;
 };
 
 export type Modifier = {
@@ -369,13 +370,14 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data
     .map((item) => ({
       id: item.id,
       name: item.name,
       isActive: item.is_active,
       isHidden: Boolean(item.is_hidden),
+      position: Number(item.position ?? 0),
     }))
     .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
@@ -430,12 +432,13 @@ export const createCategory = async (name: string): Promise<Category> => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>(response);
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,
     isActive: data.is_active,
     isHidden: Boolean(data.is_hidden),
+    position: Number(data.position ?? 0),
   };
 };
 
@@ -445,8 +448,8 @@ export const updateCategory = async (categoryId: number, name: string): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean }>(response);
-  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden) };
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden), position: Number(data.position ?? 0) };
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
@@ -2333,4 +2336,20 @@ export const markPrintJobPrinted = async (id: number): Promise<PrintJob> => {
     createdAt: new Date(data.created_at),
     printedAt: data.printed_at ? new Date(data.printed_at) : null,
   };
+};
+
+
+export const reorderCategories = async (orderedIds: number[]): Promise<Category[]> => {
+  const response = await request("/menu/categories/reorder/", {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  });
+  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    name: item.name,
+    isActive: item.is_active,
+    isHidden: Boolean(item.is_hidden),
+    position: Number(item.position ?? 0),
+  }));
 };

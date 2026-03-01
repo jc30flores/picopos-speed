@@ -29,9 +29,10 @@ class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0, db_index=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["position", "id"]
 
     def __str__(self) -> str:
         return self.name

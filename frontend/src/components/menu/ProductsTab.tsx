@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, Plus, Edit, Settings, Trash2 } from "lucide-react";
+import { Search, Plus, Edit, Settings, Trash2, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -74,6 +74,8 @@ export const ProductsTab = () => {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
+  const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
 
   const loadMenuData = async (productId: number | null = selectedProduct?.id ?? null) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -181,6 +183,46 @@ export const ProductsTab = () => {
       toast.success("Categoría actualizada");
     } catch {
       toast.error("No se pudo actualizar la categoría");
+    }
+  };
+
+  const handleCategoryDrop = async (targetCategoryId: number) => {
+    if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
+
+    const current = [...visibleCategories];
+    const from = current.findIndex((category) => category.id === draggingCategoryId);
+    const to = current.findIndex((category) => category.id === targetCategoryId);
+    if (from < 0 || to < 0) return;
+
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+
+    const previous = [...visibleCategories];
+    setCategories((prev) => {
+      const byId = new Map(prev.map((category) => [category.id, category]));
+      const reorderedVisible = current.map((category, index) => ({ ...category, position: index }));
+      reorderedVisible.forEach((category) => byId.set(category.id, category));
+      return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    });
+
+    setIsSavingCategoryOrder(true);
+    try {
+      const ordered = await reorderCategories(current.map((category) => category.id));
+      setCategories((prev) => {
+        const hidden = prev.filter((category) => category.isHidden || category.name.toUpperCase().includes("SIN CATEGORÍA"));
+        return [...ordered, ...hidden];
+      });
+      toast.success("Orden de categorías guardado");
+    } catch (error) {
+      setCategories((prev) => {
+        const byId = new Map(prev.map((category) => [category.id, category]));
+        previous.forEach((category, index) => byId.set(category.id, { ...category, position: index }));
+        return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      });
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el orden de categorías");
+    } finally {
+      setIsSavingCategoryOrder(false);
+      setDraggingCategoryId(null);
     }
   };
 
@@ -374,7 +416,21 @@ export const ProductsTab = () => {
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {visibleCategories.map((category) => (
-                <div key={category.id} className="flex items-center gap-2 rounded-lg border p-2">
+                <div
+                  key={category.id}
+                  className={cn("flex items-center gap-2 rounded-lg border p-2 transition-all", draggingCategoryId === category.id && "opacity-50 ring-2 ring-primary/50")}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (draggingCategoryId !== null) {
+                      event.dataTransfer.dropEffect = "move";
+                    }
+                  }}
+                  onDrop={() => {
+                    handleCategoryDrop(category.id).catch((error) => {
+                      console.error("Error dropping category", error);
+                    });
+                  }}
+                >
                   {editingCategoryId === category.id ? (
                     <>
                       <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
@@ -382,6 +438,17 @@ export const ProductsTab = () => {
                     </>
                   ) : (
                     <>
+                      <button
+                        type="button"
+                        className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted"
+                        draggable={!isSavingCategoryOrder}
+                        onDragStart={() => setDraggingCategoryId(category.id)}
+                        onDragEnd={() => setDraggingCategoryId(null)}
+                        aria-label={`Mover categoría ${category.name}`}
+                        title="Arrastrar para reordenar"
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </button>
                       <div className="flex-1 font-medium">{category.name}</div>
                       <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
                         Editar
