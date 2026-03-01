@@ -1,7 +1,8 @@
 import os
 import logging
+from functools import lru_cache
 from rest_framework import generics, status
-from django.db import transaction
+from django.db import transaction, connection
 from django.db import models
 from django.db.models.deletion import ProtectedError
 from rest_framework.permissions import SAFE_METHODS, AllowAny
@@ -22,6 +23,15 @@ from apps.menu.serializers import (
 
 logger = logging.getLogger(__name__)
 
+
+
+
+@lru_cache(maxsize=1)
+def _product_sort_order_column_exists() -> bool:
+    table_name = Product._meta.db_table
+    with connection.cursor() as cursor:
+        columns = connection.introspection.get_table_description(cursor, table_name)
+    return any(column.name == "sort_order" for column in columns)
 
 class CategoryListCreateView(generics.ListCreateAPIView):
     serializer_class = CategorySerializer
@@ -124,7 +134,9 @@ class ProductListCreateView(generics.ListCreateAPIView):
         include_archived = self.request.query_params.get("include_archived") in {"1", "true", "True"}
         if not include_archived:
             queryset = queryset.filter(is_archived=False)
-        return queryset.order_by("category__position", "category_id", "sort_order", "name", "id")
+        if _product_sort_order_column_exists():
+            return queryset.order_by("category__position", "category_id", "sort_order", "name", "id")
+        return queryset.order_by("category__position", "category_id", "name", "id")
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())

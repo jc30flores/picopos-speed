@@ -1,12 +1,22 @@
 from django.db import migrations, models
 
 
-def populate_product_sort_order(apps, schema_editor):
-    Product = apps.get_model("menu", "Product")
-    for category_id in Product.objects.values_list("category_id", flat=True).distinct():
-        products = Product.objects.filter(category_id=category_id).order_by("name", "id")
-        for index, product in enumerate(products):
-            Product.objects.filter(id=product.id).update(sort_order=index)
+def backfill_product_sort_order(apps, schema_editor):
+    """
+    Inicializa sort_order por categoría usando orden estable por nombre/id.
+    """
+    schema_editor.execute(
+        """
+        WITH ordered AS (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY category_id ORDER BY name, id) - 1 AS rn
+            FROM menu_product
+        )
+        UPDATE menu_product p
+        SET sort_order = o.rn
+        FROM ordered o
+        WHERE p.id = o.id
+        """
+    )
 
 
 class Migration(migrations.Migration):
@@ -19,7 +29,12 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="product",
             name="sort_order",
-            field=models.PositiveIntegerField(db_index=True, default=0),
+            field=models.PositiveIntegerField(null=True, blank=True, db_index=False),
         ),
-        migrations.RunPython(populate_product_sort_order, migrations.RunPython.noop),
+        migrations.RunPython(backfill_product_sort_order, migrations.RunPython.noop),
+        migrations.AlterField(
+            model_name="product",
+            name="sort_order",
+            field=models.PositiveIntegerField(default=0, db_index=False),
+        ),
     ]
