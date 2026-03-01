@@ -186,214 +186,224 @@ export const ProductFormDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            {editingProduct ? "Editar" : "Nuevo"} producto
-          </DialogTitle>
-          <DialogDescription>
-            Configura la información del producto
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="w-[96vw] max-w-5xl h-[90vh] overflow-hidden p-0">
+        <div className="flex h-full flex-col">
+          <DialogHeader className="border-b px-4 py-3 sm:px-6">
+            <DialogTitle>
+              {editingProduct ? "Editar" : "Nuevo"} producto
+            </DialogTitle>
+            <DialogDescription>
+              Configura la información del producto
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <Label htmlFor="product-name">Nombre del producto</Label>
-              <Input
-                id="product-name"
-                placeholder="Ej: Taco de Carne Asada"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-
-            <div className="col-span-2">
-              <Label htmlFor="product-description">Descripción</Label>
-              <Textarea
-                id="product-description"
-                placeholder="Descripción breve del producto"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="mt-1"
-                rows={3}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="product-price">Precio</Label>
-              <Input
-                id="product-price"
-                type="text"
-                inputMode="decimal"
-                placeholder="0.00"
-                value={price}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "" || /^\d*\.?\d*$/.test(value)) {
-                    setPrice(value);
-                  }
-                }}
-                className="mt-1"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="product-category">Categoría</Label>
-              <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    className="mt-1 w-full justify-between"
-                  >
-                    {selectedCategoryName || "Selecciona categoría"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[320px] p-0" align="start">
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      placeholder="Buscar categoría..."
-                      value={categoryQuery}
-                      onValueChange={(value) => {
-                        setCategoryQuery(value.toUpperCase());
-                        setSelectedCategoryId(null);
-                      }}
-                      className="uppercase"
-                    />
-                    <CommandList>
-                      {isFetchingCategories && (
-                        <CommandItem disabled>Buscando categorías...</CommandItem>
-                      )}
-                      {!isFetchingCategories && categoryOptions.length === 0 && (
-                        <div className="py-6 text-center text-sm text-muted-foreground">
-                          Sin coincidencias
-                        </div>
-                      )}
-                      {categoryOptions.length > 0 && (
-                        <CommandGroup heading="Categorías">
-                          {categoryOptions.map((cat) => (
-                            <CommandItem
-                              key={cat.id}
-                              value={cat.name}
-                              onSelect={() => handleSelectCategory(cat)}
-                            >
-                              {cat.name}
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      )}
-                      {canCreateCategory && (
-                        <>
-                          <CommandSeparator />
-                          <CommandGroup heading="Crear">
-                            <CommandItem onSelect={handleCreateCategory}>
-                              {isCreatingCategory
-                                ? "Creando categoría..."
-                                : `Crear categoría: ${categoryQuery.trim().toUpperCase()}`}
-                            </CommandItem>
-                          </CommandGroup>
-                        </>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <ImageUploadField
-              id="product-image"
-              label="Imagen del producto"
-              file={imageFile}
-              previewUrl={localImageUrl ?? existingImageUrl}
-              onChange={setImageFile}
-            />
-
-            <div>
-              <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
-              <Input
-                id="disposable-fee"
-                type="number"
-                min="0"
-                step="0.01"
-                value={disposableFee}
-                onChange={(e) => setDisposableFee(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-
-            <div className="space-y-2 pt-1">
-              <Label>Aplicar desechables en</Label>
-              {[
-                { key: "dine-in", label: "En local" },
-                { key: "takeout", label: "Para llevar" },
-                { key: "delivery", label: "Delivery" },
-              ].map((item) => (
-                <div key={item.key} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`disposable-${item.key}`}
-                    checked={disposableApplyTo.includes(item.key)}
-                    onCheckedChange={(checked) => {
-                      setDisposableApplyTo((prev) =>
-                        checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key)
-                      );
-                    }}
-                  />
-                  <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex items-center space-x-2 pt-6">
-              <Checkbox
-                id="requires-kitchen"
-                checked={requiresKitchen}
-                onCheckedChange={(checked) => setRequiresKitchen(checked as boolean)}
-              />
-              <Label htmlFor="requires-kitchen" className="cursor-pointer">
-                Va a cocina
-              </Label>
-            </div>
-
-            <div className="flex items-center space-x-2 pt-6">
-              <Checkbox
-                id="available"
-                checked={available}
-                onCheckedChange={(checked) => setAvailable(checked as boolean)}
-              />
-              <Label htmlFor="available" className="cursor-pointer">
-                Disponible
-              </Label>
-            </div>
-          </div>
-          {previewUrl && (
-            <div className="mt-4">
-              <Label className="text-sm">Vista previa</Label>
-              <div className="mt-2 flex justify-center">
-                <img
-                  src={previewUrl}
-                  alt="Vista previa del producto"
-                  className="h-32 w-32 rounded-lg object-cover border"
+          <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <Label htmlFor="product-name">Nombre del producto</Label>
+                <Input
+                  id="product-name"
+                  placeholder="Ej: Taco de Carne Asada"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mt-1"
                 />
               </div>
-            </div>
-          )}
-        </div>
 
-        <div className="flex gap-3 pt-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
-            Cancelar
-          </Button>
-          <Button
-            onClick={handleSave}
-            disabled={!isValid()}
-            className="flex-1 bg-secondary hover:bg-secondary/90"
-          >
-            Guardar producto
-          </Button>
+              <div className="md:col-span-2">
+                <Label htmlFor="product-description">Descripción</Label>
+                <Textarea
+                  id="product-description"
+                  placeholder="Descripción breve del producto"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="mt-1"
+                  rows={3}
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="product-price">Precio</Label>
+                <Input
+                  id="product-price"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={price}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === "" || /^\d*\.?\d*$/.test(value)) {
+                      setPrice(value);
+                    }
+                  }}
+                  className="mt-1"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="product-category">Categoría</Label>
+                <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="mt-1 w-full justify-between"
+                    >
+                      {selectedCategoryName || "Selecciona categoría"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[320px] p-0" align="start">
+                    <Command shouldFilter={false}>
+                      <CommandInput
+                        placeholder="Buscar categoría..."
+                        value={categoryQuery}
+                        onValueChange={(value) => {
+                          setCategoryQuery(value.toUpperCase());
+                          setSelectedCategoryId(null);
+                        }}
+                        className="uppercase"
+                      />
+                      <CommandList>
+                        {isFetchingCategories && (
+                          <CommandItem disabled>Buscando categorías...</CommandItem>
+                        )}
+                        {!isFetchingCategories && categoryOptions.length === 0 && (
+                          <div className="py-6 text-center text-sm text-muted-foreground">
+                            Sin coincidencias
+                          </div>
+                        )}
+                        {categoryOptions.length > 0 && (
+                          <CommandGroup heading="Categorías">
+                            {categoryOptions.map((cat) => (
+                              <CommandItem
+                                key={cat.id}
+                                value={cat.name}
+                                onSelect={() => handleSelectCategory(cat)}
+                              >
+                                {cat.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        )}
+                        {canCreateCategory && (
+                          <>
+                            <CommandSeparator />
+                            <CommandGroup heading="Crear">
+                              <CommandItem onSelect={handleCreateCategory}>
+                                {isCreatingCategory
+                                  ? "Creando categoría..."
+                                  : `Crear categoría: ${categoryQuery.trim().toUpperCase()}`}
+                              </CommandItem>
+                            </CommandGroup>
+                          </>
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="md:col-span-2">
+                <ImageUploadField
+                  id="product-image"
+                  label="Imagen del producto"
+                  file={imageFile}
+                  previewUrl={previewUrl}
+                  onChange={setImageFile}
+                />
+              </div>
+
+              {previewUrl && (
+                <div className="md:col-span-2">
+                  <Label className="text-sm">Vista previa</Label>
+                  <div className="mt-2 rounded-lg border p-2">
+                    <div className="mx-auto aspect-square max-h-56 w-full max-w-56 overflow-hidden rounded-md bg-muted/30">
+                      <img
+                        src={previewUrl}
+                        alt="Vista previa del producto"
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
+                <Input
+                  id="disposable-fee"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={disposableFee}
+                  onChange={(e) => setDisposableFee(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <Label>Aplicar desechables en</Label>
+                {[
+                  { key: "dine-in", label: "En local" },
+                  { key: "takeout", label: "Para llevar" },
+                  { key: "delivery", label: "Delivery" },
+                ].map((item) => (
+                  <div key={item.key} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`disposable-${item.key}`}
+                      checked={disposableApplyTo.includes(item.key)}
+                      onCheckedChange={(checked) => {
+                        setDisposableApplyTo((prev) =>
+                          checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key)
+                        );
+                      }}
+                    />
+                    <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center space-x-2 pt-2">
+                <Checkbox
+                  id="requires-kitchen"
+                  checked={requiresKitchen}
+                  onCheckedChange={(checked) => setRequiresKitchen(checked as boolean)}
+                />
+                <Label htmlFor="requires-kitchen" className="cursor-pointer">
+                  Va a cocina
+                </Label>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-2">
+                <Checkbox
+                  id="available"
+                  checked={available}
+                  onCheckedChange={(checked) => setAvailable(checked as boolean)}
+                />
+                <Label htmlFor="available" className="cursor-pointer">
+                  Disponible
+                </Label>
+              </div>
+            </div>
+          </div>
+
+          <div className="sticky bottom-0 border-t bg-background px-4 py-3 sm:px-6">
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={!isValid()}
+                className="flex-1 bg-secondary hover:bg-secondary/90"
+              >
+                Guardar producto
+              </Button>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
   );
+
 };

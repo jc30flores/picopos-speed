@@ -76,7 +76,6 @@ export const ProductsTab = () => {
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
-  const [isProductOrderMode, setIsProductOrderMode] = useState(false);
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
   const [dragOverProductId, setDragOverProductId] = useState<number | null>(null);
   const [dragOverCategoryId, setDragOverCategoryId] = useState<number | null>(null);
@@ -112,6 +111,13 @@ export const ProductsTab = () => {
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   }), [products, searchQuery, selectedCategory]);
+
+  const canReorderProducts = selectedCategory !== "Todos" && !searchQuery.trim();
+  const productReorderHint = selectedCategory === "Todos"
+    ? "Selecciona una categoría para ordenar productos."
+    : searchQuery.trim()
+      ? "Limpia la búsqueda para ordenar productos."
+      : null;
 
   const handleNewProduct = () => {
     setEditingProduct(null);
@@ -257,7 +263,7 @@ export const ProductsTab = () => {
 
 
   const handleProductDragEnter = (targetProductId: number) => {
-    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !isProductOrderMode) return;
+    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !canReorderProducts) return;
 
     const current = [...filteredProducts];
     const from = current.findIndex((product) => product.id === draggingProductId);
@@ -278,7 +284,7 @@ export const ProductsTab = () => {
   };
 
   const handleProductDrop = async (targetProductId: number) => {
-    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !isProductOrderMode) return;
+    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !canReorderProducts) return;
 
     const current = [...filteredProducts];
     const from = current.findIndex((product) => product.id === draggingProductId);
@@ -330,13 +336,6 @@ export const ProductsTab = () => {
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
                 Gestionar categorías
-              </Button>
-              <Button
-                variant={isProductOrderMode ? "default" : "outline"}
-                onClick={() => setIsProductOrderMode((prev) => !prev)}
-                disabled={selectedCategory === "Todos" || Boolean(searchQuery.trim()) || isSavingProductOrder}
-              >
-                {isProductOrderMode ? "Finalizar orden" : "Ordenar productos"}
               </Button>
               <Button
                 variant="default"
@@ -394,12 +393,12 @@ export const ProductsTab = () => {
                   <TableRow
                     key={product.id}
                     className={cn(
-                      isProductOrderMode && "cursor-move transition-all",
+                      canReorderProducts && "cursor-move transition-all",
                       draggingProductId === product.id && "opacity-60 ring-2 ring-primary/50",
                       dragOverProductId === product.id && draggingProductId !== product.id && "bg-muted/40"
                     )}
                     onDragOver={(event) => {
-                      if (!isProductOrderMode) return;
+                      if (!canReorderProducts) return;
                       event.preventDefault();
                     }}
                     onDragEnter={() => handleProductDragEnter(product.id)}
@@ -413,12 +412,12 @@ export const ProductsTab = () => {
                       <button
                         type="button"
                         className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted disabled:cursor-not-allowed"
-                        draggable={isProductOrderMode && !isSavingProductOrder}
-                        disabled={!isProductOrderMode || isSavingProductOrder}
+                        draggable={canReorderProducts && !isSavingProductOrder}
+                        disabled={!canReorderProducts || isSavingProductOrder}
                         onDragStart={() => setDraggingProductId(product.id)}
                         onDragEnd={() => { setDraggingProductId(null); setDragOverProductId(null); }}
                         aria-label={`Mover producto ${product.name}`}
-                        title={isProductOrderMode ? "Arrastrar para reordenar" : "Activa 'Ordenar productos'"}
+                        title={canReorderProducts ? "Arrastrar para reordenar" : "Selecciona una categoría y limpia búsqueda"}
                       >
                         <GripVertical className="h-4 w-4" />
                       </button>
