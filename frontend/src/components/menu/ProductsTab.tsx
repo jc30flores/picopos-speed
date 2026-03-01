@@ -78,6 +78,8 @@ export const ProductsTab = () => {
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
   const [isProductOrderMode, setIsProductOrderMode] = useState(false);
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
+  const [dragOverProductId, setDragOverProductId] = useState<number | null>(null);
+  const [dragOverCategoryId, setDragOverCategoryId] = useState<number | null>(null);
   const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
   const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
@@ -190,6 +192,28 @@ export const ProductsTab = () => {
     }
   };
 
+
+  const handleCategoryDragEnter = (targetCategoryId: number) => {
+    if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
+
+    const current = [...visibleCategories];
+    const from = current.findIndex((category) => category.id === draggingCategoryId);
+    const to = current.findIndex((category) => category.id === targetCategoryId);
+    if (from < 0 || to < 0) return;
+
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+    setDragOverCategoryId(targetCategoryId);
+
+    setCategories((prev) => {
+      const byId = new Map(prev.map((category) => [category.id, category]));
+      current.forEach((category, index) => {
+        byId.set(category.id, { ...category, position: index });
+      });
+      return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    });
+  };
+
   const handleCategoryDrop = async (targetCategoryId: number) => {
     if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
 
@@ -227,7 +251,30 @@ export const ProductsTab = () => {
     } finally {
       setIsSavingCategoryOrder(false);
       setDraggingCategoryId(null);
+      setDragOverCategoryId(null);
     }
+  };
+
+
+  const handleProductDragEnter = (targetProductId: number) => {
+    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !isProductOrderMode) return;
+
+    const current = [...filteredProducts];
+    const from = current.findIndex((product) => product.id === draggingProductId);
+    const to = current.findIndex((product) => product.id === targetProductId);
+    if (from < 0 || to < 0) return;
+
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+    setDragOverProductId(targetProductId);
+
+    setProducts((prev) => {
+      const byId = new Map(prev.map((product) => [product.id, product]));
+      current.forEach((product, index) => {
+        byId.set(product.id, { ...product, sortOrder: index });
+      });
+      return Array.from(byId.values());
+    });
   };
 
   const handleProductDrop = async (targetProductId: number) => {
@@ -268,6 +315,7 @@ export const ProductsTab = () => {
     } finally {
       setIsSavingProductOrder(false);
       setDraggingProductId(null);
+      setDragOverProductId(null);
     }
   };
 
@@ -345,11 +393,16 @@ export const ProductsTab = () => {
                 {filteredProducts.map((product) => (
                   <TableRow
                     key={product.id}
-                    className={cn(isProductOrderMode && "cursor-move", draggingProductId === product.id && "opacity-60")}
+                    className={cn(
+                      isProductOrderMode && "cursor-move transition-all",
+                      draggingProductId === product.id && "opacity-60 ring-2 ring-primary/50",
+                      dragOverProductId === product.id && draggingProductId !== product.id && "bg-muted/40"
+                    )}
                     onDragOver={(event) => {
                       if (!isProductOrderMode) return;
                       event.preventDefault();
                     }}
+                    onDragEnter={() => handleProductDragEnter(product.id)}
                     onDrop={() => {
                       handleProductDrop(product.id).catch((error) => {
                         console.error("Error dropping product", error);
@@ -363,7 +416,7 @@ export const ProductsTab = () => {
                         draggable={isProductOrderMode && !isSavingProductOrder}
                         disabled={!isProductOrderMode || isSavingProductOrder}
                         onDragStart={() => setDraggingProductId(product.id)}
-                        onDragEnd={() => setDraggingProductId(null)}
+                        onDragEnd={() => { setDraggingProductId(null); setDragOverProductId(null); }}
                         aria-label={`Mover producto ${product.name}`}
                         title={isProductOrderMode ? "Arrastrar para reordenar" : "Activa 'Ordenar productos'"}
                       >
@@ -498,13 +551,18 @@ export const ProductsTab = () => {
               {visibleCategories.map((category) => (
                 <div
                   key={category.id}
-                  className={cn("flex items-center gap-2 rounded-lg border p-2 transition-all", draggingCategoryId === category.id && "opacity-50 ring-2 ring-primary/50")}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border p-2 transition-all",
+                    draggingCategoryId === category.id && "opacity-50 ring-2 ring-primary/50",
+                    dragOverCategoryId === category.id && draggingCategoryId !== category.id && "bg-muted/40"
+                  )}
                   onDragOver={(event) => {
                     event.preventDefault();
                     if (draggingCategoryId !== null) {
                       event.dataTransfer.dropEffect = "move";
                     }
                   }}
+                  onDragEnter={() => handleCategoryDragEnter(category.id)}
                   onDrop={() => {
                     handleCategoryDrop(category.id).catch((error) => {
                       console.error("Error dropping category", error);
@@ -523,7 +581,7 @@ export const ProductsTab = () => {
                         className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted"
                         draggable={!isSavingCategoryOrder}
                         onDragStart={() => setDraggingCategoryId(category.id)}
-                        onDragEnd={() => setDraggingCategoryId(null)}
+                        onDragEnd={() => { setDraggingCategoryId(null); setDragOverCategoryId(null); }}
                         aria-label={`Mover categoría ${category.name}`}
                         title="Arrastrar para reordenar"
                       >
