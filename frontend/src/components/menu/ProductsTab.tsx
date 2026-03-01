@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, Category, ModifierGroup, Product } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -67,6 +67,8 @@ export const ProductsTab = () => {
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  const [categoryDeleteError, setCategoryDeleteError] = useState<string | null>(null);
+  const [categoryDeleteActiveProducts, setCategoryDeleteActiveProducts] = useState<string[]>([]);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
@@ -134,9 +136,14 @@ export const ProductsTab = () => {
       await deleteCategory(categoryToDelete.id);
       await loadMenuData();
       toast.success("Categoría eliminada");
+      setCategoryDeleteError(null);
+      setCategoryDeleteActiveProducts([]);
       setCategoryToDelete(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo eliminar la categoría");
+      const conflictError = error as CategoryDeleteConflictError;
+      setCategoryDeleteError(conflictError.message || "No se pudo eliminar la categoría");
+      setCategoryDeleteActiveProducts(conflictError.activeProducts ?? []);
+      toast.error(conflictError.message || "No se pudo eliminar la categoría");
     }
   };
 
@@ -318,13 +325,25 @@ export const ProductsTab = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => !open && setCategoryToDelete(null)}>
+      <Dialog open={Boolean(categoryToDelete)} onOpenChange={(open) => { if (!open) { setCategoryToDelete(null); setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Eliminar categoría: {categoryToDelete?.name}</DialogTitle>
             <DialogDescription>
               Solo se puede eliminar si no tiene productos activos asociados.
             </DialogDescription>
+            {categoryDeleteError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                <p>{categoryDeleteError}</p>
+                {categoryDeleteActiveProducts.length > 0 && (
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {categoryDeleteActiveProducts.map((productName) => (
+                      <li key={productName}>{productName}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCategoryToDelete(null)}>Cancelar</Button>
@@ -358,7 +377,7 @@ export const ProductsTab = () => {
                       <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
                         Editar
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => setCategoryToDelete(category)}>
+                      <Button size="sm" variant="outline" onClick={() => { setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); setCategoryToDelete(category); }}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </>

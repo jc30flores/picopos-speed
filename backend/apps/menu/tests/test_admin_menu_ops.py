@@ -18,10 +18,54 @@ class AdminMenuOpsTests(TestCase):
         self.client.force_authenticate(user=self.admin)
         self.category = Category.objects.create(name="COMIDA")
 
-    def test_delete_category_with_products_returns_409(self):
-        Product.objects.create(name="Item", description="", price=Decimal("1.00"), category=self.category, available=True)
+    def test_delete_category_with_active_products_returns_409_with_names(self):
+        Product.objects.create(name="PAPAS FRITAS", description="", price=Decimal("1.00"), category=self.category, available=True, is_archived=False)
+        Product.objects.create(name="PLATO DE PECHUGA", description="", price=Decimal("2.00"), category=self.category, available=True, is_archived=False)
+
         response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
         self.assertEqual(response.status_code, 409)
+        self.assertIn("detail", response.data)
+        self.assertEqual(
+            response.data["detail"],
+            "No se puede eliminar la categoría porque tiene productos activos asociados.",
+        )
+        self.assertEqual(
+            response.data["active_products"],
+            ["PAPAS FRITAS", "PLATO DE PECHUGA"],
+        )
+        self.assertTrue(Category.objects.filter(id=self.category.id).exists())
+
+    def test_delete_category_with_only_archived_products_reassigns_and_deletes(self):
+        Product.objects.create(
+            name="ARCHIVADO 1",
+            description="",
+            price=Decimal("1.00"),
+            category=self.category,
+            available=False,
+            is_archived=True,
+        )
+        Product.objects.create(
+            name="ARCHIVADO 2",
+            description="",
+            price=Decimal("2.00"),
+            category=self.category,
+            available=False,
+            is_archived=True,
+        )
+
+        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Category.objects.filter(id=self.category.id).exists())
+        fallback = Category.objects.get(name="SIN CATEGORÍA")
+        self.assertEqual(Product.objects.filter(category=fallback, is_archived=True).count(), 2)
+
+    def test_delete_category_without_products_returns_204(self):
+        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Category.objects.filter(id=self.category.id).exists())
 
     def test_delete_product_with_history_archives(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)

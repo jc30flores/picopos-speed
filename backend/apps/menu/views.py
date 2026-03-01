@@ -2,6 +2,7 @@ import os
 import logging
 from rest_framework import generics, status
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -152,12 +153,45 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()
-        if category.products.filter(is_archived=False).exists():
+
+        active_products = list(
+            Product.objects.filter(category=category, is_archived=False)
+            .order_by("name")
+            .values_list("name", flat=True)
+        )
+        if active_products:
             return Response(
-                {"detail": "No se puede eliminar; primero mueve o elimina los productos."},
+                {
+                    "detail": "No se puede eliminar la categoría porque tiene productos activos asociados.",
+                    "active_products": active_products,
+                },
                 status=status.HTTP_409_CONFLICT,
             )
-        category.delete()
+
+        inactive_products_qs = Product.objects.filter(category=category, is_archived=True)
+        try:
+            with transaction.atomic():
+                if inactive_products_qs.exists():
+                    fallback_name = "SIN CATEGORÍA"
+                    if category.name == fallback_name:
+                        fallback_name = "SIN CATEGORÍA (ARCHIVADOS)"
+                    fallback_category, _ = Category.objects.get_or_create(name=fallback_name)
+                    inactive_products_qs.update(category=fallback_category)
+                category.delete()
+        except ProtectedError:
+            blocking_active_products = list(
+                Product.objects.filter(category=category, is_archived=False)
+                .order_by("name")
+                .values_list("name", flat=True)
+            )
+            return Response(
+                {
+                    "detail": "No se puede eliminar la categoría porque tiene productos activos asociados.",
+                    "active_products": blocking_active_products,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def update(self, request, *args, **kwargs):

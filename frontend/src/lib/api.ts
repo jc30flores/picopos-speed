@@ -179,6 +179,12 @@ export type EmployeeStats = {
 
 export type PaymentMethod = "cash" | "card" | "transfer";
 
+export type CategoryDeleteConflictError = Error & {
+  status?: number;
+  activeProducts?: string[];
+};
+
+
 export type Payment = {
   id: number;
   orderId: number;
@@ -448,7 +454,12 @@ export const deleteCategory = async (categoryId: number): Promise<void> => {
   const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
     const data = await response.json().catch(() => ({ detail: "No se pudo eliminar la categoría" }));
-    throw new Error(data.detail || "No se pudo eliminar la categoría");
+    const error = new Error(data.detail || "No se pudo eliminar la categoría") as CategoryDeleteConflictError;
+    error.status = response.status;
+    if (Array.isArray(data.active_products)) {
+      error.activeProducts = data.active_products.filter((name: unknown): name is string => typeof name === "string");
+    }
+    throw error;
   }
 };
 
