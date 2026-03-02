@@ -182,6 +182,14 @@ export type EmployeeStats = {
 
 export type PaymentMethod = "cash" | "card" | "transfer";
 
+export type PaymentMethodOption = {
+  id: number;
+  code: "CASH" | "CARD" | "TRANSFER" | "PEDIDOS_YA" | "PAYPAL" | string;
+  name: string;
+  isCash: boolean;
+  sortOrder: number;
+};
+
 export type CashSessionSnapshot = {
   open: boolean;
   session?: {
@@ -197,7 +205,7 @@ export type CashSessionSnapshot = {
     expectedCashInDrawer: number;
     countedCash: number;
     overShortCash: number;
-    methods: { cash: number; card: number; transfer: number; cashIn: number };
+    methods: { cash: number; card: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
 };
 
@@ -2035,6 +2043,7 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
 export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
+  paymentMethodCode?: string;
   amount: number;
   cashReceived?: number;
   tipAmount?: number;
@@ -2048,6 +2057,7 @@ export const createPayment = async (payload: {
     body: JSON.stringify({
       order: payload.orderId,
       method: payload.method,
+      payment_method_code: payload.paymentMethodCode,
       amount: payload.amount,
       cash_received: payload.cashReceived,
       tip_amount: payload.tipAmount ?? 0,
@@ -2077,6 +2087,19 @@ export const createPayment = async (payload: {
   };
 };
 
+
+
+export const getPaymentMethods = async (): Promise<PaymentMethodOption[]> => {
+  const response = await request('/payments/methods/');
+  const data = await handleJson<Array<any>>(response);
+  return data.map((m) => ({
+    id: m.id,
+    code: m.code,
+    name: m.name,
+    isCash: Boolean(m.is_cash),
+    sortOrder: Number(m.sort_order ?? 0),
+  }));
+};
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
   const response = await request(`/payments/?order_id=${orderId}`);
   const data = await handleJson<
@@ -2117,6 +2140,7 @@ export const createRefund = async (payload: {
       order: payload.orderId,
       original_payment: payload.originalPaymentId ?? null,
       method: payload.method,
+      payment_method_code: payload.paymentMethodCode,
       amount: payload.amount,
       tip_refunded: payload.tipRefunded ?? 0,
       reason: payload.reason,
@@ -2440,15 +2464,17 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
     summary: {
       openingCash: Number(data.summary.opening_cash ?? 0),
       totalCashSales: Number(data.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(data.summary.total_cash_out ?? 0),
+      totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary.counted_cash ?? 0),
-      overShortCash: Number(data.summary.over_short_cash ?? 0),
+      overShortCash: Number(data.summary.difference ?? 0),
       methods: {
-        cash: Number(data.summary.methods?.cash ?? 0),
-        card: Number(data.summary.methods?.card ?? 0),
-        transfer: Number(data.summary.methods?.transfer ?? 0),
-        cashIn: Number(data.summary.methods?.cash_in ?? 0),
+        cash: Number(data.summary.methods?.CASH?.total ?? 0),
+        card: Number(data.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.cash_in_total ?? 0),
       },
     },
   };
@@ -2510,15 +2536,17 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
     summary: {
       openingCash: Number(row.summary.opening_cash ?? 0),
       totalCashSales: Number(row.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(row.summary.total_cash_out ?? 0),
+      totalCashOut: Number(row.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(row.summary.expected_cash_in_drawer ?? 0),
       countedCash: Number(row.summary.counted_cash ?? 0),
-      overShortCash: Number(row.summary.over_short_cash ?? 0),
+      overShortCash: Number(row.summary.difference ?? 0),
       methods: {
-        cash: Number(row.summary.methods?.cash ?? 0),
-        card: Number(row.summary.methods?.card ?? 0),
-        transfer: Number(row.summary.methods?.transfer ?? 0),
-        cashIn: Number(row.summary.methods?.cash_in ?? 0),
+        cash: Number(row.summary.methods?.CASH?.total ?? 0),
+        card: Number(row.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(row.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary.cash_in_total ?? 0),
       },
     },
   }));
@@ -2531,15 +2559,17 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
     summary: {
       openingCash: Number(data.summary.opening_cash ?? 0),
       totalCashSales: Number(data.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(data.summary.total_cash_out ?? 0),
+      totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary.counted_cash ?? 0),
-      overShortCash: Number(data.summary.over_short_cash ?? 0),
+      overShortCash: Number(data.summary.difference ?? 0),
       methods: {
-        cash: Number(data.summary.methods?.cash ?? 0),
-        card: Number(data.summary.methods?.card ?? 0),
-        transfer: Number(data.summary.methods?.transfer ?? 0),
-        cashIn: Number(data.summary.methods?.cash_in ?? 0),
+        cash: Number(data.summary.methods?.CASH?.total ?? 0),
+        card: Number(data.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.cash_in_total ?? 0),
       },
     },
     transactions: (data.transactions || []).map((tx: any) => ({
@@ -2553,6 +2583,21 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
 };
 
 
+
+
+export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
+  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`);
+  if (!response.ok) throw new Error('No se pudo descargar ticket PDF');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cierre_caja_${sessionId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
 export type DTERecord = {
   id: number;
   sale_id?: number;

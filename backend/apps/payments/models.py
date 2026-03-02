@@ -4,6 +4,20 @@ from apps.orders.models import Order
 from apps.cashier.models import CashSession
 
 
+class PaymentMethod(models.Model):
+    code = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=80)
+    is_cash = models.BooleanField(default=False)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Payment(models.Model):
     METHOD_CHOICES = [
         ("cash", "Cash"),
@@ -12,6 +26,7 @@ class Payment(models.Model):
     ]
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="payments")
+    payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, null=True, blank=True, related_name="payments")
     method = models.CharField(max_length=20, choices=METHOD_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     cash_received = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -48,6 +63,7 @@ class Refund(models.Model):
     METHOD_CHOICES = Payment.METHOD_CHOICES
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="refunds")
+    payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, null=True, blank=True, related_name="refunds")
     original_payment = models.ForeignKey(
         Payment,
         on_delete=models.SET_NULL,

@@ -5,11 +5,11 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
 from apps.cashier.models import CashSession
-from apps.payments.models import Payment, Refund
+from apps.payments.models import Payment, Refund, PaymentMethod
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
-from apps.payments.serializers import PaymentSerializer, RefundSerializer
+from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
 from apps.dte.services import transmit_sale_dte
 
@@ -17,6 +17,15 @@ from apps.dte.services import transmit_sale_dte
 def _get_open_session(user):
     return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
 
+
+
+
+class PaymentMethodListView(generics.ListAPIView):
+    serializer_class = PaymentMethodSerializer
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get_queryset(self):
+        return PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name")
 
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer

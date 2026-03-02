@@ -43,6 +43,7 @@ class CashSession(models.Model):
     closed_at = models.DateTimeField(null=True, blank=True)
     closing_counted_cash = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     notes = models.TextField(blank=True)
+    summary_snapshot = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-opened_at"]

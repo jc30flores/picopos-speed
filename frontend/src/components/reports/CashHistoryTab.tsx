@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { getCashSessionDetail, getCashSessionsHistory, type CashSessionHistoryRow, type CashTransaction } from "@/lib/api";
+import { downloadCashSessionTicketPdf, getCashSessionDetail, getCashSessionsHistory, type CashSessionHistoryRow, type CashTransaction } from "@/lib/api";
 
 export const CashHistoryTab = () => {
   const [rows, setRows] = useState<CashSessionHistoryRow[]>([]);
@@ -28,7 +28,7 @@ export const CashHistoryTab = () => {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Apertura</TableHead><TableHead>Cierre</TableHead><TableHead>Caja</TableHead><TableHead>Usuario</TableHead><TableHead>Inicial</TableHead><TableHead>Esperado</TableHead><TableHead>Contado</TableHead><TableHead>Diferencia</TableHead><TableHead>Métodos</TableHead><TableHead></TableHead>
+            <TableHead>Apertura</TableHead><TableHead>Cierre</TableHead><TableHead>Caja</TableHead><TableHead>Usuario</TableHead><TableHead>Inicial</TableHead><TableHead>Esperado</TableHead><TableHead>Contado</TableHead><TableHead>Diferencia</TableHead><TableHead>Métodos</TableHead><TableHead>Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -42,8 +42,8 @@ export const CashHistoryTab = () => {
               <TableCell>${r.summary?.expectedCashInDrawer.toFixed(2)}</TableCell>
               <TableCell>${(r.closingCountedCash ?? 0).toFixed(2)}</TableCell>
               <TableCell>${(r.summary?.overShortCash ?? 0).toFixed(2)}</TableCell>
-              <TableCell>E: ${r.summary?.methods.cash.toFixed(2)} / T: ${r.summary?.methods.card.toFixed(2)} / Tr: ${r.summary?.methods.transfer.toFixed(2)}</TableCell>
-              <TableCell><Button size="sm" variant="outline" onClick={async () => { const d = await getCashSessionDetail(r.id); setDetailTx(d.transactions); setOpenDetail(true); }}>Detalle</Button></TableCell>
+              <TableCell>E: ${r.summary?.methods.cash.toFixed(2)} / Tj: ${r.summary?.methods.card.toFixed(2)} / Tr: ${r.summary?.methods.transfer.toFixed(2)} / PY: ${r.summary?.methods.pedidosYa.toFixed(2)} / PP: ${r.summary?.methods.payPal.toFixed(2)}</TableCell>
+              <TableCell className="flex gap-2"><Button size="sm" variant="outline" onClick={async () => { const d = await getCashSessionDetail(r.id); setDetailTx(d.transactions); setOpenDetail(true); }}>Detalle</Button><Button size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button></TableCell>
             </TableRow>
           ))}
         </TableBody>

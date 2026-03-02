@@ -1,13 +1,14 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.cashier.models import Register, CashSession, CashTransaction
-from apps.cashier.printing import build_end_of_day_ticket
+from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
@@ -37,12 +38,7 @@ def _ensure_register(register_id=None):
     branch = Branch.objects.filter(is_active=True).order_by("id").first() or Branch.objects.order_by("id").first()
     if not branch:
         raise ValueError("No hay sucursales configuradas")
-    return Register.objects.create(
-        name="CAJA 1",
-        station_name="POS 1",
-        branch=branch,
-        is_active=True,
-    )
+    return Register.objects.create(name="CAJA 1", station_name="POS 1", branch=branch, is_active=True)
 
 
 class RegisterListCreateView(generics.ListCreateAPIView):
@@ -58,13 +54,8 @@ class CashSessionCurrentView(APIView):
         session = _get_open_session_for_user(request.user)
         if not session:
             return Response({"open": False}, status=status.HTTP_200_OK)
-
         summary = calculate_shift_summary(session)
-        return Response({
-            "open": True,
-            "session": CashSessionSerializer(session).data,
-            "summary": CashSessionSummarySerializer(summary).data,
-        })
+        return Response({"open": True, "session": CashSessionSerializer(session).data, "summary": CashSessionSummarySerializer(summary).data})
 
 
 class CashSessionOpenView(APIView):
@@ -73,26 +64,21 @@ class CashSessionOpenView(APIView):
     @transaction.atomic
     def post(self, request):
         if _get_open_session_for_user(request.user):
-            return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_409_CONFLICT)
 
-        opening_cash = Decimal(str(request.data.get("opening_cash", "0")))
+        opening_cash = Decimal(str(request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0"))
         if opening_cash < 0:
             return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            register = _ensure_register(request.data.get("register_id"))
+            register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         if CashSession.objects.filter(register=register, status="open").exists():
-            return Response({"detail": "La caja seleccionada ya está abierta."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "La caja seleccionada ya está abierta."}, status=status.HTTP_409_CONFLICT)
 
-        session = CashSession.objects.create(
-            register=register,
-            opened_by=request.user,
-            opening_cash=opening_cash,
-            status="open",
-        )
+        session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(CashSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
@@ -104,9 +90,9 @@ class CashSessionCloseView(APIView):
     def post(self, request):
         session = _get_open_session_for_user(request.user)
         if not session:
-            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_409_CONFLICT)
 
-        counted_cash = Decimal(str(request.data.get("closing_cash_counted", "0")))
+        counted_cash = Decimal(str(request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0"))
         notes = str(request.data.get("notes", "")).strip()
 
         session.status = "closed"
@@ -114,23 +100,15 @@ class CashSessionCloseView(APIView):
         session.closed_at = timezone.now()
         session.closing_counted_cash = counted_cash
         session.notes = notes
-        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes"])
+        # snapshot after close-time set
+        snapshot = calculate_shift_summary(session)
+        session.summary_snapshot = snapshot
+        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
 
-        summary = calculate_shift_summary(session)
         ticket_text = build_end_of_day_ticket(session.id)
-        PrintJob.objects.create(
-            type="closeout",
-            status="rendered",
-            content_text=ticket_text,
-            meta={"cash_session_id": session.id, "event": "cash_session.closed"},
-            requested_by=request.user,
-        )
+        PrintJob.objects.create(type="closeout", status="rendered", content_text=ticket_text, meta={"cash_session_id": session.id, "event": "cash_session.closed"}, requested_by=request.user)
         log_audit(request, "cash_session.close", "CashSession", session.id, {"counted_cash": str(counted_cash)})
-        return Response({
-            "session": CashSessionSerializer(session).data,
-            "summary": CashSessionSummarySerializer(summary).data,
-            "ticket_text": ticket_text,
-        })
+        return Response({"session": CashSessionSerializer(session).data, "summary": snapshot, "ticket_text": ticket_text})
 
 
 class CashTransactionListCreateView(APIView):
@@ -140,12 +118,10 @@ class CashTransactionListCreateView(APIView):
         session_id = request.query_params.get("session_id")
         if session_id:
             session = CashSession.objects.filter(pk=session_id).first()
-            if not session:
-                return Response([], status=status.HTTP_200_OK)
         else:
             session = _get_open_session_for_user(request.user)
-            if not session:
-                return Response([], status=status.HTTP_200_OK)
+        if not session:
+            return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(session=session).order_by("-created_at")
         return Response(CashTransactionSerializer(items, many=True).data)
 
@@ -153,27 +129,20 @@ class CashTransactionListCreateView(APIView):
     def post(self, request):
         session = _get_open_session_for_user(request.user)
         if not session:
-            return Response({"detail": "No hay caja abierta"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "No hay caja abierta"}, status=status.HTTP_409_CONFLICT)
 
         amount = Decimal(str(request.data.get("amount", "0")))
         description = str(request.data.get("description", "")).strip()
         transaction_type = str(request.data.get("type", "cash_out")).strip().lower()
 
-        allowed = {"cash_out", "cash_in", "expense", "payout"}
-        if transaction_type not in allowed:
+        if transaction_type not in {"cash_out", "cash_in", "expense", "payout"}:
             return Response({"detail": "Tipo de transacción inválido."}, status=status.HTTP_400_BAD_REQUEST)
         if amount <= 0:
             return Response({"detail": "El monto debe ser mayor que cero."}, status=status.HTTP_400_BAD_REQUEST)
         if not description:
             return Response({"detail": "La descripción es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
 
-        tx = CashTransaction.objects.create(
-            session=session,
-            type=transaction_type,
-            amount=amount,
-            description=description,
-            created_by=request.user,
-        )
+        tx = CashTransaction.objects.create(session=session, type=transaction_type, amount=amount, description=description, created_by=request.user)
         log_audit(request, "cash_transaction.create", "CashTransaction", tx.id, {"type": tx.type, "amount": str(tx.amount)})
         return Response(CashTransactionSerializer(tx).data, status=status.HTTP_201_CREATED)
 
@@ -196,14 +165,10 @@ class CashSessionListView(generics.ListAPIView):
         return qs
 
     def list(self, request, *args, **kwargs):
-        sessions = self.get_queryset()
         payload = []
-        for session in sessions:
+        for session in self.get_queryset():
             summary = calculate_shift_summary(session)
-            payload.append({
-                **CashSessionSerializer(session).data,
-                "summary": CashSessionSummarySerializer(summary).data,
-            })
+            payload.append({**CashSessionSerializer(session).data, "summary": summary})
         return Response(payload)
 
 
@@ -214,25 +179,31 @@ class CashSessionDetailView(APIView):
         session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").filter(pk=pk).first()
         if not session:
             return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
-        summary = calculate_shift_summary(session)
         txs = CashTransaction.objects.filter(session=session).order_by("-created_at")
-        return Response({
-            "session": CashSessionSerializer(session).data,
-            "summary": CashSessionSummarySerializer(summary).data,
-            "transactions": CashTransactionSerializer(txs, many=True).data,
-        })
+        return Response({"session": CashSessionSerializer(session).data, "summary": calculate_shift_summary(session), "transactions": CashTransactionSerializer(txs, many=True).data})
 
 
-# Legacy routes kept for compatibility
+class CashSessionTicketPDFView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request, pk: int):
+        session = CashSession.objects.filter(pk=pk).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+        pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="cierre_caja_{pk}.pdf"'
+        return response
+
+
 ShiftOpenView = CashSessionOpenView
 ShiftCurrentView = CashSessionCurrentView
+
+
 class ShiftCloseView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def post(self, request, pk: int):
-        session = CashSession.objects.filter(pk=pk, status="open").first()
-        if not session:
-            return Response({"detail": "Shift not found or closed"}, status=status.HTTP_404_NOT_FOUND)
         return CashSessionCloseView().post(request)
 
 
@@ -250,10 +221,4 @@ class ShiftCloseoutPrintJobView(APIView):
         job = PrintJob.objects.filter(type="closeout", meta__cash_session_id=pk).order_by("-created_at").first()
         if not job:
             return Response({"detail": "Print job not found"}, status=status.HTTP_404_NOT_FOUND)
-        return Response({
-            "id": job.id,
-            "status": job.status,
-            "content_text": job.content_text,
-            "created_at": job.created_at,
-            "printed_at": job.printed_at,
-        })
+        return Response({"id": job.id, "status": job.status, "content_text": job.content_text, "created_at": job.created_at, "printed_at": job.printed_at})

@@ -28,6 +28,7 @@ import {
 import {
   createOrder,
   createPayment,
+  getPaymentMethods,
   getOrderById,
   createPrintJob,
   markPrintJobPrinted,
@@ -44,6 +45,7 @@ import {
   ModifierGroup,
   Product,
   PaymentMethod,
+  PaymentMethodOption,
   CashSessionSnapshot,
   CashTransaction,
   Order,
@@ -93,7 +95,7 @@ const POS = () => {
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
-  const [openingCashInput, setOpeningCashInput] = useState("50.00");
+  const [openingCashInput, setOpeningCashInput] = useState("");
   const [closingCashInput, setClosingCashInput] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
@@ -108,6 +110,8 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
+  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -334,6 +338,18 @@ const POS = () => {
     }
   };
 
+  useEffect(() => {
+    getPaymentMethods().then((methods) => {
+      setPaymentMethods(methods);
+      const first = methods[0];
+      if (first) {
+        setSelectedPaymentMethodCode(first.code);
+        const fallback = first.isCash ? "cash" : first.code === "CARD" ? "card" : "transfer";
+        setPaymentMethod(fallback as PaymentMethod);
+      }
+    }).catch(() => undefined);
+  }, []);
+
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
     try {
@@ -455,6 +471,7 @@ const POS = () => {
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
+        paymentMethodCode: selectedPaymentMethodCode,
       });
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
@@ -870,14 +887,14 @@ const POS = () => {
                 <div className="text-sm font-semibold">Pago</div>
                 <div className="space-y-2">
                   <Label>Método</Label>
-                  <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
+                  <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cash">Efectivo</SelectItem>
-                      <SelectItem value="card">Tarjeta</SelectItem>
-                      <SelectItem value="transfer">Transferencia</SelectItem>
+                      {paymentMethods.map((m) => (
+                        <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
