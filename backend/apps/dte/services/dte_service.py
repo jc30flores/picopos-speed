@@ -165,7 +165,7 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
         print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
         print(payload_pretty)
-        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+        return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
     token = _get_env("DTE_API_TOKEN", "")
     auth_header = _get_env("DTE_API_AUTH_HEADER", "Authorization")
@@ -192,7 +192,7 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         msg = "[DTE] DTE_BASE_URL no configurado"
         logger.error(msg)
         print(msg)
-        return {"success": False, "error": {"message": "DTE_BASE_URL no configurado"}, "offline": True}
+        return {"success": False, "error": {"message": "DTE_BASE_URL no configurado", "type": "NETWORK_ERROR"}, "offline": True}
 
     try:
         headers = build_headers()
@@ -200,7 +200,7 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         msg = f"[DTE] DTE auth/header error: {exc}"
         logger.error(msg)
         print(msg)
-        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+        return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
     if mode == "mock":
         mock_resp = {
@@ -245,7 +245,7 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         logger.info("DTE RESP <<< status=%s body=\n%s", exc.code, body_pretty)
         return parsed
     except Exception as exc:
-        parsed = {"success": False, "error": {"message": str(exc)}, "offline": True}
+        parsed = {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
         msg = f"[DTE] DTE SEND ERROR endpoint={url} error={exc}"
         logger.error(msg)
         print(msg)
