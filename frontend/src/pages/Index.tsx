@@ -359,8 +359,18 @@ const POS = () => {
 
   useEffect(() => {
     listCustomers().then(setCustomers).catch(() => undefined);
-    getDefaultConsumerCustomer().then((c) => setSelectedCustomerId(String(c.id))).catch(() => undefined);
+    getDefaultConsumerCustomer().then((c) => {
+      setSelectedCustomerId(String(c.id));
+      setDteDocumentType(c.clientType ?? "CF");
+    }).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected?.clientType) {
+      setDteDocumentType(selected.clientType);
+    }
+  }, [selectedCustomerId, customers]);
 
   useEffect(() => {
     if (isPaymentOpen) {
@@ -442,6 +452,11 @@ const POS = () => {
       toast.error("El monto recibido debe cubrir el total de la orden");
       return;
     }
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected && selected.clientType && selected.clientType !== dteDocumentType) {
+      toast.error(`El tipo DTE debe coincidir con el cliente (${selected.clientType})`);
+      return;
+    }
 
     try {
       setIsProcessingPayment(true);
@@ -516,6 +531,8 @@ const POS = () => {
       setIsProcessingPayment(false);
     }
   };
+
+  const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
 
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
@@ -913,7 +930,7 @@ const POS = () => {
                       <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
                       <SelectContent>
                         {customers.map((c) => (
-                          <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                          <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -929,6 +946,9 @@ const POS = () => {
                     <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
                   </div>
                 </div>
+                {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && (
+                  <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>
+                )}
 
                 <div className="flex items-center justify-between rounded-md border p-2 text-sm">
                   <span>Exento IVA</span>

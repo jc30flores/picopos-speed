@@ -186,15 +186,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     customer = getattr(order, "customer", None)
     receptor = {
         "tipoDocumento": (customer.tipo_documento if customer else "13"),
-        "numDocumento": (customer.num_documento if customer else "00000000-0"),
-        "nombre": (customer.name if customer else order.customer_name or "CONSUMIDOR FINAL"),
-        "nrc": (customer.nrc if customer else None),
-        "codActividad": (customer.cod_actividad if customer else None),
-        "descActividad": (customer.desc_actividad if customer else None),
+        "numDocumento": ((customer.num_documento if customer else "00000000-0") if not (customer and getattr(customer, 'client_type', '') == 'SX' and customer.dui) else customer.dui.replace('-', '')),
+        "nombre": ((customer.full_name or customer.name) if customer else order.customer_name or "CONSUMIDOR FINAL"),
+        "nrc": ((customer.nrc or customer.nrc) if customer else None),
+        "codActividad": ((customer.activity_code or customer.cod_actividad) if customer else None),
+        "descActividad": ((customer.activity_description or customer.desc_actividad) if customer else None),
         "direccion": {
-            "departamento": (customer.direccion_departamento if customer else "12"),
-            "municipio": (customer.direccion_municipio if customer else "22"),
-            "complemento": (customer.direccion_complemento if customer else "Direccion del cliente"),
+            "departamento": ((customer.department_code or customer.direccion_departamento) if customer else "12"),
+            "municipio": ((customer.municipality_code or customer.direccion_municipio) if customer else "22"),
+            "complemento": ((customer.direccion or customer.direccion_complemento) if customer else "Direccion del cliente"),
         },
         "telefono": (customer.telefono if customer else "00000000"),
         "correo": (customer.correo if customer else None),

@@ -196,9 +196,14 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("Branch is required")
 
         if customer is None:
-            customer = Customer.objects.filter(is_default_consumer_final=True).first()
+            customer = Customer.objects.filter(is_deleted=False, is_consumer_final=True).first() or Customer.objects.filter(is_default_consumer_final=True).first()
             if customer is None:
-                customer = Customer.objects.create(name="CONSUMIDOR FINAL", is_default_consumer_final=True)
+                customer = Customer.objects.create(name="CONSUMIDOR FINAL", full_name="CONSUMIDOR FINAL", client_type="CF", dui="00000000-0", telefono="00000000", is_consumer_final=True)
+
+        if dte_document_type == "CCF" and customer.client_type != "CCF":
+            raise serializers.ValidationError({"dte_document_type": "Cliente debe ser CCF para emitir CCF."})
+        if dte_document_type == "SX" and customer.client_type != "SX":
+            raise serializers.ValidationError({"dte_document_type": "Cliente debe ser SX para emitir SX."})
 
         service_type = None
         if service_type_id is not None:

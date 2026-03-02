@@ -17,6 +17,7 @@ urlpatterns = [
     path("api/printing/", include("apps.printing.urls")),
     path("api/cashier/", include("apps.cashier.urls")),
     path("api/dte/", include("apps.dte.urls")),
+    path("api/clients/", include("apps.core.client_urls")),
 ]
 
 if settings.DEBUG:

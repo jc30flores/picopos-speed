@@ -195,18 +195,33 @@ export type BranchOption = {
 
 export type Customer = {
   id: number;
-  name: string;
-  tipoDocumento: string;
-  numDocumento: string;
-  nrc?: string | null;
+  fullName: string;
+  companyName?: string;
+  clientType: "CF" | "CCF" | "SX";
+  dui?: string;
+  nit?: string;
+  nrc?: string;
+  phone?: string;
+  email?: string | null;
+  direccion?: string;
+  departmentCode?: string;
+  municipalityCode?: string;
+  activityCode?: string;
+  activityDescription?: string;
+  isConsumerFinal: boolean;
+  isDeleted: boolean;
+  // legacy
+  name?: string;
+  tipoDocumento?: string;
+  numDocumento?: string;
   codActividad?: string | null;
   descActividad?: string | null;
-  direccionDepartamento: string;
-  direccionMunicipio: string;
-  direccionComplemento: string;
-  telefono: string;
+  direccionDepartamento?: string;
+  direccionMunicipio?: string;
+  direccionComplemento?: string;
+  telefono?: string;
   correo?: string | null;
-  isDefaultConsumerFinal: boolean;
+  isDefaultConsumerFinal?: boolean;
 };
 
 export type PaymentMethodOption = {
@@ -2768,10 +2783,24 @@ export const branchOptions = async (): Promise<BranchOption[]> => {
 
 const mapCustomer = (c: any): Customer => ({
   id: c.id,
+  fullName: c.full_name ?? c.name,
+  companyName: c.company_name ?? "",
+  clientType: c.client_type ?? "CF",
+  dui: c.dui ?? "",
+  nit: c.nit ?? "",
+  nrc: c.nrc,
+  phone: c.phone ?? c.telefono,
+  email: c.email ?? c.correo,
+  direccion: c.direccion ?? c.direccion_complemento,
+  departmentCode: c.department_code ?? c.direccion_departamento,
+  municipalityCode: c.municipality_code ?? c.direccion_municipio,
+  activityCode: c.activity_code ?? c.cod_actividad,
+  activityDescription: c.activity_description ?? c.desc_actividad,
+  isConsumerFinal: Boolean(c.is_consumer_final),
+  isDeleted: Boolean(c.is_deleted),
   name: c.name,
   tipoDocumento: c.tipo_documento,
   numDocumento: c.num_documento,
-  nrc: c.nrc,
   codActividad: c.cod_actividad,
   descActividad: c.desc_actividad,
   direccionDepartamento: c.direccion_departamento,
@@ -2783,58 +2812,87 @@ const mapCustomer = (c: any): Customer => ({
 });
 
 export const listCustomers = async (search = ""): Promise<Customer[]> => {
-  const query = search ? `?search=${encodeURIComponent(search)}` : "";
-  const response = await request(`/core/customers/${query}`);
+  const query = search ? `?q=${encodeURIComponent(search)}` : "";
+  const response = await request(`/clients/${query}`);
   const data = await handleJson<any[]>(response);
   return data.map(mapCustomer);
 };
 
 export const getDefaultConsumerCustomer = async (): Promise<Customer> => {
-  const response = await request('/core/customers/default-consumer-final/');
+  const response = await request('/clients/default-consumer-final/');
   const data = await handleJson<any>(response);
   return mapCustomer(data);
 };
 
-export const createCustomer = async (payload: Partial<Customer> & { name: string }): Promise<Customer> => {
-  const response = await request('/core/customers/', {
+export const createCustomer = async (payload: Partial<Customer> & { fullName: string }): Promise<Customer> => {
+  const response = await request('/clients/', {
     method: 'POST',
     body: JSON.stringify({
-      name: payload.name,
-      tipo_documento: payload.tipoDocumento ?? '13',
-      num_documento: payload.numDocumento ?? '00000000-0',
+      full_name: payload.fullName,
+      company_name: payload.companyName ?? '',
+      client_type: payload.clientType ?? 'CF',
+      dui: payload.dui ?? '',
+      nit: payload.nit ?? '',
       nrc: payload.nrc ?? null,
-      cod_actividad: payload.codActividad ?? null,
-      desc_actividad: payload.descActividad ?? null,
-      direccion_departamento: payload.direccionDepartamento ?? '12',
-      direccion_municipio: payload.direccionMunicipio ?? '22',
-      direccion_complemento: payload.direccionComplemento ?? 'Direccion del cliente',
-      telefono: payload.telefono ?? '00000000',
-      correo: payload.correo ?? null,
-      is_default_consumer_final: Boolean(payload.isDefaultConsumerFinal),
+      phone: payload.phone ?? '00000000',
+      email: payload.email ?? null,
+      direccion: payload.direccion ?? 'Direccion del cliente',
+      department_code: payload.departmentCode ?? '12',
+      municipality_code: payload.municipalityCode ?? '22',
+      activity_code: payload.activityCode ?? '',
+      activity_description: payload.activityDescription ?? '',
+      is_consumer_final: Boolean(payload.isConsumerFinal),
     }),
   });
   return mapCustomer(await handleJson<any>(response));
 };
 
 export const updateCustomer = async (id: number, payload: Partial<Customer>): Promise<Customer> => {
-  const response = await request(`/core/customers/${id}/`, {
+  const response = await request(`/clients/${id}/`, {
     method: 'PATCH',
     body: JSON.stringify({
-      ...(payload.name !== undefined ? { name: payload.name } : {}),
-      ...(payload.tipoDocumento !== undefined ? { tipo_documento: payload.tipoDocumento } : {}),
-      ...(payload.numDocumento !== undefined ? { num_documento: payload.numDocumento } : {}),
+      ...(payload.fullName !== undefined ? { full_name: payload.fullName } : {}),
+      ...(payload.companyName !== undefined ? { company_name: payload.companyName } : {}),
+      ...(payload.clientType !== undefined ? { client_type: payload.clientType } : {}),
+      ...(payload.dui !== undefined ? { dui: payload.dui } : {}),
+      ...(payload.nit !== undefined ? { nit: payload.nit } : {}),
       ...(payload.nrc !== undefined ? { nrc: payload.nrc } : {}),
-      ...(payload.codActividad !== undefined ? { cod_actividad: payload.codActividad } : {}),
-      ...(payload.descActividad !== undefined ? { desc_actividad: payload.descActividad } : {}),
-      ...(payload.direccionDepartamento !== undefined ? { direccion_departamento: payload.direccionDepartamento } : {}),
-      ...(payload.direccionMunicipio !== undefined ? { direccion_municipio: payload.direccionMunicipio } : {}),
-      ...(payload.direccionComplemento !== undefined ? { direccion_complemento: payload.direccionComplemento } : {}),
-      ...(payload.telefono !== undefined ? { telefono: payload.telefono } : {}),
-      ...(payload.correo !== undefined ? { correo: payload.correo } : {}),
-      ...(payload.isDefaultConsumerFinal !== undefined ? { is_default_consumer_final: payload.isDefaultConsumerFinal } : {}),
+      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
+      ...(payload.email !== undefined ? { email: payload.email } : {}),
+      ...(payload.direccion !== undefined ? { direccion: payload.direccion } : {}),
+      ...(payload.departmentCode !== undefined ? { department_code: payload.departmentCode } : {}),
+      ...(payload.municipalityCode !== undefined ? { municipality_code: payload.municipalityCode } : {}),
+      ...(payload.activityCode !== undefined ? { activity_code: payload.activityCode } : {}),
+      ...(payload.activityDescription !== undefined ? { activity_description: payload.activityDescription } : {}),
+      ...(payload.isConsumerFinal !== undefined ? { is_consumer_final: payload.isConsumerFinal } : {}),
     }),
   });
   return mapCustomer(await handleJson<any>(response));
+};
+
+export const setConsumerFinalCustomer = async (id: number): Promise<Customer> => {
+  const response = await request(`/clients/${id}/set-consumer-final/`, { method: 'POST' });
+  return mapCustomer(await handleJson<any>(response));
+};
+
+export const deleteCustomer = async (id: number): Promise<void> => {
+  const response = await request(`/clients/${id}/`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('No se pudo eliminar cliente');
+};
+
+export const listDepartments = async () => {
+  const response = await request('/clients/geo/departments/');
+  return handleJson<Array<{ code: string; name: string }>>(response);
+};
+
+export const listMunicipalities = async (departmentCode?: string) => {
+  const response = await request(`/clients/geo/municipalities/${departmentCode ? `?department_code=${departmentCode}` : ''}`);
+  return handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+};
+
+export const listActivities = async (q = '') => {
+  const response = await request(`/clients/activities/${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+  return handleJson<Array<{ code: string; description: string }>>(response);
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {
