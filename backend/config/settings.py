@@ -1,9 +1,17 @@
 from pathlib import Path
 import os
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
+
 
 def _load_env_file(base_dir: Path) -> None:
     env_path = base_dir / ".env"
+    if load_dotenv is not None:
+        load_dotenv(env_path, override=True)
+        return
     if not env_path.exists():
         return
     for raw_line in env_path.read_text().splitlines():
@@ -11,7 +19,7 @@ def _load_env_file(base_dir: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        os.environ[key.strip()] = value.strip()
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent

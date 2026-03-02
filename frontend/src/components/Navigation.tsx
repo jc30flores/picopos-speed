@@ -37,7 +37,7 @@ export const Navigation = () => {
     branchOptions().then((list) => {
       setBranches(list);
       const savedId = localStorage.getItem("selected_branch_id");
-      const selected = list.find((b) => String(b.id) === savedId) || list[0];
+      const selected = list.find((b) => String(b.id) === savedId) || list.find((b) => b.code === "PRINCIPAL") || list[0];
       if (selected) {
         setSelectedBranch(selected.name);
         localStorage.setItem("selected_branch_id", String(selected.id));

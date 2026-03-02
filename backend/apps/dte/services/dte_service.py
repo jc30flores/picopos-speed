@@ -32,14 +32,12 @@ def _get_env(name: str, default: str = "") -> str:
     return getattr(settings, name, os.environ.get(name, default))
 
 
-def build_dte_url(dte_type: str) -> str:
+def build_dte_url(dte_type: str) -> tuple[str, str]:
     base_url = (_get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
-    if not base_url:
-        raise DTEPreflightError("Falta configurar DTE_BASE_URL")
     endpoint = DTE_ENDPOINT_BY_TYPE.get(dte_type)
     if not endpoint:
         raise DTEPreflightError(f"Tipo DTE no soportado: {dte_type}")
-    return f"{base_url}{endpoint}"
+    return base_url, f"{base_url}{endpoint}" if base_url else endpoint
 
 
 def build_headers() -> dict[str, str]:
@@ -146,14 +144,37 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         logger.info("DTE RESP <<<\n%s", json.dumps(mock_resp, ensure_ascii=False, indent=2))
         return mock_resp
 
-    url = build_dte_url(dte_type)
     timeout = int(_get_env("DTE_TIMEOUT_SECONDS", "30"))
     logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, payload.get("dte", {}).get("identificacion", {}).get("ambiente"), json.dumps(payload, ensure_ascii=False, indent=2))
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=build_headers(), method="POST")
+    try:
+        base_url, url = build_dte_url(dte_type)
+    except DTEPreflightError as exc:
+        logger.error("DTE endpoint error: %s", exc)
+        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+
+    if not base_url:
+        logger.error("DTE_BASE_URL no configurado")
+        return {"success": False, "error": {"message": "DTE_BASE_URL no configurado"}, "offline": True}
+
+    logger.info("DTE ENDPOINT >>> %s", url)
+    try:
+        headers = build_headers()
+    except DTEPreflightError as exc:
+        logger.error("DTE auth/header error: %s", exc)
+        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-            logger.info("DTE RESP <<<\n%s", json.dumps(parsed, ensure_ascii=False, indent=2))
+            status_code = response.getcode()
+            raw_body = response.read().decode("utf-8")
+            try:
+                parsed = json.loads(raw_body) if raw_body else {}
+            except Exception:
+                parsed = {"raw": raw_body}
+            logger.info("DTE RESP <<< status=%s body=\n%s", status_code, json.dumps(parsed, ensure_ascii=False, indent=2) if isinstance(parsed, dict) else str(parsed))
+            if isinstance(parsed, dict):
+                parsed.setdefault("http_status", status_code)
             return parsed
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8") if exc.fp else ""
@@ -163,13 +184,13 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
             parsed = {"error": {"message": body}}
         parsed.setdefault("success", False)
         parsed.setdefault("http_status", exc.code)
-        logger.error("DTE HTTP ERROR status=%s body=%s", exc.code, body)
-        logger.info("DTE RESP <<<\n%s", json.dumps(parsed, ensure_ascii=False, indent=2))
+        logger.error("DTE HTTP ERROR endpoint=%s status=%s body=%s", url, exc.code, body)
+        logger.info("DTE RESP <<< status=%s body=\n%s", exc.code, json.dumps(parsed, ensure_ascii=False, indent=2))
         return parsed
     except Exception as exc:
         parsed = {"success": False, "error": {"message": str(exc)}, "offline": True}
-        logger.exception("DTE SEND ERROR")
-        logger.info("DTE RESP <<<\n%s", json.dumps(parsed, ensure_ascii=False, indent=2))
+        logger.error("DTE SEND ERROR endpoint=%s error=%s", url, exc)
+        logger.info("DTE RESP <<< status=%s body=\n%s", 0, json.dumps(parsed, ensure_ascii=False, indent=2))
         return parsed
 
 
