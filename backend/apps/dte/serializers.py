@@ -4,11 +4,14 @@ from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 
 
 class DTERecordListSerializer(serializers.ModelSerializer):
+    attempts = serializers.IntegerField(source="attempt_number", read_only=True)
+    sale_id = serializers.IntegerField(source="order_id", read_only=True)
+
     class Meta:
         model = DTERecord
         fields = [
             "id",
-            "order_id",
+            "sale_id",
             "dte_type",
             "status",
             "control_number",
@@ -17,13 +20,16 @@ class DTERecordListSerializer(serializers.ModelSerializer):
             "total_amount",
             "hacienda_uuid",
             "sello_recepcion",
-            "attempt_number",
-            "updated_at",
+            "attempts",
+            "error_message",
+            "last_sent_at",
             "created_at",
         ]
 
 
 class DTERecordDetailSerializer(serializers.ModelSerializer):
+    sale_id = serializers.IntegerField(source="order_id", read_only=True)
+
     class Meta:
         model = DTERecord
         fields = "__all__"

@@ -7,12 +7,18 @@ from apps.orders.models import Order
 
 
 class DTERecord(models.Model):
+    STATUS_PENDING = "PENDIENTE"
+    STATUS_SENDING = "ENVIANDO"
+    STATUS_ACCEPTED = "ACEPTADO"
+    STATUS_REJECTED = "RECHAZADO"
+    STATUS_INVALIDATED = "INVALIDADO"
+
     STATUS_CHOICES = [
-        ("enviando", "Enviando"),
-        ("pendiente", "Pendiente"),
-        ("aceptado", "Aceptado"),
-        ("rechazado", "Rechazado"),
-        ("invalidado", "Invalidado"),
+        (STATUS_PENDING, "Pendiente"),
+        (STATUS_SENDING, "Enviando"),
+        (STATUS_ACCEPTED, "Aceptado"),
+        (STATUS_REJECTED, "Rechazado"),
+        (STATUS_INVALIDATED, "Invalidado"),
     ]
     DTE_TYPE_CHOICES = [
         ("CF", "Consumidor Final"),
@@ -24,7 +30,7 @@ class DTERecord(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_records")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="dte_records")
     dte_type = models.CharField(max_length=20, choices=DTE_TYPE_CHOICES, default="CF")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pendiente")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     control_number = models.CharField(max_length=80)
     codigo_generacion = models.CharField(max_length=40, default="", blank=True)
     hacienda_uuid = models.CharField(max_length=160, blank=True, default="")
@@ -40,15 +46,24 @@ class DTERecord(models.Model):
     source = models.CharField(max_length=40, default="normal_send")
     error_message = models.TextField(blank=True, default="")
     error_code = models.CharField(max_length=80, blank=True, default="")
+    last_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["control_number", "dte_type"], name="dte_record_control_type_uniq"),
+            models.UniqueConstraint(fields=["codigo_generacion"], condition=~models.Q(codigo_generacion=""), name="dte_record_codigo_uniq"),
+            models.UniqueConstraint(fields=["hacienda_uuid"], condition=~models.Q(hacienda_uuid=""), name="dte_record_hacienda_uuid_uniq"),
+        ]
         indexes = [
             models.Index(fields=["dte_type", "status"]),
             models.Index(fields=["issue_date"]),
-            models.Index(fields=["order", "dte_type", "status"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["control_number"]),
+            models.Index(fields=["codigo_generacion"]),
+            models.Index(fields=["hacienda_uuid"]),
         ]
 
     def save(self, *args, **kwargs):
@@ -65,28 +80,28 @@ class DTEControlCounter(models.Model):
     establishment_code = models.CharField(max_length=12, default="000")
     pos_code = models.CharField(max_length=12, default="000")
     last_number = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = (
-            "branch",
-            "ambiente",
-            "dte_type",
-            "year",
-            "establishment_code",
-            "pos_code",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "dte_type", "year", "establishment_code", "pos_code", "ambiente"],
+                name="dte_counter_context_uniq",
+            )
+        ]
 
 
 class DTEInvalidation(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_invalidations")
-    status = models.CharField(max_length=20, default="pendiente")
+    dte_record = models.ForeignKey(DTERecord, on_delete=models.CASCADE, related_name="invalidations", null=True, blank=True)
+    status = models.CharField(max_length=20, choices=DTERecord.STATUS_CHOICES, default=DTERecord.STATUS_PENDING)
     hacienda_state = models.CharField(max_length=80, blank=True, default="")
     motivo = models.TextField()
     tipo_anulacion = models.CharField(max_length=40, default="total")
     request_payload = models.JSONField(default=dict, blank=True)
     response_payload = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=80, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -97,6 +112,8 @@ class CreditNote(models.Model):
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     dte_numero_control = models.CharField(max_length=80, blank=True, default="")
     dte_codigo_generacion = models.CharField(max_length=40, blank=True, default="")
-    dte_status = models.CharField(max_length=20, default="pendiente")
+    status = models.CharField(max_length=20, choices=DTERecord.STATUS_CHOICES, default=DTERecord.STATUS_PENDING)
+    request_payload = models.JSONField(default=dict, blank=True)
+    response_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -11,7 +11,7 @@ from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.payments.serializers import PaymentSerializer, RefundSerializer
 from apps.orders.serializers import OrderSerializer
-from apps.dte.services import transmit_invoice_dte
+from apps.dte.services import transmit_sale_dte
 
 
 def _get_open_session(user):
@@ -72,7 +72,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
-            dte_record = transmit_invoice_dte(payment.order_id, source="normal_send")
+            dte_record = transmit_sale_dte(payment.order_id, source="normal_send")
             log_audit(
                 request,
                 "invoice.processed",

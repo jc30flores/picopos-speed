@@ -283,3 +283,4 @@ python manage.py dte_autoresend --limit 50
 
 ### Pruebas locales con mock
 En local usar `DTE_BRIDGE_MODE=mock`; el backend responderá aceptado o rechazado sin dependencia externa.
+- Endpoints de envío a cliente (`/send-email/`, `/send-whatsapp/`) están en modo stub y responden `501 Not Implemented` hasta integrar proveedor real.

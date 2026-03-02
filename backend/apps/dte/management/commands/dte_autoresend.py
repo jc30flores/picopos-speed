@@ -16,7 +16,7 @@ class Command(BaseCommand):
         with transaction.atomic():
             records = (
                 DTERecord.objects.select_for_update(skip_locked=True)
-                .filter(status="pendiente")
+                .filter(status="PENDIENTE")
                 .order_by("created_at")[:limit]
             )
             count = 0

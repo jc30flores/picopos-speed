@@ -3,7 +3,7 @@ from django.test import TestCase
 
 from apps.core.models import Branch, ServiceType
 from apps.orders.models import Order
-from apps.dte.services.dte_numbers import next_control_number
+from apps.dte.services.control import next_control_number
 
 
 class DTENumbersTests(TestCase):
