@@ -65,3 +65,25 @@ class CloseoutCount(models.Model):
 
     def __str__(self) -> str:
         return f"Closeout {self.cash_session_id}"
+
+
+class CashTransaction(models.Model):
+    TYPE_CHOICES = [("payout", "Payout")]
+
+    session = models.ForeignKey(CashSession, on_delete=models.CASCADE, related_name="transactions")
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="payout")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="cash_transactions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["session", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.type} {self.amount} ({self.session_id})"

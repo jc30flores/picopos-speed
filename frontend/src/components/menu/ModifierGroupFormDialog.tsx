@@ -40,6 +40,12 @@ export const ModifierGroupFormDialog = ({
   editingGroup,
   onSaved,
 }: ModifierGroupFormDialogProps) => {
+  const toUpperNormalized = (value: string) =>
+    value
+      .replace(/\s+/g, " ")
+      .trimStart()
+      .toUpperCase();
+
   const [name, setName] = useState("");
   const [required, setRequired] = useState(false);
   const [minSelection, setMinSelection] = useState(0);
@@ -145,12 +151,16 @@ export const ModifierGroupFormDialog = ({
           await uploadModifierGroupImage(baseGroup.id, groupImageFile);
         }
 
-        for (let i = 0; i < options.length; i += 1) {
-          const optionFile = options[i].imageFile;
-          if (!optionFile) continue;
-          const savedOption = baseGroup.modifiers[i];
-          if (!savedOption?.id) continue;
-          await uploadModifierOptionImage(savedOption.id, optionFile);
+        const savedOptionsByName = new Map(
+          baseGroup.modifiers.map((modifier) => [modifier.name.trim().toLowerCase(), modifier.id])
+        );
+        for (const option of options) {
+          if (!option.imageFile) continue;
+          const existingId = Number.isFinite(Number(option.id)) ? Number(option.id) : null;
+          const savedId =
+            existingId ?? savedOptionsByName.get(option.name.trim().toLowerCase()) ?? null;
+          if (!savedId) continue;
+          await uploadModifierOptionImage(savedId, option.imageFile);
         }
       }
 
@@ -210,7 +220,7 @@ export const ModifierGroupFormDialog = ({
           <div className="space-y-4">
             <div>
               <Label htmlFor="group-name">Nombre del grupo</Label>
-              <Input id="group-name" placeholder="Ej: Tipo de tortilla" value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+              <Input id="group-name" placeholder="Ej: TIPO DE TORTILLA" value={name} onChange={(e) => setName(toUpperNormalized(e.target.value))} className="mt-1" />
             </div>
 
             <ImageUploadField id="group-image" label="Imagen del grupo" file={groupImageFile} previewUrl={groupImage} onChange={setGroupImageFile} />
@@ -270,7 +280,7 @@ export const ModifierGroupFormDialog = ({
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">Nombre</Label>
-                            <Input placeholder="Ej: Salsa Verde" value={option.name} onChange={(e) => updateOption(option.id, "name", e.target.value)} className="mt-1" />
+                            <Input placeholder="Ej: SALSA VERDE" value={option.name} onChange={(e) => updateOption(option.id, "name", toUpperNormalized(e.target.value))} className="mt-1" />
                           </div>
                           <div>
                             <Label className="text-xs">Precio adicional</Label>

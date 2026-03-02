@@ -150,6 +150,7 @@ class AppliedDiscount(models.Model):
     discount_type_snapshot = models.CharField(max_length=20)
     discount_value_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
     amount_discounted = models.DecimalField(max_digits=10, decimal_places=2)
+    breakdown = models.JSONField(default=dict, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["order"]) ]

@@ -8,4 +8,5 @@ urlpatterns = [
     path("<int:pk>/status/", views.OrderStatusUpdateView.as_view(), name="orders-status"),
     path("<int:pk>/void/", views.OrderVoidView.as_view(), name="orders-void"),
     path("customer-display/", views.CustomerDisplayOrderListView.as_view(), name="orders-customer-display"),
+    path("customer-board/", views.CustomerBoardListView.as_view(), name="orders-customer-board"),
 ]

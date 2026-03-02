@@ -1,14 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { AuthUser, getCSRF, login as loginRequest, logout as logoutRequest, me } from "@/lib/api";
-
-interface AuthContextValue {
-  user: AuthUser | null;
-  loading: boolean;
-  login: (payload: { identifier: string; password: string }) => Promise<void>;
-  logout: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { getCSRF, login as loginRequest, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
+import { AuthContext } from "./authContext";
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -18,7 +10,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       const current = await me();
       setUser(current);
-    } catch (error) {
+    } catch {
       setUser(null);
     } finally {
       setLoading(false);
@@ -51,16 +43,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       login,
       logout,
     }),
-    [user, loading, login, logout]
+    [user, loading, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
-  }
-  return context;
 };

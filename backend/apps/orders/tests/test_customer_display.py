@@ -53,3 +53,43 @@ class CustomerDisplayOrderTests(TestCase):
         payload = response.json()
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0]["order_number"], 100)
+
+    def test_customer_board_only_returns_preparing_and_ready(self):
+        Order.objects.create(
+            order_number=101,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="new",
+            customer_name="Hidden",
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+        preparing = Order.objects.create(
+            order_number=102,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="preparing",
+            customer_name="Prep",
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+        ready = Order.objects.create(
+            order_number=103,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="ready",
+            customer_name="Ready",
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+
+        response = self.client.get("/api/orders/customer-board/")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([item["order_number"] for item in payload], [preparing.order_number, ready.order_number])

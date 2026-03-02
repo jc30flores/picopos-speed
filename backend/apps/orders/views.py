@@ -108,6 +108,19 @@ class CustomerDisplayOrderListView(generics.ListAPIView):
         return Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True).order_by("created_at")
 
 
+class CustomerBoardListView(generics.ListAPIView):
+    serializer_class = CustomerDisplayOrderSerializer
+    permission_classes = [AllowAny]
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            Order.objects.filter(status__in=["preparing", "ready"])
+            .only("id", "order_number", "customer_name", "status", "created_at")
+            .order_by("created_at", "id")
+        )
+
+
 class OrderVoidView(generics.GenericAPIView):
     queryset = Order.objects.all()
     serializer_class = OrderSerializer

@@ -10,6 +10,11 @@ def normalize_category_name(name: str | None) -> str:
     return (name or "").strip().upper()
 
 
+def normalize_modifier_label(name: str | None) -> str:
+    collapsed = re.sub(r"\s+", " ", (name or "").strip())
+    return collapsed.upper()
+
+
 def product_image_upload_to(instance: "Product", filename: str) -> str:
     extension = os.path.splitext(filename)[1].lower().lstrip(".")
     category_name = normalize_category_name(
@@ -23,9 +28,11 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
     is_active = models.BooleanField(default=True)
+    is_hidden = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0, db_index=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["position", "id"]
 
     def __str__(self) -> str:
         return self.name
@@ -56,6 +63,11 @@ class ModifierGroup(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def save(self, *args, **kwargs) -> None:
+        if self.name:
+            self.name = normalize_modifier_label(self.name)
+        super().save(*args, **kwargs)
+
 
 class Modifier(models.Model):
     group = models.ForeignKey(ModifierGroup, on_delete=models.CASCADE, related_name="modifiers")
@@ -73,12 +85,28 @@ class Modifier(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def save(self, *args, **kwargs) -> None:
+        if self.name:
+            self.name = normalize_modifier_label(self.name)
+        super().save(*args, **kwargs)
+
+
+class ProductModifierGroup(models.Model):
+    product = models.ForeignKey("Product", on_delete=models.CASCADE)
+    modifier_group = models.ForeignKey(ModifierGroup, on_delete=models.CASCADE, db_column="modifiergroup_id")
+    show_in_pos = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "menu_product_modifier_groups"
+        unique_together = (("product", "modifier_group"),)
+
 
 class Product(models.Model):
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
+    sort_order = models.PositiveIntegerField(default=0, db_index=True)
     image = models.CharField(max_length=255, blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     available = models.BooleanField(default=True)
@@ -86,11 +114,17 @@ class Product(models.Model):
     disposable_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
-    modifier_groups = models.ManyToManyField(ModifierGroup, blank=True, related_name="products")
+    modifier_groups = models.ManyToManyField(
+        ModifierGroup,
+        blank=True,
+        related_name="products",
+        through="ProductModifierGroup",
+        through_fields=("product", "modifier_group"),
+    )
     modifier_group_order = models.JSONField(default=list, blank=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["sort_order", "name", "id"]
         indexes = [models.Index(fields=["category", "available"])]
 
     def __str__(self) -> str:
@@ -108,6 +142,7 @@ class Discount(models.Model):
     TYPE_CHOICES = [
         ("percent", "Percent"),
         ("fixed", "Fixed"),
+        ("bxgy", "Buy X Get Y"),
     ]
     APPLIES_CHOICES = [
         ("order", "Order"),
@@ -127,6 +162,9 @@ class Discount(models.Model):
     days_of_week = ArrayField(models.IntegerField(), default=list, blank=True)
     start_time = models.TimeField(blank=True, null=True)
     end_time = models.TimeField(blank=True, null=True)
+    priority = models.IntegerField(default=100)
+    stackable = models.BooleanField(default=False)
+    bxgy_config = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["name"]

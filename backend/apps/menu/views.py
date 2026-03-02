@@ -1,7 +1,10 @@
 import os
 import logging
+from functools import lru_cache
 from rest_framework import generics, status
-from django.db import transaction
+from django.db import transaction, connection
+from django.db import models
+from django.db.models.deletion import ProtectedError
 from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -21,17 +24,37 @@ from apps.menu.serializers import (
 logger = logging.getLogger(__name__)
 
 
+
+
+@lru_cache(maxsize=1)
+def _product_sort_order_column_exists() -> bool:
+    table_name = Product._meta.db_table
+    with connection.cursor() as cursor:
+        columns = connection.introspection.get_table_description(cursor, table_name)
+    return any(column.name == "sort_order" for column in columns)
+
 class CategoryListCreateView(generics.ListCreateAPIView):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
         queryset = Category.objects.filter(is_active=True)
+        include_hidden = self.request.query_params.get("include_hidden") in {"1", "true", "True"}
+        user = getattr(self.request, "user", None)
+        can_view_hidden = bool(
+            include_hidden
+            and user
+            and user.is_authenticated
+            and getattr(user, "role", None) in {"admin", "manager"}
+        )
+        if not can_view_hidden:
+            queryset = queryset.filter(is_hidden=False)
+
         query = self.request.query_params.get("q")
         if query:
             normalized = query.strip().upper()
             if normalized:
                 queryset = queryset.filter(name__icontains=normalized)
-        return queryset.order_by("name")
+        return queryset.order_by("position", "id")
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -42,10 +65,15 @@ class CategoryListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         name = serializer.validated_data["name"]
-        category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True})
+        next_position = (Category.objects.aggregate(max_position=models.Max("position")).get("max_position") or -1) + 1
+        category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True, "position": next_position})
         if not category.is_active:
             category.is_active = True
-            category.save(update_fields=["is_active"])
+            update_fields = ["is_active"]
+            if category.position != next_position:
+                category.position = next_position
+                update_fields.append("position")
+            category.save(update_fields=update_fields)
         if created:
             log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
         response_serializer = self.get_serializer(category)
@@ -53,6 +81,37 @@ class CategoryListCreateView(generics.ListCreateAPIView):
             response_serializer.data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+
+class CategoryReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def patch(self, request):
+        ordered_ids = request.data.get("ordered_ids") or []
+        if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
+            return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(set(ordered_ids)) != len(ordered_ids):
+            return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        expected_ids = list(
+            Category.objects.filter(is_active=True, is_hidden=False)
+            .order_by("position", "id")
+            .values_list("id", flat=True)
+        )
+        if sorted(expected_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids debe incluir todas las categorías activas visibles."}, status=status.HTTP_400_BAD_REQUEST)
+
+        categories = {category.id: category for category in Category.objects.filter(id__in=ordered_ids)}
+        with transaction.atomic():
+            for index, category_id in enumerate(ordered_ids):
+                categories[category_id].position = index
+            Category.objects.bulk_update(categories.values(), ["position"])
+
+        serialized = CategorySerializer(
+            Category.objects.filter(id__in=ordered_ids).order_by("position", "id"),
+            many=True,
+        )
+        return Response(serialized.data, status=status.HTTP_200_OK)
 
 
 class ProductListCreateView(generics.ListCreateAPIView):
@@ -75,7 +134,9 @@ class ProductListCreateView(generics.ListCreateAPIView):
         include_archived = self.request.query_params.get("include_archived") in {"1", "true", "True"}
         if not include_archived:
             queryset = queryset.filter(is_archived=False)
-        return queryset
+        if _product_sort_order_column_exists():
+            return queryset.order_by("category__position", "category_id", "sort_order", "name", "id")
+        return queryset.order_by("category__position", "category_id", "name", "id")
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -96,8 +157,44 @@ class ProductListCreateView(generics.ListCreateAPIView):
         return [IsAdminOrManager()]
 
     def perform_create(self, serializer):
-        product = serializer.save()
+        category = serializer.validated_data.get("category")
+        next_sort_order = (
+            Product.objects.filter(category=category)
+            .aggregate(max_sort=models.Max("sort_order"))
+            .get("max_sort")
+            or -1
+        ) + 1
+        product = serializer.save(sort_order=next_sort_order)
         log_audit(self.request, "menu.product.create", "Product", product.id, {"name": product.name})
+
+
+class ProductReorderView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def post(self, request):
+        ordered_ids = request.data.get("ordered_ids") or []
+        category_id = request.data.get("category_id")
+
+        if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
+            return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(set(ordered_ids)) != len(ordered_ids):
+            return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_qs = Product.objects.filter(is_archived=False)
+        if category_id is not None:
+            base_qs = base_qs.filter(category_id=category_id)
+
+        expected_ids = list(base_qs.order_by("sort_order", "id").values_list("id", flat=True))
+        if sorted(expected_ids) != sorted(ordered_ids):
+            return Response({"detail": "ordered_ids debe incluir todos los productos del filtro actual."}, status=status.HTTP_400_BAD_REQUEST)
+
+        products_by_id = {product.id: product for product in Product.objects.filter(id__in=ordered_ids)}
+        with transaction.atomic():
+            for index, product_id in enumerate(ordered_ids):
+                products_by_id[product_id].sort_order = index
+            Product.objects.bulk_update(products_by_id.values(), ["sort_order"])
+
+        return Response({"ok": True}, status=status.HTTP_200_OK)
 
 
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -152,12 +249,48 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()
-        if category.products.filter(is_archived=False).exists():
+
+        active_products = list(
+            Product.objects.filter(category=category, is_archived=False)
+            .order_by("name")
+            .values_list("name", flat=True)
+        )
+        if active_products:
             return Response(
-                {"detail": "No se puede eliminar; primero mueve o elimina los productos."},
+                {
+                    "detail": "No se puede eliminar la categoría porque tiene productos activos asociados.",
+                    "active_products": active_products,
+                },
                 status=status.HTTP_409_CONFLICT,
             )
-        category.delete()
+
+        inactive_products_qs = Product.objects.filter(category=category, is_archived=True)
+        try:
+            with transaction.atomic():
+                if inactive_products_qs.exists():
+                    fallback_name = "SIN CATEGORÍA"
+                    if category.name == fallback_name:
+                        fallback_name = "SIN CATEGORÍA (ARCHIVADOS)"
+                    fallback_category, _ = Category.objects.get_or_create(name=fallback_name, defaults={"is_hidden": True})
+                    if not fallback_category.is_hidden:
+                        fallback_category.is_hidden = True
+                        fallback_category.save(update_fields=["is_hidden"])
+                    inactive_products_qs.update(category=fallback_category)
+                category.delete()
+        except ProtectedError:
+            blocking_active_products = list(
+                Product.objects.filter(category=category, is_archived=False)
+                .order_by("name")
+                .values_list("name", flat=True)
+            )
+            return Response(
+                {
+                    "detail": "No se puede eliminar la categoría porque tiene productos activos asociados.",
+                    "active_products": blocking_active_products,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def update(self, request, *args, **kwargs):
@@ -224,7 +357,7 @@ class ModifierGroupListCreateView(generics.ListCreateAPIView):
 
 class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ModifierGroupSerializer
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    parser_classes = [JSONParser]
     queryset = ModifierGroup.objects.prefetch_related("modifiers")
 
     def get_permissions(self):
@@ -238,6 +371,29 @@ class ModifierGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
         group.products.clear()
         group.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ModifierGroupImageUploadView(generics.UpdateAPIView):
+    serializer_class = ModifierGroupSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    queryset = ModifierGroup.objects.prefetch_related("modifiers")
+
+    def get_permissions(self):
+        return [IsAdminOrManager()]
+
+    def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        image_file = request.FILES.get("image")
+        if not image_file:
+            return Response({"image": "Debes enviar un archivo en el campo 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.menu.utils.images import save_menu_image
+
+        saved = save_menu_image(image_file, "MODIFIER_GROUPS")
+        instance.image = saved["image"]
+        instance.image_path = saved["image_path"]
+        instance.save(update_fields=["image", "image_path"])
+        return Response(self.get_serializer(instance).data)
 
 
 class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):
@@ -261,6 +417,29 @@ class ModifierOptionDetailView(generics.RetrieveUpdateAPIView):
             instance.save(update_fields=["image", "image_path"])
             return Response(self.get_serializer(instance).data)
         return super().patch(request, *args, **kwargs)
+
+
+class ModifierImageUploadView(generics.UpdateAPIView):
+    serializer_class = ModifierSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    queryset = Modifier.objects.select_related("group")
+
+    def get_permissions(self):
+        return [IsAdminOrManager()]
+
+    def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        image_file = request.FILES.get("image")
+        if not image_file:
+            return Response({"image": "Debes enviar un archivo en el campo 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.menu.utils.images import save_menu_image
+
+        saved = save_menu_image(image_file, "MODIFIERS")
+        instance.image = saved["image"]
+        instance.image_path = saved["image_path"]
+        instance.save(update_fields=["image", "image_path"])
+        return Response(self.get_serializer(instance).data)
 
 class ProductModifierGroupsReorderView(APIView):
     permission_classes = [IsAdminOrManager]

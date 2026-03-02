@@ -4,6 +4,8 @@ export type Category = {
   id: number;
   name: string;
   isActive?: boolean;
+  isHidden?: boolean;
+  position?: number;
 };
 
 export type Modifier = {
@@ -32,6 +34,7 @@ export type Product = {
   name: string;
   description: string;
   price: number;
+  sortOrder?: number;
   category: string;
   categoryName?: string | null;
   categoryId: number;
@@ -46,6 +49,8 @@ export type Product = {
   disposableApplyTo?: string[];
   requiresKitchen: boolean;
   modifierGroups: number[];
+  modifierGroupsPos?: number[];
+  modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
 };
 
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
@@ -104,7 +109,7 @@ export type Discount = {
   id: number;
   name: string;
   description?: string;
-  type: "percent" | "fixed";
+  type: "percent" | "fixed" | "bxgy";
   value: number;
   appliesTo: "order" | "categories" | "products";
   targetCategoryIds?: number[];
@@ -116,6 +121,9 @@ export type Discount = {
   minAmount?: number | null;
   autoApply: boolean;
   isActive: boolean;
+  priority?: number;
+  stackable?: boolean;
+  bxgyConfig?: Record<string, unknown>;
 };
 
 export type ServiceType = {
@@ -173,6 +181,39 @@ export type EmployeeStats = {
 };
 
 export type PaymentMethod = "cash" | "card" | "transfer";
+
+export type CashSessionSnapshot = {
+  open: boolean;
+  session?: {
+    id: number;
+    openingCash: number;
+    openedAt: string;
+    status: "open" | "closed";
+  };
+  summary?: {
+    openingCash: number;
+    cashTotal: number;
+    cardTotal: number;
+    transferTotal: number;
+    payoutsTotal: number;
+    expectedCashInDrawer: number;
+    overShortCash: number;
+  };
+};
+
+export type CashTransaction = {
+  id: number;
+  type: "payout";
+  amount: number;
+  description: string;
+  createdAt: string;
+};
+
+export type CategoryDeleteConflictError = Error & {
+  status?: number;
+  activeProducts?: string[];
+};
+
 
 export type Payment = {
   id: number;
@@ -357,12 +398,16 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean }>>(response);
-  return data.map((item) => ({
-    id: item.id,
-    name: item.name,
-    isActive: item.is_active,
-  }));
+  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  return data
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      isActive: item.is_active,
+      isHidden: Boolean(item.is_hidden),
+      position: Number(item.position ?? 0),
+    }))
+    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
 
 export const getFeatureFlags = async (): Promise<FeatureFlag[]> => {
@@ -415,11 +460,13 @@ export const createCategory = async (name: string): Promise<Category> => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,
     isActive: data.is_active,
+    isHidden: Boolean(data.is_hidden),
+    position: Number(data.position ?? 0),
   };
 };
 
@@ -429,15 +476,23 @@ export const updateCategory = async (categoryId: number, name: string): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean }>(response);
-  return { id: data.id, name: data.name, isActive: data.is_active };
+  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden), position: Number(data.position ?? 0) };
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
   const response = await request(`/menu/categories/${categoryId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
+    if (response.status === 404) {
+      return;
+    }
     const data = await response.json().catch(() => ({ detail: "No se pudo eliminar la categoría" }));
-    throw new Error(data.detail || "No se pudo eliminar la categoría");
+    const error = new Error(data.detail || "No se pudo eliminar la categoría") as CategoryDeleteConflictError;
+    error.status = response.status;
+    if (Array.isArray(data.active_products)) {
+      error.activeProducts = data.active_products.filter((name: unknown): name is string => typeof name === "string");
+    }
+    throw error;
   }
 };
 
@@ -461,6 +516,7 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -473,6 +529,8 @@ export const getProducts = async (options?: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>>(response);
   return data.map((item) => {
     const normalizedImageUrl = normalizeImageUrl(item);
@@ -481,6 +539,7 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      sortOrder: Number(item.sort_order ?? 0),
       category: item.category,
       categoryName: item.category_name ?? item.category,
       categoryId: item.category_id_display ?? 0,
@@ -495,6 +554,11 @@ export const getProducts = async (options?: {
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       modifierGroups: item.modifier_groups,
+      modifierGroupsPos: item.modifier_groups_pos ?? [],
+      modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
+        groupId: link.group_id,
+        showInPos: Boolean(link.show_in_pos),
+      })),
     };
   });
 };
@@ -536,6 +600,7 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -548,12 +613,15 @@ export const createProduct = async (payload: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
@@ -566,6 +634,11 @@ export const createProduct = async (payload: {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 
@@ -610,6 +683,7 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -619,12 +693,15 @@ export const updateProduct = async (
     available: boolean;
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? payload.categoryId,
@@ -635,6 +712,11 @@ export const updateProduct = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 
@@ -651,18 +733,25 @@ export const deleteProduct = async (productId: number): Promise<{ detail?: strin
 export const updateProductModifierGroups = async (
   productId: number,
   modifierGroupIds: number[],
+  modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>,
 ): Promise<Product> => {
-  const formData = new FormData();
-  modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
   const response = await request(`/menu/products/${productId}/`, {
     method: "PATCH",
-    body: formData,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      modifier_group_ids: modifierGroupIds,
+      modifier_group_links: (modifierGroupLinks ?? []).map((link) => ({
+        group_id: link.groupId,
+        show_in_pos: link.showInPos,
+      })),
+    }),
   });
   const data = await handleJson<{
     id: number;
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -675,12 +764,15 @@ export const updateProductModifierGroups = async (
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
   }>(response);
   return {
     id: data.id,
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? 0,
@@ -693,6 +785,11 @@ export const updateProductModifierGroups = async (
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
   };
 };
 
@@ -721,6 +818,7 @@ export const updateProductAvailability = async (
     name: string;
     description: string;
     price: string;
+    sort_order?: number;
     category: string;
     category_name?: string;
     category_id_display?: number;
@@ -737,6 +835,7 @@ export const updateProductAvailability = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
     categoryId: data.category_id_display ?? 0,
@@ -911,7 +1010,7 @@ export const updateModifierGroup = async (
 export const uploadModifierGroupImage = async (groupId: number, image: File): Promise<void> => {
   const formData = new FormData();
   formData.append("image", image);
-  await request(`/menu/modifier-groups/${groupId}/`, {
+  await request(`/menu/modifier-groups/${groupId}/image/`, {
     method: "PATCH",
     body: formData,
   }).then(handleJson);
@@ -920,7 +1019,7 @@ export const uploadModifierGroupImage = async (groupId: number, image: File): Pr
 export const uploadModifierOptionImage = async (optionId: number, image: File): Promise<void> => {
   const formData = new FormData();
   formData.append("image", image);
-  await request(`/menu/modifier-options/${optionId}/`, {
+  await request(`/menu/modifiers/${optionId}/image/`, {
     method: "PATCH",
     body: formData,
   }).then(handleJson);
@@ -930,6 +1029,9 @@ export const uploadModifierOptionImage = async (optionId: number, image: File): 
 export const deleteModifierGroup = async (groupId: number): Promise<void> => {
   const response = await request(`/menu/modifier-groups/${groupId}/`, { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
+    if (response.status === 404) {
+      return;
+    }
     const data = await response.json().catch(() => ({ detail: "No se pudo eliminar el grupo" }));
     throw new Error(data.detail || "No se pudo eliminar el grupo");
   }
@@ -953,6 +1055,9 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -970,6 +1075,9 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     minAmount: item.min_amount ? Number(item.min_amount) : null,
     autoApply: item.auto_apply,
     isActive: item.is_active,
+    priority: item.priority ?? 100,
+    stackable: Boolean(item.stackable),
+    bxgyConfig: item.bxgy_config ?? undefined,
   }));
 };
 
@@ -1202,23 +1310,30 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
   return mapOrder(data);
 };
 
-export const getCustomerOrders = async (): Promise<
-  Array<{ id: number; orderNumber: number; status: Order["status"]; customerName?: string; createdAt: Date }>
-> => {
-  const response = await request("/orders/customer-display/");
-  const data = await handleJson<
-    Array<{ id: number; order_number: number; status: Order["status"]; customer_name: string; created_at: string }>
+export const getCustomerOrders = async (
+  signal?: AbortSignal
+): Promise<Array<{ id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date }>> => {
+  const response = await request("/orders/customer-board/", { signal });
+  const raw = await handleJson<
+    | Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }>
+    | { results?: Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }> }
   >(response);
-  if (!Array.isArray(data)) {
-    return [];
-  }
-  return data.map((order) => ({
-    id: order.id,
-    orderNumber: order.order_number,
-    status: order.status,
-    customerName: order.customer_name || undefined,
-    createdAt: new Date(order.created_at),
-  }));
+  const list = Array.isArray(raw) ? raw : raw.results ?? [];
+  return list
+    .map((order) => {
+      const normalizedStatus = String(order.status || "").toLowerCase();
+      if (normalizedStatus !== "preparing" && normalizedStatus !== "ready") {
+        return null;
+      }
+      return {
+        id: order.id,
+        orderNumber: order.order_number,
+        status: normalizedStatus,
+        customerName: order.customer_name || undefined,
+        createdAt: new Date(order.created_at),
+      };
+    })
+    .filter((order): order is { id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date } => Boolean(order));
 };
 
 export const getSalesReport = async (filters?: {
@@ -1341,6 +1456,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
       min_amount: payload.minAmount ?? null,
       auto_apply: payload.autoApply,
       is_active: payload.isActive,
+      priority: payload.priority ?? 100,
+      stackable: payload.stackable ?? false,
+      bxgy_config: payload.bxgyConfig ?? {},
     }),
   });
   const data = await handleJson<{
@@ -1359,6 +1477,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>(response);
   return {
     id: data.id,
@@ -1376,6 +1497,9 @@ export const createDiscount = async (payload: Discount): Promise<Discount> => {
     minAmount: data.min_amount ? Number(data.min_amount) : null,
     autoApply: data.auto_apply,
     isActive: data.is_active,
+    priority: data.priority ?? 100,
+    stackable: Boolean(data.stackable),
+    bxgyConfig: data.bxgy_config ?? undefined,
   };
 };
 
@@ -1398,6 +1522,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
       min_amount: payload.minAmount ?? null,
       auto_apply: payload.autoApply,
       is_active: payload.isActive,
+      priority: payload.priority ?? 100,
+      stackable: payload.stackable ?? false,
+      bxgy_config: payload.bxgyConfig ?? {},
     }),
   });
   const data = await handleJson<{
@@ -1416,6 +1543,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     min_amount: string | null;
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>(response);
   return {
     id: data.id,
@@ -1433,6 +1563,9 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     minAmount: data.min_amount ? Number(data.min_amount) : null,
     autoApply: data.auto_apply,
     isActive: data.is_active,
+    priority: data.priority ?? 100,
+    stackable: Boolean(data.stackable),
+    bxgyConfig: data.bxgy_config ?? undefined,
   };
 };
 
@@ -1795,6 +1928,9 @@ export const getSchedules = async (
     break_minutes: number;
     allows_overtime: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
+    bxgy_config?: Record<string, unknown>;
   }>>(response);
   return data.map((item) => ({
     id: String(item.id),
@@ -2245,4 +2381,89 @@ export const markPrintJobPrinted = async (id: number): Promise<PrintJob> => {
     createdAt: new Date(data.created_at),
     printedAt: data.printed_at ? new Date(data.printed_at) : null,
   };
+};
+
+
+
+
+export const reorderProducts = async (payload: { categoryId?: number | null; orderedIds: number[] }): Promise<void> => {
+  await request("/menu/products/reorder/", {
+    method: "POST",
+    body: JSON.stringify({
+      category_id: payload.categoryId ?? null,
+      ordered_ids: payload.orderedIds,
+    }),
+  });
+};
+export const reorderCategories = async (orderedIds: number[]): Promise<Category[]> => {
+  const response = await request("/menu/categories/reorder/", {
+    method: "PATCH",
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  });
+  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    name: item.name,
+    isActive: item.is_active,
+    isHidden: Boolean(item.is_hidden),
+    position: Number(item.position ?? 0),
+  }));
+};
+
+
+export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
+  const response = await request('/cashier/session/current/');
+  const data = await handleJson<{ open: boolean; session?: { id: number; opening_cash: string; opened_at: string; status: "open" | "closed" }; summary?: { opening_cash?: string; cash_total?: string; card_total?: string; transfer_total?: string; payouts_total?: string; expected_cash_in_drawer?: string; over_short_cash?: string } }>(response);
+  if (!data.open) return { open: false };
+  return {
+    open: true,
+    session: {
+      id: data.session.id,
+      openingCash: Number(data.session.opening_cash ?? 0),
+      openedAt: data.session.opened_at,
+      status: data.session.status,
+    },
+    summary: {
+      openingCash: Number(data.summary.opening_cash ?? 0),
+      cashTotal: Number(data.summary.cash_total ?? 0),
+      cardTotal: Number(data.summary.card_total ?? 0),
+      transferTotal: Number(data.summary.transfer_total ?? 0),
+      payoutsTotal: Number(data.summary.payouts_total ?? 0),
+      expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
+      overShortCash: Number(data.summary.over_short_cash ?? 0),
+    },
+  };
+};
+
+export const openCashSession = async (openingCash: number): Promise<void> => {
+  await handleJson(await request('/cashier/session/open/', {
+    method: 'POST',
+    body: JSON.stringify({ opening_cash: openingCash }),
+  }));
+};
+
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<void> => {
+  await handleJson(await request('/cashier/session/close/', {
+    method: 'POST',
+    body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
+  }));
+};
+
+export const getCashTransactions = async (): Promise<CashTransaction[]> => {
+  const response = await request('/cashier/transactions/');
+  const data = await handleJson<Array<{ id: number; type: "payout"; amount: string; description: string; created_at: string }>>(response);
+  return data.map((tx) => ({
+    id: tx.id,
+    type: tx.type,
+    amount: Number(tx.amount),
+    description: tx.description,
+    createdAt: tx.created_at,
+  }));
+};
+
+export const createCashPayout = async (amount: number, description: string): Promise<void> => {
+  await handleJson(await request('/cashier/transactions/', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'payout', amount, description }),
+  }));
 };

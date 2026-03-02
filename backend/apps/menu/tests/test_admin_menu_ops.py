@@ -18,11 +18,132 @@ class AdminMenuOpsTests(TestCase):
         self.client.force_authenticate(user=self.admin)
         self.category = Category.objects.create(name="COMIDA")
 
-    def test_delete_category_with_products_returns_409(self):
-        Product.objects.create(name="Item", description="", price=Decimal("1.00"), category=self.category, available=True)
-        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
-        self.assertEqual(response.status_code, 409)
+    def test_delete_category_with_active_products_returns_409_with_names(self):
+        Product.objects.create(name="PAPAS FRITAS", description="", price=Decimal("1.00"), category=self.category, available=True, is_archived=False)
+        Product.objects.create(name="PLATO DE PECHUGA", description="", price=Decimal("2.00"), category=self.category, available=True, is_archived=False)
 
+        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("detail", response.data)
+        self.assertEqual(
+            response.data["detail"],
+            "No se puede eliminar la categoría porque tiene productos activos asociados.",
+        )
+        self.assertEqual(
+            response.data["active_products"],
+            ["PAPAS FRITAS", "PLATO DE PECHUGA"],
+        )
+        self.assertTrue(Category.objects.filter(id=self.category.id).exists())
+
+    def test_delete_category_with_only_archived_products_reassigns_and_deletes(self):
+        Product.objects.create(
+            name="ARCHIVADO 1",
+            description="",
+            price=Decimal("1.00"),
+            category=self.category,
+            available=False,
+            is_archived=True,
+        )
+        Product.objects.create(
+            name="ARCHIVADO 2",
+            description="",
+            price=Decimal("2.00"),
+            category=self.category,
+            available=False,
+            is_archived=True,
+        )
+
+        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Category.objects.filter(id=self.category.id).exists())
+        fallback = Category.objects.get(name="SIN CATEGORÍA")
+        self.assertTrue(fallback.is_hidden)
+        self.assertEqual(Product.objects.filter(category=fallback, is_archived=True).count(), 2)
+
+    def test_delete_category_without_products_returns_204(self):
+        response = self.client.delete(f"/api/menu/categories/{self.category.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Category.objects.filter(id=self.category.id).exists())
+
+
+    def test_list_categories_hides_system_categories_by_default(self):
+        Category.objects.create(name="SIN CATEGORÍA (ARCHIVADOS)", is_hidden=True)
+
+        response = self.client.get("/api/menu/categories/")
+
+        self.assertEqual(response.status_code, 200)
+        names = [item["name"] for item in response.data]
+        self.assertNotIn("SIN CATEGORÍA (ARCHIVADOS)", names)
+
+    def test_list_categories_include_hidden_for_admin(self):
+        Category.objects.create(name="SIN CATEGORÍA (ARCHIVADOS)", is_hidden=True)
+
+        response = self.client.get("/api/menu/categories/?include_hidden=1")
+
+        self.assertEqual(response.status_code, 200)
+        names = [item["name"] for item in response.data]
+        self.assertIn("SIN CATEGORÍA (ARCHIVADOS)", names)
+
+
+    def test_reorder_categories_persists_order(self):
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+        c3 = Category.objects.create(name="POSTRES", position=2)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [c3.id, self.category.id, c2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        ordered = self.client.get("/api/menu/categories/")
+        names = [item["name"] for item in ordered.data]
+        self.assertEqual(names, ["POSTRES", "COMIDA", "BEBIDAS"])
+
+    def test_reorder_categories_with_duplicates_returns_400(self):
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [self.category.id, c2.id, c2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("duplicados", str(response.data).lower())
+
+
+    def test_reorder_products_within_category_persists_order(self):
+        p1 = Product.objects.create(name="A", description="", price=Decimal("1.00"), category=self.category, sort_order=0, available=True)
+        p2 = Product.objects.create(name="B", description="", price=Decimal("1.00"), category=self.category, sort_order=1, available=True)
+        p3 = Product.objects.create(name="C", description="", price=Decimal("1.00"), category=self.category, sort_order=2, available=True)
+
+        response = self.client.post(
+            "/api/menu/products/reorder/",
+            {"category_id": self.category.id, "ordered_ids": [p3.id, p1.id, p2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        ordered = self.client.get(f"/api/menu/products/?category_id={self.category.id}")
+        names = [item["name"] for item in ordered.data]
+        self.assertEqual(names, ["C", "A", "B"])
+
+    def test_reorder_products_rejects_duplicate_ids(self):
+        p1 = Product.objects.create(name="A", description="", price=Decimal("1.00"), category=self.category, sort_order=0, available=True)
+        p2 = Product.objects.create(name="B", description="", price=Decimal("1.00"), category=self.category, sort_order=1, available=True)
+
+        response = self.client.post(
+            "/api/menu/products/reorder/",
+            {"category_id": self.category.id, "ordered_ids": [p1.id, p2.id, p2.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("duplicados", str(response.data).lower())
     def test_delete_product_with_history_archives(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
         branch = Branch.objects.create(name="B", code="B")
@@ -116,6 +237,41 @@ class AdminMenuOpsTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_modifier_group_name_is_normalized_to_uppercase(self):
+        response = self.client.post(
+            "/api/menu/modifier-groups/",
+            {
+                "name": "  salsas   premium ",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [{"name": "  salsa verde ", "price": "0.00", "is_active": True}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["name"], "SALSAS PREMIUM")
+        self.assertEqual(response.data["modifiers"][0]["name"], "SALSA VERDE")
+
+    def test_modifier_group_duplicate_case_insensitive_returns_400(self):
+        ModifierGroup.objects.create(name="SALSAS", required=False)
+
+        response = self.client.post(
+            "/api/menu/modifier-groups/",
+            {
+                "name": "  salsas ",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [{"name": "ROJA", "price": "0.00", "is_active": True}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Ya existe un grupo de modificadores con ese nombre.", str(response.data))
+
     def test_delete_modifier_group_assigned_to_product_unassigns_and_deletes(self):
         product = Product.objects.create(name="Item", description="", price=Decimal("2.00"), category=self.category, available=True)
         group = ModifierGroup.objects.create(name="Extras", required=False)
@@ -136,12 +292,12 @@ class AdminMenuOpsTests(TestCase):
         option_image = SimpleUploadedFile("opcion.png", b"fakepngcontent", content_type="image/png")
 
         group_response = self.client.patch(
-            f"/api/menu/modifier-groups/{group.id}/",
+            f"/api/menu/modifier-groups/{group.id}/image/",
             {"image": group_image},
             format="multipart",
         )
         option_response = self.client.patch(
-            f"/api/menu/modifier-options/{option.id}/",
+            f"/api/menu/modifiers/{option.id}/image/",
             {"image": option_image},
             format="multipart",
         )
@@ -153,3 +309,24 @@ class AdminMenuOpsTests(TestCase):
         option.refresh_from_db()
         self.assertTrue(group.image_path)
         self.assertTrue(option.image_path)
+
+    def test_update_modifier_group_missing_existing_id_returns_clear_400(self):
+        group = ModifierGroup.objects.create(name="Guarniciones", required=False)
+        Modifier.objects.create(group=group, name="Chips", price=Decimal("0.00"), sort_order=0)
+
+        response = self.client.patch(
+            f"/api/menu/modifier-groups/{group.id}/",
+            {
+                "name": "Guarniciones",
+                "required": False,
+                "min_selection": 0,
+                "max_selection": 1,
+                "modifiers": [
+                    {"name": "Chips", "price": "0.00", "is_active": True},
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Incluye el campo 'id'", str(response.data))

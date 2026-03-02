@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import serializers
-from apps.cashier.models import Register, CashSession, CloseoutCount
+from apps.cashier.models import Register, CashSession, CloseoutCount, CashTransaction
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund
 
@@ -49,7 +49,21 @@ class CloseoutCountSerializer(serializers.ModelSerializer):
         ]
 
 
+
+
+class CashTransactionSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+
+    class Meta:
+        model = CashTransaction
+        fields = ["id", "session", "type", "amount", "description", "created_by", "created_by_username", "created_at"]
+        read_only_fields = ["session", "created_by", "created_at"]
+
+
 class CashSessionSummarySerializer(serializers.Serializer):
+    opening_cash = serializers.DecimalField(max_digits=10, decimal_places=2)
+    expected_cash_in_drawer = serializers.DecimalField(max_digits=10, decimal_places=2)
+    payouts_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     expected_cash = serializers.DecimalField(max_digits=10, decimal_places=2)
     expected_card = serializers.DecimalField(max_digits=10, decimal_places=2)
     expected_transfer = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -152,6 +166,11 @@ def calculate_shift_summary(session: CashSession) -> dict:
         discount_total=Sum("discount_total"),
     )
 
+    payouts_total = (
+        CashTransaction.objects.filter(session=session, type="payout").aggregate(total=Sum("amount")).get("total")
+        or Decimal("0")
+    )
+
     closeout = getattr(session, "closeout", None)
     counted_cash = closeout.counted_cash if closeout else Decimal("0")
     counted_card = closeout.counted_card if closeout else Decimal("0")
@@ -166,17 +185,21 @@ def calculate_shift_summary(session: CashSession) -> dict:
     refunds_sales = refund_totals["refunds_sales"] or Decimal("0")
 
     expected_cash = (payment_totals["cash_total"] or Decimal("0")) - refunds_cash
+    expected_cash_in_drawer = session.opening_cash + expected_cash - payouts_total
     expected_card = (payment_totals["card_total"] or Decimal("0")) - refunds_card
     expected_transfer = (payment_totals["transfer_total"] or Decimal("0")) - refunds_transfer
     expected_tips = (payment_totals["tips_total"] or Decimal("0")) - refunds_tips
     expected_total = (payment_totals["expected_total"] or Decimal("0")) - refunds_total
 
-    over_short_cash = counted_cash - expected_cash
+    over_short_cash = counted_cash - expected_cash_in_drawer
     over_short_total = (counted_cash + counted_card + counted_transfer + counted_tips) - (
         expected_cash + expected_card + expected_transfer + expected_tips
     )
 
     return {
+        "opening_cash": session.opening_cash,
+        "expected_cash_in_drawer": expected_cash_in_drawer,
+        "payouts_total": payouts_total,
         "expected_cash": expected_cash,
         "expected_card": expected_card,
         "expected_transfer": expected_transfer,
