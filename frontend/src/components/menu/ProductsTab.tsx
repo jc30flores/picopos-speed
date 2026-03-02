@@ -71,6 +71,9 @@ export const ProductsTab = () => {
   const [categoryDeleteError, setCategoryDeleteError] = useState<string | null>(null);
   const [categoryDeleteActiveProducts, setCategoryDeleteActiveProducts] = useState<string[]>([]);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [isModifierManagerOpen, setIsModifierManagerOpen] = useState(false);
+  const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
+  const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
@@ -82,17 +85,26 @@ export const ProductsTab = () => {
   const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
   const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
-    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
-      getCategories(),
-      getProducts(),
-      getModifierGroups(),
-    ]);
-    setCategories(categoriesResponse);
-    setProducts(productsResponse);
-    setModifierGroups(modifierGroupsResponse);
-    if (productId) {
-      const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
-      setSelectedProduct(updatedProduct);
+    setIsMenuLoading(true);
+    setMenuLoadError(null);
+    try {
+      const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+        getCategories(),
+        getProducts(),
+        getModifierGroups(),
+      ]);
+      setCategories(categoriesResponse);
+      setProducts(productsResponse);
+      setModifierGroups(modifierGroupsResponse);
+      if (productId) {
+        const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
+        setSelectedProduct(updatedProduct);
+      }
+    } catch (error) {
+      setMenuLoadError(error instanceof Error ? error.message : "No se pudo cargar el menú");
+      throw error;
+    } finally {
+      setIsMenuLoading(false);
     }
   }, [selectedProduct?.id]);
 
@@ -338,15 +350,18 @@ export const ProductsTab = () => {
 
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    <div className="space-y-6">
       {/* Left: Products Table (60%) */}
-      <div className="lg:col-span-3 space-y-4">
+      <div className="space-y-4">
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">Productos del Menú</h2>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
                 Gestionar categorías
+              </Button>
+              <Button variant="outline" onClick={() => setIsModifierManagerOpen(true)}>
+                Gestionar modificadores
               </Button>
               <Button
                 variant="default"
@@ -360,6 +375,15 @@ export const ProductsTab = () => {
           </div>
 
           <div className="space-y-4">
+            {menuLoadError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                <p>{menuLoadError}</p>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => loadMenuData().catch(() => undefined)}>
+                  Reintentar
+                </Button>
+              </div>
+            )}
+
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -400,7 +424,11 @@ export const ProductsTab = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredProducts.map((product) => (
+                {isMenuLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Cargando productos...</TableCell>
+                  </TableRow>
+                ) : filteredProducts.map((product) => (
                   <TableRow
                     key={product.id}
                     className={cn(
@@ -455,32 +483,38 @@ export const ProductsTab = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleEditProduct(product)}
-                        >
-                          <Edit className="h-4 w-4 mr-1" />
-                          Editar
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelectedProduct(product)}
+                          onClick={() => {
+                            setSelectedProduct(product);
+                            setIsModifierManagerOpen(true);
+                          }}
                         >
                           <Settings className="h-4 w-4 mr-1" />
                           Modificadores
                         </Button>
                         <Button
                           variant="outline"
-                          size="sm"
+                          size="icon"
                           onClick={() => handleDuplicateProduct(product)}
+                          title="Duplicar"
+                          aria-label="Duplicar producto"
                         >
-                          <Copy className="h-4 w-4 mr-1" />
-                          Duplicar
+                          <Copy className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="outline"
-                          size="sm"
+                          size="icon"
+                          onClick={() => handleEditProduct(product)}
+                          title="Editar"
+                          aria-label="Editar producto"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
                           onClick={() => setProductToDelete(product)}
-                          title="Eliminar producto"
+                          title="Eliminar"
+                          aria-label="Eliminar producto"
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -494,14 +528,25 @@ export const ProductsTab = () => {
         </Card>
       </div>
 
-      {/* Right: Modifier Panel (40%) */}
-      <div className="lg:col-span-2">
-        <ModifierPanel
-          selectedProduct={selectedProduct}
-          modifierGroups={modifierGroups}
-          onModifierGroupsUpdated={loadMenuData}
-        />
-      </div>
+
+
+      <Dialog open={isModifierManagerOpen} onOpenChange={setIsModifierManagerOpen}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Gestión de modificadores</DialogTitle>
+            <DialogDescription>
+              Administra grupos y asignaciones por producto desde un solo lugar.
+            </DialogDescription>
+          </DialogHeader>
+          <ModifierPanel
+            selectedProduct={selectedProduct}
+            products={products}
+            modifierGroups={modifierGroups}
+            onSelectProduct={setSelectedProduct}
+            onModifierGroupsUpdated={loadMenuData}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Product Form Dialog */}
       <ProductFormDialog

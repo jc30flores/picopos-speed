@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Edit, Trash2, X, Settings, GripVertical } from "lucide-react";
+import { Plus, Edit, Trash2, X, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -9,19 +9,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModifierGroupFormDialog } from "./ModifierGroupFormDialog";
 import { ModifierGroup, Product, deleteModifierGroup, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
 
 interface ModifierPanelProps {
   selectedProduct: Product | null;
+  products: Product[];
   modifierGroups: ModifierGroup[];
+  onSelectProduct: (product: Product | null) => void;
   onModifierGroupsUpdated: (productId?: number) => Promise<void>;
 }
 
 export const ModifierPanel = ({
   selectedProduct,
+  products,
   modifierGroups,
+  onSelectProduct,
   onModifierGroupsUpdated,
 }: ModifierPanelProps) => {
   const [assignedGroups, setAssignedGroups] = useState<number[]>([]);
@@ -43,6 +48,9 @@ export const ModifierPanel = ({
         return acc;
       }, {});
       setAssignedGroupVisibility(visibility);
+    } else {
+      setAssignedGroups([]);
+      setAssignedGroupVisibility({});
     }
   }, [selectedProduct]);
 
@@ -135,18 +143,6 @@ export const ModifierPanel = ({
     }
   };
 
-  if (!selectedProduct) {
-    return (
-      <Card className="p-6 h-full flex items-center justify-center">
-        <div className="text-center text-muted-foreground">
-          <Settings className="h-16 w-16 mx-auto mb-3 opacity-50" />
-          <p className="font-semibold">Selecciona un producto</p>
-          <p className="text-sm mt-1">Haz clic en "Modificadores" para gestionar sus opciones</p>
-        </div>
-      </Card>
-    );
-  }
-
   const assignedGroupObjects = modifierGroups.filter((group) =>
     assignedGroups.includes(group.id)
   );
@@ -195,15 +191,49 @@ export const ModifierPanel = ({
   return (
     <div className="space-y-4">
       <Card className="p-6">
-        <div className="flex items-start justify-between mb-4">
+        <div className="mb-4 space-y-3">
           <div>
-            <h3 className="text-xl font-bold">{selectedProduct.name}</h3>
-            <div className="flex gap-2 mt-2">
-              <Badge variant="outline">{selectedProduct.category}</Badge>
-              <Badge variant="default" className="bg-secondary">
-                ${selectedProduct.price.toFixed(2)}
-              </Badge>
-            </div>
+            <Label className="text-sm text-muted-foreground">Aplicar a producto</Label>
+            <Select
+              value={selectedProduct ? String(selectedProduct.id) : "none"}
+              onValueChange={(value) => {
+                if (value === "none") {
+                  onSelectProduct(null);
+                  return;
+                }
+                const product = products.find((item) => String(item.id) === value) ?? null;
+                onSelectProduct(product);
+              }}
+            >
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="Ninguno / Solo administrar grupos" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Ninguno / Solo administrar grupos</SelectItem>
+                {products.map((product) => (
+                  <SelectItem key={product.id} value={String(product.id)}>
+                    {product.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            {selectedProduct ? (
+              <>
+                <h3 className="text-xl font-bold">{selectedProduct.name}</h3>
+                <div className="flex gap-2 mt-2">
+                  <Badge variant="outline">{selectedProduct.category}</Badge>
+                  <Badge variant="default" className="bg-secondary">
+                    ${selectedProduct.price.toFixed(2)}
+                  </Badge>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-sm text-muted-foreground">
+                Selecciona un producto para gestionar asignaciones. Puedes crear/editar/eliminar grupos sin seleccionar producto.
+              </div>
+            )}
           </div>
         </div>
 
@@ -213,6 +243,7 @@ export const ModifierPanel = ({
             <Button
               variant="outline"
               size="sm"
+              disabled={!selectedProduct}
               onClick={() => setShowAssignDialog(true)}
             >
               <Plus className="h-4 w-4 mr-1" />
@@ -220,7 +251,11 @@ export const ModifierPanel = ({
             </Button>
           </div>
 
-          {assignedGroupObjects.length === 0 ? (
+          {!selectedProduct ? (
+            <div className="text-sm text-muted-foreground text-center py-4 border rounded-lg">
+              Selecciona un producto para ver grupos asignados.
+            </div>
+          ) : assignedGroupObjects.length === 0 ? (
             <div className="text-sm text-muted-foreground text-center py-4 border rounded-lg">
               No hay grupos asignados
             </div>
@@ -346,12 +381,12 @@ export const ModifierPanel = ({
       </Card>
 
       {/* Assign Group Dialog */}
-      <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
+      <Dialog open={showAssignDialog && Boolean(selectedProduct)} onOpenChange={setShowAssignDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Asignar grupos de modificadores</DialogTitle>
             <DialogDescription>
-              Selecciona los grupos que deseas asignar a {selectedProduct.name}
+              Selecciona los grupos que deseas asignar a {selectedProduct?.name}
             </DialogDescription>
           </DialogHeader>
 
