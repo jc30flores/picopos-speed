@@ -15,8 +15,18 @@ from apps.dte.services.dte_service import (
 from apps.orders.models import Order, OrderInvoice
 
 
+def _normalize_ambiente(raw_value: str | None) -> str:
+    value = (raw_value or "").strip().upper()
+    if value == "01" or "01" in value or value in {"PROD", "PRODUCCION", "PRODUCTION"}:
+        return "01"
+    if value == "00" or "00" in value or value in {"TEST", "CERT", "CERTIFICACION", "DEV"}:
+        return "00"
+    return "01"
+
+
 def _ambiente() -> str:
-    return os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE") or "00"
+    raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
+    return _normalize_ambiente(raw)
 
 
 def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False) -> DTERecord:

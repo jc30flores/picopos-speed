@@ -20,6 +20,13 @@ class DTERecord(models.Model):
         (STATUS_REJECTED, "Rechazado"),
         (STATUS_INVALIDATED, "Invalidado"),
     ]
+    AMBIENTE_TEST = "00"
+    AMBIENTE_PROD = "01"
+    AMBIENTE_CHOICES = [
+        (AMBIENTE_TEST, "Pruebas (00)"),
+        (AMBIENTE_PROD, "Producción (01)"),
+    ]
+
     DTE_TYPE_CHOICES = [
         ("CF_01", "Consumidor Final (01)"),
         ("CCF_03", "Crédito Fiscal (03)"),
@@ -32,7 +39,7 @@ class DTERecord(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="dte_records")
     dte_type = models.CharField(max_length=20, choices=DTE_TYPE_CHOICES, default="CF_01")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
-    ambiente = models.CharField(max_length=2, default="00")
+    ambiente = models.CharField(max_length=2, choices=AMBIENTE_CHOICES, default=AMBIENTE_TEST)
     control_number = models.CharField(max_length=80)
     codigo_generacion = models.CharField(max_length=40, default="", blank=True)
     hacienda_uuid = models.CharField(max_length=160, blank=True, default="")
@@ -55,6 +62,7 @@ class DTERecord(models.Model):
     class Meta:
         ordering = ["-created_at"]
         constraints = [
+            models.CheckConstraint(check=models.Q(ambiente__in=["00", "01"]), name="dte_record_ambiente_valid"),
             models.UniqueConstraint(fields=["control_number", "dte_type"], name="dte_record_control_type_uniq"),
             models.UniqueConstraint(fields=["codigo_generacion"], condition=~models.Q(codigo_generacion=""), name="dte_record_codigo_uniq"),
             models.UniqueConstraint(fields=["hacienda_uuid"], condition=~models.Q(hacienda_uuid=""), name="dte_record_hacienda_uuid_uniq"),
@@ -76,7 +84,7 @@ class DTERecord(models.Model):
 
 class DTEControlCounter(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="dte_counters")
-    ambiente = models.CharField(max_length=2, default="00")
+    ambiente = models.CharField(max_length=2, choices=DTERecord.AMBIENTE_CHOICES, default=DTERecord.AMBIENTE_TEST)
     dte_type = models.CharField(max_length=20, default="CF_01")
     year = models.PositiveIntegerField()
     establishment_code = models.CharField(max_length=3, default="001")
@@ -86,6 +94,7 @@ class DTEControlCounter(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(check=models.Q(ambiente__in=["00", "01"]), name="dte_counter_ambiente_valid"),
             models.UniqueConstraint(
                 fields=["branch", "dte_type", "year", "establishment_code", "pos_code", "ambiente"],
                 name="dte_counter_context_uniq",
