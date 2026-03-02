@@ -38,6 +38,8 @@ import {
   ModifierGroup,
   Product,
   PaymentMethod,
+  CashSessionSnapshot,
+  CashTransaction,
   Order,
   PrintJob,
 } from "@/lib/api";
@@ -80,6 +82,17 @@ const POS = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
+
+  const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
+  const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
+  const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
+  const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [openingCashInput, setOpeningCashInput] = useState("50.00");
+  const [closingCashInput, setClosingCashInput] = useState("");
+  const [payoutAmount, setPayoutAmount] = useState("");
+  const [payoutDescription, setPayoutDescription] = useState("");
+  const [cashNotes, setCashNotes] = useState("");
+  const [isSavingCashAction, setIsSavingCashAction] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [products, setProducts] = useState<Product[]>([]);
@@ -300,6 +313,63 @@ const POS = () => {
     setSelectedModifiers({});
   };
 
+
+  const loadCashData = async () => {
+    try {
+      const [snapshot, transactions] = await Promise.all([
+        getCurrentCashSession(),
+        getCashTransactions(),
+      ]);
+      setCashSnapshot(snapshot);
+      setCashTransactions(transactions);
+    } catch (error) {
+      console.error("Failed to load cash data", error);
+      toast.error("No se pudo cargar información de caja");
+    }
+  };
+
+  const handleOpenCashSession = async () => {
+    setIsSavingCashAction(true);
+    try {
+      await openCashSession(Number(openingCashInput || 0));
+      await loadCashData();
+      toast.success("Caja abierta");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir caja");
+    } finally {
+      setIsSavingCashAction(false);
+    }
+  };
+
+  const handleCloseCashSession = async () => {
+    setIsSavingCashAction(true);
+    try {
+      await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      await loadCashData();
+      toast.success("Caja cerrada");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
+    } finally {
+      setIsSavingCashAction(false);
+    }
+  };
+
+  const handleCreatePayout = async () => {
+    setIsSavingCashAction(true);
+    try {
+      await createCashPayout(Number(payoutAmount || 0), payoutDescription);
+      setPayoutAmount("");
+      setPayoutDescription("");
+      setIsPayoutDialogOpen(false);
+      await loadCashData();
+      toast.success("Pago registrado");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar pago");
+    } finally {
+      setIsSavingCashAction(false);
+    }
+  };
+
   const closeExtrasDialog = (open: boolean) => {
     setIsExtrasOpen(open);
     if (!open) {
@@ -494,7 +564,10 @@ const POS = () => {
           {/* Cart Section */}
           <Card className="flex flex-col overflow-hidden">
             <div className="p-4 border-b">
-              <h2 className="text-xl font-bold mb-3">Pedido Actual</h2>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-xl font-bold">Pedido Actual</h2>
+                <Button variant="outline" size="sm" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
+              </div>
               
               <div className="flex gap-2">
                 <Button
@@ -622,6 +695,90 @@ const POS = () => {
           </Card>
         </div>
       </div>
+
+
+      <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Transacciones de Caja</DialogTitle>
+            <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-md border p-3 text-sm">
+              <div className="font-semibold">Estado: {cashSnapshot.open ? "Caja Abierta" : "Caja Cerrada"}</div>
+              {cashSnapshot.open && cashSnapshot.summary && (
+                <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
+                  <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
+                  <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.cashTotal)}</div>
+                  <div>Tarjeta: {formatMoney(cashSnapshot.summary.cardTotal)}</div>
+                  <div>Transferencia: {formatMoney(cashSnapshot.summary.transferTotal)}</div>
+                  <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.payoutsTotal)}</div>
+                  <div className="font-semibold text-foreground">Esperado en caja: {formatMoney(cashSnapshot.summary.expectedCashInDrawer)}</div>
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Button className="h-14 text-base font-semibold" variant="outline" disabled title="Próximamente: apertura de cajón de dinero">ABRIR CAJA</Button>
+              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
+            </div>
+
+            {!cashSnapshot.open ? (
+              <div className="space-y-2 rounded-md border p-3">
+                <Label>Apertura de sesión (efectivo inicial)</Label>
+                <Input type="number" min="0" step="0.01" value={openingCashInput} onChange={(e) => setOpeningCashInput(e.target.value)} />
+                <Button onClick={handleOpenCashSession} disabled={isSavingCashAction}>Abrir Caja (Sesión)</Button>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-md border p-3">
+                <Label>Efectivo contado al cierre</Label>
+                <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
+                <Label>Notas</Label>
+                <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
+              </div>
+            )}
+
+            <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
+              {cashTransactions.length === 0 ? (
+                <div className="text-muted-foreground">Sin pagos registrados.</div>
+              ) : (
+                cashTransactions.map((tx) => (
+                  <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
+                    <div>
+                      <div className="font-medium">{tx.description}</div>
+                      <div className="text-xs text-muted-foreground">{new Date(tx.createdAt).toLocaleString()}</div>
+                    </div>
+                    <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPayoutDialogOpen} onOpenChange={setIsPayoutDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Registrar Pago (Gasto)</DialogTitle>
+            <DialogDescription>Este pago resta efectivo de caja.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Monto</Label>
+              <Input type="number" min="0" step="0.01" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} />
+            </div>
+            <div>
+              <Label>Descripción</Label>
+              <Textarea rows={3} value={payoutDescription} onChange={(e) => setPayoutDescription(e.target.value)} placeholder="Ej: Pago proveedor / compra insumos" />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setIsPayoutDialogOpen(false)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleCreatePayout} disabled={isSavingCashAction || !payoutAmount || !payoutDescription.trim()}>Guardar pago</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Payment Dialog */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>

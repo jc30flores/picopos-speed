@@ -182,6 +182,33 @@ export type EmployeeStats = {
 
 export type PaymentMethod = "cash" | "card" | "transfer";
 
+export type CashSessionSnapshot = {
+  open: boolean;
+  session?: {
+    id: number;
+    openingCash: number;
+    openedAt: string;
+    status: "open" | "closed";
+  };
+  summary?: {
+    openingCash: number;
+    cashTotal: number;
+    cardTotal: number;
+    transferTotal: number;
+    payoutsTotal: number;
+    expectedCashInDrawer: number;
+    overShortCash: number;
+  };
+};
+
+export type CashTransaction = {
+  id: number;
+  type: "payout";
+  amount: number;
+  description: string;
+  createdAt: string;
+};
+
 export type CategoryDeleteConflictError = Error & {
   status?: number;
   activeProducts?: string[];
@@ -2380,5 +2407,63 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
     isActive: item.is_active,
     isHidden: Boolean(item.is_hidden),
     position: Number(item.position ?? 0),
+  }));
+};
+
+
+export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
+  const response = await request('/cashier/session/current/');
+  const data = await handleJson<{ open: boolean; session?: { id: number; opening_cash: string; opened_at: string; status: "open" | "closed" }; summary?: { opening_cash?: string; cash_total?: string; card_total?: string; transfer_total?: string; payouts_total?: string; expected_cash_in_drawer?: string; over_short_cash?: string } }>(response);
+  if (!data.open) return { open: false };
+  return {
+    open: true,
+    session: {
+      id: data.session.id,
+      openingCash: Number(data.session.opening_cash ?? 0),
+      openedAt: data.session.opened_at,
+      status: data.session.status,
+    },
+    summary: {
+      openingCash: Number(data.summary.opening_cash ?? 0),
+      cashTotal: Number(data.summary.cash_total ?? 0),
+      cardTotal: Number(data.summary.card_total ?? 0),
+      transferTotal: Number(data.summary.transfer_total ?? 0),
+      payoutsTotal: Number(data.summary.payouts_total ?? 0),
+      expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
+      overShortCash: Number(data.summary.over_short_cash ?? 0),
+    },
+  };
+};
+
+export const openCashSession = async (openingCash: number): Promise<void> => {
+  await handleJson(await request('/cashier/session/open/', {
+    method: 'POST',
+    body: JSON.stringify({ opening_cash: openingCash }),
+  }));
+};
+
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<void> => {
+  await handleJson(await request('/cashier/session/close/', {
+    method: 'POST',
+    body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
+  }));
+};
+
+export const getCashTransactions = async (): Promise<CashTransaction[]> => {
+  const response = await request('/cashier/transactions/');
+  const data = await handleJson<Array<{ id: number; type: "payout"; amount: string; description: string; created_at: string }>>(response);
+  return data.map((tx) => ({
+    id: tx.id,
+    type: tx.type,
+    amount: Number(tx.amount),
+    description: tx.description,
+    createdAt: tx.created_at,
+  }));
+};
+
+export const createCashPayout = async (amount: number, description: string): Promise<void> => {
+  await handleJson(await request('/cashier/transactions/', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'payout', amount, description }),
   }));
 };

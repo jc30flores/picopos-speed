@@ -4,12 +4,13 @@ from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.cashier.models import Register, CashSession, CloseoutCount
+from apps.cashier.models import Register, CashSession, CloseoutCount, CashTransaction
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
     CloseoutCountSerializer,
     CashSessionSummarySerializer,
+    CashTransactionSerializer,
     calculate_shift_summary,
 )
 from apps.core.audit import log_audit
@@ -19,6 +20,10 @@ from apps.printing.models import PrintJob
 
 
 def _get_user_shift(user):
+    return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
+
+
+def _get_open_session_for_user(user):
     return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
 
 
@@ -185,3 +190,119 @@ class ShiftCloseoutPrintJobView(APIView):
                 "printed_at": job.printed_at,
             }
         )
+
+
+class CashSessionCurrentView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request):
+        session = _get_open_session_for_user(request.user)
+        if not session:
+            return Response({"open": False}, status=status.HTTP_200_OK)
+
+        summary = calculate_shift_summary(session)
+        return Response({
+            "open": True,
+            "session": CashSessionSerializer(session).data,
+            "summary": CashSessionSummarySerializer(summary).data,
+        })
+
+
+class CashSessionOpenView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request):
+        if _get_open_session_for_user(request.user):
+            return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+
+        opening_cash = Decimal(str(request.data.get("opening_cash", "0")))
+        register_id = request.data.get("register_id")
+        register = None
+        if register_id:
+            register = Register.objects.filter(id=register_id, is_active=True).first()
+        if not register:
+            register = Register.objects.filter(is_active=True).order_by("id").first()
+        if not register:
+            return Response({"detail": "No hay cajas registradoras activas configuradas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        session = CashSession.objects.create(
+            register=register,
+            opened_by=request.user,
+            opening_cash=opening_cash,
+            status="open",
+        )
+        return Response(CashSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+
+
+class CashSessionCloseView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request):
+        session = _get_open_session_for_user(request.user)
+        if not session:
+            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+
+        counted_cash = Decimal(str(request.data.get("closing_cash_counted", "0")))
+        notes = request.data.get("notes", "")
+
+        closeout, _ = CloseoutCount.objects.update_or_create(
+            cash_session=session,
+            defaults={
+                "counted_cash": counted_cash,
+                "counted_card": Decimal("0"),
+                "counted_transfer": Decimal("0"),
+                "counted_tips": Decimal("0"),
+                "notes": notes,
+            },
+        )
+
+        session.status = "closed"
+        session.closed_by = request.user
+        session.closed_at = timezone.now()
+        session.save(update_fields=["status", "closed_by", "closed_at"])
+
+        summary = calculate_shift_summary(session)
+        return Response({
+            "session": CashSessionSerializer(session).data,
+            "closeout": CloseoutCountSerializer(closeout).data,
+            "summary": CashSessionSummarySerializer(summary).data,
+        })
+
+
+class CashTransactionListCreateView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request):
+        session = _get_open_session_for_user(request.user)
+        if not session:
+            return Response([], status=status.HTTP_200_OK)
+        items = CashTransaction.objects.filter(session=session).order_by("-created_at")
+        return Response(CashTransactionSerializer(items, many=True).data)
+
+    @transaction.atomic
+    def post(self, request):
+        session = _get_open_session_for_user(request.user)
+        if not session:
+            return Response({"detail": "No hay caja abierta"}, status=status.HTTP_400_BAD_REQUEST)
+
+        amount = Decimal(str(request.data.get("amount", "0")))
+        description = str(request.data.get("description", "")).strip()
+        transaction_type = str(request.data.get("type", "payout")).strip().lower()
+
+        if transaction_type != "payout":
+            return Response({"detail": "Tipo de transacción inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        if amount <= 0:
+            return Response({"detail": "El monto debe ser mayor que cero."}, status=status.HTTP_400_BAD_REQUEST)
+        if not description:
+            return Response({"detail": "La descripción es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+
+        tx = CashTransaction.objects.create(
+            session=session,
+            type="payout",
+            amount=amount,
+            description=description,
+            created_by=request.user,
+        )
+        return Response(CashTransactionSerializer(tx).data, status=status.HTTP_201_CREATED)
