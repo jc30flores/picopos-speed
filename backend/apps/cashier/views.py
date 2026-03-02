@@ -1,195 +1,54 @@
 from decimal import Decimal
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.cashier.models import Register, CashSession, CloseoutCount, CashTransaction
+
+from apps.cashier.models import Register, CashSession, CashTransaction
+from apps.cashier.printing import build_end_of_day_ticket
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
-    CloseoutCountSerializer,
     CashSessionSummarySerializer,
     CashTransactionSerializer,
     calculate_shift_summary,
 )
 from apps.core.audit import log_audit
+from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
-from apps.printing.services.renderers import render_closeout_ticket
 from apps.printing.models import PrintJob
 
 
-def _get_user_shift(user):
-    return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
-
-
 def _get_open_session_for_user(user):
-    return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
+    return CashSession.objects.filter(opened_by=user, status="open").select_related("register", "register__branch").first()
 
 
-def _ensure_can_view(session: CashSession, user) -> bool:
-    if not user.is_authenticated:
-        return False
-    if user.is_superuser:
-        return True
-    if session.opened_by_id == user.id or session.closed_by_id == user.id:
-        return True
-    return False
+def _ensure_register(register_id=None):
+    register = None
+    if register_id:
+        register = Register.objects.filter(id=register_id, is_active=True).first()
+    if register:
+        return register
+    register = Register.objects.filter(is_active=True).order_by("id").first()
+    if register:
+        return register
+    branch = Branch.objects.filter(is_active=True).order_by("id").first() or Branch.objects.order_by("id").first()
+    if not branch:
+        raise ValueError("No hay sucursales configuradas")
+    return Register.objects.create(
+        name="CAJA 1",
+        station_name="POS 1",
+        branch=branch,
+        is_active=True,
+    )
 
 
 class RegisterListCreateView(generics.ListCreateAPIView):
     queryset = Register.objects.select_related("branch").all()
     serializer_class = RegisterSerializer
     permission_classes = [IsAdminOrManager]
-
-
-class ShiftOpenView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
-
-    @transaction.atomic
-    def post(self, request):
-        register_id = request.data.get("register_id")
-        opening_cash = Decimal(str(request.data.get("opening_cash", "0")))
-        if not register_id:
-            return Response({"detail": "register_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        register = Register.objects.filter(id=register_id, is_active=True).first()
-        if not register:
-            return Response({"detail": "Register not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        existing = CashSession.objects.filter(register=register, status="open").first()
-        if existing:
-            return Response({"detail": "Register already has an open shift"}, status=status.HTTP_400_BAD_REQUEST)
-
-        session = CashSession.objects.create(
-            register=register,
-            opened_by=request.user,
-            opening_cash=opening_cash,
-            status="open",
-        )
-        log_audit(
-            request,
-            "shift.open",
-            "CashSession",
-            session.id,
-            {"register_id": register.id, "opening_cash": str(opening_cash)},
-        )
-        serializer = CashSessionSerializer(session)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-class ShiftCurrentView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
-
-    def get(self, request):
-        session = _get_user_shift(request.user)
-        if not session:
-            return Response({"detail": "No open shift"}, status=status.HTTP_200_OK)
-        serializer = CashSessionSerializer(session)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-class ShiftCloseView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
-
-    @transaction.atomic
-    def post(self, request, pk):
-        session = CashSession.objects.select_related("register").filter(pk=pk).first()
-        if not session:
-            return Response({"detail": "Shift not found"}, status=status.HTTP_404_NOT_FOUND)
-        if session.status != "open":
-            return Response({"detail": "Shift already closed"}, status=status.HTTP_400_BAD_REQUEST)
-        if not _ensure_can_view(session, request.user):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        closeout_data = {
-            "counted_cash": request.data.get("counted_cash", "0"),
-            "counted_card": request.data.get("counted_card", "0"),
-            "counted_transfer": request.data.get("counted_transfer", "0"),
-            "counted_tips": request.data.get("counted_tips", "0"),
-            "notes": request.data.get("notes", ""),
-        }
-        serializer = CloseoutCountSerializer(data={"cash_session": session.id, **closeout_data})
-        serializer.is_valid(raise_exception=True)
-        closeout = serializer.save()
-
-        session.status = "closed"
-        session.closed_by = request.user
-        session.closed_at = timezone.now()
-        session.save(update_fields=["status", "closed_by", "closed_at"])
-
-        summary = calculate_shift_summary(session)
-        log_audit(
-            request,
-            "shift.close",
-            "CashSession",
-            session.id,
-            {
-                "register_id": session.register_id,
-                "counted_cash": str(closeout.counted_cash),
-                "counted_card": str(closeout.counted_card),
-                "counted_transfer": str(closeout.counted_transfer),
-                "counted_tips": str(closeout.counted_tips),
-                "over_short_total": str(summary["over_short_total"]),
-            },
-        )
-
-        closeout_ticket = render_closeout_ticket(session, summary)
-        PrintJob.objects.create(
-            type="closeout",
-            status="rendered",
-            content_text=closeout_ticket["text"],
-            content_html=closeout_ticket.get("html", ""),
-            meta=closeout_ticket.get("meta", {}),
-            requested_by=request.user,
-        )
-
-        summary_serializer = CashSessionSummarySerializer(summary)
-        return Response(
-            {
-                "session": CashSessionSerializer(session).data,
-                "closeout": CloseoutCountSerializer(closeout).data,
-                "summary": summary_serializer.data,
-            }
-        )
-
-
-class ShiftSummaryView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
-
-    def get(self, request, pk):
-        session = CashSession.objects.select_related("register").filter(pk=pk).first()
-        if not session:
-            return Response({"detail": "Shift not found"}, status=status.HTTP_404_NOT_FOUND)
-        if not _ensure_can_view(session, request.user):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-        summary = calculate_shift_summary(session)
-        serializer = CashSessionSummarySerializer(summary)
-        return Response(serializer.data)
-
-
-class ShiftCloseoutPrintJobView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
-
-    def get(self, request, pk):
-        session = CashSession.objects.filter(pk=pk).first()
-        if not session:
-            return Response({"detail": "Shift not found"}, status=status.HTTP_404_NOT_FOUND)
-        if not _ensure_can_view(session, request.user):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-        job = PrintJob.objects.filter(type="closeout", meta__cash_session_id=session.id).order_by("-created_at").first()
-        if not job:
-            return Response({"detail": "Print job not found"}, status=status.HTTP_404_NOT_FOUND)
-        return Response(
-            {
-                "id": job.id,
-                "status": job.status,
-                "content_text": job.content_text,
-                "content_html": job.content_html,
-                "created_at": job.created_at,
-                "printed_at": job.printed_at,
-            }
-        )
 
 
 class CashSessionCurrentView(APIView):
@@ -217,14 +76,16 @@ class CashSessionOpenView(APIView):
             return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
         opening_cash = Decimal(str(request.data.get("opening_cash", "0")))
-        register_id = request.data.get("register_id")
-        register = None
-        if register_id:
-            register = Register.objects.filter(id=register_id, is_active=True).first()
-        if not register:
-            register = Register.objects.filter(is_active=True).order_by("id").first()
-        if not register:
-            return Response({"detail": "No hay cajas registradoras activas configuradas."}, status=status.HTTP_400_BAD_REQUEST)
+        if opening_cash < 0:
+            return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            register = _ensure_register(request.data.get("register_id"))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if CashSession.objects.filter(register=register, status="open").exists():
+            return Response({"detail": "La caja seleccionada ya está abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
         session = CashSession.objects.create(
             register=register,
@@ -232,6 +93,7 @@ class CashSessionOpenView(APIView):
             opening_cash=opening_cash,
             status="open",
         )
+        log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(CashSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
 
@@ -245,29 +107,29 @@ class CashSessionCloseView(APIView):
             return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
         counted_cash = Decimal(str(request.data.get("closing_cash_counted", "0")))
-        notes = request.data.get("notes", "")
-
-        closeout, _ = CloseoutCount.objects.update_or_create(
-            cash_session=session,
-            defaults={
-                "counted_cash": counted_cash,
-                "counted_card": Decimal("0"),
-                "counted_transfer": Decimal("0"),
-                "counted_tips": Decimal("0"),
-                "notes": notes,
-            },
-        )
+        notes = str(request.data.get("notes", "")).strip()
 
         session.status = "closed"
         session.closed_by = request.user
         session.closed_at = timezone.now()
-        session.save(update_fields=["status", "closed_by", "closed_at"])
+        session.closing_counted_cash = counted_cash
+        session.notes = notes
+        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes"])
 
         summary = calculate_shift_summary(session)
+        ticket_text = build_end_of_day_ticket(session.id)
+        PrintJob.objects.create(
+            type="closeout",
+            status="rendered",
+            content_text=ticket_text,
+            meta={"cash_session_id": session.id, "event": "cash_session.closed"},
+            requested_by=request.user,
+        )
+        log_audit(request, "cash_session.close", "CashSession", session.id, {"counted_cash": str(counted_cash)})
         return Response({
             "session": CashSessionSerializer(session).data,
-            "closeout": CloseoutCountSerializer(closeout).data,
             "summary": CashSessionSummarySerializer(summary).data,
+            "ticket_text": ticket_text,
         })
 
 
@@ -275,9 +137,15 @@ class CashTransactionListCreateView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        session = _get_open_session_for_user(request.user)
-        if not session:
-            return Response([], status=status.HTTP_200_OK)
+        session_id = request.query_params.get("session_id")
+        if session_id:
+            session = CashSession.objects.filter(pk=session_id).first()
+            if not session:
+                return Response([], status=status.HTTP_200_OK)
+        else:
+            session = _get_open_session_for_user(request.user)
+            if not session:
+                return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(session=session).order_by("-created_at")
         return Response(CashTransactionSerializer(items, many=True).data)
 
@@ -289,9 +157,10 @@ class CashTransactionListCreateView(APIView):
 
         amount = Decimal(str(request.data.get("amount", "0")))
         description = str(request.data.get("description", "")).strip()
-        transaction_type = str(request.data.get("type", "payout")).strip().lower()
+        transaction_type = str(request.data.get("type", "cash_out")).strip().lower()
 
-        if transaction_type != "payout":
+        allowed = {"cash_out", "cash_in", "expense", "payout"}
+        if transaction_type not in allowed:
             return Response({"detail": "Tipo de transacción inválido."}, status=status.HTTP_400_BAD_REQUEST)
         if amount <= 0:
             return Response({"detail": "El monto debe ser mayor que cero."}, status=status.HTTP_400_BAD_REQUEST)
@@ -300,9 +169,91 @@ class CashTransactionListCreateView(APIView):
 
         tx = CashTransaction.objects.create(
             session=session,
-            type="payout",
+            type=transaction_type,
             amount=amount,
             description=description,
             created_by=request.user,
         )
+        log_audit(request, "cash_transaction.create", "CashTransaction", tx.id, {"type": tx.type, "amount": str(tx.amount)})
         return Response(CashTransactionSerializer(tx).data, status=status.HTTP_201_CREATED)
+
+
+class CashSessionListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticatedAndActive]
+    serializer_class = CashSessionSerializer
+
+    def get_queryset(self):
+        qs = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").all()
+        date_from = self.request.query_params.get("date_from")
+        date_to = self.request.query_params.get("date_to")
+        register_id = self.request.query_params.get("register_id")
+        if date_from:
+            qs = qs.filter(opened_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(opened_at__date__lte=date_to)
+        if register_id:
+            qs = qs.filter(register_id=register_id)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        sessions = self.get_queryset()
+        payload = []
+        for session in sessions:
+            summary = calculate_shift_summary(session)
+            payload.append({
+                **CashSessionSerializer(session).data,
+                "summary": CashSessionSummarySerializer(summary).data,
+            })
+        return Response(payload)
+
+
+class CashSessionDetailView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request, pk: int):
+        session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").filter(pk=pk).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+        summary = calculate_shift_summary(session)
+        txs = CashTransaction.objects.filter(session=session).order_by("-created_at")
+        return Response({
+            "session": CashSessionSerializer(session).data,
+            "summary": CashSessionSummarySerializer(summary).data,
+            "transactions": CashTransactionSerializer(txs, many=True).data,
+        })
+
+
+# Legacy routes kept for compatibility
+ShiftOpenView = CashSessionOpenView
+ShiftCurrentView = CashSessionCurrentView
+class ShiftCloseView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request, pk: int):
+        session = CashSession.objects.filter(pk=pk, status="open").first()
+        if not session:
+            return Response({"detail": "Shift not found or closed"}, status=status.HTTP_404_NOT_FOUND)
+        return CashSessionCloseView().post(request)
+
+
+class ShiftSummaryView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request, pk: int):
+        return CashSessionDetailView().get(request, pk)
+
+
+class ShiftCloseoutPrintJobView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request, pk: int):
+        job = PrintJob.objects.filter(type="closeout", meta__cash_session_id=pk).order_by("-created_at").first()
+        if not job:
+            return Response({"detail": "Print job not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            "id": job.id,
+            "status": job.status,
+            "content_text": job.content_text,
+            "created_at": job.created_at,
+            "printed_at": job.printed_at,
+        })

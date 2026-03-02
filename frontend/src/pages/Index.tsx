@@ -350,9 +350,12 @@ const POS = () => {
   const handleCloseCashSession = async () => {
     setIsSavingCashAction(true);
     try {
-      await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      if (closeResp.ticketText) {
+        toast.success("Caja cerrada. Ticket generado");
+      }
       await loadCashData();
-      toast.success("Caja cerrada");
+      
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
@@ -715,10 +718,10 @@ const POS = () => {
               {cashSnapshot.open && cashSnapshot.summary && (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
-                  <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.cashTotal)}</div>
-                  <div>Tarjeta: {formatMoney(cashSnapshot.summary.cardTotal)}</div>
-                  <div>Transferencia: {formatMoney(cashSnapshot.summary.transferTotal)}</div>
-                  <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.payoutsTotal)}</div>
+                  <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
+                  <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
+                  <div>Transferencia: {formatMoney(cashSnapshot.summary.methods.transfer)}</div>
+                  <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.totalCashOut)}</div>
                   <div className="font-semibold text-foreground">Esperado en caja: {formatMoney(cashSnapshot.summary.expectedCashInDrawer)}</div>
                 </div>
               )}

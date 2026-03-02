@@ -192,18 +192,18 @@ export type CashSessionSnapshot = {
   };
   summary?: {
     openingCash: number;
-    cashTotal: number;
-    cardTotal: number;
-    transferTotal: number;
-    payoutsTotal: number;
+    totalCashSales: number;
+    totalCashOut: number;
     expectedCashInDrawer: number;
+    countedCash: number;
     overShortCash: number;
+    methods: { cash: number; card: number; transfer: number; cashIn: number };
   };
 };
 
 export type CashTransaction = {
   id: number;
-  type: "payout";
+  type: "cash_out" | "cash_in" | "expense" | "payout";
   amount: number;
   description: string;
   createdAt: string;
@@ -2411,9 +2411,23 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
 };
 
 
+
+
+export type CashSessionHistoryRow = {
+  id: number;
+  registerName: string;
+  stationName: string;
+  openedByUsername: string;
+  openedAt: string;
+  closedAt?: string | null;
+  openingCash: number;
+  closingCountedCash?: number | null;
+  status: "open" | "closed";
+  summary: CashSessionSnapshot["summary"];
+};
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const response = await request('/cashier/session/current/');
-  const data = await handleJson<{ open: boolean; session?: { id: number; opening_cash: string; opened_at: string; status: "open" | "closed" }; summary?: { opening_cash?: string; cash_total?: string; card_total?: string; transfer_total?: string; payouts_total?: string; expected_cash_in_drawer?: string; over_short_cash?: string } }>(response);
+  const data = await handleJson<any>(response);
   if (!data.open) return { open: false };
   return {
     open: true,
@@ -2425,12 +2439,17 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
     },
     summary: {
       openingCash: Number(data.summary.opening_cash ?? 0),
-      cashTotal: Number(data.summary.cash_total ?? 0),
-      cardTotal: Number(data.summary.card_total ?? 0),
-      transferTotal: Number(data.summary.transfer_total ?? 0),
-      payoutsTotal: Number(data.summary.payouts_total ?? 0),
+      totalCashSales: Number(data.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(data.summary.total_cash_out ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
+      countedCash: Number(data.summary.counted_cash ?? 0),
       overShortCash: Number(data.summary.over_short_cash ?? 0),
+      methods: {
+        cash: Number(data.summary.methods?.cash ?? 0),
+        card: Number(data.summary.methods?.card ?? 0),
+        transfer: Number(data.summary.methods?.transfer ?? 0),
+        cashIn: Number(data.summary.methods?.cash_in ?? 0),
+      },
     },
   };
 };
@@ -2442,16 +2461,19 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<void> => {
-  await handleJson(await request('/cashier/session/close/', {
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string }> => {
+  const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
+  return { ticketText: data.ticket_text };
 };
 
-export const getCashTransactions = async (): Promise<CashTransaction[]> => {
-  const response = await request('/cashier/transactions/');
-  const data = await handleJson<Array<{ id: number; type: "payout"; amount: string; description: string; created_at: string }>>(response);
+export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', String(sessionId));
+  const response = await request(`/cashier/transactions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const data = await handleJson<Array<any>>(response);
   return data.map((tx) => ({
     id: tx.id,
     type: tx.type,
@@ -2464,11 +2486,71 @@ export const getCashTransactions = async (): Promise<CashTransaction[]> => {
 export const createCashPayout = async (amount: number, description: string): Promise<void> => {
   await handleJson(await request('/cashier/transactions/', {
     method: 'POST',
-    body: JSON.stringify({ type: 'payout', amount, description }),
+    body: JSON.stringify({ type: 'cash_out', amount, description }),
   }));
 };
 
+export const getCashSessionsHistory = async (filters?: { dateFrom?: string; dateTo?: string; registerId?: number }): Promise<CashSessionHistoryRow[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
+  if (filters?.dateTo) params.set('date_to', filters.dateTo);
+  if (filters?.registerId) params.set('register_id', String(filters.registerId));
+  const response = await request(`/cashier/sessions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    registerName: row.register_name,
+    stationName: row.station_name,
+    openedByUsername: row.opened_by_username,
+    openedAt: row.opened_at,
+    closedAt: row.closed_at,
+    openingCash: Number(row.opening_cash ?? 0),
+    closingCountedCash: row.closing_counted_cash != null ? Number(row.closing_counted_cash) : null,
+    status: row.status,
+    summary: {
+      openingCash: Number(row.summary.opening_cash ?? 0),
+      totalCashSales: Number(row.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(row.summary.total_cash_out ?? 0),
+      expectedCashInDrawer: Number(row.summary.expected_cash_in_drawer ?? 0),
+      countedCash: Number(row.summary.counted_cash ?? 0),
+      overShortCash: Number(row.summary.over_short_cash ?? 0),
+      methods: {
+        cash: Number(row.summary.methods?.cash ?? 0),
+        card: Number(row.summary.methods?.card ?? 0),
+        transfer: Number(row.summary.methods?.transfer ?? 0),
+        cashIn: Number(row.summary.methods?.cash_in ?? 0),
+      },
+    },
+  }));
+};
 
+export const getCashSessionDetail = async (sessionId: number): Promise<{ summary: CashSessionSnapshot["summary"]; transactions: CashTransaction[] }> => {
+  const response = await request(`/cashier/sessions/${sessionId}/`);
+  const data = await handleJson<any>(response);
+  return {
+    summary: {
+      openingCash: Number(data.summary.opening_cash ?? 0),
+      totalCashSales: Number(data.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(data.summary.total_cash_out ?? 0),
+      expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
+      countedCash: Number(data.summary.counted_cash ?? 0),
+      overShortCash: Number(data.summary.over_short_cash ?? 0),
+      methods: {
+        cash: Number(data.summary.methods?.cash ?? 0),
+        card: Number(data.summary.methods?.card ?? 0),
+        transfer: Number(data.summary.methods?.transfer ?? 0),
+        cashIn: Number(data.summary.methods?.cash_in ?? 0),
+      },
+    },
+    transactions: (data.transactions || []).map((tx: any) => ({
+      id: tx.id,
+      type: tx.type,
+      amount: Number(tx.amount),
+      description: tx.description,
+      createdAt: tx.created_at,
+    })),
+  };
+};
 
 
 export type DTERecord = {

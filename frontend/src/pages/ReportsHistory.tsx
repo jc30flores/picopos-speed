@@ -4,6 +4,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PageTabs } from "@/components/ui/page-tabs";
 import { ReportsTab } from "@/components/reports/ReportsTab";
 import { SalesHistoryTab } from "@/components/reports/SalesHistoryTab";
+import { CashHistoryTab } from "@/components/reports/CashHistoryTab";
 
 const ReportsHistory = () => {
   const [activeTab, setActiveTab] = useState("reports");
@@ -22,6 +23,7 @@ const ReportsHistory = () => {
             tabs={[
               { label: "Reportes", value: "reports" },
               { label: "Historial de Ventas", value: "sales-history" },
+              { label: "Historial de Caja", value: "cash-history" },
             ]}
             activeValue={activeTab}
             onChange={setActiveTab}
@@ -34,6 +36,10 @@ const ReportsHistory = () => {
 
             <TabsContent value="sales-history" className="mt-0">
               <SalesHistoryTab />
+            </TabsContent>
+
+            <TabsContent value="cash-history" className="mt-0">
+              <CashHistoryTab />
             </TabsContent>
           </Tabs>
         </div>
