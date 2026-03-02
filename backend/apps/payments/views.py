@@ -81,14 +81,23 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
-            dte_record = transmit_sale_dte(payment.order_id, source="normal_send")
-            log_audit(
-                request,
-                "invoice.processed",
-                "DTERecord",
-                dte_record.id,
-                {"order_id": payment.order_id, "status": dte_record.status},
-            )
+            try:
+                dte_record = transmit_sale_dte(payment.order_id, source="normal_send")
+                log_audit(
+                    request,
+                    "invoice.processed",
+                    "DTERecord",
+                    dte_record.id,
+                    {"order_id": payment.order_id, "status": dte_record.status},
+                )
+            except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
+                log_audit(
+                    request,
+                    "invoice.failed_non_blocking",
+                    "Order",
+                    payment.order_id,
+                    {"order_id": payment.order_id, "error": str(exc)},
+                )
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")

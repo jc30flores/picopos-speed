@@ -21,16 +21,18 @@ class DTERecord(models.Model):
         (STATUS_INVALIDATED, "Invalidado"),
     ]
     DTE_TYPE_CHOICES = [
-        ("CF", "Consumidor Final"),
-        ("CCF", "Crédito Fiscal"),
-        ("NC", "Nota de Crédito"),
-        ("INVALIDATION", "Invalidación"),
+        ("CF_01", "Consumidor Final (01)"),
+        ("CCF_03", "Crédito Fiscal (03)"),
+        ("SE_14", "Sujeto Excluido (14)"),
+        ("NC_05", "Nota de Crédito (05)"),
+        ("INVALIDACION", "Invalidación"),
     ]
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_records")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="dte_records")
-    dte_type = models.CharField(max_length=20, choices=DTE_TYPE_CHOICES, default="CF")
+    dte_type = models.CharField(max_length=20, choices=DTE_TYPE_CHOICES, default="CF_01")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    ambiente = models.CharField(max_length=2, default="00")
     control_number = models.CharField(max_length=80)
     codigo_generacion = models.CharField(max_length=40, default="", blank=True)
     hacienda_uuid = models.CharField(max_length=160, blank=True, default="")
@@ -42,7 +44,7 @@ class DTERecord(models.Model):
     receiver_name = models.CharField(max_length=180, blank=True, default="")
     issue_date = models.DateField(default=timezone.localdate)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    attempt_number = models.PositiveIntegerField(default=1)
+    send_attempts = models.PositiveIntegerField(default=0)
     source = models.CharField(max_length=40, default="normal_send")
     error_message = models.TextField(blank=True, default="")
     error_code = models.CharField(max_length=80, blank=True, default="")
@@ -74,11 +76,11 @@ class DTERecord(models.Model):
 
 class DTEControlCounter(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="dte_counters")
-    ambiente = models.CharField(max_length=20, default="test")
-    dte_type = models.CharField(max_length=20, default="CF")
+    ambiente = models.CharField(max_length=2, default="00")
+    dte_type = models.CharField(max_length=20, default="CF_01")
     year = models.PositiveIntegerField()
-    establishment_code = models.CharField(max_length=12, default="000")
-    pos_code = models.CharField(max_length=12, default="000")
+    establishment_code = models.CharField(max_length=3, default="001")
+    pos_code = models.CharField(max_length=3, default="001")
     last_number = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 

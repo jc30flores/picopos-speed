@@ -4,7 +4,7 @@ from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 
 
 class DTERecordListSerializer(serializers.ModelSerializer):
-    attempts = serializers.IntegerField(source="attempt_number", read_only=True)
+    attempts = serializers.IntegerField(source="send_attempts", read_only=True)
     sale_id = serializers.IntegerField(source="order_id", read_only=True)
 
     class Meta:

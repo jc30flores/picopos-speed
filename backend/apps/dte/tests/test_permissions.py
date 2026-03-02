@@ -29,7 +29,7 @@ class DTEPermissionsTests(TestCase):
         self.record = DTERecord.objects.create(
             order=order,
             branch=branch,
-            dte_type="CF",
+            dte_type="CF_01",
             status=DTERecord.STATUS_PENDING,
             control_number="CF-MAIN-2026-000000000000001",
             codigo_generacion="A" * 36,

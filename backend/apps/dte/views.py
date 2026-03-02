@@ -15,7 +15,6 @@ from apps.dte.serializers import (
     DTERecordDetailSerializer,
     DTERecordListSerializer,
 )
-from apps.dte.services import transmit_sale_dte
 from apps.dte.services.dte_retry import resend_record
 from apps.dte.services.dte_security import redact_payload
 
@@ -88,8 +87,9 @@ class DTEResendView(APIView):
         record = generics.get_object_or_404(DTERecord, pk=pk)
         if record.status not in {DTERecord.STATUS_PENDING, DTERecord.STATUS_REJECTED}:
             return Response({"detail": "Solo se puede reenviar pendiente/rechazado"}, status=status.HTTP_400_BAD_REQUEST)
-        # re-orchestrate safely (same control/code via invoice)
-        updated = transmit_sale_dte(record.order_id, source="manual_resend", force=True)
+        if record.status == DTERecord.STATUS_SENDING:
+            return Response({"detail": "El DTE está en proceso de envío"}, status=status.HTTP_409_CONFLICT)
+        updated = resend_record(record)
         log_audit(request, "dte.resend", "DTERecord", updated.id, {"sale_id": updated.order_id, "status": updated.status})
         return Response(DTERecordDetailSerializer(updated).data)
 
