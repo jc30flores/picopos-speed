@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
-import urllib.error
 import urllib.request
 
 
@@ -29,23 +29,72 @@ def _is_enabled() -> bool:
     return _env("DTE_SENTINEL_ENABLED", "1") not in {"0", "false", "False"}
 
 
+def _health_headers() -> dict[str, str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (PicoPOS Health)",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    token = _env("DTE_API_TOKEN", "").strip()
+    if token:
+        auth_header = _env("DTE_API_AUTH_HEADER", "Authorization")
+        auth_prefix = _env("DTE_API_AUTH_PREFIX", "Bearer").strip()
+        headers[auth_header] = f"{auth_prefix} {token}".strip()
+    return headers
+
+
+def _log_fail(url: str, status: int, error: str, body: str):
+    short_body = (body or "")[:200]
+    msg = f"[DTE] Health check failed url={url} status={status} error={error} body={short_body}"
+    logger.error(msg)
+    print(msg)
+    if status == 403:
+        advice = "[DTE] 403 puede ser por bloqueo de User-Agent o auth; se está enviando UA+Authorization, revise token/endpoint."
+        logger.error(advice)
+        print(advice)
+
+
 def _loop(url: str, interval: int, timeout: int):
-    last_state = None
+    last_ok = None
+    last_fail_log_at = 0.0
+
     while True:
         ok = False
+        status = 0
+        body = ""
+        err_text = ""
         try:
-            req = urllib.request.Request(url, method="GET")
+            req = urllib.request.Request(url, method="GET", headers=_health_headers())
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                ok = resp.getcode() == 200
-                if not ok and last_state is not False:
-                    logger.error("[DTE] Health check failed status=%s url=%s", resp.getcode(), url)
+                status = int(resp.getcode() or 0)
+                body = resp.read().decode("utf-8", errors="replace")
+                if status == 200:
+                    ok = True
+                    try:
+                        parsed = json.loads(body) if body else {}
+                        if isinstance(parsed, dict) and parsed.get("status") not in {None, "healthy"}:
+                            ok = False
+                            err_text = f"unexpected_json_status={parsed.get('status')}"
+                    except Exception:
+                        pass
+                if not ok and not err_text:
+                    err_text = f"http_status={status}"
         except Exception as exc:
-            if last_state is not False:
-                logger.error("[DTE] Health check failed url=%s error=%s", url, exc)
+            err_text = str(exc)
 
-        if ok and last_state is False:
-            logger.info("[DTE] Health recovered url=%s", url)
-        last_state = ok
+        now = time.time()
+        if ok:
+            if last_ok is False:
+                msg = f"[DTE] Health recovered url={url} status=200"
+                logger.info(msg)
+                print(msg)
+        else:
+            should_log = (last_ok is not False) or (now - last_fail_log_at >= 60)
+            if should_log:
+                _log_fail(url=url, status=status, error=err_text, body=body)
+                last_fail_log_at = now
+
+        last_ok = ok
         time.sleep(interval)
 
 

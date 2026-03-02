@@ -82,6 +82,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
             try:
+                print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
                 dte_record = transmit_sale_dte(payment.order_id, source="normal_send")
                 log_audit(
                     request,

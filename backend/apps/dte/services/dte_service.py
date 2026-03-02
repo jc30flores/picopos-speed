@@ -15,6 +15,22 @@ from apps.dte.models import DTEBranchConfig, DTERecord
 logger = logging.getLogger(__name__)
 
 
+def _mask_token(token: str) -> str:
+    if not token:
+        return ""
+    if len(token) <= 8:
+        return "****"
+    return f"{token[:4]}...{token[-4:]}"
+
+
+def _log_secrets_enabled() -> bool:
+    return _get_env("DTE_LOG_SECRETS", "0") in {"1", "true", "True"}
+
+
+def _display_token(token: str) -> str:
+    return token if _log_secrets_enabled() else _mask_token(token)
+
+
 DTE_ENDPOINT_BY_TYPE = {
     "CF_01": "/api/v1/dte/factura",
     "CCF_03": "/api/v1/dte/credito-fiscal",
@@ -134,34 +150,69 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
 def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
     mode = _get_env("DTE_BRIDGE_MODE", "mock").lower()
+    timeout = int(_get_env("DTE_TIMEOUT_SECONDS", "30"))
+    ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
+    payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    try:
+        base_url, url = build_dte_url(dte_type)
+    except DTEPreflightError as exc:
+        base_url = (_get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
+        url = f"{base_url}{DTE_ENDPOINT_BY_TYPE.get(dte_type, '')}" if base_url else DTE_ENDPOINT_BY_TYPE.get(dte_type, "")
+        msg = f"[DTE] endpoint error: {exc}"
+        logger.error(msg)
+        print(msg)
+        print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
+        print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+        print(payload_pretty)
+        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+
+    token = _get_env("DTE_API_TOKEN", "")
+    auth_header = _get_env("DTE_API_AUTH_HEADER", "Authorization")
+    auth_prefix = _get_env("DTE_API_AUTH_PREFIX", "Bearer")
+    token_for_log = _display_token(token)
+    payload_min = json.dumps(payload, ensure_ascii=False)
+    payload_for_shell = payload_min.replace("'", "'\"'\"'")
+    curl_cmd = (
+        f"curl -X POST \"{url}\" \\n"
+        f"  -H \"{auth_header}: {auth_prefix} {token_for_log}\" \\n"
+        f"  -H \"Content-Type: application/json\" \\n"
+        f"  -d '{payload_for_shell}'"
+    )
+
+    print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
+    print(f"[DTE] DTE ENDPOINT >>> path={DTE_ENDPOINT_BY_TYPE.get(dte_type)} url={url}")
+    print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+    print(payload_pretty)
+    print(f"[DTE] CURL >>>\n{curl_cmd}")
+    logger.info("DTE ENDPOINT >>> %s", url)
+    logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, ambiente, payload_pretty)
+
+    if not base_url:
+        msg = "[DTE] DTE_BASE_URL no configurado"
+        logger.error(msg)
+        print(msg)
+        return {"success": False, "error": {"message": "DTE_BASE_URL no configurado"}, "offline": True}
+
+    try:
+        headers = build_headers()
+    except DTEPreflightError as exc:
+        msg = f"[DTE] DTE auth/header error: {exc}"
+        logger.error(msg)
+        print(msg)
+        return {"success": False, "error": {"message": str(exc)}, "offline": True}
+
     if mode == "mock":
-        logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, payload.get("dte", {}).get("identificacion", {}).get("ambiente"), json.dumps(payload, ensure_ascii=False, indent=2))
         mock_resp = {
             "success": True,
             "uuid": payload.get("dte", {}).get("identificacion", {}).get("codigoGeneracion", ""),
             "respuesta_hacienda": {"estado": "PROCESADO", "selloRecibido": "SELLO-MOCK"},
+            "http_status": 200,
         }
-        logger.info("DTE RESP <<<\n%s", json.dumps(mock_resp, ensure_ascii=False, indent=2))
+        body_pretty = json.dumps(mock_resp, ensure_ascii=False, indent=2)
+        print(f"[DTE] DTE RESP <<< status=200 body=\n{body_pretty}")
+        logger.info("DTE RESP <<<\n%s", body_pretty)
         return mock_resp
-
-    timeout = int(_get_env("DTE_TIMEOUT_SECONDS", "30"))
-    logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, payload.get("dte", {}).get("identificacion", {}).get("ambiente"), json.dumps(payload, ensure_ascii=False, indent=2))
-    try:
-        base_url, url = build_dte_url(dte_type)
-    except DTEPreflightError as exc:
-        logger.error("DTE endpoint error: %s", exc)
-        return {"success": False, "error": {"message": str(exc)}, "offline": True}
-
-    if not base_url:
-        logger.error("DTE_BASE_URL no configurado")
-        return {"success": False, "error": {"message": "DTE_BASE_URL no configurado"}, "offline": True}
-
-    logger.info("DTE ENDPOINT >>> %s", url)
-    try:
-        headers = build_headers()
-    except DTEPreflightError as exc:
-        logger.error("DTE auth/header error: %s", exc)
-        return {"success": False, "error": {"message": str(exc)}, "offline": True}
 
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
@@ -172,7 +223,9 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
                 parsed = json.loads(raw_body) if raw_body else {}
             except Exception:
                 parsed = {"raw": raw_body}
-            logger.info("DTE RESP <<< status=%s body=\n%s", status_code, json.dumps(parsed, ensure_ascii=False, indent=2) if isinstance(parsed, dict) else str(parsed))
+            body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2) if isinstance(parsed, dict) else str(parsed)
+            print(f"[DTE] DTE RESP <<< status={status_code} body=\n{body_pretty}")
+            logger.info("DTE RESP <<< status=%s body=\n%s", status_code, body_pretty)
             if isinstance(parsed, dict):
                 parsed.setdefault("http_status", status_code)
             return parsed
@@ -184,13 +237,21 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
             parsed = {"error": {"message": body}}
         parsed.setdefault("success", False)
         parsed.setdefault("http_status", exc.code)
-        logger.error("DTE HTTP ERROR endpoint=%s status=%s body=%s", url, exc.code, body)
-        logger.info("DTE RESP <<< status=%s body=\n%s", exc.code, json.dumps(parsed, ensure_ascii=False, indent=2))
+        msg = f"[DTE] DTE HTTP ERROR endpoint={url} status={exc.code} body={body}"
+        logger.error(msg)
+        print(msg)
+        body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
+        print(f"[DTE] DTE RESP <<< status={exc.code} body=\n{body_pretty}")
+        logger.info("DTE RESP <<< status=%s body=\n%s", exc.code, body_pretty)
         return parsed
     except Exception as exc:
         parsed = {"success": False, "error": {"message": str(exc)}, "offline": True}
-        logger.error("DTE SEND ERROR endpoint=%s error=%s", url, exc)
-        logger.info("DTE RESP <<< status=%s body=\n%s", 0, json.dumps(parsed, ensure_ascii=False, indent=2))
+        msg = f"[DTE] DTE SEND ERROR endpoint={url} error={exc}"
+        logger.error(msg)
+        print(msg)
+        body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
+        print(f"[DTE] DTE RESP <<< status=0 body=\n{body_pretty}")
+        logger.info("DTE RESP <<< status=%s body=\n%s", 0, body_pretty)
         return parsed
 
 
