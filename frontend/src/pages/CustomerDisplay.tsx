@@ -10,6 +10,7 @@ const CustomerDisplay = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryToken, setRetryToken] = useState(0);
+  const [serviceFilter, setServiceFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
   const pollDelayRef = useRef(5000);
 
   useEffect(() => {
@@ -22,7 +23,8 @@ const CustomerDisplay = () => {
       currentController = new AbortController();
       setIsLoading(true);
       try {
-        const data = await getCustomerOrders(currentController.signal);
+        const branchId = localStorage.getItem("selected_branch_id") || undefined;
+        const data = await getCustomerOrders(currentController.signal, { branchId, serviceType: serviceFilter });
         if (isUnmounted) return;
         setOrders(data);
         setError(null);
@@ -53,7 +55,7 @@ const CustomerDisplay = () => {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [retryToken]);
+  }, [retryToken, serviceFilter]);
 
   const handleRetry = () => {
     pollDelayRef.current = 2000;
@@ -84,6 +86,26 @@ const CustomerDisplay = () => {
             <h1 className="text-5xl font-bold">Pico de Gallo</h1>
           </div>
           <p className="text-xl text-primary-foreground/80">Estado de Pedidos</p>
+          <div className="mt-4 flex justify-center gap-2">
+            {([
+              ["all", "Todos"],
+              ["dine-in", "En local"],
+              ["takeout", "Para llevar"],
+              ["delivery", "Delivery"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setServiceFilter(key)}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-sm",
+                  serviceFilter === key ? "bg-primary-foreground text-primary" : "text-primary-foreground/90"
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {error && (

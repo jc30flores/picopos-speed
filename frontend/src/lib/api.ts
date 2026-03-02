@@ -1270,8 +1270,11 @@ export const createOrder = async (payload: {
   return mapOrder(data);
 };
 
-export const getActiveOrders = async (): Promise<Order[]> => {
-  const response = await request("/orders/active/");
+export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.serviceType) qs.set("service_type", params.serviceType);
+  const response = await request(`/orders/kitchen/${qs.toString() ? `?${qs.toString()}` : ""}`);
   const data = await handleJson<
     Array<{
       id: number;
@@ -1361,9 +1364,13 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
 };
 
 export const getCustomerOrders = async (
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  params?: { branchId?: number | string; serviceType?: string }
 ): Promise<Array<{ id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date }>> => {
-  const response = await request("/orders/customer-board/", { signal });
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.serviceType) qs.set("service_type", params.serviceType);
+  const response = await request(`/orders/customer-display/${qs.toString() ? `?${qs.toString()}` : ""}`, { signal });
   const raw = await handleJson<
     | Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }>
     | { results?: Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }> }
@@ -1384,6 +1391,35 @@ export const getCustomerOrders = async (
       };
     })
     .filter((order): order is { id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date } => Boolean(order));
+};
+
+export const duplicateProduct = async (productId: number): Promise<Product> => {
+  const response = await request(`/menu/products/${productId}/duplicate/`, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
+    category: data.category,
+    categoryName: data.category_name ?? data.category,
+    categoryId: data.category_id_display ?? data.category_id,
+    image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: data.image_url ?? undefined,
+    available: data.available,
+    isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
+    requiresKitchen: Boolean(data.requires_kitchen),
+    modifierGroups: data.modifier_groups ?? [],
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
+  };
 };
 
 export const getSalesReport = async (filters?: {

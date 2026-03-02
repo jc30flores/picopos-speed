@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Plus, Edit, Settings, Trash2, GripVertical } from "lucide-react";
+import { Search, Plus, Edit, Settings, Trash2, GripVertical, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { ModifierPanel } from "./ModifierPanel";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -143,6 +143,17 @@ export const ProductsTab = () => {
       setProductToDelete(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo eliminar el producto");
+    }
+  };
+
+  const handleDuplicateProduct = async (product: Product) => {
+    if (!window.confirm("¿Duplicar producto?")) return;
+    try {
+      await duplicateProduct(product.id);
+      await loadMenuData(product.id);
+      toast.success("Producto duplicado");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo duplicar el producto");
     }
   };
 
@@ -456,6 +467,14 @@ export const ProductsTab = () => {
                         >
                           <Settings className="h-4 w-4 mr-1" />
                           Modificadores
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDuplicateProduct(product)}
+                        >
+                          <Copy className="h-4 w-4 mr-1" />
+                          Duplicar
                         </Button>
                         <Button
                           variant="outline"

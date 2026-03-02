@@ -4,6 +4,7 @@ from apps.orders import views
 urlpatterns = [
     path("", views.OrderCreateView.as_view(), name="orders-create"),
     path("active/", views.ActiveOrderListView.as_view(), name="orders-active"),
+    path("kitchen/", views.KitchenOrderListView.as_view(), name="orders-kitchen"),
     path("<int:pk>/", views.OrderDetailView.as_view(), name="orders-detail"),
     path("<int:pk>/status/", views.OrderStatusUpdateView.as_view(), name="orders-status"),
     path("<int:pk>/void/", views.OrderVoidView.as_view(), name="orders-void"),

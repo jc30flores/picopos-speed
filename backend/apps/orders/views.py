@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import generics
@@ -20,6 +21,32 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.payments.models import Payment
 from apps.dte.models import DTERecord
+
+
+logger = logging.getLogger(__name__)
+
+
+def _selected_branch_id(request):
+    raw = request.query_params.get("branch_id")
+    if raw and str(raw).isdigit():
+        return int(raw)
+    from apps.core.models import Branch
+
+    principal = Branch.objects.filter(code="PRINCIPAL", is_active=True).first()
+    if principal:
+        return principal.id
+    first = Branch.objects.filter(is_active=True).order_by("id").first()
+    return first.id if first else None
+
+
+def _apply_common_filters(request, queryset):
+    branch_id = _selected_branch_id(request)
+    if branch_id:
+        queryset = queryset.filter(branch_id=branch_id)
+    service_type = (request.query_params.get("service_type") or request.query_params.get("service_type_key") or "all").strip().lower()
+    if service_type and service_type not in {"all", "todos"}:
+        queryset = queryset.filter(service_type__key=service_type)
+    return queryset, branch_id, service_type
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
@@ -68,11 +95,14 @@ class ActiveOrderListView(generics.ListAPIView):
     permission_classes = [IsAuthenticatedAndActive]
 
     def get_queryset(self):
-        return (
+        queryset = (
             Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True)
             .prefetch_related("items__applied_modifiers")
             .order_by("created_at")
         )
+        queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
+        logger.info("[ORDERS] kitchen branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "preparing,ready", queryset.count())
+        return queryset
 
 
 class OrderStatusUpdateView(generics.UpdateAPIView):
@@ -107,7 +137,10 @@ class CustomerDisplayOrderListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        return Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True).order_by("created_at")
+        queryset = Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True).order_by("created_at")
+        queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
+        logger.info("[ORDERS] customer-display branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "preparing,ready", queryset.count())
+        return queryset
 
 
 class CustomerBoardListView(generics.ListAPIView):
@@ -116,11 +149,29 @@ class CustomerBoardListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        return (
+        queryset = (
             Order.objects.filter(status__in=["preparing", "ready"])
             .only("id", "order_number", "customer_name", "status", "created_at")
             .order_by("created_at", "id")
         )
+        queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
+        logger.info("[ORDERS] customer-board branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "preparing,ready", queryset.count())
+        return queryset
+
+
+class KitchenOrderListView(generics.ListAPIView):
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get_queryset(self):
+        queryset = (
+            Order.objects.filter(status__in=["new", "preparing"], requires_kitchen=True)
+            .prefetch_related("items__applied_modifiers")
+            .order_by("created_at")
+        )
+        queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
+        logger.info("[ORDERS] kitchen branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "new,preparing", queryset.count())
+        return queryset
 
 
 class OrderVoidView(generics.GenericAPIView):

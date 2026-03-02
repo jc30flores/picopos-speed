@@ -242,6 +242,60 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ProductDuplicateView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        product = Product.objects.select_related("category").prefetch_related("productmodifiergroup_set").filter(pk=pk).first()
+        if not product:
+            return Response({"detail": "Producto no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+        base_name = product.name
+
+        def _next_name() -> str:
+            existing = Product.objects.filter(name__startswith=f"{base_name} #").values_list("name", flat=True)
+            max_n = 0
+            for name in existing:
+                suffix = name.replace(f"{base_name} #", "", 1).strip()
+                if suffix.isdigit():
+                    max_n = max(max_n, int(suffix))
+            return f"{base_name} #{max_n + 1}"
+
+        cloned = None
+        for attempt in range(10):
+            candidate = _next_name()
+            try:
+                cloned = Product.objects.create(
+                    name=candidate,
+                    description=product.description,
+                    price=product.price,
+                    category=product.category,
+                    sort_order=product.sort_order + attempt + 1,
+                    image=product.image,
+                    image_path=product.image_path,
+                    available=product.available,
+                    is_archived=product.is_archived,
+                    disposable_fee=product.disposable_fee,
+                    disposable_apply_to=product.disposable_apply_to,
+                    requires_kitchen=product.requires_kitchen,
+                    modifier_group_order=product.modifier_group_order,
+                )
+                break
+            except Exception:
+                cloned = None
+
+        if cloned is None:
+            return Response({"detail": "No se pudo duplicar el producto"}, status=status.HTTP_400_BAD_REQUEST)
+
+        for link in product.productmodifiergroup_set.all():
+            cloned.productmodifiergroup_set.create(modifier_group_id=link.modifier_group_id, show_in_pos=link.show_in_pos)
+
+        logger.info("menu.product.duplicate source=%s duplicate=%s", product.id, cloned.id)
+        log_audit(request, "menu.product.duplicate", "Product", cloned.id, {"source_product_id": product.id, "name": cloned.name})
+        return Response(ProductSerializer(cloned, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
 class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CategorySerializer
     queryset = Category.objects.all()
