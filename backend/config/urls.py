@@ -16,6 +16,7 @@ urlpatterns = [
     path("api/refunds/", include("apps.payments.refund_urls")),
     path("api/printing/", include("apps.printing.urls")),
     path("api/cashier/", include("apps.cashier.urls")),
+    path("api/dte/", include("apps.dte.urls")),
 ]
 
 if settings.DEBUG:

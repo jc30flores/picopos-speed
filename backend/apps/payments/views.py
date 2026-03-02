@@ -11,7 +11,7 @@ from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.payments.serializers import PaymentSerializer, RefundSerializer
 from apps.orders.serializers import OrderSerializer
-from apps.orders.services.checkout import create_order_and_invoice
+from apps.dte.services import transmit_invoice_dte
 
 
 def _get_open_session(user):
@@ -72,13 +72,13 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
-            invoice_result = create_order_and_invoice(payment.order)
+            dte_record = transmit_invoice_dte(payment.order_id, source="normal_send")
             log_audit(
                 request,
                 "invoice.processed",
-                "OrderInvoice",
-                invoice_result.invoice_id,
-                {"order_id": payment.order_id, "status": invoice_result.hacienda_status},
+                "DTERecord",
+                dte_record.id,
+                {"order_id": payment.order_id, "status": dte_record.status},
             )
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:

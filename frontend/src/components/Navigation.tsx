@@ -20,6 +20,7 @@ const navItems = [
   { label: "Pedidos Clientes", path: "/customer-display" },
   { label: "Menú & Descuentos", path: "/menu" },
   { label: "Reportes & Historial", path: "/reports-history" },
+  { label: "DTE", path: "/dte" },
   { label: "Configuración", path: "/settings" },
 ];
 

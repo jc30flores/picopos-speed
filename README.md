@@ -266,3 +266,20 @@ Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/c
 - **Qué cuenta como “extra de pago”**: en POS rápido solo se muestran modificadores con `price > 0` (por grupo/opción). Los grupos gratis/obligatorios no se muestran en caja.
 - **Defaults en grupos requeridos (POS rápido)**: si un grupo requerido no se muestra y no recibe selección manual, el backend autocompleta con la primera opción activa del grupo para permitir guardar el ítem.
 - **Fallo de Hacienda (DTE)**: al completar el pago, se crea/actualiza `OrderInvoice` y se intenta envío. Si falla, la venta no se pierde; queda `failed` con `hacienda_payload`, `hacienda_response` y `last_error` para reintentos.
+
+## DTE module (Facturación electrónica)
+
+### Variables de entorno
+- `DTE_BRIDGE_MODE=mock|bridge` (por defecto `mock`).
+- `DTE_BRIDGE_BASE_URL` y `DTE_BRIDGE_TOKEN` cuando se usa bridge real.
+- `DTE_BRIDGE_CONNECT_TIMEOUT` y `DTE_BRIDGE_READ_TIMEOUT` para timeouts.
+
+### Reintentos automáticos
+Ejecutar:
+
+```bash
+python manage.py dte_autoresend --limit 50
+```
+
+### Pruebas locales con mock
+En local usar `DTE_BRIDGE_MODE=mock`; el backend responderá aceptado o rechazado sin dependencia externa.

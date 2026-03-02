@@ -299,7 +299,7 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "admin" | "manager" | "cashier" | "kitchen";
+  role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
 };
 
 const buildApiUrl = (path: string) => {
@@ -2466,4 +2466,53 @@ export const createCashPayout = async (amount: number, description: string): Pro
     method: 'POST',
     body: JSON.stringify({ type: 'payout', amount, description }),
   }));
+};
+
+
+export type DTERecord = {
+  id: number;
+  order_id: number;
+  dte_type: string;
+  status: string;
+  control_number: string;
+  codigo_generacion: string;
+  receiver_name: string;
+  total_amount: number;
+  hacienda_uuid?: string;
+  sello_recepcion?: string;
+  request_payload?: Record<string, unknown>;
+  response_payload?: Record<string, unknown>;
+  hacienda_state?: string;
+  created_at: string;
+};
+
+export const dteIssuedList = async (q?: string): Promise<DTERecord[]> => {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  const res = await fetch(`${API_BASE_URL}/dte/issued/?${params.toString()}`, { credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo cargar DTE");
+  const data = await res.json();
+  return Array.isArray(data.results) ? data.results : data;
+};
+
+export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/`, { credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo cargar detalle DTE");
+  return res.json();
+};
+
+export const dteResend = async (id: number): Promise<DTERecord> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/resend/`, { method: "POST", credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo reenviar DTE");
+  return res.json();
+};
+
+export const dteSendEmail = async (id: number): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-email/`, { method: "POST", credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo enviar correo");
+};
+
+export const dteSendWhatsapp = async (id: number): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-whatsapp/`, { method: "POST", credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
 };

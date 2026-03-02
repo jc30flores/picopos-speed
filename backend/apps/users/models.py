@@ -8,6 +8,7 @@ class UserProfile(models.Model):
         ("manager", "Manager"),
         ("cashier", "Cashier"),
         ("kitchen", "Kitchen"),
+        ("accountant", "Contador"),
     ]
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")

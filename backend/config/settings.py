@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.printing",
     "apps.cashier",
+    "apps.dte",
 ]
 
 MIDDLEWARE = [
