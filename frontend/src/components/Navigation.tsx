@@ -12,6 +12,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/useAuth";
+import { branchOptions, type BranchOption } from "@/lib/api";
 
 const navItems = [
   { label: "POS", path: "/" },
@@ -20,6 +21,8 @@ const navItems = [
   { label: "Pedidos Clientes", path: "/customer-display" },
   { label: "Menú & Descuentos", path: "/menu" },
   { label: "Reportes & Historial", path: "/reports-history" },
+  { label: "DTE", path: "/dte" },
+  { label: "Clientes", path: "/clientes" },
   { label: "Configuración", path: "/settings" },
 ];
 
@@ -28,8 +31,20 @@ export const Navigation = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string>("Sucursal Principal");
 
   useEffect(() => {
+    branchOptions().then((list) => {
+      setBranches(list);
+      const savedId = localStorage.getItem("selected_branch_id");
+      const selected = list.find((b) => String(b.id) === savedId) || list.find((b) => b.code === "PRINCIPAL") || list[0];
+      if (selected) {
+        setSelectedBranch(selected.name);
+        localStorage.setItem("selected_branch_id", String(selected.id));
+      }
+    }).catch(() => undefined);
+
     const savedTheme = localStorage.getItem("theme") as "light" | "dark" | null;
     if (savedTheme) {
       setTheme(savedTheme);
@@ -107,14 +122,16 @@ export const Navigation = () => {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="hidden md:flex gap-2 rounded-lg border border-border">
-                  Sucursal Centro
+                  {selectedBranch}
                   <ChevronDown className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem>Sucursal Centro</DropdownMenuItem>
-                <DropdownMenuItem>Sucursal Norte</DropdownMenuItem>
-                <DropdownMenuItem>Sucursal Sur</DropdownMenuItem>
+                {branches.map((branch) => (
+                  <DropdownMenuItem key={branch.id} onClick={() => { setSelectedBranch(branch.name); localStorage.setItem("selected_branch_id", String(branch.id)); }}>
+                    {branch.name}
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuContent>
             </DropdownMenu>
 

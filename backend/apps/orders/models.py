@@ -1,5 +1,5 @@
 from django.db import models
-from apps.core.models import Branch, ServiceType, Table
+from apps.core.models import Branch, Customer, ServiceType, Table
 from apps.menu.models import Product
 
 
@@ -18,6 +18,7 @@ class Order(models.Model):
         ("paid", "Paid"),
     ]
     CHANNEL_CHOICES = [("pos", "POS"), ("kiosk", "Kiosk"), ("online", "Online")]
+    DTE_DOCUMENT_TYPE_CHOICES = [("CF", "Consumidor Final"), ("CCF", "Credito Fiscal"), ("SX", "Sujeto Excluido")]
     FINANCIAL_STATUS_CHOICES = [
         ("open", "Open"),
         ("paid", "Paid"),
@@ -32,6 +33,11 @@ class Order(models.Model):
     table = models.ForeignKey(Table, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting_payment")
     customer_name = models.CharField(max_length=120, blank=True)
+
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True, related_name="orders")
+    dte_document_type = models.CharField(max_length=4, choices=DTE_DOCUMENT_TYPE_CHOICES, default="CF")
+    iva_exempt = models.BooleanField(default=False)
+    iva_exempt_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default="pos")
     requires_kitchen = models.BooleanField(default=False)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -182,6 +188,13 @@ class OrderInvoice(models.Model):
     status = models.CharField(max_length=20, choices=HACIENDA_STATUS_CHOICES, default="pending")
     dte_number = models.CharField(max_length=80, blank=True)
     generation_code = models.CharField(max_length=120, blank=True)
+    dte_status = models.CharField(max_length=20, blank=True, default="pending")
+    dte_send_attempts = models.PositiveIntegerField(default=0)
+    last_dte_sent_at = models.DateTimeField(null=True, blank=True)
+    last_dte_error = models.TextField(blank=True)
+    last_dte_error_code = models.CharField(max_length=80, blank=True)
+    numero_control = models.CharField(max_length=80, blank=True)
+    codigo_generacion = models.CharField(max_length=40, blank=True)
     hacienda_payload = models.JSONField(default=dict, blank=True)
     hacienda_response = models.JSONField(default=dict, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)

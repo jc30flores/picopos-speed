@@ -5,18 +5,27 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
 from apps.cashier.models import CashSession
-from apps.payments.models import Payment, Refund
+from apps.payments.models import Payment, Refund, PaymentMethod
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
-from apps.payments.serializers import PaymentSerializer, RefundSerializer
+from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
-from apps.orders.services.checkout import create_order_and_invoice
+from apps.dte.services import transmit_sale_dte
 
 
 def _get_open_session(user):
     return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
 
+
+
+
+class PaymentMethodListView(generics.ListAPIView):
+    serializer_class = PaymentMethodSerializer
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get_queryset(self):
+        return PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name")
 
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer
@@ -72,14 +81,24 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
-            invoice_result = create_order_and_invoice(payment.order)
-            log_audit(
-                request,
-                "invoice.processed",
-                "OrderInvoice",
-                invoice_result.invoice_id,
-                {"order_id": payment.order_id, "status": invoice_result.hacienda_status},
-            )
+            try:
+                print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
+                dte_record = transmit_sale_dte(payment.order_id, source="normal_send")
+                log_audit(
+                    request,
+                    "invoice.processed",
+                    "DTERecord",
+                    dte_record.id,
+                    {"order_id": payment.order_id, "status": dte_record.status},
+                )
+            except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
+                log_audit(
+                    request,
+                    "invoice.failed_non_blocking",
+                    "Order",
+                    payment.order_id,
+                    {"order_id": payment.order_id, "error": str(exc)},
+                )
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")

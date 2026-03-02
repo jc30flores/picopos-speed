@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import os
+from django.db import transaction
+from django.utils import timezone
+
+from apps.dte.models import DTERecord
+from apps.dte.services.control import build_generation_code, next_control_number
+from apps.dte.services.dte_service import (
+    DTEPreflightError,
+    build_payload_cf,
+    interpret_dte_response,
+    send_to_bridge,
+)
+from apps.orders.models import Order, OrderInvoice
+
+
+def _normalize_ambiente(raw_value: str | None) -> str:
+    value = (raw_value or "").strip().upper()
+    if value == "01" or "01" in value or value in {"PROD", "PRODUCCION", "PRODUCTION"}:
+        return "01"
+    if value == "00" or "00" in value or value in {"TEST", "CERT", "CERTIFICACION", "DEV"}:
+        return "00"
+    return "01"
+
+
+def _ambiente() -> str:
+    raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
+    return _normalize_ambiente(raw)
+
+
+def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False) -> DTERecord:
+    order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
+    if order.dte_document_type != "CF":
+        raise DTEPreflightError(f"Tipo DTE aún no implementado: {order.dte_document_type}")
+    dte_type = "CF_01"
+
+    accepted = DTERecord.objects.filter(order=order, dte_type=dte_type, status=DTERecord.STATUS_ACCEPTED).first()
+    if accepted and not force:
+        return accepted
+
+    invoice, _ = OrderInvoice.objects.get_or_create(order=order)
+    ambiente = _ambiente()
+    numero_control = invoice.numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
+    codigo_generacion = build_generation_code(invoice.codigo_generacion)
+
+    attempts = (invoice.dte_send_attempts or 0) + 1
+    now = timezone.now()
+
+    try:
+        payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
+    except DTEPreflightError as exc:
+        payload = {}
+        parsed = {
+            "status": DTERecord.STATUS_REJECTED,
+            "hacienda_uuid": "",
+            "sello_recepcion": "",
+            "hacienda_state": "PRECHECK",
+            "error_code": "PRECHECK",
+            "error_message": str(exc),
+        }
+        response = {"success": False, "error": {"message": str(exc)}}
+    else:
+        response = send_to_bridge(dte_type, payload, branch_name=order.branch.name)
+        parsed = interpret_dte_response(response)
+
+    with transaction.atomic():
+        record = DTERecord.objects.create(
+            order=order,
+            branch=order.branch,
+            dte_type=dte_type,
+            status=parsed["status"],
+            ambiente=ambiente,
+            control_number=numero_control,
+            codigo_generacion=codigo_generacion,
+            request_payload={**payload, "branch": order.branch.name},
+            response_payload=response,
+            receiver_name=(order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final",
+            issue_date=timezone.localdate(),
+            total_amount=order.total,
+            source=source,
+            send_attempts=attempts,
+            error_message=parsed["error_message"],
+            error_code=parsed["error_code"],
+            last_sent_at=now,
+            hacienda_uuid=parsed["hacienda_uuid"],
+            sello_recepcion=parsed["sello_recepcion"],
+            hacienda_state=parsed["hacienda_state"],
+        )
+
+    invoice.status = "sent" if record.status == DTERecord.STATUS_ACCEPTED else "failed" if record.status == DTERecord.STATUS_REJECTED else "pending"
+    invoice.dte_number = numero_control
+    invoice.generation_code = codigo_generacion
+    invoice.numero_control = numero_control
+    invoice.codigo_generacion = codigo_generacion
+    invoice.hacienda_payload = payload
+    invoice.hacienda_response = response
+    invoice.last_error = parsed["error_message"]
+    invoice.dte_status = record.status
+    invoice.dte_send_attempts = attempts
+    invoice.last_dte_sent_at = now
+    invoice.last_dte_error = parsed["error_message"]
+    invoice.last_dte_error_code = parsed["error_code"]
+    if record.status == DTERecord.STATUS_ACCEPTED:
+        invoice.sent_at = now
+    invoice.save()
+
+    return record

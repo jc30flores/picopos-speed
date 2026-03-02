@@ -5,6 +5,7 @@ from apps.core.models import Branch
 
 class Register(models.Model):
     name = models.CharField(max_length=120)
+    station_name = models.CharField(max_length=120, blank=True, default="")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="registers")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -40,6 +41,9 @@ class CashSession(models.Model):
         related_name="closed_cash_sessions",
     )
     closed_at = models.DateTimeField(null=True, blank=True)
+    closing_counted_cash = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    notes = models.TextField(blank=True)
+    summary_snapshot = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-opened_at"]
@@ -68,10 +72,15 @@ class CloseoutCount(models.Model):
 
 
 class CashTransaction(models.Model):
-    TYPE_CHOICES = [("payout", "Payout")]
+    TYPE_CHOICES = [
+        ("cash_out", "Cash Out"),
+        ("cash_in", "Cash In"),
+        ("expense", "Expense"),
+        ("payout", "Payout"),
+    ]
 
     session = models.ForeignKey(CashSession, on_delete=models.CASCADE, related_name="transactions")
-    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="payout")
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="cash_out")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField()
     created_by = models.ForeignKey(

@@ -1,7 +1,29 @@
 from pathlib import Path
 import os
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
+
+
+def _load_env_file(base_dir: Path) -> None:
+    env_path = base_dir / ".env"
+    if load_dotenv is not None:
+        load_dotenv(env_path, override=True)
+        return
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ[key.strip()] = value.strip()
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+_load_env_file(BASE_DIR)
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
@@ -28,6 +50,7 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.printing",
     "apps.cashier",
+    "apps.dte",
 ]
 
 MIDDLEWARE = [

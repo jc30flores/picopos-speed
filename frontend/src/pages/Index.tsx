@@ -27,7 +27,9 @@ import {
 } from "@/components/ui/select";
 import {
   createOrder,
+  Customer,
   createPayment,
+  getPaymentMethods,
   getOrderById,
   createPrintJob,
   markPrintJobPrinted,
@@ -36,6 +38,8 @@ import {
   getModifierGroups,
   getProducts,
   getCurrentCashSession,
+  getDefaultConsumerCustomer,
+  listCustomers,
   openCashSession,
   closeCashSession,
   getCashTransactions,
@@ -44,6 +48,7 @@ import {
   ModifierGroup,
   Product,
   PaymentMethod,
+  PaymentMethodOption,
   CashSessionSnapshot,
   CashTransaction,
   Order,
@@ -93,7 +98,7 @@ const POS = () => {
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
-  const [openingCashInput, setOpeningCashInput] = useState("50.00");
+  const [openingCashInput, setOpeningCashInput] = useState("");
   const [closingCashInput, setClosingCashInput] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
@@ -108,6 +113,12 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
+  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [dteDocumentType, setDteDocumentType] = useState<"CF" | "CCF" | "SX">("CF");
+  const [ivaExempt, setIvaExempt] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -248,12 +259,12 @@ const POS = () => {
   const total = itemsGross + cartDisposableTotal;
   const subtotal = itemsGross;
   const paymentTotal =
-    checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+    (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
-  const checkoutTotal = checkoutDraft?.total ?? 0;
+  const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
   const paidTotal = paymentAmountValue + tipAmountValue;
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
@@ -334,6 +345,39 @@ const POS = () => {
     }
   };
 
+  useEffect(() => {
+    getPaymentMethods().then((methods) => {
+      setPaymentMethods(methods);
+      const first = methods[0];
+      if (first) {
+        setSelectedPaymentMethodCode(first.code);
+        const fallback = first.isCash ? "cash" : first.code === "CARD" ? "card" : "transfer";
+        setPaymentMethod(fallback as PaymentMethod);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    listCustomers().then(setCustomers).catch(() => undefined);
+    getDefaultConsumerCustomer().then((c) => {
+      setSelectedCustomerId(String(c.id));
+      setDteDocumentType(c.clientType ?? "CF");
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected?.clientType) {
+      setDteDocumentType(selected.clientType);
+    }
+  }, [selectedCustomerId, customers]);
+
+  useEffect(() => {
+    if (isPaymentOpen) {
+      setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
+    }
+  }, [checkoutTotal, isPaymentOpen]);
+
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
     try {
@@ -350,9 +394,12 @@ const POS = () => {
   const handleCloseCashSession = async () => {
     setIsSavingCashAction(true);
     try {
-      await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      if (closeResp.ticketText) {
+        toast.success("Caja cerrada. Ticket generado");
+      }
       await loadCashData();
-      toast.success("Caja cerrada");
+      
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
@@ -405,6 +452,11 @@ const POS = () => {
       toast.error("El monto recibido debe cubrir el total de la orden");
       return;
     }
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected && selected.clientType && selected.clientType !== dteDocumentType) {
+      toast.error(`El tipo DTE debe coincidir con el cliente (${selected.clientType})`);
+      return;
+    }
 
     try {
       setIsProcessingPayment(true);
@@ -418,6 +470,9 @@ const POS = () => {
             serviceType: checkoutDraft.serviceType,
             source: "pos",
             channel: "pos",
+            customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+            dteDocumentType,
+            ivaExempt,
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
               productName: item.name,
@@ -452,6 +507,7 @@ const POS = () => {
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
+        paymentMethodCode: selectedPaymentMethodCode,
       });
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
@@ -475,6 +531,8 @@ const POS = () => {
       setIsProcessingPayment(false);
     }
   };
+
+  const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
 
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
@@ -715,10 +773,10 @@ const POS = () => {
               {cashSnapshot.open && cashSnapshot.summary && (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
-                  <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.cashTotal)}</div>
-                  <div>Tarjeta: {formatMoney(cashSnapshot.summary.cardTotal)}</div>
-                  <div>Transferencia: {formatMoney(cashSnapshot.summary.transferTotal)}</div>
-                  <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.payoutsTotal)}</div>
+                  <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
+                  <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
+                  <div>Transferencia: {formatMoney(cashSnapshot.summary.methods.transfer)}</div>
+                  <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.totalCashOut)}</div>
                   <div className="font-semibold text-foreground">Esperado en caja: {formatMoney(cashSnapshot.summary.expectedCashInDrawer)}</div>
                 </div>
               )}
@@ -866,15 +924,50 @@ const POS = () => {
               <div className="space-y-3">
                 <div className="text-sm font-semibold">Pago</div>
                 <div className="space-y-2">
+                  <Label>Cliente</Label>
+                  <div className="flex gap-2">
+                    <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                      <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
+                      <SelectContent>
+                        {customers.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Tipo DTE</Label>
+                  <div className="flex gap-2">
+                    <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                    <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                    <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                  </div>
+                </div>
+                {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && (
+                  <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>
+                )}
+
+                <div className="flex items-center justify-between rounded-md border p-2 text-sm">
+                  <span>Exento IVA</span>
+                  <Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(Boolean(v))} />
+                </div>
+                {ivaExempt && (
+                  <p className="text-xs text-muted-foreground">Aplicando exención: se descuenta IVA del total.</p>
+                )}
+
+                <div className="space-y-2">
                   <Label>Método</Label>
-                  <Select value={paymentMethod} onValueChange={(value: PaymentMethod) => setPaymentMethod(value)}>
+                  <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cash">Efectivo</SelectItem>
-                      <SelectItem value="card">Tarjeta</SelectItem>
-                      <SelectItem value="transfer">Transferencia</SelectItem>
+                      {paymentMethods.map((m) => (
+                        <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

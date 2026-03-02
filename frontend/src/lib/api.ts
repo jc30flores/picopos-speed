@@ -164,6 +164,10 @@ export type Order = {
   createdAt: Date;
   prepTime: number;
   customerName?: string;
+  customerId?: number;
+  dteDocumentType?: "CF" | "CCF" | "SX";
+  ivaExempt?: boolean;
+  ivaExemptDiscount?: number;
   paymentStatus: "unpaid" | "partial" | "paid";
   financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
@@ -182,6 +186,52 @@ export type EmployeeStats = {
 
 export type PaymentMethod = "cash" | "card" | "transfer";
 
+export type BranchOption = {
+  id: number;
+  name: string;
+  code: string;
+  is_active: boolean;
+};
+
+export type Customer = {
+  id: number;
+  fullName: string;
+  companyName?: string;
+  clientType: "CF" | "CCF" | "SX";
+  dui?: string;
+  nit?: string;
+  nrc?: string;
+  phone?: string;
+  email?: string | null;
+  direccion?: string;
+  departmentCode?: string;
+  municipalityCode?: string;
+  activityCode?: string;
+  activityDescription?: string;
+  isConsumerFinal: boolean;
+  isDeleted: boolean;
+  // legacy
+  name?: string;
+  tipoDocumento?: string;
+  numDocumento?: string;
+  codActividad?: string | null;
+  descActividad?: string | null;
+  direccionDepartamento?: string;
+  direccionMunicipio?: string;
+  direccionComplemento?: string;
+  telefono?: string;
+  correo?: string | null;
+  isDefaultConsumerFinal?: boolean;
+};
+
+export type PaymentMethodOption = {
+  id: number;
+  code: "CASH" | "CARD" | "TRANSFER" | "PEDIDOS_YA" | "PAYPAL" | string;
+  name: string;
+  isCash: boolean;
+  sortOrder: number;
+};
+
 export type CashSessionSnapshot = {
   open: boolean;
   session?: {
@@ -192,18 +242,18 @@ export type CashSessionSnapshot = {
   };
   summary?: {
     openingCash: number;
-    cashTotal: number;
-    cardTotal: number;
-    transferTotal: number;
-    payoutsTotal: number;
+    totalCashSales: number;
+    totalCashOut: number;
     expectedCashInDrawer: number;
+    countedCash: number;
     overShortCash: number;
+    methods: { cash: number; card: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
 };
 
 export type CashTransaction = {
   id: number;
-  type: "payout";
+  type: "cash_out" | "cash_in" | "expense" | "payout";
   amount: number;
   description: string;
   createdAt: string;
@@ -299,7 +349,7 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "admin" | "manager" | "cashier" | "kitchen";
+  role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
 };
 
 const buildApiUrl = (path: string) => {
@@ -1105,6 +1155,10 @@ const mapOrder = (order: {
   order_number: number;
   status: Order["status"];
   customer_name: string;
+  customer_id?: number;
+  dte_document_type?: "CF" | "CCF" | "SX";
+  iva_exempt?: boolean;
+  iva_exempt_discount?: string;
   total: string;
   service_type: Order["serviceType"];
   created_at: string;
@@ -1144,6 +1198,10 @@ const mapOrder = (order: {
     createdAt,
     prepTime,
     customerName: order.customer_name || undefined,
+    customerId: order.customer_id ?? undefined,
+    dteDocumentType: order.dte_document_type ?? "CF",
+    ivaExempt: Boolean(order.iva_exempt),
+    ivaExemptDiscount: Number(order.iva_exempt_discount ?? 0),
     paymentStatus: order.payment_status,
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
@@ -1156,6 +1214,9 @@ const mapOrder = (order: {
 export const createOrder = async (payload: {
   serviceType: Order["serviceType"];
   customerName?: string;
+  customerId?: number;
+  dteDocumentType?: "CF" | "CCF" | "SX";
+  ivaExempt?: boolean;
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
   items: Array<{
@@ -1172,9 +1233,13 @@ export const createOrder = async (payload: {
     body: JSON.stringify({
       service_type_key: payload.serviceType,
       customer_name: payload.customerName ?? "",
+      customer_id: payload.customerId,
+      dte_document_type: payload.dteDocumentType ?? "CF",
+      iva_exempt: Boolean(payload.ivaExempt),
       source: payload.source,
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
+      ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
         product_id: item.productId,
         product_name_snapshot: item.productName,
@@ -1220,8 +1285,11 @@ export const createOrder = async (payload: {
   return mapOrder(data);
 };
 
-export const getActiveOrders = async (): Promise<Order[]> => {
-  const response = await request("/orders/active/");
+export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.serviceType) qs.set("service_type", params.serviceType);
+  const response = await request(`/orders/kitchen/${qs.toString() ? `?${qs.toString()}` : ""}`);
   const data = await handleJson<
     Array<{
       id: number;
@@ -1311,9 +1379,13 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
 };
 
 export const getCustomerOrders = async (
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  params?: { branchId?: number | string; serviceType?: string }
 ): Promise<Array<{ id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date }>> => {
-  const response = await request("/orders/customer-board/", { signal });
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.serviceType) qs.set("service_type", params.serviceType);
+  const response = await request(`/orders/customer-display/${qs.toString() ? `?${qs.toString()}` : ""}`, { signal });
   const raw = await handleJson<
     | Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }>
     | { results?: Array<{ id: number; order_number: number; status: string; customer_name?: string | null; created_at: string }> }
@@ -1334,6 +1406,35 @@ export const getCustomerOrders = async (
       };
     })
     .filter((order): order is { id: number; orderNumber: number; status: "preparing" | "ready"; customerName?: string; createdAt: Date } => Boolean(order));
+};
+
+export const duplicateProduct = async (productId: number): Promise<Product> => {
+  const response = await request(`/menu/products/${productId}/duplicate/`, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    sortOrder: Number(data.sort_order ?? 0),
+    category: data.category,
+    categoryName: data.category_name ?? data.category,
+    categoryId: data.category_id_display ?? data.category_id,
+    image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: data.image_url ?? undefined,
+    available: data.available,
+    isArchived: Boolean(data.is_archived),
+    disposableFee: Number(data.disposable_fee ?? 0),
+    disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
+    requiresKitchen: Boolean(data.requires_kitchen),
+    modifierGroups: data.modifier_groups ?? [],
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
+  };
 };
 
 export const getSalesReport = async (filters?: {
@@ -2035,6 +2136,7 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
 export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
+  paymentMethodCode?: string;
   amount: number;
   cashReceived?: number;
   tipAmount?: number;
@@ -2048,6 +2150,7 @@ export const createPayment = async (payload: {
     body: JSON.stringify({
       order: payload.orderId,
       method: payload.method,
+      payment_method_code: payload.paymentMethodCode,
       amount: payload.amount,
       cash_received: payload.cashReceived,
       tip_amount: payload.tipAmount ?? 0,
@@ -2077,6 +2180,19 @@ export const createPayment = async (payload: {
   };
 };
 
+
+
+export const getPaymentMethods = async (): Promise<PaymentMethodOption[]> => {
+  const response = await request('/payments/methods/');
+  const data = await handleJson<Array<any>>(response);
+  return data.map((m) => ({
+    id: m.id,
+    code: m.code,
+    name: m.name,
+    isCash: Boolean(m.is_cash),
+    sortOrder: Number(m.sort_order ?? 0),
+  }));
+};
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
   const response = await request(`/payments/?order_id=${orderId}`);
   const data = await handleJson<
@@ -2117,6 +2233,7 @@ export const createRefund = async (payload: {
       order: payload.orderId,
       original_payment: payload.originalPaymentId ?? null,
       method: payload.method,
+      payment_method_code: payload.paymentMethodCode,
       amount: payload.amount,
       tip_refunded: payload.tipRefunded ?? 0,
       reason: payload.reason,
@@ -2411,9 +2528,23 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
 };
 
 
+
+
+export type CashSessionHistoryRow = {
+  id: number;
+  registerName: string;
+  stationName: string;
+  openedByUsername: string;
+  openedAt: string;
+  closedAt?: string | null;
+  openingCash: number;
+  closingCountedCash?: number | null;
+  status: "open" | "closed";
+  summary: CashSessionSnapshot["summary"];
+};
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const response = await request('/cashier/session/current/');
-  const data = await handleJson<{ open: boolean; session?: { id: number; opening_cash: string; opened_at: string; status: "open" | "closed" }; summary?: { opening_cash?: string; cash_total?: string; card_total?: string; transfer_total?: string; payouts_total?: string; expected_cash_in_drawer?: string; over_short_cash?: string } }>(response);
+  const data = await handleJson<any>(response);
   if (!data.open) return { open: false };
   return {
     open: true,
@@ -2425,12 +2556,19 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
     },
     summary: {
       openingCash: Number(data.summary.opening_cash ?? 0),
-      cashTotal: Number(data.summary.cash_total ?? 0),
-      cardTotal: Number(data.summary.card_total ?? 0),
-      transferTotal: Number(data.summary.transfer_total ?? 0),
-      payoutsTotal: Number(data.summary.payouts_total ?? 0),
+      totalCashSales: Number(data.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
-      overShortCash: Number(data.summary.over_short_cash ?? 0),
+      countedCash: Number(data.summary.counted_cash ?? 0),
+      overShortCash: Number(data.summary.difference ?? 0),
+      methods: {
+        cash: Number(data.summary.methods?.CASH?.total ?? 0),
+        card: Number(data.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.cash_in_total ?? 0),
+      },
     },
   };
 };
@@ -2442,16 +2580,19 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<void> => {
-  await handleJson(await request('/cashier/session/close/', {
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string }> => {
+  const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
+  return { ticketText: data.ticket_text };
 };
 
-export const getCashTransactions = async (): Promise<CashTransaction[]> => {
-  const response = await request('/cashier/transactions/');
-  const data = await handleJson<Array<{ id: number; type: "payout"; amount: string; description: string; created_at: string }>>(response);
+export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', String(sessionId));
+  const response = await request(`/cashier/transactions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const data = await handleJson<Array<any>>(response);
   return data.map((tx) => ({
     id: tx.id,
     type: tx.type,
@@ -2464,6 +2605,298 @@ export const getCashTransactions = async (): Promise<CashTransaction[]> => {
 export const createCashPayout = async (amount: number, description: string): Promise<void> => {
   await handleJson(await request('/cashier/transactions/', {
     method: 'POST',
-    body: JSON.stringify({ type: 'payout', amount, description }),
+    body: JSON.stringify({ type: 'cash_out', amount, description }),
   }));
+};
+
+export const getCashSessionsHistory = async (filters?: { dateFrom?: string; dateTo?: string; registerId?: number }): Promise<CashSessionHistoryRow[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
+  if (filters?.dateTo) params.set('date_to', filters.dateTo);
+  if (filters?.registerId) params.set('register_id', String(filters.registerId));
+  const response = await request(`/cashier/sessions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    registerName: row.register_name,
+    stationName: row.station_name,
+    openedByUsername: row.opened_by_username,
+    openedAt: row.opened_at,
+    closedAt: row.closed_at,
+    openingCash: Number(row.opening_cash ?? 0),
+    closingCountedCash: row.closing_counted_cash != null ? Number(row.closing_counted_cash) : null,
+    status: row.status,
+    summary: {
+      openingCash: Number(row.summary.opening_cash ?? 0),
+      totalCashSales: Number(row.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(row.summary.cash_expenses_total ?? 0),
+      expectedCashInDrawer: Number(row.summary.expected_cash_in_drawer ?? 0),
+      countedCash: Number(row.summary.counted_cash ?? 0),
+      overShortCash: Number(row.summary.difference ?? 0),
+      methods: {
+        cash: Number(row.summary.methods?.CASH?.total ?? 0),
+        card: Number(row.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(row.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary.cash_in_total ?? 0),
+      },
+    },
+  }));
+};
+
+export const getCashSessionDetail = async (sessionId: number): Promise<{ summary: CashSessionSnapshot["summary"]; transactions: CashTransaction[] }> => {
+  const response = await request(`/cashier/sessions/${sessionId}/`);
+  const data = await handleJson<any>(response);
+  return {
+    summary: {
+      openingCash: Number(data.summary.opening_cash ?? 0),
+      totalCashSales: Number(data.summary.total_cash_sales ?? 0),
+      totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
+      expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
+      countedCash: Number(data.summary.counted_cash ?? 0),
+      overShortCash: Number(data.summary.difference ?? 0),
+      methods: {
+        cash: Number(data.summary.methods?.CASH?.total ?? 0),
+        card: Number(data.summary.methods?.CARD?.total ?? 0),
+        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.cash_in_total ?? 0),
+      },
+    },
+    transactions: (data.transactions || []).map((tx: any) => ({
+      id: tx.id,
+      type: tx.type,
+      amount: Number(tx.amount),
+      description: tx.description,
+      createdAt: tx.created_at,
+    })),
+  };
+};
+
+
+
+
+export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
+  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`);
+  if (!response.ok) throw new Error('No se pudo descargar ticket PDF');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cierre_caja_${sessionId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+export type DTERecord = {
+  id: number;
+  sale_id?: number;
+  order_id?: number;
+  dte_type: string;
+  status: "PENDIENTE" | "ENVIANDO" | "ACEPTADO" | "RECHAZADO" | "INVALIDADO" | string;
+  control_number: string;
+  codigo_generacion: string;
+  receiver_name: string;
+  total_amount: number;
+  hacienda_uuid?: string;
+  sello_recepcion?: string;
+  request_payload?: Record<string, unknown>;
+  response_payload?: Record<string, unknown>;
+  hacienda_state?: string;
+  error_message?: string;
+  attempts?: number;
+  last_sent_at?: string;
+  created_at: string;
+};
+
+export const dteIssuedList = async (filters?: {
+  q?: string;
+  status?: string;
+  dteType?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<DTERecord[]> => {
+  const params = new URLSearchParams();
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.dteType) params.set("dte_type", filters.dteType);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  const res = await fetch(`${API_BASE_URL}/dte/issued/?${params.toString()}`, { credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo cargar DTE");
+  const data = await res.json();
+  return Array.isArray(data.results) ? data.results : data;
+};
+
+export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/`, { credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo cargar detalle DTE");
+  return res.json();
+};
+
+export const dteResend = async (id: number): Promise<DTERecord> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/resend/`, { method: "POST", credentials: "include" });
+  if (!res.ok) throw new Error("No se pudo reenviar DTE");
+  return res.json();
+};
+
+export const dteSendEmail = async (id: number): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-email/`, { method: "POST", credentials: "include" });
+  if (res.status === 501) throw new Error("Próximamente");
+  if (!res.ok) throw new Error("No se pudo enviar correo");
+};
+
+export const dteSendWhatsapp = async (id: number): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-whatsapp/`, { method: "POST", credentials: "include" });
+  if (res.status === 501) throw new Error("Próximamente");
+  if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
+};
+
+export const dteInvalidate = async (id: number, motivo: string): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/invalidate/`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ motivo }),
+  });
+  if (!res.ok) throw new Error("No se pudo invalidar DTE");
+};
+
+export const dteCreateCreditNote = async (id: number, motivo: string): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/credit-note/`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ motivo }),
+  });
+  if (!res.ok) throw new Error("No se pudo crear nota de crédito");
+};
+
+
+export const branchOptions = async (): Promise<BranchOption[]> => {
+  const response = await request("/core/branches/");
+  return handleJson<BranchOption[]>(response);
+};
+
+const mapCustomer = (c: any): Customer => ({
+  id: c.id,
+  fullName: c.full_name ?? c.name,
+  companyName: c.company_name ?? "",
+  clientType: c.client_type ?? "CF",
+  dui: c.dui ?? "",
+  nit: c.nit ?? "",
+  nrc: c.nrc,
+  phone: c.phone ?? c.telefono,
+  email: c.email ?? c.correo,
+  direccion: c.direccion ?? c.direccion_complemento,
+  departmentCode: c.department_code ?? c.direccion_departamento,
+  municipalityCode: c.municipality_code ?? c.direccion_municipio,
+  activityCode: c.activity_code ?? c.cod_actividad,
+  activityDescription: c.activity_description ?? c.desc_actividad,
+  isConsumerFinal: Boolean(c.is_consumer_final),
+  isDeleted: Boolean(c.is_deleted),
+  name: c.name,
+  tipoDocumento: c.tipo_documento,
+  numDocumento: c.num_documento,
+  codActividad: c.cod_actividad,
+  descActividad: c.desc_actividad,
+  direccionDepartamento: c.direccion_departamento,
+  direccionMunicipio: c.direccion_municipio,
+  direccionComplemento: c.direccion_complemento,
+  telefono: c.telefono,
+  correo: c.correo,
+  isDefaultConsumerFinal: Boolean(c.is_default_consumer_final),
+});
+
+export const listCustomers = async (search = ""): Promise<Customer[]> => {
+  const query = search ? `?q=${encodeURIComponent(search)}` : "";
+  const response = await request(`/clients/${query}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapCustomer);
+};
+
+export const getDefaultConsumerCustomer = async (): Promise<Customer> => {
+  const response = await request('/clients/default-consumer-final/');
+  const data = await handleJson<any>(response);
+  return mapCustomer(data);
+};
+
+export const createCustomer = async (payload: Partial<Customer> & { fullName: string }): Promise<Customer> => {
+  const response = await request('/clients/', {
+    method: 'POST',
+    body: JSON.stringify({
+      full_name: payload.fullName,
+      company_name: payload.companyName ?? '',
+      client_type: payload.clientType ?? 'CF',
+      dui: payload.dui ?? '',
+      nit: payload.nit ?? '',
+      nrc: payload.nrc ?? null,
+      phone: payload.phone ?? '00000000',
+      email: payload.email ?? null,
+      direccion: payload.direccion ?? 'Direccion del cliente',
+      department_code: payload.departmentCode ?? '12',
+      municipality_code: payload.municipalityCode ?? '22',
+      activity_code: payload.activityCode ?? '',
+      activity_description: payload.activityDescription ?? '',
+      is_consumer_final: Boolean(payload.isConsumerFinal),
+    }),
+  });
+  return mapCustomer(await handleJson<any>(response));
+};
+
+export const updateCustomer = async (id: number, payload: Partial<Customer>): Promise<Customer> => {
+  const response = await request(`/clients/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      ...(payload.fullName !== undefined ? { full_name: payload.fullName } : {}),
+      ...(payload.companyName !== undefined ? { company_name: payload.companyName } : {}),
+      ...(payload.clientType !== undefined ? { client_type: payload.clientType } : {}),
+      ...(payload.dui !== undefined ? { dui: payload.dui } : {}),
+      ...(payload.nit !== undefined ? { nit: payload.nit } : {}),
+      ...(payload.nrc !== undefined ? { nrc: payload.nrc } : {}),
+      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
+      ...(payload.email !== undefined ? { email: payload.email } : {}),
+      ...(payload.direccion !== undefined ? { direccion: payload.direccion } : {}),
+      ...(payload.departmentCode !== undefined ? { department_code: payload.departmentCode } : {}),
+      ...(payload.municipalityCode !== undefined ? { municipality_code: payload.municipalityCode } : {}),
+      ...(payload.activityCode !== undefined ? { activity_code: payload.activityCode } : {}),
+      ...(payload.activityDescription !== undefined ? { activity_description: payload.activityDescription } : {}),
+      ...(payload.isConsumerFinal !== undefined ? { is_consumer_final: payload.isConsumerFinal } : {}),
+    }),
+  });
+  return mapCustomer(await handleJson<any>(response));
+};
+
+export const setConsumerFinalCustomer = async (id: number): Promise<Customer> => {
+  const response = await request(`/clients/${id}/set-consumer-final/`, { method: 'POST' });
+  return mapCustomer(await handleJson<any>(response));
+};
+
+export const deleteCustomer = async (id: number): Promise<void> => {
+  const response = await request(`/clients/${id}/`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('No se pudo eliminar cliente');
+};
+
+export const listDepartments = async () => {
+  const response = await request('/clients/geo/departments/');
+  return handleJson<Array<{ code: string; name: string }>>(response);
+};
+
+export const listMunicipalities = async (departmentCode?: string) => {
+  const response = await request(`/clients/geo/municipalities/${departmentCode ? `?department_code=${departmentCode}` : ''}`);
+  return handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+};
+
+export const listActivities = async (q = '') => {
+  const response = await request(`/clients/activities/${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+  return handleJson<Array<{ code: string; description: string }>>(response);
+};
+
+export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {
+  const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
+  if (!response.ok) throw new Error("No se pudo descargar PDF");
+  return response.blob();
 };

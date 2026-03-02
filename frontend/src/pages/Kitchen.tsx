@@ -17,9 +17,10 @@ const Kitchen = () => {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const loadOrders = useCallback(async () => {
-    const data = await getActiveOrders();
+    const branchId = localStorage.getItem("selected_branch_id") || undefined;
+    const data = await getActiveOrders({ branchId, serviceType: filter === "all" ? "all" : filter });
     setOrders(data);
-  }, []);
+  }, [filter]);
 
   useEffect(() => {
     loadOrders().catch((error) => {

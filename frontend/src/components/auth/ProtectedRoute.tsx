@@ -3,7 +3,7 @@ import { useAuth } from "@/context/useAuth";
 import AccessDenied from "@/pages/AccessDenied";
 
 interface ProtectedRouteProps {
-  allowedRoles?: Array<"admin" | "manager" | "cashier" | "kitchen">;
+  allowedRoles?: Array<"admin" | "manager" | "cashier" | "kitchen" | "accountant">;
   children: React.ReactElement;
 }
 

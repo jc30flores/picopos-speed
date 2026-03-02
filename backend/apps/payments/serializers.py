@@ -2,11 +2,19 @@ from decimal import Decimal
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
-from apps.payments.models import Payment, Refund
+from apps.payments.models import Payment, Refund, PaymentMethod
+
+
+class PaymentMethodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentMethod
+        fields = ["id", "code", "name", "is_cash", "sort_order", "is_active"]
 
 
 class PaymentSerializer(serializers.ModelSerializer):
     received_by = serializers.CharField(source="received_by.username", read_only=True)
+    payment_method_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
 
     class Meta:
         model = Payment
@@ -14,6 +22,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             "id",
             "order",
             "method",
+            "payment_method",
+            "payment_method_code",
+            "payment_method_name",
             "amount",
             "cash_received",
             "tip_amount",
@@ -26,6 +37,17 @@ class PaymentSerializer(serializers.ModelSerializer):
         order = attrs.get("order")
         amount = attrs.get("amount") or Decimal("0")
         tip_amount = attrs.get("tip_amount") or Decimal("0")
+
+        code = (attrs.pop("payment_method_code", "") or "").strip().upper()
+        payment_method = attrs.get("payment_method")
+        if code and not payment_method:
+            payment_method = PaymentMethod.objects.filter(code=code, is_active=True).first()
+            if not payment_method:
+                raise serializers.ValidationError("Payment method not found")
+            attrs["payment_method"] = payment_method
+
+        if payment_method and not attrs.get("method"):
+            attrs["method"] = payment_method.code.lower().replace("pedidos_ya", "transfer").replace("paypal", "transfer")
 
         if amount <= 0:
             raise serializers.ValidationError("Amount must be greater than 0")
@@ -77,6 +99,7 @@ class RefundSerializer(serializers.ModelSerializer):
             "original_payment",
             "cash_session",
             "method",
+            "payment_method",
             "amount",
             "tip_refunded",
             "reason",

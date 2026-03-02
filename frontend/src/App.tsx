@@ -12,6 +12,8 @@ import ReportsHistory from "./pages/ReportsHistory";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
+import DTEPage from "./pages/DTE";
+import CustomersPage from "./pages/Customers";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 
 const queryClient = new QueryClient();
@@ -49,6 +51,7 @@ const App = () => (
               }
             />
             <Route path="/customer-display" element={<CustomerDisplay />} />
+            <Route path="/clientes" element={<CustomersPage />} />
             <Route
               path="/menu"
               element={
@@ -62,6 +65,14 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["admin", "manager"]}>
                   <ReportsHistory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/dte"
+              element={
+                <ProtectedRoute allowedRoles={["cashier", "admin", "manager", "accountant"]}>
+                  <DTEPage />
                 </ProtectedRoute>
               }
             />
