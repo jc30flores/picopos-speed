@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee
 from apps.menu.models import Product, Discount, Modifier
-from apps.core.models import Branch, ServiceType, Table, TaxConfig
+from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts
 
@@ -49,6 +49,10 @@ class OrderSerializer(serializers.ModelSerializer):
             "order_number",
             "status",
             "customer_name",
+            "customer_id",
+            "dte_document_type",
+            "iva_exempt",
+            "iva_exempt_discount",
             "subtotal",
             "tax",
             "total",
@@ -133,6 +137,9 @@ class OrderCreateSerializer(serializers.Serializer):
     service_type_key = serializers.CharField(required=False, allow_blank=True)
     table_id = serializers.PrimaryKeyRelatedField(queryset=Table.objects.all(), required=False, allow_null=True)
     customer_name = serializers.CharField(required=False, allow_blank=True)
+    customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.all(), required=False, allow_null=True)
+    dte_document_type = serializers.ChoiceField(choices=["CF", "CCF", "SX"], required=False, default="CF")
+    iva_exempt = serializers.BooleanField(required=False, default=False)
     source = serializers.CharField(required=False, allow_blank=True)
     channel = serializers.CharField(required=False, allow_blank=True)
     fast_pos_mode = serializers.BooleanField(required=False, default=False)
@@ -178,11 +185,20 @@ class OrderCreateSerializer(serializers.Serializer):
         source = (validated_data.pop("source", "") or "").strip().lower()
         channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
         fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
+        customer_name = (validated_data.pop("customer_name", "") or "").strip()
         branch = validated_data.pop("branch_id", None)
+        customer = validated_data.pop("customer_id", None)
+        dte_document_type = validated_data.pop("dte_document_type", "CF")
+        iva_exempt = bool(validated_data.pop("iva_exempt", False))
         if branch is None:
             branch = Branch.objects.first()
             if branch is None:
                 raise serializers.ValidationError("Branch is required")
+
+        if customer is None:
+            customer = Customer.objects.filter(is_default_consumer_final=True).first()
+            if customer is None:
+                customer = Customer.objects.create(name="CONSUMIDOR FINAL", is_default_consumer_final=True)
 
         service_type = None
         if service_type_id is not None:
@@ -201,6 +217,10 @@ class OrderCreateSerializer(serializers.Serializer):
             service_type=service_type,
             status=status,
             channel=channel if channel in {"pos", "kiosk", "online"} else "pos",
+            customer=customer,
+            customer_name=customer_name or customer.name,
+            dte_document_type=dte_document_type,
+            iva_exempt=iva_exempt,
             **validated_data,
         )
 
@@ -287,6 +307,14 @@ class OrderCreateSerializer(serializers.Serializer):
         order.total = total
         order.discount_total = discount_total
         order.disposable_total = disposable_total
+        if order.iva_exempt:
+            exempt_discount = (total - (total / Decimal("1.13"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            order.iva_exempt_discount = exempt_discount
+            order.discount_total = (discount_total + exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            order.tax = Decimal("0.00")
+            order.total = (total - exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        else:
+            order.iva_exempt_discount = Decimal("0.00")
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
         if order.requires_kitchen and order.status == "preparing":
             from apps.kitchen.models import KitchenOrderView
@@ -294,7 +322,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "disposable_total", "requires_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "disposable_total", "iva_exempt_discount", "requires_kitchen", "updated_at"])
 
         breakdown_by_discount = {}
         for entry in discount_result["applied_breakdown"]:

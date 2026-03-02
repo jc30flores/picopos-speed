@@ -30,7 +30,9 @@ def _ambiente() -> str:
 
 
 def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False) -> DTERecord:
-    order = Order.objects.select_related("branch", "service_type").prefetch_related("items").get(pk=sale_id)
+    order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
+    if order.dte_document_type != "CF":
+        raise DTEPreflightError(f"Tipo DTE aún no implementado: {order.dte_document_type}")
     dte_type = "CF_01"
 
     accepted = DTERecord.objects.filter(order=order, dte_type=dte_type, status=DTERecord.STATUS_ACCEPTED).first()
@@ -73,7 +75,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             codigo_generacion=codigo_generacion,
             request_payload={**payload, "branch": order.branch.name},
             response_payload=response,
-            receiver_name=order.customer_name or "Consumidor Final",
+            receiver_name=(order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final",
             issue_date=timezone.localdate(),
             total_amount=order.total,
             source=source,

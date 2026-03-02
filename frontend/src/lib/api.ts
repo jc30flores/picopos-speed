@@ -164,6 +164,10 @@ export type Order = {
   createdAt: Date;
   prepTime: number;
   customerName?: string;
+  customerId?: number;
+  dteDocumentType?: "CF" | "CCF" | "SX";
+  ivaExempt?: boolean;
+  ivaExemptDiscount?: number;
   paymentStatus: "unpaid" | "partial" | "paid";
   financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
@@ -187,6 +191,22 @@ export type BranchOption = {
   name: string;
   code: string;
   is_active: boolean;
+};
+
+export type Customer = {
+  id: number;
+  name: string;
+  tipoDocumento: string;
+  numDocumento: string;
+  nrc?: string | null;
+  codActividad?: string | null;
+  descActividad?: string | null;
+  direccionDepartamento: string;
+  direccionMunicipio: string;
+  direccionComplemento: string;
+  telefono: string;
+  correo?: string | null;
+  isDefaultConsumerFinal: boolean;
 };
 
 export type PaymentMethodOption = {
@@ -1120,6 +1140,10 @@ const mapOrder = (order: {
   order_number: number;
   status: Order["status"];
   customer_name: string;
+  customer_id?: number;
+  dte_document_type?: "CF" | "CCF" | "SX";
+  iva_exempt?: boolean;
+  iva_exempt_discount?: string;
   total: string;
   service_type: Order["serviceType"];
   created_at: string;
@@ -1159,6 +1183,10 @@ const mapOrder = (order: {
     createdAt,
     prepTime,
     customerName: order.customer_name || undefined,
+    customerId: order.customer_id ?? undefined,
+    dteDocumentType: order.dte_document_type ?? "CF",
+    ivaExempt: Boolean(order.iva_exempt),
+    ivaExemptDiscount: Number(order.iva_exempt_discount ?? 0),
     paymentStatus: order.payment_status,
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
@@ -1171,6 +1199,9 @@ const mapOrder = (order: {
 export const createOrder = async (payload: {
   serviceType: Order["serviceType"];
   customerName?: string;
+  customerId?: number;
+  dteDocumentType?: "CF" | "CCF" | "SX";
+  ivaExempt?: boolean;
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
   items: Array<{
@@ -1187,6 +1218,9 @@ export const createOrder = async (payload: {
     body: JSON.stringify({
       service_type_key: payload.serviceType,
       customer_name: payload.customerName ?? "",
+      customer_id: payload.customerId,
+      dte_document_type: payload.dteDocumentType ?? "CF",
+      iva_exempt: Boolean(payload.ivaExempt),
       source: payload.source,
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
@@ -2694,6 +2728,77 @@ export const dteCreateCreditNote = async (id: number, motivo: string): Promise<v
 export const branchOptions = async (): Promise<BranchOption[]> => {
   const response = await request("/core/branches/");
   return handleJson<BranchOption[]>(response);
+};
+
+const mapCustomer = (c: any): Customer => ({
+  id: c.id,
+  name: c.name,
+  tipoDocumento: c.tipo_documento,
+  numDocumento: c.num_documento,
+  nrc: c.nrc,
+  codActividad: c.cod_actividad,
+  descActividad: c.desc_actividad,
+  direccionDepartamento: c.direccion_departamento,
+  direccionMunicipio: c.direccion_municipio,
+  direccionComplemento: c.direccion_complemento,
+  telefono: c.telefono,
+  correo: c.correo,
+  isDefaultConsumerFinal: Boolean(c.is_default_consumer_final),
+});
+
+export const listCustomers = async (search = ""): Promise<Customer[]> => {
+  const query = search ? `?search=${encodeURIComponent(search)}` : "";
+  const response = await request(`/core/customers/${query}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapCustomer);
+};
+
+export const getDefaultConsumerCustomer = async (): Promise<Customer> => {
+  const response = await request('/core/customers/default-consumer-final/');
+  const data = await handleJson<any>(response);
+  return mapCustomer(data);
+};
+
+export const createCustomer = async (payload: Partial<Customer> & { name: string }): Promise<Customer> => {
+  const response = await request('/core/customers/', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: payload.name,
+      tipo_documento: payload.tipoDocumento ?? '13',
+      num_documento: payload.numDocumento ?? '00000000-0',
+      nrc: payload.nrc ?? null,
+      cod_actividad: payload.codActividad ?? null,
+      desc_actividad: payload.descActividad ?? null,
+      direccion_departamento: payload.direccionDepartamento ?? '12',
+      direccion_municipio: payload.direccionMunicipio ?? '22',
+      direccion_complemento: payload.direccionComplemento ?? 'Direccion del cliente',
+      telefono: payload.telefono ?? '00000000',
+      correo: payload.correo ?? null,
+      is_default_consumer_final: Boolean(payload.isDefaultConsumerFinal),
+    }),
+  });
+  return mapCustomer(await handleJson<any>(response));
+};
+
+export const updateCustomer = async (id: number, payload: Partial<Customer>): Promise<Customer> => {
+  const response = await request(`/core/customers/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      ...(payload.name !== undefined ? { name: payload.name } : {}),
+      ...(payload.tipoDocumento !== undefined ? { tipo_documento: payload.tipoDocumento } : {}),
+      ...(payload.numDocumento !== undefined ? { num_documento: payload.numDocumento } : {}),
+      ...(payload.nrc !== undefined ? { nrc: payload.nrc } : {}),
+      ...(payload.codActividad !== undefined ? { cod_actividad: payload.codActividad } : {}),
+      ...(payload.descActividad !== undefined ? { desc_actividad: payload.descActividad } : {}),
+      ...(payload.direccionDepartamento !== undefined ? { direccion_departamento: payload.direccionDepartamento } : {}),
+      ...(payload.direccionMunicipio !== undefined ? { direccion_municipio: payload.direccionMunicipio } : {}),
+      ...(payload.direccionComplemento !== undefined ? { direccion_complemento: payload.direccionComplemento } : {}),
+      ...(payload.telefono !== undefined ? { telefono: payload.telefono } : {}),
+      ...(payload.correo !== undefined ? { correo: payload.correo } : {}),
+      ...(payload.isDefaultConsumerFinal !== undefined ? { is_default_consumer_final: payload.isDefaultConsumerFinal } : {}),
+    }),
+  });
+  return mapCustomer(await handleJson<any>(response));
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {

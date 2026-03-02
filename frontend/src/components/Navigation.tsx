@@ -22,6 +22,7 @@ const navItems = [
   { label: "Menú & Descuentos", path: "/menu" },
   { label: "Reportes & Historial", path: "/reports-history" },
   { label: "DTE", path: "/dte" },
+  { label: "Clientes", path: "/clientes" },
   { label: "Configuración", path: "/settings" },
 ];
 

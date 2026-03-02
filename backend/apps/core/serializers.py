@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.core.models import FeatureFlag, ServiceType, TaxConfig
+from apps.core.models import Customer, FeatureFlag, ServiceType, TaxConfig
 
 
 class ServiceTypeSerializer(serializers.ModelSerializer):
@@ -27,3 +27,14 @@ class BranchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Branch
         fields = ["id", "name", "code", "is_active"]
+
+
+class CustomerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = [
+            "id", "name", "tipo_documento", "num_documento", "nrc", "cod_actividad",
+            "desc_actividad", "direccion_departamento", "direccion_municipio",
+            "direccion_complemento", "telefono", "correo", "is_default_consumer_final",
+            "created_at", "updated_at",
+        ]

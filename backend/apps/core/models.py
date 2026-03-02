@@ -95,3 +95,31 @@ class FeatureFlag(models.Model):
 
     def __str__(self) -> str:
         return f"{self.key} ({'on' if self.is_enabled else 'off'})"
+
+
+class Customer(models.Model):
+    name = models.CharField(max_length=160)
+    tipo_documento = models.CharField(max_length=10, default="13")
+    num_documento = models.CharField(max_length=30, default="00000000-0")
+    nrc = models.CharField(max_length=30, blank=True, null=True)
+    cod_actividad = models.CharField(max_length=10, blank=True, null=True)
+    desc_actividad = models.CharField(max_length=200, blank=True, null=True)
+    direccion_departamento = models.CharField(max_length=2, default="12")
+    direccion_municipio = models.CharField(max_length=2, default="22")
+    direccion_complemento = models.CharField(max_length=255, default="Direccion del cliente")
+    telefono = models.CharField(max_length=20, default="00000000")
+    correo = models.EmailField(blank=True, null=True)
+    is_default_consumer_final = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default_consumer_final:
+            Customer.objects.exclude(pk=self.pk).filter(is_default_consumer_final=True).update(is_default_consumer_final=False)
+
+    def __str__(self) -> str:
+        return self.name

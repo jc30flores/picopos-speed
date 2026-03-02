@@ -1,8 +1,9 @@
+from django.db import models
 from django.db.models import Case, IntegerField, Value, When
 from rest_framework import generics
-from apps.core.models import Branch, FeatureFlag, ServiceType, TaxConfig
+from apps.core.models import Branch, Customer, FeatureFlag, ServiceType, TaxConfig
 from apps.core.permissions import IsAuthenticatedAndActive
-from apps.core.serializers import BranchSerializer, FeatureFlagSerializer, ServiceTypeSerializer, TaxConfigSerializer
+from apps.core.serializers import BranchSerializer, CustomerSerializer, FeatureFlagSerializer, ServiceTypeSerializer, TaxConfigSerializer
 
 
 class ServiceTypeListView(generics.ListAPIView):
@@ -41,3 +42,32 @@ class BranchListView(generics.ListAPIView):
     ).order_by("sort_default", "name")
     serializer_class = BranchSerializer
     permission_classes = [IsAuthenticatedAndActive]
+
+
+class CustomerListCreateView(generics.ListCreateAPIView):
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get_queryset(self):
+        qs = Customer.objects.all().order_by("-is_default_consumer_final", "name")
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(models.Q(name__icontains=search) | models.Q(num_documento__icontains=search))
+        return qs
+
+
+class CustomerDetailView(generics.RetrieveUpdateAPIView):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+
+class DefaultConsumerFinalView(generics.RetrieveAPIView):
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get_object(self):
+        customer = Customer.objects.filter(is_default_consumer_final=True).first()
+        if customer:
+            return customer
+        return Customer.objects.create(name="CONSUMIDOR FINAL", is_default_consumer_final=True)

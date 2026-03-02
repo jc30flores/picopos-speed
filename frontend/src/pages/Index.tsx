@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import {
   createOrder,
+  Customer,
   createPayment,
   getPaymentMethods,
   getOrderById,
@@ -37,6 +38,8 @@ import {
   getModifierGroups,
   getProducts,
   getCurrentCashSession,
+  getDefaultConsumerCustomer,
+  listCustomers,
   openCashSession,
   closeCashSession,
   getCashTransactions,
@@ -112,6 +115,10 @@ const POS = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [dteDocumentType, setDteDocumentType] = useState<"CF" | "CCF" | "SX">("CF");
+  const [ivaExempt, setIvaExempt] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [tipAmount, setTipAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -252,12 +259,12 @@ const POS = () => {
   const total = itemsGross + cartDisposableTotal;
   const subtotal = itemsGross;
   const paymentTotal =
-    checkoutDraft?.total ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+    (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
-  const checkoutTotal = checkoutDraft?.total ?? 0;
+  const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
   const paidTotal = paymentAmountValue + tipAmountValue;
   const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
   const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
@@ -350,6 +357,17 @@ const POS = () => {
     }).catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    listCustomers().then(setCustomers).catch(() => undefined);
+    getDefaultConsumerCustomer().then((c) => setSelectedCustomerId(String(c.id))).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (isPaymentOpen) {
+      setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
+    }
+  }, [checkoutTotal, isPaymentOpen]);
+
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
     try {
@@ -437,6 +455,9 @@ const POS = () => {
             serviceType: checkoutDraft.serviceType,
             source: "pos",
             channel: "pos",
+            customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+            dteDocumentType,
+            ivaExempt,
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
               productName: item.name,
@@ -885,6 +906,38 @@ const POS = () => {
 
               <div className="space-y-3">
                 <div className="text-sm font-semibold">Pago</div>
+                <div className="space-y-2">
+                  <Label>Cliente</Label>
+                  <div className="flex gap-2">
+                    <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                      <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
+                      <SelectContent>
+                        {customers.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Tipo DTE</Label>
+                  <div className="flex gap-2">
+                    <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                    <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                    <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between rounded-md border p-2 text-sm">
+                  <span>Exento IVA</span>
+                  <Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(Boolean(v))} />
+                </div>
+                {ivaExempt && (
+                  <p className="text-xs text-muted-foreground">Aplicando exención: se descuenta IVA del total.</p>
+                )}
+
                 <div className="space-y-2">
                   <Label>Método</Label>
                   <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
