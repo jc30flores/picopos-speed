@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { ModifierPanel } from "./ModifierPanel";
+import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
+import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
 import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -71,7 +72,8 @@ export const ProductsTab = () => {
   const [categoryDeleteError, setCategoryDeleteError] = useState<string | null>(null);
   const [categoryDeleteActiveProducts, setCategoryDeleteActiveProducts] = useState<string[]>([]);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
-  const [isModifierManagerOpen, setIsModifierManagerOpen] = useState(false);
+  const [isModifierGroupsAdminOpen, setIsModifierGroupsAdminOpen] = useState(false);
+  const [isProductModifiersOpen, setIsProductModifiersOpen] = useState(false);
   const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -360,7 +362,7 @@ export const ProductsTab = () => {
               <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
                 Gestionar categorías
               </Button>
-              <Button variant="outline" onClick={() => setIsModifierManagerOpen(true)}>
+              <Button variant="outline" onClick={() => setIsModifierGroupsAdminOpen(true)}>
                 Gestionar modificadores
               </Button>
               <Button
@@ -485,7 +487,7 @@ export const ProductsTab = () => {
                           size="sm"
                           onClick={() => {
                             setSelectedProduct(product);
-                            setIsModifierManagerOpen(true);
+                            setIsProductModifiersOpen(true);
                           }}
                         >
                           <Settings className="h-4 w-4 mr-1" />
@@ -529,24 +531,21 @@ export const ProductsTab = () => {
       </div>
 
 
+      <ModifierGroupsAdminModal
+        open={isModifierGroupsAdminOpen}
+        onOpenChange={setIsModifierGroupsAdminOpen}
+        modifierGroups={modifierGroups}
+        onUpdated={() => loadMenuData()}
+      />
 
-      <Dialog open={isModifierManagerOpen} onOpenChange={setIsModifierManagerOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Gestión de modificadores</DialogTitle>
-            <DialogDescription>
-              Administra grupos y asignaciones por producto desde un solo lugar.
-            </DialogDescription>
-          </DialogHeader>
-          <ModifierPanel
-            selectedProduct={selectedProduct}
-            products={products}
-            modifierGroups={modifierGroups}
-            onSelectProduct={setSelectedProduct}
-            onModifierGroupsUpdated={loadMenuData}
-          />
-        </DialogContent>
-      </Dialog>
+      <ProductModifiersModal
+        open={isProductModifiersOpen}
+        onOpenChange={setIsProductModifiersOpen}
+        selectedProduct={selectedProduct}
+        modifierGroups={modifierGroups}
+        onUpdated={loadMenuData}
+      />
+
 
       {/* Product Form Dialog */}
       <ProductFormDialog
