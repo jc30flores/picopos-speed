@@ -59,7 +59,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
-        response = send_to_bridge(dte_type, payload)
+        response = send_to_bridge(dte_type, payload, branch_name=order.branch.name)
         parsed = interpret_dte_response(response)
 
     with transaction.atomic():
@@ -71,7 +71,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             ambiente=ambiente,
             control_number=numero_control,
             codigo_generacion=codigo_generacion,
-            request_payload=payload,
+            request_payload={**payload, "branch": order.branch.name},
             response_payload=response,
             receiver_name=order.customer_name or "Consumidor Final",
             issue_date=timezone.localdate(),

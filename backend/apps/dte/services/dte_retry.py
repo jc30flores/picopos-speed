@@ -7,7 +7,7 @@ from apps.dte.services.dte_service import interpret_dte_response, send_to_bridge
 
 
 def resend_record(record: DTERecord) -> DTERecord:
-    response = send_to_bridge(record.dte_type, record.request_payload)
+    response = send_to_bridge(record.dte_type, record.request_payload, branch_name=record.branch.name)
     parsed = interpret_dte_response(response)
 
     record.response_payload = response

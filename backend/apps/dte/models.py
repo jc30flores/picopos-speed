@@ -87,8 +87,8 @@ class DTEControlCounter(models.Model):
     ambiente = models.CharField(max_length=2, choices=DTERecord.AMBIENTE_CHOICES, default=DTERecord.AMBIENTE_TEST)
     dte_type = models.CharField(max_length=20, default="CF_01")
     year = models.PositiveIntegerField()
-    establishment_code = models.CharField(max_length=3, default="001")
-    pos_code = models.CharField(max_length=3, default="001")
+    establishment_code = models.CharField(max_length=4, default="M001")
+    pos_code = models.CharField(max_length=4, default="P001")
     last_number = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -128,3 +128,32 @@ class CreditNote(models.Model):
     response_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class DTEBranchConfig(models.Model):
+    branch = models.OneToOneField(Branch, on_delete=models.CASCADE, related_name="dte_config")
+    emisor_nit = models.CharField(max_length=20, blank=True, default="")
+    emisor_nrc = models.CharField(max_length=20, blank=True, default="")
+    emisor_nombre = models.CharField(max_length=180, blank=True, default="")
+    emisor_nombre_comercial = models.CharField(max_length=180, blank=True, default="")
+    cod_actividad = models.CharField(max_length=10, blank=True, default="")
+    desc_actividad = models.CharField(max_length=255, blank=True, default="")
+    tipo_establecimiento = models.CharField(max_length=4, blank=True, default="")
+    cod_estable_mh = models.CharField(max_length=10, blank=True, default="M001")
+    cod_estable = models.CharField(max_length=10, blank=True, default="M001")
+    cod_punto_venta_mh = models.CharField(max_length=10, blank=True, default="P001")
+    cod_punto_venta = models.CharField(max_length=10, blank=True, default="P001")
+    direccion_departamento = models.CharField(max_length=8, blank=True, default="")
+    direccion_municipio = models.CharField(max_length=8, blank=True, default="")
+    direccion_complemento = models.TextField(blank=True, default="")
+    telefono = models.CharField(max_length=20, blank=True, default="")
+    correo = models.EmailField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["branch"], name="dte_branch_config_branch_unique")
+        ]
+

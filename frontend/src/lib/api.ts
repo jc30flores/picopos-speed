@@ -182,6 +182,13 @@ export type EmployeeStats = {
 
 export type PaymentMethod = "cash" | "card" | "transfer";
 
+export type BranchOption = {
+  id: number;
+  name: string;
+  code: string;
+  is_active: boolean;
+};
+
 export type PaymentMethodOption = {
   id: number;
   code: "CASH" | "CARD" | "TRANSFER" | "PEDIDOS_YA" | "PAYPAL" | string;
@@ -1183,6 +1190,7 @@ export const createOrder = async (payload: {
       source: payload.source,
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
+      ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
         product_id: item.productId,
         product_name_snapshot: item.productName,
@@ -2680,4 +2688,16 @@ export const dteCreateCreditNote = async (id: number, motivo: string): Promise<v
     body: JSON.stringify({ motivo }),
   });
   if (!res.ok) throw new Error("No se pudo crear nota de crédito");
+};
+
+
+export const branchOptions = async (): Promise<BranchOption[]> => {
+  const response = await request("/core/branches/");
+  return handleJson<BranchOption[]>(response);
+};
+
+export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {
+  const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
+  if (!response.ok) throw new Error("No se pudo descargar PDF");
+  return response.blob();
 };

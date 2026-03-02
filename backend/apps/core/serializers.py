@@ -18,3 +18,12 @@ class FeatureFlagSerializer(serializers.ModelSerializer):
     class Meta:
         model = FeatureFlag
         fields = ["id", "key", "label", "description", "is_enabled"]
+
+
+from apps.core.models import Branch
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Branch
+        fields = ["id", "name", "code", "is_active"]

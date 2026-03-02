@@ -121,6 +121,15 @@ export default function DTEPage() {
                 <Button size="sm" variant="outline" onClick={() => copy(selected.sello_recepcion)}>Copiar sello</Button>
                 <Button size="sm" onClick={async () => { try { await dteSendWhatsapp(selected.id); } catch { toast({ title: "Próximamente" }); } }}>WhatsApp</Button>
                 <Button size="sm" variant="outline" onClick={async () => { try { await dteSendEmail(selected.id); } catch { toast({ title: "Próximamente" }); } }}>Correo</Button>
+                <Button size="sm" variant="outline" onClick={async () => {
+                  const blob = await downloadOrderReceiptPdf(selected.sale_id);
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `receipt_order_${selected.sale_id}.pdf`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}>Descargar PDF</Button>
                 <Button size="sm" variant="destructive" onClick={async () => { await dteInvalidate(selected.id, "Anulación desde panel"); toast({ title: "Invalidación creada" }); setSelected(null); await load(); }}>Invalidar</Button>
                 <Button size="sm" variant="secondary" onClick={async () => { await dteCreateCreditNote(selected.id, "Nota de crédito desde panel"); toast({ title: "Nota de crédito creada" }); }}>Nota de crédito</Button>
               </div>
