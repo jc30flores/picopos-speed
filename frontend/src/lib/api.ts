@@ -3,6 +3,9 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 export type Category = {
   id: number;
   name: string;
+  image?: string | null;
+  imagePath?: string | null;
+  imageUrl?: string | null;
   isActive?: boolean;
   isHidden?: boolean;
   position?: number;
@@ -448,11 +451,14 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data
     .map((item) => ({
       id: item.id,
       name: item.name,
+      image: item.image ?? null,
+      imagePath: item.image_path ?? null,
+      imageUrl: normalizeImageUrl(item),
       isActive: item.is_active,
       isHidden: Boolean(item.is_hidden),
       position: Number(item.position ?? 0),
@@ -504,30 +510,60 @@ export const updateFeatureFlag = async (
   };
 };
 
-export const createCategory = async (name: string): Promise<Category> => {
+export const createCategory = async (payload: string | { name: string; image?: File | null }): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null } : payload;
+  const formData = new FormData();
+  formData.append("name", normalizedPayload.name);
+  if (normalizedPayload.image) {
+    formData.append("image", normalizedPayload.image);
+  }
+
   const response = await request("/menu/categories/", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     isActive: data.is_active,
     isHidden: Boolean(data.is_hidden),
     position: Number(data.position ?? 0),
   };
 };
 
-export const updateCategory = async (categoryId: number, name: string): Promise<Category> => {
+export const updateCategory = async (
+  categoryId: number,
+  payload: string | { name: string; image?: File | null; removeImage?: boolean }
+): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false } : payload;
+  const formData = new FormData();
+  formData.append("name", normalizedPayload.name);
+  if (normalizedPayload.image) {
+    formData.append("image", normalizedPayload.image);
+  }
+  if (normalizedPayload.removeImage) {
+    formData.append("remove_image", "1");
+  }
+
   const response = await request(`/menu/categories/${categoryId}/`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden), position: Number(data.position ?? 0) };
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
+    isActive: data.is_active,
+    isHidden: Boolean(data.is_hidden),
+    position: Number(data.position ?? 0),
+  };
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
@@ -2517,7 +2553,7 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
     method: "PATCH",
     body: JSON.stringify({ ordered_ids: orderedIds }),
   });
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data.map((item) => ({
     id: item.id,
     name: item.name,

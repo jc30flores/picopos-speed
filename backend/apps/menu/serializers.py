@@ -18,15 +18,59 @@ from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_i
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    image_path = serializers.CharField(read_only=True)
+
     class Meta:
         model = Category
-        fields = ["id", "name", "is_active", "is_hidden", "position"]
+        fields = ["id", "name", "image", "image_path", "is_active", "is_hidden", "position"]
 
     def validate_name(self, value: str) -> str:
         normalized = normalize_category_name(value)
         if not normalized:
             raise serializers.ValidationError("La categoría no puede estar vacía.")
         return normalized
+
+    def _extract_remove_image(self) -> bool:
+        request = self.context.get("request")
+        if not request:
+            return False
+        raw = request.data.get("remove_image")
+        return str(raw).lower() in {"1", "true", "yes", "on"}
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        image_file = request.FILES.get("image") if request else None
+        category = Category.objects.create(**validated_data)
+        if image_file:
+            saved = save_menu_image(image_file, category.name)
+            category.image = saved["image"]
+            category.image_path = saved["image_path"]
+            category.save(update_fields=["image", "image_path"])
+        return category
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        image_file = request.FILES.get("image") if request else None
+        remove_image = self._extract_remove_image()
+        old_image = instance.image
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if remove_image and old_image:
+            delete_menu_image_by_image_field(old_image)
+            instance.image = None
+            instance.image_path = None
+            instance.save(update_fields=["image", "image_path"])
+        elif image_file:
+            saved = save_menu_image(image_file, instance.name)
+            instance.image = saved["image"]
+            instance.image_path = saved["image_path"]
+            instance.save(update_fields=["image", "image_path"])
+            if old_image and old_image != instance.image:
+                delete_menu_image_by_image_field(old_image)
+
+        return instance
 
 
 class ModifierSerializer(serializers.ModelSerializer):

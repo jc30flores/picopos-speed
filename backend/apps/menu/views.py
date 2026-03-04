@@ -35,6 +35,7 @@ def _product_sort_order_column_exists() -> bool:
 
 class CategoryListCreateView(generics.ListCreateAPIView):
     serializer_class = CategorySerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         queryset = Category.objects.filter(is_active=True)
@@ -67,13 +68,28 @@ class CategoryListCreateView(generics.ListCreateAPIView):
         name = serializer.validated_data["name"]
         next_position = (Category.objects.aggregate(max_position=models.Max("position")).get("max_position") or -1) + 1
         category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True, "position": next_position})
+
+        update_fields = []
         if not category.is_active:
             category.is_active = True
-            update_fields = ["is_active"]
-            if category.position != next_position:
-                category.position = next_position
-                update_fields.append("position")
+            update_fields.append("is_active")
+        if category.position != next_position:
+            category.position = next_position
+            update_fields.append("position")
+        if update_fields:
             category.save(update_fields=update_fields)
+
+        image_file = request.FILES.get("image")
+        if image_file:
+            payload_serializer = self.get_serializer(category, data={"name": category.name}, partial=True)
+            payload_serializer.is_valid(raise_exception=True)
+            payload_serializer.save()
+            from apps.menu.utils.images import save_menu_image
+            saved = save_menu_image(image_file, category.name)
+            category.image = saved["image"]
+            category.image_path = saved["image_path"]
+            category.save(update_fields=["image", "image_path"])
+
         if created:
             log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
         response_serializer = self.get_serializer(category)
@@ -300,6 +316,7 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CategorySerializer
     queryset = Category.objects.all()
     permission_classes = [IsAdminOrManager]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()

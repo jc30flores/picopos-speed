@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Plus, Edit, Settings, Trash2, GripVertical, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { getEntityImageSrc } from "@/lib/media";
 import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
 import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
@@ -77,8 +79,11 @@ export const ProductsTab = () => {
   const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryImage, setNewCategoryImage] = useState<File | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
+  const [removeEditingCategoryImage, setRemoveEditingCategoryImage] = useState(false);
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
@@ -199,8 +204,9 @@ export const ProductsTab = () => {
     const normalized = newCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await createCategory(normalized);
+      await createCategory({ name: normalized, image: newCategoryImage });
       setNewCategoryName("");
+      setNewCategoryImage(null);
       await loadMenuData();
       toast.success("Categoría creada");
     } catch (error) {
@@ -213,9 +219,11 @@ export const ProductsTab = () => {
     const normalized = editingCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await updateCategory(editingCategoryId, normalized);
+      await updateCategory(editingCategoryId, { name: normalized, image: editingCategoryImage, removeImage: removeEditingCategoryImage });
       setEditingCategoryId(null);
       setEditingCategoryName("");
+      setEditingCategoryImage(null);
+      setRemoveEditingCategoryImage(false);
       await loadMenuData();
       toast.success("Categoría actualizada");
     } catch {
@@ -609,6 +617,17 @@ export const ProductsTab = () => {
               <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
               <Button onClick={handleCreateCategory}>Crear</Button>
             </div>
+            <ImageUploadField
+              id="new-category-image"
+              label="Imagen de categoría (opcional)"
+              file={newCategoryImage}
+              onChange={setNewCategoryImage}
+            />
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setNewCategoryImage(null)}>
+                Limpiar imagen
+              </Button>
+            </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {visibleCategories.map((category) => (
                 <div
@@ -632,12 +651,28 @@ export const ProductsTab = () => {
                   }}
                 >
                   {editingCategoryId === category.id ? (
-                    <>
+                    <div className="flex w-full flex-col gap-2">
                       <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
-                      <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
-                    </>
+                      <ImageUploadField
+                        id={`edit-category-image-${category.id}`}
+                        label="Imagen"
+                        file={editingCategoryImage}
+                        previewUrl={removeEditingCategoryImage ? null : getEntityImageSrc(category)}
+                        onChange={(file) => {
+                          setEditingCategoryImage(file);
+                          if (file) setRemoveEditingCategoryImage(false);
+                        }}
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => { setEditingCategoryImage(null); setRemoveEditingCategoryImage(true); }}>
+                          Quitar imagen
+                        </Button>
+                        <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
+                      </div>
+                    </div>
                   ) : (
                     <>
+                      {getEntityImageSrc(category) ? <img src={getEntityImageSrc(category) ?? ""} alt={category.name} className="h-10 w-10 rounded-md border object-cover" /> : null}
                       <button
                         type="button"
                         className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted"
@@ -650,7 +685,7 @@ export const ProductsTab = () => {
                         <GripVertical className="h-4 w-4" />
                       </button>
                       <div className="flex-1 font-medium">{category.name}</div>
-                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
                         Editar
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => { setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); setCategoryToDelete(category); }}>

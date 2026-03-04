@@ -27,6 +27,8 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
+    image = models.CharField(max_length=255, blank=True, null=True)
+    image_path = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0, db_index=True)
