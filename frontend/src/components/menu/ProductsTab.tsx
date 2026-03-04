@@ -79,7 +79,6 @@ export const ProductsTab = () => {
   const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryImage, setNewCategoryImage] = useState<File | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
@@ -204,9 +203,8 @@ export const ProductsTab = () => {
     const normalized = newCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await createCategory({ name: normalized, image: newCategoryImage });
+      await createCategory({ name: normalized });
       setNewCategoryName("");
-      setNewCategoryImage(null);
       await loadMenuData();
       toast.success("Categoría creada");
     } catch (error) {
@@ -219,14 +217,19 @@ export const ProductsTab = () => {
     const normalized = editingCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await updateCategory(editingCategoryId, { name: normalized, image: editingCategoryImage, removeImage: removeEditingCategoryImage });
+      await updateCategory(editingCategoryId, {
+        name: normalized,
+        image: editingCategoryImage,
+        removeImage: removeEditingCategoryImage,
+      });
       setEditingCategoryId(null);
       setEditingCategoryName("");
       setEditingCategoryImage(null);
       setRemoveEditingCategoryImage(false);
       await loadMenuData();
       toast.success("Categoría actualizada");
-    } catch {
+    } catch (error) {
+      console.error("Failed to update category", error);
       toast.error("No se pudo actualizar la categoría");
     }
   };
@@ -616,17 +619,6 @@ export const ProductsTab = () => {
             <div className="flex gap-2">
               <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
               <Button onClick={handleCreateCategory}>Crear</Button>
-            </div>
-            <ImageUploadField
-              id="new-category-image"
-              label="Imagen de categoría (opcional)"
-              file={newCategoryImage}
-              onChange={setNewCategoryImage}
-            />
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setNewCategoryImage(null)}>
-                Limpiar imagen
-              </Button>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {visibleCategories.map((category) => (

@@ -451,7 +451,7 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data
     .map((item) => ({
       id: item.id,
@@ -522,7 +522,7 @@ export const createCategory = async (payload: string | { name: string; image?: F
     method: "POST",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,
@@ -537,11 +537,13 @@ export const createCategory = async (payload: string | { name: string; image?: F
 
 export const updateCategory = async (
   categoryId: number,
-  payload: string | { name: string; image?: File | null; removeImage?: boolean }
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean }
 ): Promise<Category> => {
   const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false } : payload;
   const formData = new FormData();
-  formData.append("name", normalizedPayload.name);
+  if (normalizedPayload.name !== undefined) {
+    formData.append("name", normalizedPayload.name);
+  }
   if (normalizedPayload.image) {
     formData.append("image", normalizedPayload.image);
   }
@@ -553,7 +555,7 @@ export const updateCategory = async (
     method: "PATCH",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,

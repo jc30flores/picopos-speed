@@ -81,13 +81,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
 
         image_file = request.FILES.get("image")
         if image_file:
-            payload_serializer = self.get_serializer(category, data={"name": category.name}, partial=True)
-            payload_serializer.is_valid(raise_exception=True)
-            payload_serializer.save()
-            from apps.menu.utils.images import save_menu_image
-            saved = save_menu_image(image_file, category.name)
-            category.image = saved["image"]
-            category.image_path = saved["image_path"]
+            category.image = image_file
             category.save(update_fields=["image", "image_path"])
 
         if created:

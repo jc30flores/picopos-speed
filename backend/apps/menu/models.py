@@ -27,7 +27,7 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
-    image = models.CharField(max_length=255, blank=True, null=True)
+    image = models.FileField(upload_to="categories/", blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
@@ -42,6 +42,10 @@ class Category(models.Model):
     def save(self, *args, **kwargs) -> None:
         if self.name:
             self.name = normalize_category_name(self.name)
+        if self.image and getattr(self.image, "url", None):
+            self.image_path = self.image.url
+        elif not self.image:
+            self.image_path = None
         super().save(*args, **kwargs)
 
 
