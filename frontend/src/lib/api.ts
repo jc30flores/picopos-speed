@@ -19,6 +19,7 @@ export type Modifier = {
   sortOrder?: number;
   image?: string | null;
   imagePath?: string | null;
+  imageUrl?: string | null;
 };
 
 export type ModifierGroup = {
@@ -29,6 +30,7 @@ export type ModifierGroup = {
   maxSelection: number;
   image?: string | null;
   imagePath?: string | null;
+  imageUrl?: string | null;
   modifiers: Modifier[];
 };
 
@@ -104,11 +106,6 @@ const normalizeImageUrl = (item: {
   const path = item.image_path ?? item.imagePath ?? null;
   if (typeof path === "string" && path.trim()) {
     return normalizeMediaPath(path);
-  }
-
-  const image = item.image ?? null;
-  if (typeof image === "string" && image.trim()) {
-    return normalizeMediaPath(image);
   }
 
   return null;
@@ -952,9 +949,10 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null }>;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null; image_url?: string | null }>;
     image?: string | null;
     image_path?: string | null;
+    image_url?: string | null;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -964,6 +962,7 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     maxSelection: item.max_selection,
     image: item.image ?? null,
     imagePath: item.image_path ?? null,
+    imageUrl: normalizeImageUrl(item),
     modifiers: item.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -972,6 +971,7 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
       sortOrder: modifier.sort_order ?? 0,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   }));
 };
@@ -1025,7 +1025,8 @@ export const createModifierGroup = async (payload: {
     max_selection: number;
     image?: string | null;
     image_path?: string | null;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+    image_url?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null; image_url?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -1035,6 +1036,7 @@ export const createModifierGroup = async (payload: {
     maxSelection: data.max_selection,
     image: data.image ?? null,
     imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -1042,6 +1044,7 @@ export const createModifierGroup = async (payload: {
       isActive: modifier.is_active,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   };
 };
@@ -1081,7 +1084,8 @@ export const updateModifierGroup = async (
     max_selection: number;
     image?: string | null;
     image_path?: string | null;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+    image_url?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null; image_url?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -1091,6 +1095,7 @@ export const updateModifierGroup = async (
     maxSelection: data.max_selection,
     image: data.image ?? null,
     imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -1098,6 +1103,7 @@ export const updateModifierGroup = async (
       isActive: modifier.is_active,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   };
 };

@@ -61,25 +61,27 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class ModifierSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(required=False)
-    image_path = serializers.SerializerMethodField()
+    image_path = serializers.CharField(read_only=True)
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Modifier
-        fields = ["id", "name", "price", "is_active", "sort_order", "image", "image_path"]
+        fields = ["id", "name", "price", "is_active", "sort_order", "image", "image_path", "image_url"]
 
-    def get_image_path(self, obj: Modifier) -> str | None:
+    def get_image_url(self, obj: Modifier) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)
 
 
 class ModifierGroupSerializer(serializers.ModelSerializer):
     modifiers = ModifierSerializer(many=True)
-    image_path = serializers.SerializerMethodField()
+    image_path = serializers.CharField(read_only=True)
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ModifierGroup
-        fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
+        fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "image_url", "modifiers"]
 
-    def get_image_path(self, obj: ModifierGroup) -> str | None:
+    def get_image_url(self, obj: ModifierGroup) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)
 
     def validate_name(self, value: str) -> str:

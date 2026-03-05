@@ -26,14 +26,12 @@ export const getEntityImageSrc = (entity: {
   imageUrl?: unknown;
   image_path?: unknown;
   imagePath?: unknown;
-  image?: unknown;
 }): string | null => {
   return (
     getMediaUrl(entity.image_url) ??
     getMediaUrl(entity.imageUrl) ??
     getMediaUrl(entity.image_path) ??
-    getMediaUrl(entity.imagePath) ??
-    getMediaUrl(entity.image)
+    getMediaUrl(entity.imagePath)
   );
 };
 

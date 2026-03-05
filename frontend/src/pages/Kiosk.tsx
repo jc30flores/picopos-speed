@@ -104,16 +104,30 @@ const Kiosk = () => {
     };
 
     if (step === "category") {
-      preload(categories.map((cat) => getSafeImage(getEntityImageSrc(cat))));
+      preload(categoriesForGrid.slice(0, 8).map((cat) => getSafeImage(getEntityImageSrc(cat))));
+      return;
     }
+
     if (step === "products") {
       preload(
         products
           .filter((p) => p.category === selectedCategory && p.available)
+          .slice(0, 8)
           .map((p) => getSafeImage(getProductImageSrc(p))),
       );
+      return;
     }
-  }, [categories, products, selectedCategory, step]);
+
+    if (step === "modifiers" && selectedProduct) {
+      const visibleModifiers = selectedProduct.modifierGroups
+        .map((groupId) => modifierGroups.find((group) => group.id === groupId))
+        .filter((group): group is ModifierGroup => Boolean(group))
+        .flatMap((group) => group.modifiers)
+        .slice(0, 8)
+        .map((modifier) => getSafeImage(getModifierImageSrc(modifier)));
+      preload(visibleModifiers);
+    }
+  }, [categoriesForGrid, modifierGroups, products, selectedCategory, selectedProduct, step]);
 
   const categoriesForGrid = useMemo(() => categories.filter((cat) => !cat.isHidden), [categories]);
 
@@ -201,8 +215,8 @@ const Kiosk = () => {
       setStep("modifiers");
       return;
     }
-    addToCart(product, [], "General");
-    setStep("review");
+    setAssignedNameError(null);
+    setAssignedNameDialog({ open: true, mode: "send", value: "" });
   };
 
   const handleEditCartItem = (itemId: string) => {
@@ -295,8 +309,8 @@ const Kiosk = () => {
     }
   };
 
-  const getModifierImageSrc = (image?: string | null, imagePath?: string | null) =>
-    getProductImageSrc({ image: image ?? null, imagePath: imagePath ?? null });
+  const getModifierImageSrc = (entity: { imageUrl?: string | null; imagePath?: string | null }) =>
+    getProductImageSrc({ imageUrl: entity.imageUrl ?? null, imagePath: entity.imagePath ?? null });
 
   const getItemTotal = (item: CartItem) => {
     const modifiersTotal = item.modifiers.reduce((sum, mod) => sum + mod.price, 0);
@@ -304,10 +318,56 @@ const Kiosk = () => {
   };
   const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
 
+  const assignedNameDialogNode = (
+    <Dialog
+      open={assignedNameDialog.open}
+      onOpenChange={(open) => {
+        if (isAssigningName) return;
+        setAssignedNameDialog((prev) => ({ ...prev, open }));
+        if (!open) setAssignedNameError(null);
+      }}
+    >
+      <DialogContent className="max-w-2xl p-8">
+        <DialogHeader>
+          <DialogTitle className="text-3xl">¿A nombre de quién es este producto?</DialogTitle>
+          <DialogDescription className="text-base">Escribe el nombre para identificar este artículo en cocina y entrega.</DialogDescription>
+        </DialogHeader>
+        <input
+          value={assignedNameDialog.value}
+          onChange={(event) => {
+            setAssignedNameDialog((prev) => ({ ...prev, value: event.target.value.slice(0, 80) }));
+            if (assignedNameError) setAssignedNameError(null);
+          }}
+          placeholder="Ej: Carlos, Ana, Mesa 1"
+          className="mt-4 h-16 w-full rounded-xl border border-white/20 bg-background px-4 text-2xl"
+          autoFocus
+          maxLength={80}
+        />
+        {assignedNameError ? <p className="mt-2 text-sm text-destructive">{assignedNameError}</p> : null}
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Button
+            variant="outline"
+            className="h-14 text-lg"
+            onClick={() => {
+              if (isAssigningName) return;
+              setAssignedNameDialog((prev) => ({ ...prev, open: false }));
+              setAssignedNameError(null);
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button className="h-14 text-lg" onClick={confirmAssignedName} disabled={isAssigningName}>
+            {isAssigningName ? "Guardando..." : "Aceptar"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
   const renderModifierTile = (group: ModifierGroup, mod: Modifier, singleSelection: boolean) => {
     const checked = selectedModifiers[String(group.id)]?.includes(String(mod.id)) || false;
     const disabled = !singleSelection && !checked && (selectedModifiers[String(group.id)]?.length || 0) >= group.maxSelection;
-    const imageSrc = getSafeImage(getModifierImageSrc(mod.image, mod.imagePath));
+    const imageSrc = getSafeImage(getModifierImageSrc(mod));
     const cardDisabled = disabled && !checked;
 
     const handleCardSelect = () => {
@@ -492,6 +552,8 @@ const Kiosk = () => {
           </div>
         </div>
 
+        {assignedNameDialogNode}
+
         <KioskImageLightbox
           open={preview.open}
           title={preview.title}
@@ -522,7 +584,7 @@ const Kiosk = () => {
                 if (!group) return null;
 
                 const selectedCount = selectedModifiers[String(groupId)]?.length || 0;
-                const groupImageSrc = getSafeImage(getModifierImageSrc(group.image, group.imagePath));
+                const groupImageSrc = getSafeImage(getModifierImageSrc(group));
 
                 return (
                   <Card key={groupId} className="rounded-3xl border-white/10 p-4 md:p-6">
@@ -605,49 +667,7 @@ const Kiosk = () => {
         </div>
 
 
-        <Dialog
-          open={assignedNameDialog.open}
-          onOpenChange={(open) => {
-            if (isAssigningName) return;
-            setAssignedNameDialog((prev) => ({ ...prev, open }));
-            if (!open) setAssignedNameError(null);
-          }}
-        >
-          <DialogContent className="max-w-2xl p-8">
-            <DialogHeader>
-              <DialogTitle className="text-3xl">¿A nombre de quién es este producto?</DialogTitle>
-              <DialogDescription className="text-base">Escribe el nombre para identificar este artículo en cocina y entrega.</DialogDescription>
-            </DialogHeader>
-            <input
-              value={assignedNameDialog.value}
-              onChange={(event) => {
-                setAssignedNameDialog((prev) => ({ ...prev, value: event.target.value.slice(0, 80) }));
-                if (assignedNameError) setAssignedNameError(null);
-              }}
-              placeholder="Ej: Carlos, Ana, Mesa 1"
-              className="mt-4 h-16 w-full rounded-xl border border-white/20 bg-background px-4 text-2xl"
-              autoFocus
-              maxLength={80}
-            />
-            {assignedNameError ? <p className="mt-2 text-sm text-destructive">{assignedNameError}</p> : null}
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Button
-                variant="outline"
-                className="h-14 text-lg"
-                onClick={() => {
-                  if (isAssigningName) return;
-                  setAssignedNameDialog((prev) => ({ ...prev, open: false }));
-                  setAssignedNameError(null);
-                }}
-              >
-                Cancelar
-              </Button>
-              <Button className="h-14 text-lg" onClick={confirmAssignedName} disabled={isAssigningName}>
-                {isAssigningName ? "Guardando..." : "Aceptar"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {assignedNameDialogNode}
 
         <KioskImageLightbox
           open={preview.open}
