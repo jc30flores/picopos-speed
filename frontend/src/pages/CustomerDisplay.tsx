@@ -147,12 +147,12 @@ const CustomerDisplay = () => {
                 preparingOrders.map((order) => (
                   <div
                     key={order.id}
-                    className="bg-primary-light/50 backdrop-blur-sm rounded-2xl p-6 border border-primary-foreground/10 animate-fade-in"
+                    className="bg-primary-light/60 backdrop-blur-sm rounded-2xl p-6 border border-white/20 animate-fade-in"
                   >
-                    <div className="text-center">
-                      <div className="text-7xl font-black mb-2">#{order.orderNumber}</div>
+                    <div className="text-center text-white">
+                      <div className="text-7xl font-black mb-2 tracking-tight text-white drop-shadow-sm">#{order.orderNumber}</div>
                       {order.customerName && (
-                        <p className="text-2xl font-semibold">{order.customerName}</p>
+                        <p className="text-2xl font-semibold text-white/95">{order.customerName}</p>
                       )}
                     </div>
                   </div>
@@ -188,12 +188,12 @@ const CustomerDisplay = () => {
                       "border-2 border-success"
                     )}
                   >
-                    <div className="text-center">
-                      <div className="text-7xl font-black mb-2 text-primary">
+                    <div className="text-center text-slate-950">
+                      <div className="text-7xl font-black mb-2 text-slate-950 tracking-tight">
                         #{order.orderNumber}
                       </div>
                       {order.customerName && (
-                        <p className="text-2xl font-semibold text-primary">
+                        <p className="text-2xl font-semibold text-slate-900">
                           {order.customerName}
                         </p>
                       )}
