@@ -79,6 +79,9 @@ const Kiosk = () => {
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [preview, setPreview] = useState<PreviewState>({ open: false, title: "" });
 
+  const categoriesForGrid = useMemo(() => categories.filter((cat) => !cat.isHidden), [categories]);
+
+
   useEffect(() => {
     Promise.all([getCategories(), getProducts(), getModifierGroups()])
       .then(([categoriesResponse, productsResponse, modifierGroupsResponse]) => {
@@ -129,7 +132,6 @@ const Kiosk = () => {
     }
   }, [categoriesForGrid, modifierGroups, products, selectedCategory, selectedProduct, step]);
 
-  const categoriesForGrid = useMemo(() => categories.filter((cat) => !cat.isHidden), [categories]);
 
   const groupedCart = useMemo(() => {
     const map = new Map<string, { signature: string; representative: CartItem; itemIds: string[] }>();
