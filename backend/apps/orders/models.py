@@ -130,6 +130,7 @@ class OrderItem(models.Model):
     product_name_snapshot = models.CharField(max_length=160)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.PositiveIntegerField(default=1)
+    assigned_name = models.CharField(max_length=80, blank=True, default="")
 
     class Meta:
         indexes = [models.Index(fields=["order"]) ]

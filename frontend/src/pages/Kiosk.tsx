@@ -40,6 +40,7 @@ interface CartItem {
   basePrice: number;
   quantity: number;
   modifiers: CartModifier[];
+  assignedName: string;
 }
 
 interface PreviewState {
@@ -56,7 +57,7 @@ const buildItemSignature = (item: CartItem) => {
     .map((mod) => `${mod.groupId ?? "g"}:${mod.id ?? mod.name}:${mod.price}`)
     .sort()
     .join("|");
-  return `${item.productId}::${mods}`;
+  return `${item.productId}::${item.assignedName.trim().toLowerCase()}::${mods}`;
 };
 
 const Kiosk = () => {
@@ -68,6 +69,9 @@ const Kiosk = () => {
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [editingCartItemId, setEditingCartItemId] = useState<string | null>(null);
   const [unitPicker, setUnitPicker] = useState<{ open: boolean; itemIds: string[]; title: string }>({ open: false, itemIds: [], title: "" });
+  const [assignedNameDialog, setAssignedNameDialog] = useState<{ open: boolean; mode: "send" | "continue"; value: string }>({ open: false, mode: "send", value: "" });
+  const [isAssigningName, setIsAssigningName] = useState(false);
+  const [assignedNameError, setAssignedNameError] = useState<string | null>(null);
   const [orderNumber, setOrderNumber] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
@@ -89,20 +93,24 @@ const Kiosk = () => {
 
   useEffect(() => {
     const preload = (urls: Array<string | null>) => {
-      urls.filter(Boolean).slice(0, 10).forEach((src) => {
-        const img = new Image();
-        img.src = src as string;
-      });
+      urls
+        .filter((src): src is string => Boolean(src) && !brokenImageUrlCache.has(src as string))
+        .slice(0, 8)
+        .forEach((src) => {
+          const img = new Image();
+          img.loading = "lazy";
+          img.src = src;
+        });
     };
 
     if (step === "category") {
-      preload(categories.map((cat) => getEntityImageSrc(cat)));
+      preload(categories.map((cat) => getSafeImage(getEntityImageSrc(cat))));
     }
     if (step === "products") {
       preload(
         products
           .filter((p) => p.category === selectedCategory && p.available)
-          .map((p) => getProductImageSrc(p)),
+          .map((p) => getSafeImage(getProductImageSrc(p))),
       );
     }
   }, [categories, products, selectedCategory, step]);
@@ -138,7 +146,7 @@ const Kiosk = () => {
     setPreview({ open: true, title, subtitle, imageSrc });
   };
 
-  const addToCart = (product: Product, modifiers: CartModifier[]) => {
+  const addToCart = (product: Product, modifiers: CartModifier[], assignedName: string) => {
     setCart((previous) => [
       ...previous,
       {
@@ -148,8 +156,24 @@ const Kiosk = () => {
         basePrice: product.price,
         quantity: 1,
         modifiers,
+        assignedName,
       },
     ]);
+  };
+
+  const getSelectedModifiers = () => {
+    if (!selectedProduct) return [] as CartModifier[];
+    const selectedMods: CartModifier[] = [];
+    selectedProduct.modifierGroups.forEach((groupId) => {
+      const group = modifierGroups.find((g) => g.id === groupId);
+      const selectedInGroup = selectedModifiers[String(groupId)] || [];
+      if (!group) return;
+      selectedInGroup.forEach((modId) => {
+        const mod = group.modifiers.find((m) => String(m.id) === modId);
+        if (mod) selectedMods.push({ id: mod.id, groupId: group.id, name: mod.name, price: mod.price });
+      });
+    });
+    return selectedMods;
   };
 
   const cloneCartItemUnit = (sourceItemId: string) => {
@@ -157,7 +181,7 @@ const Kiosk = () => {
     if (!source) return;
     const product = products.find((candidate) => candidate.id === source.productId);
     if (!product) return;
-    addToCart(product, source.modifiers.map((mod) => ({ ...mod })));
+    addToCart(product, source.modifiers.map((mod) => ({ ...mod })), source.assignedName);
   };
 
   const removeCartItemById = (itemId: string) => {
@@ -177,7 +201,7 @@ const Kiosk = () => {
       setStep("modifiers");
       return;
     }
-    addToCart(product, []);
+    addToCart(product, [], "General");
     setStep("review");
   };
 
@@ -200,28 +224,38 @@ const Kiosk = () => {
     setStep("modifiers");
   };
 
-  const handleAddModifiers = () => {
+  const handleNameModalOpen = (mode: "send" | "continue") => {
     if (!selectedProduct) return;
+    if (!canContinue()) return;
+    const existingName = editingCartItemId ? cart.find((item) => item.id === editingCartItemId)?.assignedName ?? "" : "";
+    setAssignedNameError(null);
+    setAssignedNameDialog({ open: true, mode, value: existingName });
+  };
 
-    const selectedMods: CartModifier[] = [];
-    selectedProduct.modifierGroups.forEach((groupId) => {
-      const group = modifierGroups.find((g) => g.id === groupId);
-      const selectedInGroup = selectedModifiers[String(groupId)] || [];
-      if (!group) return;
-      selectedInGroup.forEach((modId) => {
-        const mod = group.modifiers.find((m) => String(m.id) === modId);
-        if (mod) selectedMods.push({ id: mod.id, groupId: group.id, name: mod.name, price: mod.price });
-      });
-    });
-
-    if (editingCartItemId) {
-      setCart((previous) => previous.map((item) => (item.id === editingCartItemId ? { ...item, modifiers: selectedMods } : item)));
-      setEditingCartItemId(null);
-    } else {
-      addToCart(selectedProduct, selectedMods);
+  const confirmAssignedName = () => {
+    if (!selectedProduct || isAssigningName) return;
+    const trimmedName = assignedNameDialog.value.trim();
+    if (!trimmedName) {
+      setAssignedNameError("Ingresa un nombre para continuar");
+      return;
     }
 
-    setStep("review");
+    setIsAssigningName(true);
+    const selectedMods = getSelectedModifiers();
+
+    if (editingCartItemId) {
+      setCart((previous) => previous.map((item) => (item.id === editingCartItemId ? { ...item, modifiers: selectedMods, assignedName: trimmedName } : item)));
+      setEditingCartItemId(null);
+    } else {
+      addToCart(selectedProduct, selectedMods, trimmedName);
+    }
+
+    const mode = assignedNameDialog.mode;
+    setAssignedNameDialog({ open: false, mode, value: "" });
+    setIsAssigningName(false);
+    setSelectedProduct(null);
+    setSelectedModifiers({});
+    setStep(mode === "send" ? "category" : "review");
   };
 
   const canContinue = () => {
@@ -247,7 +281,8 @@ const Kiosk = () => {
           productName: item.name,
           price: item.basePrice,
           quantity: item.quantity,
-          modifiers: item.modifiers.map(({ name, price }) => ({ name, price })),
+          modifiers: item.modifiers.map(({ id, name, price }) => ({ id, name, price })),
+          assignedName: item.assignedName,
         })),
       });
       setOrderNumber(order.orderNumber);
@@ -305,11 +340,16 @@ const Kiosk = () => {
         <div className="flex items-center justify-between">
           <div className="shrink-0">
             {singleSelection ? (
-              <RadioGroupItem value={String(mod.id)} id={`radio-${group.id}-${mod.id}`} />
+              <RadioGroupItem
+                value={String(mod.id)}
+                id={`radio-${group.id}-${mod.id}`}
+                onClick={(event) => event.stopPropagation()}
+              />
             ) : (
               <Checkbox
                 id={`check-${group.id}-${mod.id}`}
                 checked={checked}
+                onClick={(event) => event.stopPropagation()}
                 onCheckedChange={(nextChecked) => {
                   const current = selectedModifiers[String(group.id)] || [];
                   if (nextChecked && current.length < group.maxSelection) {
@@ -330,18 +370,20 @@ const Kiosk = () => {
           </span>
         </div>
 
-        <div className="h-[160px] w-full">
-          <KioskImage
-            src={imageSrc}
-            alt={mod.name}
-            ratio="16 / 10"
-            className="h-full w-full rounded-xl"
-            imageClassName="p-2"
-            sizes="(min-width: 1280px) 24vw, 40vw"
-            onPreview={() => openPreview(mod.name, imageSrc, group.name)}
-            onImageError={() => markImageFailed(imageSrc)}
-          />
-        </div>
+        {imageSrc ? (
+          <div className="h-[180px] w-full">
+            <KioskImage
+              src={imageSrc}
+              alt={mod.name}
+              ratio="16 / 10"
+              className="h-full w-full rounded-xl"
+              imageClassName="p-2"
+              sizes="(min-width: 1280px) 24vw, 40vw"
+              onPreview={() => openPreview(mod.name, imageSrc, group.name)}
+              onImageError={() => markImageFailed(imageSrc)}
+            />
+          </div>
+        ) : null}
 
         <Label
           htmlFor={singleSelection ? `radio-${group.id}-${mod.id}` : `check-${group.id}-${mod.id}`}
@@ -369,17 +411,31 @@ const Kiosk = () => {
                 <Card
                   key={category.id}
                   className={cn(
-                    "cursor-pointer text-center transition hover:bg-muted/70 active:scale-[0.99]",
-                    src ? "p-4 sm:p-6" : "flex min-h-[120px] items-center justify-center p-4 sm:p-6",
+                    "cursor-pointer overflow-hidden rounded-3xl border border-white/10 bg-card/60 text-center transition hover:bg-muted/70 active:scale-[0.99]",
+                    src ? "p-4 sm:p-5" : "flex min-h-[140px] items-center justify-center p-5",
                   )}
                   onClick={() => handleCategorySelect(category.name)}
                 >
                   {src ? (
-                    <div className="mb-3 h-28 w-full overflow-hidden rounded-2xl">
-                      <KioskImage src={src} alt={category.name} ratio="16 / 10" imageClassName="object-cover p-0" sizes="(min-width: 768px) 30vw, 45vw" onImageError={() => markImageFailed(src)} />
+                    <div className="flex h-full flex-col">
+                      <div className="w-full overflow-hidden rounded-2xl bg-white" style={{ aspectRatio: "4 / 3", minHeight: "220px" }}>
+                        <KioskImage
+                          src={src}
+                          alt={category.name}
+                          ratio="4 / 3"
+                          className="h-full w-full rounded-2xl"
+                          imageClassName="object-contain p-3"
+                          sizes="(min-width: 1280px) 22vw, (min-width: 640px) 30vw, 45vw"
+                          onImageError={() => markImageFailed(src)}
+                        />
+                      </div>
+                      <div className="pt-4">
+                        <h3 className="text-xl font-black break-words sm:text-2xl">{category.name}</h3>
+                      </div>
                     </div>
-                  ) : null}
-                  <h3 className="text-xl font-bold break-words sm:text-2xl">{category.name}</h3>
+                  ) : (
+                    <h3 className="text-2xl font-black break-words">{category.name}</h3>
+                  )}
                 </Card>
               );
             })}
@@ -529,15 +585,69 @@ const Kiosk = () => {
 
             <Button
               size="lg"
-              variant="default"
+              variant="outline"
               className="mt-8 w-full py-8 text-xl font-bold md:text-2xl"
-              onClick={handleAddModifiers}
-              disabled={!canContinue()}
+              onClick={() => handleNameModalOpen("send")}
+              disabled={!canContinue() || isAssigningName}
+            >
+              Enviar al carrito
+            </Button>
+            <Button
+              size="lg"
+              variant="default"
+              className="mt-4 w-full py-8 text-xl font-bold md:text-2xl"
+              onClick={() => handleNameModalOpen("continue")}
+              disabled={!canContinue() || isAssigningName}
             >
               Continuar
             </Button>
           </div>
         </div>
+
+
+        <Dialog
+          open={assignedNameDialog.open}
+          onOpenChange={(open) => {
+            if (isAssigningName) return;
+            setAssignedNameDialog((prev) => ({ ...prev, open }));
+            if (!open) setAssignedNameError(null);
+          }}
+        >
+          <DialogContent className="max-w-2xl p-8">
+            <DialogHeader>
+              <DialogTitle className="text-3xl">¿A nombre de quién es este producto?</DialogTitle>
+              <DialogDescription className="text-base">Escribe el nombre para identificar este artículo en cocina y entrega.</DialogDescription>
+            </DialogHeader>
+            <input
+              value={assignedNameDialog.value}
+              onChange={(event) => {
+                setAssignedNameDialog((prev) => ({ ...prev, value: event.target.value.slice(0, 80) }));
+                if (assignedNameError) setAssignedNameError(null);
+              }}
+              placeholder="Ej: Carlos, Ana, Mesa 1"
+              className="mt-4 h-16 w-full rounded-xl border border-white/20 bg-background px-4 text-2xl"
+              autoFocus
+              maxLength={80}
+            />
+            {assignedNameError ? <p className="mt-2 text-sm text-destructive">{assignedNameError}</p> : null}
+            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Button
+                variant="outline"
+                className="h-14 text-lg"
+                onClick={() => {
+                  if (isAssigningName) return;
+                  setAssignedNameDialog((prev) => ({ ...prev, open: false }));
+                  setAssignedNameError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button className="h-14 text-lg" onClick={confirmAssignedName} disabled={isAssigningName}>
+                {isAssigningName ? "Guardando..." : "Aceptar"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <KioskImageLightbox
           open={preview.open}
@@ -567,6 +677,7 @@ const Kiosk = () => {
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex-1">
                         <h3 className="text-xl font-bold">{item.name}</h3>
+                        <p className="mt-1 text-sm font-semibold text-secondary">A nombre de: {item.assignedName}</p>
                         {item.modifiers.length > 0 && (
                           <div className="text-sm text-muted-foreground mt-2 space-y-1">
                             {item.modifiers.map((mod, idx) => (
@@ -713,6 +824,8 @@ const Kiosk = () => {
             setOrderNumber(null);
             setSelectedProduct(null);
             setEditingCartItemId(null);
+            setAssignedNameDialog({ open: false, mode: "send", value: "" });
+            setAssignedNameError(null);
           }}
         >
           Finalizar

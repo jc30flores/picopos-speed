@@ -74,6 +74,21 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
   return normalizedPath;
 };
 
+const normalizeMediaPath = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  const normalized = trimmed
+    .replace(/^\/+/, "")
+    .replace(/^media\/menu_image\/menu_image\//, "media/menu_image/")
+    .replace(/^menu_image\/menu_image\//, "menu_image/");
+
+  if (normalized.startsWith("media/")) return `/${normalized}`;
+  if (normalized.startsWith("menu_image/")) return `/media/${normalized}`;
+  return `/${normalized}`;
+};
+
 const normalizeImageUrl = (item: {
   image_url?: string | null;
   imageUrl?: string | null;
@@ -83,26 +98,17 @@ const normalizeImageUrl = (item: {
 }): string | null => {
   const direct = item.image_url ?? item.imageUrl ?? null;
   if (typeof direct === "string" && direct.trim()) {
-    const trimmed = direct.trim();
-    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    return normalizeMediaPath(direct);
   }
 
   const path = item.image_path ?? item.imagePath ?? null;
   if (typeof path === "string" && path.trim()) {
-    const trimmed = path.trim();
-    if (trimmed.startsWith("/menu_image/")) {
-      return trimmed.replace("/menu_image/", "/media/menu_image/", 1);
-    }
-    if (trimmed.startsWith("/media/")) {
-      return trimmed;
-    }
-    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    return normalizeMediaPath(path);
   }
 
   const image = item.image ?? null;
   if (typeof image === "string" && image.trim()) {
-    const trimmed = image.trim().replace(/^\/+/, "");
-    return `/media/menu_image/${trimmed}`;
+    return normalizeMediaPath(image);
   }
 
   return null;
@@ -155,6 +161,7 @@ export type OrderItem = {
   quantity: number;
   modifiers: string[];
   price: number;
+  assignedName?: string;
 };
 
 export type Order = {
@@ -1206,6 +1213,7 @@ const mapOrder = (order: {
     product_name_snapshot: string;
     price_snapshot: string;
     quantity: number;
+    assigned_name?: string;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
@@ -1229,6 +1237,7 @@ const mapOrder = (order: {
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      assignedName: item.assigned_name || undefined,
     })),
     total: Number(order.total),
     status: order.status,
@@ -1263,6 +1272,7 @@ export const createOrder = async (payload: {
     price: number;
     quantity: number;
     modifiers: Array<{ id?: number; name: string; price: number }>;
+    assignedName?: string;
   }>;
 }): Promise<Order> => {
   const response = await request("/orders/", {
@@ -1283,6 +1293,7 @@ export const createOrder = async (payload: {
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
+        assigned_name: item.assignedName?.trim() || "",
         modifiers: item.modifiers.map((modifier) => ({
           id: modifier.id,
           name: modifier.name,

@@ -7,7 +7,17 @@ export const getMediaUrl = (raw: unknown): string | null => {
     return trimmed;
   }
 
-  const path = trimmed.replace(/^\/+/, "");
+  const normalized = trimmed
+    .replace(/^\/+/, "")
+    .replace(/^media\/menu_image\/menu_image\//, "media/menu_image/")
+    .replace(/^menu_image\/menu_image\//, "menu_image/");
+
+  const path = normalized.startsWith("media/")
+    ? normalized
+    : normalized.startsWith("menu_image/")
+      ? `media/${normalized}`
+      : normalized;
+
   return `${window.location.origin}/${path}`.replace(/([^:]\/)\/+/g, "$1");
 };
 

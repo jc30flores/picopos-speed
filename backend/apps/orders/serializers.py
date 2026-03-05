@@ -27,6 +27,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_name_snapshot",
             "price_snapshot",
             "quantity",
+            "assigned_name",
             "applied_modifiers",
         ]
 
@@ -128,6 +129,7 @@ class OrderItemInputSerializer(serializers.Serializer):
     product_name_snapshot = serializers.CharField()
     price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2)
     quantity = serializers.IntegerField(min_value=1)
+    assigned_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
     modifiers = AppliedModifierInputSerializer(many=True, required=False)
 
 
