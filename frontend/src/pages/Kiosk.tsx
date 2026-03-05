@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, Minus, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Minus, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +51,8 @@ interface PreviewState {
 }
 
 const brokenImageUrlCache = new Set<string>();
+
+const normalizeAssignedName = (value: string) => value.toLocaleUpperCase("es-SV");
 
 const buildItemSignature = (item: CartItem) => {
   const mods = [...item.modifiers]
@@ -243,14 +245,14 @@ const Kiosk = () => {
   const handleNameModalOpen = (mode: "send" | "continue") => {
     if (!selectedProduct) return;
     if (!canContinue()) return;
-    const existingName = editingCartItemId ? cart.find((item) => item.id === editingCartItemId)?.assignedName ?? "" : "";
+    const existingName = editingCartItemId ? normalizeAssignedName(cart.find((item) => item.id === editingCartItemId)?.assignedName ?? "") : "";
     setAssignedNameError(null);
     setAssignedNameDialog({ open: true, mode, value: existingName });
   };
 
   const confirmAssignedName = () => {
     if (!selectedProduct || isAssigningName) return;
-    const trimmedName = assignedNameDialog.value.trim();
+    const trimmedName = normalizeAssignedName(assignedNameDialog.value.trim());
     if (!trimmedName) {
       setAssignedNameError("Ingresa un nombre para continuar");
       return;
@@ -319,6 +321,7 @@ const Kiosk = () => {
     return (item.basePrice + modifiersTotal) * item.quantity;
   };
   const total = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
+  const cartUnitsCount = cart.reduce((sum, item) => sum + Math.max(1, item.quantity || 1), 0);
 
   const assignedNameDialogNode = (
     <Dialog
@@ -337,13 +340,24 @@ const Kiosk = () => {
         <input
           value={assignedNameDialog.value}
           onChange={(event) => {
-            setAssignedNameDialog((prev) => ({ ...prev, value: event.target.value.slice(0, 80) }));
+            const uppercaseValue = normalizeAssignedName(event.target.value).slice(0, 80);
+            setAssignedNameDialog((prev) => ({ ...prev, value: uppercaseValue }));
             if (assignedNameError) setAssignedNameError(null);
           }}
-          placeholder="Ej: Carlos, Ana, Mesa 1"
-          className="mt-4 h-16 w-full rounded-xl border border-white/20 bg-background px-4 text-2xl"
+          onPaste={(event) => {
+            event.preventDefault();
+            const pasted = event.clipboardData.getData("text");
+            const uppercaseValue = normalizeAssignedName(pasted).slice(0, 80);
+            setAssignedNameDialog((prev) => ({ ...prev, value: uppercaseValue }));
+            if (assignedNameError) setAssignedNameError(null);
+          }}
+          placeholder="EJ: CARLOS, ANA, MESA 1"
+          className="mt-4 h-16 w-full rounded-xl border border-white/20 bg-background px-4 text-2xl uppercase"
           autoFocus
           maxLength={80}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
         />
         {assignedNameError ? <p className="mt-2 text-sm text-destructive">{assignedNameError}</p> : null}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -502,6 +516,19 @@ const Kiosk = () => {
               );
             })}
           </div>
+
+          {cartUnitsCount > 0 ? (
+            <div className="sticky bottom-4 mt-6">
+              <Button
+                size="lg"
+                className="h-16 w-full text-xl font-black"
+                onClick={() => setStep("review")}
+              >
+                <ReceiptText className="mr-2 h-6 w-6" />
+                VER ORDEN ({cartUnitsCount})
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
     );
