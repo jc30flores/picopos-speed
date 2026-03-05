@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from django.db import transaction
-from django.conf import settings
 import json
 from decimal import Decimal
 from apps.menu.models import (
@@ -15,11 +14,12 @@ from apps.menu.models import (
     normalize_modifier_label,
 )
 from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
+from apps.menu.utils.media import safe_media_url
 
 
 class CategorySerializer(serializers.ModelSerializer):
     image = serializers.FileField(required=False, allow_null=True)
-    image_path = serializers.CharField(read_only=True)
+    image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
     remove_image = serializers.BooleanField(write_only=True, required=False, default=False)
 
@@ -28,9 +28,10 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = ["id", "name", "image", "image_path", "image_url", "remove_image", "is_active", "is_hidden", "position"]
 
     def get_image_url(self, obj: Category) -> str | None:
-        if obj.image and getattr(obj.image, "url", None):
-            return obj.image.url
-        return obj.image_path
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
+
+    def get_image_path(self, obj: Category) -> str | None:
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
 
     def validate_name(self, value: str) -> str:
         normalized = normalize_category_name(value)
@@ -60,20 +61,26 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class ModifierSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(required=False)
-    image_path = serializers.CharField(read_only=True)
+    image_path = serializers.SerializerMethodField()
 
     class Meta:
         model = Modifier
         fields = ["id", "name", "price", "is_active", "sort_order", "image", "image_path"]
 
+    def get_image_path(self, obj: Modifier) -> str | None:
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
+
 
 class ModifierGroupSerializer(serializers.ModelSerializer):
     modifiers = ModifierSerializer(many=True)
-    image_path = serializers.CharField(read_only=True)
+    image_path = serializers.SerializerMethodField()
 
     class Meta:
         model = ModifierGroup
         fields = ["id", "name", "required", "min_selection", "max_selection", "image", "image_path", "modifiers"]
+
+    def get_image_path(self, obj: ModifierGroup) -> str | None:
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
 
     def validate_name(self, value: str) -> str:
         normalized = normalize_modifier_label(value)
@@ -219,7 +226,7 @@ class ProductSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False,
     )
-    image_path = serializers.CharField(read_only=True)
+    image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -315,19 +322,10 @@ class ProductSerializer(serializers.ModelSerializer):
             ProductModifierGroup.objects.filter(product=instance, modifier_group_id=group_id).update(show_in_pos=bool(show))
 
     def get_image_url(self, obj: Product) -> str | None:
-        url = None
-        if obj.image_path:
-            url = obj.image_path
-        elif obj.image:
-            image_value = obj.image
-            if not image_value.startswith("menu_image/"):
-                image_value = f"menu_image/{image_value}"
-            url = f"{settings.MEDIA_URL.rstrip('/')}/{image_value}"
-        if not url:
-            return None
-        if url.startswith("/menu_image/"):
-            url = url.replace("/menu_image/", "/media/menu_image/", 1)
-        return url
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
+
+    def get_image_path(self, obj: Product) -> str | None:
+        return safe_media_url(image=obj.image, image_path=obj.image_path)
 
     def update(self, instance, validated_data):
         disposable_apply_to = validated_data.get("disposable_apply_to")

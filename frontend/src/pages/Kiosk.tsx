@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, ImageIcon, Minus, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,8 @@ interface PreviewState {
   imageSrc?: string | null;
 }
 
+const brokenImageUrlCache = new Set<string>();
+
 const buildItemSignature = (item: CartItem) => {
   const mods = [...item.modifiers]
     .map((mod) => `${mod.groupId ?? "g"}:${mod.id ?? mod.name}:${mod.price}`)
@@ -71,7 +73,6 @@ const Kiosk = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
-  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<PreviewState>({ open: false, title: "" });
 
   useEffect(() => {
@@ -122,13 +123,13 @@ const Kiosk = () => {
     return Array.from(map.values());
   }, [cart]);
 
-  const getSafeImage = (key: string, src: string | null) => {
-    if (!src || failedImages[key]) return null;
+  const getSafeImage = (src: string | null) => {
+    if (!src || brokenImageUrlCache.has(src)) return null;
     return src;
   };
 
-  const markImageFailed = (key: string) => {
-    setFailedImages((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  const markImageFailed = (src?: string | null) => {
+    if (src) brokenImageUrlCache.add(src);
     setPreview((current) => (current.imageSrc ? { ...current, open: false } : current));
   };
 
@@ -271,16 +272,35 @@ const Kiosk = () => {
   const renderModifierTile = (group: ModifierGroup, mod: Modifier, singleSelection: boolean) => {
     const checked = selectedModifiers[String(group.id)]?.includes(String(mod.id)) || false;
     const disabled = !singleSelection && !checked && (selectedModifiers[String(group.id)]?.length || 0) >= group.maxSelection;
-    const imageKey = `option-${mod.id}`;
-    const imageSrc = getSafeImage(imageKey, getModifierImageSrc(mod.image, mod.imagePath));
+    const imageSrc = getSafeImage(getModifierImageSrc(mod.image, mod.imagePath));
+    const cardDisabled = disabled && !checked;
+
+    const handleCardSelect = () => {
+      if (singleSelection) {
+        setSelectedModifiers({ ...selectedModifiers, [String(group.id)]: [String(mod.id)] });
+        return;
+      }
+      const current = selectedModifiers[String(group.id)] || [];
+      if (checked) {
+        setSelectedModifiers({
+          ...selectedModifiers,
+          [String(group.id)]: current.filter((id) => id !== String(mod.id)),
+        });
+        return;
+      }
+      if (current.length < group.maxSelection) {
+        setSelectedModifiers({ ...selectedModifiers, [String(group.id)]: [...current, String(mod.id)] });
+      }
+    };
 
     return (
       <div
         className={cn(
-          "flex min-h-[150px] flex-col gap-3 rounded-2xl border p-3 md:p-4",
-          checked ? "border-primary bg-primary/10" : "border-white/10 bg-card/40",
-          disabled ? "opacity-60" : "hover:bg-muted/80",
+          "flex min-h-[150px] cursor-pointer flex-col gap-3 rounded-2xl border p-3 transition-all md:p-4",
+          checked ? "border-primary bg-primary/15 shadow-[0_0_0_2px_rgba(34,197,94,0.15)]" : "border-white/10 bg-card/40",
+          cardDisabled ? "opacity-60" : "hover:bg-muted/80",
         )}
+        onClick={handleCardSelect}
       >
         <div className="flex items-center justify-between">
           <div className="shrink-0">
@@ -301,7 +321,7 @@ const Kiosk = () => {
                     });
                   }
                 }}
-                disabled={disabled}
+                disabled={cardDisabled}
               />
             )}
           </div>
@@ -319,7 +339,7 @@ const Kiosk = () => {
             imageClassName="p-2"
             sizes="(min-width: 1280px) 24vw, 40vw"
             onPreview={() => openPreview(mod.name, imageSrc, group.name)}
-            onImageError={() => markImageFailed(imageKey)}
+            onImageError={() => markImageFailed(imageSrc)}
           />
         </div>
 
@@ -344,22 +364,21 @@ const Kiosk = () => {
           <h1 className="mb-8 text-center text-3xl font-bold break-words sm:text-4xl md:text-5xl">Selecciona una Categoría</h1>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6">
             {categoriesForGrid.map((category) => {
-              const src = getSafeImage(`category-${category.id}`, getEntityImageSrc(category));
+              const src = getSafeImage(getEntityImageSrc(category));
               return (
                 <Card
                   key={category.id}
-                  className="cursor-pointer p-4 text-center transition hover:bg-muted/70 active:scale-[0.99] sm:p-6"
+                  className={cn(
+                    "cursor-pointer text-center transition hover:bg-muted/70 active:scale-[0.99]",
+                    src ? "p-4 sm:p-6" : "flex min-h-[120px] items-center justify-center p-4 sm:p-6",
+                  )}
                   onClick={() => handleCategorySelect(category.name)}
                 >
-                  <div className="mb-3 h-28 w-full">
-                    {src ? (
-                      <KioskImage src={src} alt={category.name} ratio="16 / 10" sizes="(min-width: 768px) 30vw, 45vw" onImageError={() => markImageFailed(`category-${category.id}`)} />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-white text-slate-500">
-                        <ImageIcon className="h-10 w-10" />
-                      </div>
-                    )}
-                  </div>
+                  {src ? (
+                    <div className="mb-3 h-28 w-full overflow-hidden rounded-2xl">
+                      <KioskImage src={src} alt={category.name} ratio="16 / 10" imageClassName="object-cover p-0" sizes="(min-width: 768px) 30vw, 45vw" onImageError={() => markImageFailed(src)} />
+                    </div>
+                  ) : null}
                   <h3 className="text-xl font-bold break-words sm:text-2xl">{category.name}</h3>
                 </Card>
               );
@@ -385,27 +404,28 @@ const Kiosk = () => {
 
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
               {productsForCategory.map((product) => {
-                const imageKey = `product-${product.id}`;
-                const imageSrc = getSafeImage(imageKey, getProductImageSrc(product));
+                const imageSrc = getSafeImage(getProductImageSrc(product));
                 return (
                   <Card
                     key={product.id}
                     className="group cursor-pointer overflow-hidden rounded-3xl border-white/10 bg-card/70 p-0 shadow-lg transition-transform duration-150 hover:-translate-y-0.5 hover:shadow-2xl active:scale-[0.995]"
                     onClick={() => handleProductSelect(product)}
                   >
-                    <div className="p-4 pb-2 md:p-5 md:pb-3">
-                      <KioskImage
-                        src={imageSrc}
-                        alt={product.name}
-                        ratio="16 / 10"
-                        loading="lazy"
-                        sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
-                        className="w-full rounded-2xl"
-                        onPreview={() => openPreview(product.name, imageSrc, selectedCategory)}
-                        onImageError={() => markImageFailed(imageKey)}
-                      />
-                    </div>
-                    <div className="px-5 pb-5 pt-3">
+                    {imageSrc ? (
+                      <div className="p-4 pb-2 md:p-5 md:pb-3">
+                        <KioskImage
+                          src={imageSrc}
+                          alt={product.name}
+                          ratio="16 / 10"
+                          loading="lazy"
+                          sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
+                          className="w-full rounded-2xl"
+                          onPreview={() => openPreview(product.name, imageSrc, selectedCategory)}
+                          onImageError={() => markImageFailed(imageSrc)}
+                        />
+                      </div>
+                    ) : null}
+                    <div className={cn("px-5 pb-5", imageSrc ? "pt-3" : "pt-5")}>
                       <h3 className="line-clamp-2 text-2xl font-extrabold leading-tight">{product.name}</h3>
                       <p className="mt-2 text-3xl font-black text-secondary">${product.price.toFixed(2)}</p>
                     </div>
@@ -446,25 +466,26 @@ const Kiosk = () => {
                 if (!group) return null;
 
                 const selectedCount = selectedModifiers[String(groupId)]?.length || 0;
-                const groupImageKey = `group-${group.id}`;
-                const groupImageSrc = getSafeImage(groupImageKey, getModifierImageSrc(group.image, group.imagePath));
+                const groupImageSrc = getSafeImage(getModifierImageSrc(group.image, group.imagePath));
 
                 return (
                   <Card key={groupId} className="rounded-3xl border-white/10 p-4 md:p-6">
                     <div className="mb-5 flex items-center justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-4">
-                        <div className="h-24 w-24 shrink-0 md:h-28 md:w-28">
-                          <KioskImage
-                            src={groupImageSrc}
-                            alt={group.name}
-                            ratio="1 / 1"
-                            className="h-full w-full rounded-2xl"
-                            imageClassName="p-2"
-                            sizes="112px"
-                            onPreview={() => openPreview(group.name, groupImageSrc, "Grupo de modificadores")}
-                            onImageError={() => markImageFailed(groupImageKey)}
-                          />
-                        </div>
+                        {groupImageSrc ? (
+                          <div className="h-24 w-24 shrink-0 md:h-28 md:w-28">
+                            <KioskImage
+                              src={groupImageSrc}
+                              alt={group.name}
+                              ratio="1 / 1"
+                              className="h-full w-full rounded-2xl"
+                              imageClassName="p-2"
+                              sizes="112px"
+                              onPreview={() => openPreview(group.name, groupImageSrc, "Grupo de modificadores")}
+                              onImageError={() => markImageFailed(groupImageSrc)}
+                            />
+                          </div>
+                        ) : null}
                         <div className="min-w-0">
                           <h3 className="text-2xl font-black leading-tight md:text-3xl">
                             {group.name}

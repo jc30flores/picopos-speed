@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import { Eye, ImageIcon } from "lucide-react";
+import { memo, useEffect, useState } from "react";
+import { Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { KioskImageFrame } from "@/components/kiosk/KioskImageFrame";
 
@@ -14,11 +14,6 @@ interface KioskImageProps {
   onPreview?: () => void;
   onImageError?: () => void;
 }
-
-const getVariantSrcSet = (src: string) => {
-  if (src.startsWith("data:")) return undefined;
-  return `${src}?w=256 256w, ${src}?w=512 512w, ${src}?w=1024 1024w`;
-};
 
 export const KioskImage = memo(
   ({
@@ -40,24 +35,13 @@ export const KioskImage = memo(
       setIsLoading(Boolean(src));
     }, [src]);
 
-    const srcSet = useMemo(() => (src ? getVariantSrcSet(src) : undefined), [src]);
-
-    if (!src || hasError) {
-      return (
-        <KioskImageFrame ratio={ratio} className={className}>
-          <div className="flex h-full w-full items-center justify-center text-slate-500">
-            <ImageIcon className="h-8 w-8" />
-          </div>
-        </KioskImageFrame>
-      );
-    }
+    if (!src || hasError) return null;
 
     return (
       <KioskImageFrame ratio={ratio} className={cn(onPreview && "cursor-zoom-in", className)}>
-        <img
-          src={src}
-          srcSet={srcSet}
-          sizes={sizes}
+          <img
+            src={src}
+            sizes={sizes}
           alt={alt}
           loading={loading}
           decoding="async"
