@@ -66,11 +66,11 @@ const CustomerDisplay = () => {
   const readyOrders = orders.filter((o) => o.status === "ready");
 
   return (
-    <div className="min-h-screen bg-primary text-primary-foreground p-8 relative">
+    <div className="min-h-screen bg-background text-foreground p-8 relative">
       {/* Back Button - Almost invisible */}
       <button
         onClick={() => navigate(-1)}
-        className="fixed top-4 left-4 p-2 text-primary-foreground/20 hover:text-primary-foreground/40 transition-colors z-50"
+        className="fixed top-4 left-4 p-2 text-foreground/30 hover:text-foreground/60 transition-colors z-50"
         aria-label="Volver"
       >
         <ArrowLeft className="h-6 w-6" />
@@ -85,7 +85,7 @@ const CustomerDisplay = () => {
             </div>
             <h1 className="text-5xl font-bold">Pico de Gallo</h1>
           </div>
-          <p className="text-xl text-primary-foreground/80">Estado de Pedidos</p>
+          <p className="text-xl text-muted-foreground">Estado de Pedidos</p>
           <div className="mt-4 flex justify-center gap-2">
             {([
               ["all", "Todos"],
@@ -99,7 +99,7 @@ const CustomerDisplay = () => {
                 onClick={() => setServiceFilter(key)}
                 className={cn(
                   "rounded-full border px-3 py-1 text-sm",
-                  serviceFilter === key ? "bg-primary-foreground text-primary" : "text-primary-foreground/90"
+                  serviceFilter === key ? "bg-foreground text-background" : "text-foreground/90"
                 )}
               >
                 {label}
@@ -136,11 +136,11 @@ const CustomerDisplay = () => {
 
             <div className="space-y-4">
               {isLoading && preparingOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">Cargando pedidos...</p>
                 </div>
               ) : preparingOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">No hay pedidos en preparación</p>
                 </div>
               ) : (
@@ -172,11 +172,11 @@ const CustomerDisplay = () => {
 
             <div className="space-y-4">
               {isLoading && readyOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">Cargando pedidos...</p>
                 </div>
               ) : readyOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">No hay pedidos listos</p>
                 </div>
               ) : (
@@ -206,7 +206,7 @@ const CustomerDisplay = () => {
         </div>
 
         {/* Footer */}
-        <div className="mt-12 text-center text-primary-foreground/60">
+        <div className="mt-12 text-center text-muted-foreground">
           <p className="text-lg">Gracias por tu preferencia</p>
         </div>
       </div>
