@@ -37,7 +37,7 @@ class SalesReportListView(generics.ListAPIView):
             {
                 "order_id": order.id,
                 "order_number": order.order_number,
-                "service_type": order.service_type.key,
+                "service_type": (order.service_type.key if order.service_type else "SIN_TIPO"),
                 "date": order.created_at,
                 "subtotal": order.subtotal,
                 "tax": order.tax,

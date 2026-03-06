@@ -33,7 +33,7 @@ def render_kitchen_ticket(order: Order) -> dict:
     lines.append(_divider())
     lines.append(_line(f"Orden #{order.order_number}"))
     lines.append(_line(now.strftime("%Y-%m-%d %H:%M")))
-    lines.append(_line(f"Servicio: {order.service_type.key}"))
+    lines.append(_line(f"Servicio: {order.service_type.key if order.service_type else 'SIN_TIPO'}"))
     lines.append(_divider())
 
     for item in order.items.all():
@@ -65,7 +65,7 @@ def render_kitchen_ticket(order: Order) -> dict:
         "meta": {
             "order_id": order.id,
             "type": "kitchen",
-            "service_type": order.service_type.key,
+            "service_type": (order.service_type.key if order.service_type else "SIN_TIPO"),
             "total_items": order.items.count(),
         },
     }
@@ -83,7 +83,7 @@ def render_customer_ticket(order: Order) -> dict:
     lines.append(_divider())
     lines.append(_line(f"Orden #{order.order_number}"))
     lines.append(_line(now.strftime("%Y-%m-%d %H:%M")))
-    lines.append(_line(f"Servicio: {order.service_type.key}"))
+    lines.append(_line(f"Servicio: {order.service_type.key if order.service_type else 'SIN_TIPO'}"))
     lines.append(_divider())
 
     for item in order.items.all():

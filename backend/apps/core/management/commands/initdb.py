@@ -10,10 +10,10 @@ DEFAULT_BRANCHES = [
 ]
 
 DEFAULT_SERVICE_TYPES = [
-    {"key": "dine-in", "label": "En local"},
-    {"key": "takeout", "label": "Para llevar"},
-    {"key": "delivery", "label": "Delivery"},
-    {"key": "kiosk", "label": "Kiosk"},
+    {"key": "MESA", "label": "Mesa", "sort_order": 0},
+    {"key": "PEDIDOS_YA", "label": "Pedidos Ya", "sort_order": 1},
+    {"key": "PARA_LLEVAR", "label": "Para Llevar", "sort_order": 2},
+    {"key": "KIOSK", "label": "Kiosk", "sort_order": 3},
 ]
 
 DEFAULT_FEATURE_FLAGS = [
@@ -91,9 +91,9 @@ class Command(BaseCommand):
                 Table.objects.get_or_create(branch=branch, number=table_number)
 
         for service_data in DEFAULT_SERVICE_TYPES:
-            ServiceType.objects.get_or_create(
+            ServiceType.objects.update_or_create(
                 key=service_data["key"],
-                defaults={"label": service_data["label"]},
+                defaults={"label": service_data["label"], "sort_order": service_data.get("sort_order", 0), "is_active": True},
             )
 
         TaxConfig.objects.get_or_create(

@@ -137,6 +137,7 @@ export type ServiceType = {
   key: string;
   label: string;
   isActive?: boolean;
+  sortOrder?: number;
 };
 
 export type TaxConfig = {
@@ -167,7 +168,7 @@ export type Order = {
   items: OrderItem[];
   total: number;
   status: "new" | "preparing" | "ready" | "delivered" | "canceled";
-  serviceType: "dine-in" | "takeout" | "delivery" | "kiosk";
+  serviceType: string | null;
   createdAt: Date;
   prepTime: number;
   customerName?: string;
@@ -1184,13 +1185,44 @@ export const getDiscounts = async (): Promise<Discount[]> => {
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
   const response = await request("/core/service-types/");
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean }>>(response);
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
   return data.map((item) => ({
     id: item.id,
     key: item.key,
     label: item.label,
     isActive: item.is_active,
+    sortOrder: item.sort_order ?? 0,
   }));
+};
+
+export const listOrderTypes = async (): Promise<ServiceType[]> => {
+  const response = await request('/core/order-types/');
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
+  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0 }));
+};
+
+export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number }): Promise<ServiceType> => {
+  const response = await request('/core/order-types/', {
+    method: 'POST',
+    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder }),
+  });
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+};
+
+export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number }>): Promise<ServiceType> => {
+  const body: Record<string, unknown> = {};
+  if (payload.key !== undefined) body.key = payload.key;
+  if (payload.label !== undefined) body.label = payload.label;
+  if (payload.isActive !== undefined) body.is_active = payload.isActive;
+  if (payload.sortOrder !== undefined) body.sort_order = payload.sortOrder;
+  const response = await request(`/core/order-types/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+};
+
+export const deleteOrderType = async (id: number): Promise<void> => {
+  await request(`/core/order-types/${id}/`, { method: 'DELETE' });
 };
 
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {

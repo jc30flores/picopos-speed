@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Clock, ChefHat } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createPrintJob, markPrintJobPrinted, getActiveOrders, updateOrderStatus, Order, PrintJob } from "@/lib/api";
+import { createPrintJob, markPrintJobPrinted, getActiveOrders, getServiceTypes, updateOrderStatus, Order, PrintJob, ServiceType } from "@/lib/api";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
 
 const Kitchen = () => {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [filter, setFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
+  const [filter, setFilter] = useState<string>("all");
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [kitchenJob, setKitchenJob] = useState<PrintJob | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -33,6 +34,15 @@ const Kitchen = () => {
     }, 5000);
     return () => clearInterval(interval);
   }, [loadOrders]);
+
+
+  useEffect(() => {
+    getServiceTypes()
+      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
+      .catch((error) => {
+        console.error("Failed to load service types", error);
+      });
+  }, []);
 
   const getStatusColor = (prepTime: number) => {
     if (prepTime < 10) return "status-new";
@@ -91,11 +101,10 @@ const Kitchen = () => {
     return order.serviceType === filter && order.status !== "delivered";
   });
 
-  const serviceTypeLabels = {
-    "dine-in": "En Local",
-    takeout: "Para Llevar",
-    delivery: "Delivery",
-  };
+  const serviceTypeLabelByKey = serviceTypes.reduce<Record<string, string>>((acc, item) => {
+    acc[item.key] = item.label;
+    return acc;
+  }, {});
 
   return (
     <div className="min-h-screen bg-background">
@@ -109,30 +118,15 @@ const Kitchen = () => {
           </div>
 
           <div className="flex gap-2 flex-wrap">
-            <Button
-              variant={filter === "all" ? "default" : "outline"}
-              onClick={() => setFilter("all")}
-            >
-              Todos
-            </Button>
-            <Button
-              variant={filter === "dine-in" ? "default" : "outline"}
-              onClick={() => setFilter("dine-in")}
-            >
-              En Local
-            </Button>
-            <Button
-              variant={filter === "takeout" ? "default" : "outline"}
-              onClick={() => setFilter("takeout")}
-            >
-              Para Llevar
-            </Button>
-            <Button
-              variant={filter === "delivery" ? "default" : "outline"}
-              onClick={() => setFilter("delivery")}
-            >
-              Delivery
-            </Button>
+            {[{ key: "all", label: "Todos" }, ...serviceTypes.map((item) => ({ key: item.key, label: item.label }))].map((item) => (
+              <Button
+                key={item.key}
+                variant={filter === item.key ? "default" : "outline"}
+                onClick={() => setFilter(item.key)}
+              >
+                {item.label}
+              </Button>
+            ))}
           </div>
         </div>
 
@@ -153,7 +147,7 @@ const Kitchen = () => {
                   <div>
                     <h3 className="text-2xl font-bold">#{order.orderNumber}</h3>
                     <p className="text-sm text-muted-foreground">
-                      {serviceTypeLabels[order.serviceType]}
+                      {serviceTypeLabelByKey[order.serviceType ?? ""] ?? order.serviceType ?? "Sin tipo"}
                     </p>
                     {order.customerName && (
                       <p className="text-sm font-medium mt-1">{order.customerName}</p>

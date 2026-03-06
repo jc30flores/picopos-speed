@@ -12,7 +12,7 @@ class KitchenOrderView(models.Model):
     ]
 
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name="kitchen_view")
-    service_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT, related_name="kitchen_orders")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, blank=True, related_name="kitchen_orders")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="new")
     prep_time_minutes = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)

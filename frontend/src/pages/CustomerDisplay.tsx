@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getCustomerOrders } from "@/lib/api";
+import { getCustomerOrders, getServiceTypes, ServiceType } from "@/lib/api";
 
 const CustomerDisplay = () => {
   const navigate = useNavigate();
@@ -10,7 +10,8 @@ const CustomerDisplay = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryToken, setRetryToken] = useState(0);
-  const [serviceFilter, setServiceFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
+  const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const pollDelayRef = useRef(5000);
 
   useEffect(() => {
@@ -57,6 +58,15 @@ const CustomerDisplay = () => {
     };
   }, [retryToken, serviceFilter]);
 
+
+  useEffect(() => {
+    getServiceTypes()
+      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
+      .catch((error) => {
+        console.error("Failed to load service types", error);
+      });
+  }, []);
+
   const handleRetry = () => {
     pollDelayRef.current = 2000;
     setRetryToken((prev) => prev + 1);
@@ -87,12 +97,7 @@ const CustomerDisplay = () => {
           </div>
           <p className="text-xl text-muted-foreground">Estado de Pedidos</p>
           <div className="mt-4 flex justify-center gap-2">
-            {([
-              ["all", "Todos"],
-              ["dine-in", "En local"],
-              ["takeout", "Para llevar"],
-              ["delivery", "Delivery"],
-            ] as const).map(([key, label]) => (
+            {[{ key: "all", label: "Todos" }, ...serviceTypes.map((item) => ({ key: item.key, label: item.label }))].map(({ key, label }) => (
               <button
                 key={key}
                 type="button"

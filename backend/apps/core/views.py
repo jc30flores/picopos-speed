@@ -11,9 +11,35 @@ from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, C
 
 
 class ServiceTypeListView(generics.ListAPIView):
-    queryset = ServiceType.objects.filter(is_active=True).order_by("label")
+    queryset = ServiceType.objects.filter(is_active=True).order_by("sort_order", "label")
     serializer_class = ServiceTypeSerializer
     permission_classes = [IsAuthenticatedAndActive]
+
+
+class ServiceTypeAdminListCreateView(generics.ListCreateAPIView):
+    queryset = ServiceType.objects.all().order_by("sort_order", "label")
+    serializer_class = ServiceTypeSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+
+class ServiceTypeAdminDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ServiceType.objects.all()
+    serializer_class = ServiceTypeSerializer
+    permission_classes = [IsAuthenticatedAndActive]
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        from apps.orders.models import Order
+        from apps.kitchen.models import KitchenOrderView
+        from apps.reports.models import SaleSnapshot
+
+        Order.objects.filter(service_type=instance).update(service_type=None)
+        KitchenOrderView.objects.filter(service_type=instance).update(service_type=None)
+        SaleSnapshot.objects.filter(service_type=instance).update(service_type=None)
+
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ActiveTaxConfigView(generics.RetrieveAPIView):

@@ -39,6 +39,7 @@ import {
   getProducts,
   getCurrentCashSession,
   getDefaultConsumerCustomer,
+  getServiceTypes,
   listCustomers,
   openCashSession,
   closeCashSession,
@@ -47,6 +48,7 @@ import {
   Category,
   ModifierGroup,
   Product,
+  ServiceType,
   PaymentMethod,
   PaymentMethodOption,
   CashSessionSnapshot,
@@ -76,7 +78,7 @@ const getPaidExtrasLines = (item: CartItem) =>
 const getOrderDisposableTotal = (
   items: CartItem[],
   products: Product[],
-  serviceType: "dine-in" | "takeout" | "delivery"
+  serviceType: string
 ) =>
   items.reduce((sum, item) => {
     const product = products.find((candidate) => candidate.id === item.productId);
@@ -91,7 +93,8 @@ const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
+  const [serviceType, setServiceType] = useState<string>("MESA");
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
 
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
@@ -158,6 +161,17 @@ const POS = () => {
       .then((config) => setTaxRate(config.rate))
       .catch((error) => {
         console.error("Failed to load tax config", error);
+      });
+    getServiceTypes()
+      .then((data) => {
+        const active = (data || []).filter((item) => item.isActive !== false);
+        setServiceTypes(active);
+        if (active.length && !active.some((item) => item.key === serviceType)) {
+          setServiceType(active[0].key);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load service types", error);
       });
   }, []);
 
@@ -667,31 +681,24 @@ const POS = () => {
                 <Button variant="outline" size="sm" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
               </div>
               
-              <div className="flex gap-2">
-                <Button
-                  variant={serviceType === "dine-in" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("dine-in")}
-                  className="flex-1"
-                >
-                  En Local
-                </Button>
-                <Button
-                  variant={serviceType === "takeout" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("takeout")}
-                  className="flex-1"
-                >
-                  Para Llevar
-                </Button>
-                <Button
-                  variant={serviceType === "delivery" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("delivery")}
-                  className="flex-1"
-                >
-                  Delivery
-                </Button>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {serviceTypes.length > 0 ? (
+                  serviceTypes.map((type) => (
+                    <Button
+                      key={type.id}
+                      variant={serviceType === type.key ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setServiceType(type.key)}
+                      className="min-w-fit whitespace-nowrap"
+                    >
+                      {type.label}
+                    </Button>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted-foreground">
+                    Configura tipos de pedido en Configuración.
+                  </span>
+                )}
               </div>
             </div>
 

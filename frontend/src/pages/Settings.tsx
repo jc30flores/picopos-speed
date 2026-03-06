@@ -5,6 +5,7 @@ import { PageTabs } from "@/components/ui/page-tabs";
 import { EmployeesTab } from "@/components/settings/EmployeesTab";
 import { SchedulesTab } from "@/components/settings/SchedulesTab";
 import { FeatureFlagsTab } from "@/components/settings/FeatureFlagsTab";
+import { OrderTypesTab } from "@/components/settings/OrderTypesTab";
 
 const Settings = () => {
   const [activeTab, setActiveTab] = useState("employees");
@@ -26,6 +27,7 @@ const Settings = () => {
               { label: "Empleados", value: "employees" },
               { label: "Horarios", value: "schedules" },
               { label: "Funciones", value: "features" },
+              { label: "Tipos de Pedido", value: "order-types" },
             ]}
             activeValue={activeTab}
             onChange={setActiveTab}
@@ -42,6 +44,10 @@ const Settings = () => {
 
             <TabsContent value="features">
               <FeatureFlagsTab />
+            </TabsContent>
+
+            <TabsContent value="order-types">
+              <OrderTypesTab />
             </TabsContent>
           </Tabs>
         </div>
