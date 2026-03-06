@@ -188,12 +188,12 @@ const CustomerDisplay = () => {
                       "border-2 border-success"
                     )}
                   >
-                    <div className="text-center text-white">
-                      <div className="text-7xl font-black mb-2 tracking-tight text-white drop-shadow-sm">
+                    <div className="text-center text-slate-950 dark:text-white">
+                      <div className="text-7xl font-black mb-2 tracking-tight text-slate-950 dark:text-white dark:drop-shadow-sm">
                         #{order.orderNumber}
                       </div>
                       {order.customerName && (
-                        <p className="text-2xl font-semibold text-white/95">
+                        <p className="text-2xl font-semibold text-slate-900 dark:text-white/95">
                           {order.customerName}
                         </p>
                       )}
