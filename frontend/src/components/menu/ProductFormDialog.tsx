@@ -430,14 +430,14 @@ export const ProductFormDialog = ({
 
       <Dialog open={ruleOpen} onOpenChange={setRuleOpen}>
         <DialogContent className="max-w-2xl p-0">
-          <div className="flex max-h-[90vh] flex-col overflow-hidden rounded-lg">
+          <div className="flex max-h-[90vh] flex-col">
             <DialogHeader className="border-b px-6 py-4 pr-12">
               <DialogTitle>{editingRuleId ? "Editar" : "Nuevo"} precio especial</DialogTitle>
               <DialogDescription>
                 Configura reglas por días, horas, fechas y tipos de pedido.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3 overflow-y-auto px-6 py-4">
+            <div className="space-y-3 overflow-y-auto overflow-x-visible px-6 py-4">
             <div>
               <Label>Nombre (opcional)</Label>
               <Input value={ruleDraft.name ?? ""} onChange={(e) => setRuleDraft((prev) => ({ ...prev, name: e.target.value }))} />
