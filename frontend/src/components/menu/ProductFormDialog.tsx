@@ -429,11 +429,15 @@ export const ProductFormDialog = ({
       </DialogContent>
 
       <Dialog open={ruleOpen} onOpenChange={setRuleOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>{editingRuleId ? "Editar" : "Nuevo"} precio especial</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 overflow-y-auto pr-1">
+        <DialogContent className="max-w-2xl p-0">
+          <div className="flex max-h-[90vh] flex-col overflow-hidden rounded-lg">
+            <DialogHeader className="border-b px-6 py-4 pr-12">
+              <DialogTitle>{editingRuleId ? "Editar" : "Nuevo"} precio especial</DialogTitle>
+              <DialogDescription>
+                Configura reglas por días, horas, fechas y tipos de pedido.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 overflow-y-auto px-6 py-4">
             <div>
               <Label>Nombre (opcional)</Label>
               <Input value={ruleDraft.name ?? ""} onChange={(e) => setRuleDraft((prev) => ({ ...prev, name: e.target.value }))} />
@@ -512,6 +516,7 @@ export const ProductFormDialog = ({
               <Button type="button" variant="outline" onClick={() => setRuleOpen(false)} className="flex-1">Cancelar</Button>
               <Button type="button" onClick={saveRule} className="flex-1">Guardar regla</Button>
             </div>
+          </div>
           </div>
         </DialogContent>
       </Dialog>
