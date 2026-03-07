@@ -429,10 +429,10 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       const message =
         (errorPayload && (errorPayload.detail || errorPayload.error)) ||
         (errorPayload ? JSON.stringify(errorPayload) : "");
-      throw new Error(message || "API request failed");
+      throw new Error(message || `Error del servidor (${response.status}). Revisa el backend.`);
     }
-    const text = await response.text();
-    throw new Error(text ? `API request failed: ${text.slice(0, 200)}` : "API request failed");
+    await response.text().catch(() => "");
+    throw new Error(`Error del servidor (${response.status}). Revisa el backend.`);
   }
 
   if (!isJson) {

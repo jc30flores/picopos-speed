@@ -24,12 +24,6 @@ class CategorySerializer(serializers.ModelSerializer):
     image = serializers.FileField(required=False, allow_null=True)
     image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
-    effective_price = serializers.SerializerMethodField()
-    applied_special_price_rule_id = serializers.SerializerMethodField()
-    applied_special_price_rule_name = serializers.SerializerMethodField()
-    effective_price = serializers.SerializerMethodField()
-    applied_special_price_rule_id = serializers.SerializerMethodField()
-    applied_special_price_rule_name = serializers.SerializerMethodField()
     remove_image = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:

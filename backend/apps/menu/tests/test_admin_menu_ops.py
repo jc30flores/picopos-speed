@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
 from apps.menu.models import Category, Modifier, ModifierGroup, Product
+from apps.menu.serializers import CategorySerializer
 from apps.orders.models import Order, OrderItem
 
 
@@ -68,6 +69,18 @@ class AdminMenuOpsTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Category.objects.filter(id=self.category.id).exists())
 
+
+
+    def test_categories_endpoint_returns_json_list(self):
+        response = self.client.get("/api/menu/categories/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+
+    def test_category_serializer_does_not_expose_effective_price(self):
+        fields = CategorySerializer().get_fields()
+
+        self.assertNotIn("effective_price", fields)
 
     def test_list_categories_hides_system_categories_by_default(self):
         Category.objects.create(name="SIN CATEGORÍA (ARCHIVADOS)", is_hidden=True)
