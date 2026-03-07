@@ -34,9 +34,10 @@ class ServiceType(models.Model):
     key = models.CharField(max_length=32, unique=True)
     label = models.CharField(max_length=64)
     is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
 
     class Meta:
-        ordering = ["label"]
+        ordering = ["sort_order", "label"]
 
     def __str__(self) -> str:
         return self.label

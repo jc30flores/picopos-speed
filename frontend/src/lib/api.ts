@@ -3,6 +3,9 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 export type Category = {
   id: number;
   name: string;
+  image?: string | null;
+  imagePath?: string | null;
+  imageUrl?: string | null;
   isActive?: boolean;
   isHidden?: boolean;
   position?: number;
@@ -16,6 +19,7 @@ export type Modifier = {
   sortOrder?: number;
   image?: string | null;
   imagePath?: string | null;
+  imageUrl?: string | null;
 };
 
 export type ModifierGroup = {
@@ -26,6 +30,7 @@ export type ModifierGroup = {
   maxSelection: number;
   image?: string | null;
   imagePath?: string | null;
+  imageUrl?: string | null;
   modifiers: Modifier[];
 };
 
@@ -34,6 +39,9 @@ export type Product = {
   name: string;
   description: string;
   price: number;
+  effectivePrice?: number;
+  appliedSpecialPriceRuleId?: number | null;
+  appliedSpecialPriceRuleName?: string | null;
   sortOrder?: number;
   category: string;
   categoryName?: string | null;
@@ -71,6 +79,21 @@ export const resolveImageUrl = (imagePath?: string | null): string | null => {
   return normalizedPath;
 };
 
+const normalizeMediaPath = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  const normalized = trimmed
+    .replace(/^\/+/, "")
+    .replace(/^media\/menu_image\/menu_image\//, "media/menu_image/")
+    .replace(/^menu_image\/menu_image\//, "menu_image/");
+
+  if (normalized.startsWith("media/")) return `/${normalized}`;
+  if (normalized.startsWith("menu_image/")) return `/media/${normalized}`;
+  return `/${normalized}`;
+};
+
 const normalizeImageUrl = (item: {
   image_url?: string | null;
   imageUrl?: string | null;
@@ -80,26 +103,12 @@ const normalizeImageUrl = (item: {
 }): string | null => {
   const direct = item.image_url ?? item.imageUrl ?? null;
   if (typeof direct === "string" && direct.trim()) {
-    const trimmed = direct.trim();
-    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    return normalizeMediaPath(direct);
   }
 
   const path = item.image_path ?? item.imagePath ?? null;
   if (typeof path === "string" && path.trim()) {
-    const trimmed = path.trim();
-    if (trimmed.startsWith("/menu_image/")) {
-      return trimmed.replace("/menu_image/", "/media/menu_image/", 1);
-    }
-    if (trimmed.startsWith("/media/")) {
-      return trimmed;
-    }
-    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  }
-
-  const image = item.image ?? null;
-  if (typeof image === "string" && image.trim()) {
-    const trimmed = image.trim().replace(/^\/+/, "");
-    return `/media/menu_image/${trimmed}`;
+    return normalizeMediaPath(path);
   }
 
   return null;
@@ -131,8 +140,28 @@ export type ServiceType = {
   key: string;
   label: string;
   isActive?: boolean;
+  sortOrder?: number;
 };
 
+
+
+export type ProductSpecialPriceRule = {
+  id: number;
+  productId?: number;
+  name?: string;
+  isActive: boolean;
+  priority: number;
+  discountType: "FIXED_PRICE" | "PERCENT_OFF";
+  fixedPrice?: number | null;
+  percentOff?: number | null;
+  daysOfWeek: number[];
+  startTime?: string | null;
+  endTime?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  appliesToAllOrderTypes: boolean;
+  orderTypeIds: number[];
+};
 export type TaxConfig = {
   rate: number;
   taxIncluded: boolean;
@@ -152,6 +181,7 @@ export type OrderItem = {
   quantity: number;
   modifiers: string[];
   price: number;
+  assignedName?: string;
 };
 
 export type Order = {
@@ -160,7 +190,7 @@ export type Order = {
   items: OrderItem[];
   total: number;
   status: "new" | "preparing" | "ready" | "delivered" | "canceled";
-  serviceType: "dine-in" | "takeout" | "delivery" | "kiosk";
+  serviceType: string | null;
   createdAt: Date;
   prepTime: number;
   customerName?: string;
@@ -399,10 +429,10 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       const message =
         (errorPayload && (errorPayload.detail || errorPayload.error)) ||
         (errorPayload ? JSON.stringify(errorPayload) : "");
-      throw new Error(message || "API request failed");
+      throw new Error(message || `Error del servidor (${response.status}). Revisa el backend.`);
     }
-    const text = await response.text();
-    throw new Error(text ? `API request failed: ${text.slice(0, 200)}` : "API request failed");
+    await response.text().catch(() => "");
+    throw new Error(`Error del servidor (${response.status}). Revisa el backend.`);
   }
 
   if (!isJson) {
@@ -448,11 +478,14 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data
     .map((item) => ({
       id: item.id,
       name: item.name,
+      image: item.image ?? null,
+      imagePath: item.image_path ?? null,
+      imageUrl: normalizeImageUrl(item),
       isActive: item.is_active,
       isHidden: Boolean(item.is_hidden),
       position: Number(item.position ?? 0),
@@ -504,30 +537,62 @@ export const updateFeatureFlag = async (
   };
 };
 
-export const createCategory = async (name: string): Promise<Category> => {
+export const createCategory = async (payload: string | { name: string; image?: File | null }): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null } : payload;
+  const formData = new FormData();
+  formData.append("name", normalizedPayload.name);
+  if (normalizedPayload.image) {
+    formData.append("image", normalizedPayload.image);
+  }
+
   const response = await request("/menu/categories/", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
   return {
     id: data.id,
     name: data.name,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     isActive: data.is_active,
     isHidden: Boolean(data.is_hidden),
     position: Number(data.position ?? 0),
   };
 };
 
-export const updateCategory = async (categoryId: number, name: string): Promise<Category> => {
+export const updateCategory = async (
+  categoryId: number,
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean }
+): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false } : payload;
+  const formData = new FormData();
+  if (normalizedPayload.name !== undefined) {
+    formData.append("name", normalizedPayload.name);
+  }
+  if (normalizedPayload.image) {
+    formData.append("image", normalizedPayload.image);
+  }
+  if (normalizedPayload.removeImage) {
+    formData.append("remove_image", "1");
+  }
+
   const response = await request(`/menu/categories/${categoryId}/`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return { id: data.id, name: data.name, isActive: data.is_active, isHidden: Boolean(data.is_hidden), position: Number(data.position ?? 0) };
+  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
+  return {
+    id: data.id,
+    name: data.name,
+    image: data.image ?? null,
+    imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
+    isActive: data.is_active,
+    isHidden: Boolean(data.is_hidden),
+    position: Number(data.position ?? 0),
+  };
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
@@ -552,6 +617,8 @@ export const getProducts = async (options?: {
   page?: number;
   limit?: number;
   ids?: number[];
+  orderTypeId?: number;
+  at?: string;
 }): Promise<Product[]> => {
   const params = new URLSearchParams();
   if (options?.search) params.set("search", options.search);
@@ -559,6 +626,8 @@ export const getProducts = async (options?: {
   if (options?.page) params.set("page", String(options.page));
   if (options?.limit) params.set("limit", String(options.limit));
   if (options?.ids?.length) params.set("ids", options.ids.join(","));
+  if (options?.orderTypeId) params.set("order_type_id", String(options.orderTypeId));
+  if (options?.at) params.set("at", options.at);
   const query = params.toString();
   const response = await request(`/menu/products/${query ? `?${query}` : ""}`);
   const data = await handleJson<Array<{
@@ -566,6 +635,9 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -589,6 +661,9 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      effectivePrice: item.effective_price != null ? Number(item.effective_price) : Number(item.price),
+      appliedSpecialPriceRuleId: item.applied_special_price_rule_id ?? null,
+      appliedSpecialPriceRuleName: item.applied_special_price_rule_name ?? null,
       sortOrder: Number(item.sort_order ?? 0),
       category: item.category,
       categoryName: item.category_name ?? item.category,
@@ -650,6 +725,9 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -671,6 +749,9 @@ export const createProduct = async (payload: {
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
+    appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
@@ -733,6 +814,9 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -751,6 +835,9 @@ export const updateProduct = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
+    appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
@@ -907,9 +994,10 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     required: boolean;
     min_selection: number;
     max_selection: number;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null }>;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; sort_order?: number; image?: string | null; image_path?: string | null; image_url?: string | null }>;
     image?: string | null;
     image_path?: string | null;
+    image_url?: string | null;
   }>>(response);
   return data.map((item) => ({
     id: item.id,
@@ -919,6 +1007,7 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
     maxSelection: item.max_selection,
     image: item.image ?? null,
     imagePath: item.image_path ?? null,
+    imageUrl: normalizeImageUrl(item),
     modifiers: item.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -927,6 +1016,7 @@ export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
       sortOrder: modifier.sort_order ?? 0,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   }));
 };
@@ -980,7 +1070,8 @@ export const createModifierGroup = async (payload: {
     max_selection: number;
     image?: string | null;
     image_path?: string | null;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+    image_url?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null; image_url?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -990,6 +1081,7 @@ export const createModifierGroup = async (payload: {
     maxSelection: data.max_selection,
     image: data.image ?? null,
     imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -997,6 +1089,7 @@ export const createModifierGroup = async (payload: {
       isActive: modifier.is_active,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   };
 };
@@ -1036,7 +1129,8 @@ export const updateModifierGroup = async (
     max_selection: number;
     image?: string | null;
     image_path?: string | null;
-    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null }>;
+    image_url?: string | null;
+    modifiers: Array<{ id: number; name: string; price: string; is_active: boolean; image?: string | null; image_path?: string | null; image_url?: string | null }>;
   }>(response);
   return {
     id: data.id,
@@ -1046,6 +1140,7 @@ export const updateModifierGroup = async (
     maxSelection: data.max_selection,
     image: data.image ?? null,
     imagePath: data.image_path ?? null,
+    imageUrl: normalizeImageUrl(data),
     modifiers: data.modifiers.map((modifier) => ({
       id: modifier.id,
       name: modifier.name,
@@ -1053,6 +1148,7 @@ export const updateModifierGroup = async (
       isActive: modifier.is_active,
       image: modifier.image ?? null,
       imagePath: modifier.image_path ?? null,
+      imageUrl: normalizeImageUrl(modifier),
     })),
   };
 };
@@ -1133,13 +1229,163 @@ export const getDiscounts = async (): Promise<Discount[]> => {
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
   const response = await request("/core/service-types/");
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean }>>(response);
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
   return data.map((item) => ({
     id: item.id,
     key: item.key,
     label: item.label,
     isActive: item.is_active,
+    sortOrder: item.sort_order ?? 0,
   }));
+};
+
+export const listOrderTypes = async (): Promise<ServiceType[]> => {
+  const response = await request('/core/order-types/');
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
+  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0 }));
+};
+
+export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number }): Promise<ServiceType> => {
+  const response = await request('/core/order-types/', {
+    method: 'POST',
+    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder }),
+  });
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+};
+
+export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number }>): Promise<ServiceType> => {
+  const body: Record<string, unknown> = {};
+  if (payload.key !== undefined) body.key = payload.key;
+  if (payload.label !== undefined) body.label = payload.label;
+  if (payload.isActive !== undefined) body.is_active = payload.isActive;
+  if (payload.sortOrder !== undefined) body.sort_order = payload.sortOrder;
+  const response = await request(`/core/order-types/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+};
+
+export const deleteOrderType = async (id: number): Promise<void> => {
+  await request(`/core/order-types/${id}/`, { method: 'DELETE' });
+};
+
+
+export const listProductSpecialPrices = async (productId: number): Promise<ProductSpecialPriceRule[]> => {
+  const response = await request(`/menu/products/${productId}/special-prices/`);
+  const data = await handleJson<Array<{
+    id: number;
+    product?: number;
+    name?: string;
+    is_active: boolean;
+    priority: number;
+    discount_type: "FIXED_PRICE" | "PERCENT_OFF";
+    fixed_price?: string | null;
+    percent_off?: string | null;
+    days_of_week?: number[];
+    start_time?: string | null;
+    end_time?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    applies_to_all_order_types: boolean;
+    order_type_ids?: number[];
+  }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  }));
+};
+
+export const createProductSpecialPrice = async (productId: number, payload: Omit<ProductSpecialPriceRule, "id" | "productId">): Promise<ProductSpecialPriceRule> => {
+  const response = await request(`/menu/products/${productId}/special-prices/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: payload.name ?? "",
+      is_active: payload.isActive,
+      priority: payload.priority,
+      discount_type: payload.discountType,
+      fixed_price: payload.fixedPrice,
+      percent_off: payload.percentOff,
+      days_of_week: payload.daysOfWeek,
+      start_time: payload.startTime,
+      end_time: payload.endTime,
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      applies_to_all_order_types: payload.appliesToAllOrderTypes,
+      order_type_ids: payload.orderTypeIds,
+    }),
+  });
+  const item = await handleJson<any>(response);
+  return {
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  };
+};
+
+export const updateProductSpecialPrice = async (ruleId: number, payload: Partial<Omit<ProductSpecialPriceRule, "id" | "productId">>): Promise<ProductSpecialPriceRule> => {
+  const body: Record<string, unknown> = {};
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.isActive !== undefined) body.is_active = payload.isActive;
+  if (payload.priority !== undefined) body.priority = payload.priority;
+  if (payload.discountType !== undefined) body.discount_type = payload.discountType;
+  if (payload.fixedPrice !== undefined) body.fixed_price = payload.fixedPrice;
+  if (payload.percentOff !== undefined) body.percent_off = payload.percentOff;
+  if (payload.daysOfWeek !== undefined) body.days_of_week = payload.daysOfWeek;
+  if (payload.startTime !== undefined) body.start_time = payload.startTime;
+  if (payload.endTime !== undefined) body.end_time = payload.endTime;
+  if (payload.startDate !== undefined) body.start_date = payload.startDate;
+  if (payload.endDate !== undefined) body.end_date = payload.endDate;
+  if (payload.appliesToAllOrderTypes !== undefined) body.applies_to_all_order_types = payload.appliesToAllOrderTypes;
+  if (payload.orderTypeIds !== undefined) body.order_type_ids = payload.orderTypeIds;
+
+  const response = await request(`/menu/special-prices/${ruleId}/`, { method: "PATCH", body: JSON.stringify(body) });
+  const item = await handleJson<any>(response);
+  return {
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  };
+};
+
+export const deleteProductSpecialPrice = async (ruleId: number): Promise<void> => {
+  await request(`/menu/special-prices/${ruleId}/`, { method: "DELETE" });
 };
 
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {
@@ -1168,6 +1414,7 @@ const mapOrder = (order: {
     product_name_snapshot: string;
     price_snapshot: string;
     quantity: number;
+    assigned_name?: string;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
@@ -1191,6 +1438,7 @@ const mapOrder = (order: {
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      assignedName: item.assigned_name || undefined,
     })),
     total: Number(order.total),
     status: order.status,
@@ -1225,6 +1473,7 @@ export const createOrder = async (payload: {
     price: number;
     quantity: number;
     modifiers: Array<{ id?: number; name: string; price: number }>;
+    assignedName?: string;
   }>;
 }): Promise<Order> => {
   const response = await request("/orders/", {
@@ -1245,6 +1494,7 @@ export const createOrder = async (payload: {
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
+        assigned_name: item.assignedName?.trim() || "",
         modifiers: item.modifiers.map((modifier) => ({
           id: modifier.id,
           name: modifier.name,
@@ -2517,7 +2767,7 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
     method: "PATCH",
     body: JSON.stringify({ ordered_ids: orderedIds }),
   });
-  const data = await handleJson<Array<{ id: number; name: string; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data.map((item) => ({
     id: item.id,
     name: item.name,

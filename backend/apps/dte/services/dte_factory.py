@@ -33,7 +33,7 @@ def build_payload(order: Order, control_number: str, codigo_generacion: str, dte
         "emisor": {"sucursal": order.branch.name, "codigo": order.branch.code},
         "receptor": {"nombre": order.customer_name or "Consumidor Final", "nit": ""},
         "resumen": {"total": _as_str(order.total), "subtotal": _as_str(order.subtotal), "impuesto": _as_str(order.tax)},
-        "extension": {"service_type": order.service_type.label, "channel": order.channel},
+        "extension": {"service_type": (order.service_type.label if order.service_type else "Sin tipo"), "channel": order.channel},
         "cuerpoDocumento": items,
         "meta": {"order_id": order.id, "order_number": order.order_number},
     }

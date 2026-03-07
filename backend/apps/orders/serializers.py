@@ -8,6 +8,7 @@ from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts
+from apps.menu.utils.pricing import resolve_effective_price
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -27,13 +28,15 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_name_snapshot",
             "price_snapshot",
             "quantity",
+            "assigned_name",
+            "applied_special_price_rule_id",
             "applied_modifiers",
         ]
 
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
-    service_type = serializers.CharField(source="service_type.key", read_only=True)
+    service_type = serializers.SerializerMethodField()
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
@@ -74,6 +77,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "requires_kitchen",
             "fees",
         ]
+
+    def get_service_type(self, obj: Order):
+        return obj.service_type.key if obj.service_type else None
 
     def get_fees(self, obj: Order):
         return [
@@ -128,6 +134,7 @@ class OrderItemInputSerializer(serializers.Serializer):
     product_name_snapshot = serializers.CharField()
     price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2)
     quantity = serializers.IntegerField(min_value=1)
+    assigned_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
     modifiers = AppliedModifierInputSerializer(many=True, required=False)
 
 
@@ -209,13 +216,25 @@ class OrderCreateSerializer(serializers.Serializer):
         if service_type_id is not None:
             service_type = ServiceType.objects.filter(id=service_type_id).first()
         if service_type is None and service_type_key:
-            service_type = ServiceType.objects.filter(key=service_type_key).first()
+            normalized_key = service_type_key.strip().upper().replace("-", "_")
+            legacy_map = {
+                "DINE_IN": "MESA",
+                "EN_LOCAL": "MESA",
+                "MESA": "MESA",
+                "TAKEOUT": "PARA_LLEVAR",
+                "PARA_LLEVAR": "PARA_LLEVAR",
+                "DELIVERY": "PEDIDOS_YA",
+                "PEDIDOS_YA": "PEDIDOS_YA",
+                "KIOSK": "KIOSK",
+            }
+            mapped_key = legacy_map.get(normalized_key, normalized_key)
+            service_type = ServiceType.objects.filter(key__iexact=mapped_key).first()
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
         service_type_key = service_type.key
 
         order_number = self._next_order_number(branch)
-        status = "preparing" if source == "kiosk" or service_type_key == "kiosk" else "waiting_payment"
+        status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
         order = Order.objects.create(
             branch=branch,
             order_number=order_number,
@@ -241,13 +260,20 @@ class OrderCreateSerializer(serializers.Serializer):
             modifiers = item_data.pop("modifiers", [])
             product = item_data.pop("product_id")
             modifiers = self._resolve_modifier_payload(product, modifiers, fast_pos_mode, channel)
-            price_snapshot = item_data["price_snapshot"]
             quantity = item_data["quantity"]
+            pricing_result = resolve_effective_price(product, order_type=service_type, at=timezone.now())
+            price_snapshot = pricing_result.effective_price
+            item_data["price_snapshot"] = price_snapshot
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
             line_total = (price_snapshot + modifiers_total) * quantity
             line_key = f"line-{len(order_lines)}"
 
-            order_item = OrderItem.objects.create(order=order, product=product, **item_data)
+            order_item = OrderItem.objects.create(
+                order=order,
+                product=product,
+                applied_special_price_rule=pricing_result.applied_rule,
+                **item_data,
+            )
             for modifier_data in modifiers:
                 OrderItemModifier.objects.create(
                     order_item=order_item,

@@ -24,7 +24,7 @@ export const KioskImageLightbox = ({ open, title, subtitle, imageSrc, onClose }:
 
   return (
     <div
-      className="fixed inset-0 z-[1000] bg-black/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[1000] bg-black/80 p-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

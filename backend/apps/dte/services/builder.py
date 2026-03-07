@@ -35,6 +35,6 @@ def build_dte_payload(order: Order, numero_control: str, codigo_generacion: str,
             "order_id": order.id,
             "order_number": order.order_number,
             "channel": order.channel,
-            "service_type": order.service_type.key,
+            "service_type": (order.service_type.key if order.service_type else "SIN_TIPO"),
         },
     }

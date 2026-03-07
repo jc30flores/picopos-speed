@@ -27,6 +27,8 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 class Category(models.Model):
     name = models.CharField(max_length=120, unique=True)
+    image = models.FileField(upload_to="categories/", blank=True, null=True)
+    image_path = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0, db_index=True)
@@ -40,6 +42,10 @@ class Category(models.Model):
     def save(self, *args, **kwargs) -> None:
         if self.name:
             self.name = normalize_category_name(self.name)
+        if self.image and getattr(self.image, "url", None):
+            self.image_path = self.image.url
+        elif not self.image:
+            self.image_path = None
         super().save(*args, **kwargs)
 
 
@@ -136,6 +142,44 @@ class Product(models.Model):
         else:
             self.image_path = None
         super().save(*args, **kwargs)
+
+
+
+
+class ProductSpecialPriceRule(models.Model):
+    DISCOUNT_TYPE_FIXED_PRICE = "FIXED_PRICE"
+    DISCOUNT_TYPE_PERCENT_OFF = "PERCENT_OFF"
+    DISCOUNT_TYPE_CHOICES = [
+        (DISCOUNT_TYPE_FIXED_PRICE, "Fixed price"),
+        (DISCOUNT_TYPE_PERCENT_OFF, "Percent off"),
+    ]
+
+    product = models.ForeignKey("Product", on_delete=models.CASCADE, related_name="special_price_rules")
+    name = models.CharField(max_length=120, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    priority = models.IntegerField(default=0, db_index=True)
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPE_CHOICES)
+    fixed_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    percent_off = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    days_of_week = models.JSONField(default=list, blank=True)
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    applies_to_all_order_types = models.BooleanField(default=True)
+    order_types = models.ManyToManyField("core.ServiceType", blank=True, related_name="product_special_price_rules")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority", "id"]
+        indexes = [
+            models.Index(fields=["product", "is_active"]),
+            models.Index(fields=["priority"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name or f"Regla {self.id}"
 
 
 class Discount(models.Model):

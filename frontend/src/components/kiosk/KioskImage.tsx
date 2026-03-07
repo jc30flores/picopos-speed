@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import { Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { KioskImageFrame } from "@/components/kiosk/KioskImageFrame";
 
 interface KioskImageProps {
   src?: string | null;
@@ -34,34 +35,16 @@ export const KioskImage = memo(
       setIsLoading(Boolean(src));
     }, [src]);
 
-    if (!src || hasError) {
-      return null;
-    }
+    if (!src || hasError) return null;
 
     return (
-      <div
-        className={cn(
-          "relative overflow-hidden rounded-2xl border border-white/10 bg-muted/60",
-          onPreview && "cursor-zoom-in",
-          className,
-        )}
-        style={{ aspectRatio: ratio }}
-      >
-        <img
-          src={src}
-          alt=""
-          aria-hidden="true"
-          className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl opacity-35"
-          loading={loading}
-          decoding="async"
-          sizes={sizes}
-        />
-        <img
-          src={src}
+      <KioskImageFrame ratio={ratio} className={cn(onPreview && "cursor-zoom-in", className)}>
+          <img
+            src={src}
+            sizes={sizes}
           alt={alt}
           loading={loading}
           decoding="async"
-          sizes={sizes}
           className={cn("relative z-10 h-full w-full object-contain p-2 md:p-3", imageClassName)}
           onLoad={() => setIsLoading(false)}
           onError={() => {
@@ -71,9 +54,7 @@ export const KioskImage = memo(
           }}
         />
 
-        {isLoading && (
-          <div className="absolute inset-0 z-20 animate-pulse bg-gradient-to-br from-white/10 via-white/5 to-transparent" />
-        )}
+        {isLoading && <div className="absolute inset-0 z-20 animate-pulse bg-slate-200/70" />}
 
         {onPreview && (
           <button
@@ -82,13 +63,13 @@ export const KioskImage = memo(
               event.stopPropagation();
               onPreview();
             }}
-            className="absolute right-3 top-3 z-30 rounded-full bg-black/55 px-3 py-1.5 text-xs font-semibold text-white shadow-lg transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="absolute right-3 top-3 z-30 rounded-full bg-black/55 p-2 text-white shadow-lg transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             aria-label="Vista previa"
           >
-            <Eye className="h-4 w-4" />
+            <Eye className="h-5 w-5" />
           </button>
         )}
-      </div>
+      </KioskImageFrame>
     );
   },
 );

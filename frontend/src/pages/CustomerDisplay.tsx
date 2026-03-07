@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getCustomerOrders } from "@/lib/api";
+import { getCustomerOrders, getServiceTypes, ServiceType } from "@/lib/api";
 
 const CustomerDisplay = () => {
   const navigate = useNavigate();
@@ -10,7 +10,8 @@ const CustomerDisplay = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [retryToken, setRetryToken] = useState(0);
-  const [serviceFilter, setServiceFilter] = useState<"all" | "dine-in" | "takeout" | "delivery">("all");
+  const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const pollDelayRef = useRef(5000);
 
   useEffect(() => {
@@ -57,6 +58,15 @@ const CustomerDisplay = () => {
     };
   }, [retryToken, serviceFilter]);
 
+
+  useEffect(() => {
+    getServiceTypes()
+      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
+      .catch((error) => {
+        console.error("Failed to load service types", error);
+      });
+  }, []);
+
   const handleRetry = () => {
     pollDelayRef.current = 2000;
     setRetryToken((prev) => prev + 1);
@@ -66,11 +76,11 @@ const CustomerDisplay = () => {
   const readyOrders = orders.filter((o) => o.status === "ready");
 
   return (
-    <div className="min-h-screen bg-primary text-primary-foreground p-8 relative">
+    <div className="min-h-screen bg-background text-foreground p-8 relative">
       {/* Back Button - Almost invisible */}
       <button
         onClick={() => navigate(-1)}
-        className="fixed top-4 left-4 p-2 text-primary-foreground/20 hover:text-primary-foreground/40 transition-colors z-50"
+        className="fixed top-4 left-4 p-2 text-foreground/30 hover:text-foreground/60 transition-colors z-50"
         aria-label="Volver"
       >
         <ArrowLeft className="h-6 w-6" />
@@ -85,21 +95,16 @@ const CustomerDisplay = () => {
             </div>
             <h1 className="text-5xl font-bold">Pico de Gallo</h1>
           </div>
-          <p className="text-xl text-primary-foreground/80">Estado de Pedidos</p>
+          <p className="text-xl text-muted-foreground">Estado de Pedidos</p>
           <div className="mt-4 flex justify-center gap-2">
-            {([
-              ["all", "Todos"],
-              ["dine-in", "En local"],
-              ["takeout", "Para llevar"],
-              ["delivery", "Delivery"],
-            ] as const).map(([key, label]) => (
+            {[{ key: "all", label: "Todos" }, ...serviceTypes.map((item) => ({ key: item.key, label: item.label }))].map(({ key, label }) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => setServiceFilter(key)}
                 className={cn(
                   "rounded-full border px-3 py-1 text-sm",
-                  serviceFilter === key ? "bg-primary-foreground text-primary" : "text-primary-foreground/90"
+                  serviceFilter === key ? "bg-foreground text-background" : "text-foreground/90"
                 )}
               >
                 {label}
@@ -136,23 +141,23 @@ const CustomerDisplay = () => {
 
             <div className="space-y-4">
               {isLoading && preparingOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">Cargando pedidos...</p>
                 </div>
               ) : preparingOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">No hay pedidos en preparación</p>
                 </div>
               ) : (
                 preparingOrders.map((order) => (
                   <div
                     key={order.id}
-                    className="bg-primary-light/50 backdrop-blur-sm rounded-2xl p-6 border border-primary-foreground/10 animate-fade-in"
+                    className="bg-primary-light/60 backdrop-blur-sm rounded-2xl p-6 border border-white/20 animate-fade-in"
                   >
-                    <div className="text-center">
-                      <div className="text-7xl font-black mb-2">#{order.orderNumber}</div>
+                    <div className="text-center text-white">
+                      <div className="text-7xl font-black mb-2 tracking-tight text-white drop-shadow-sm">#{order.orderNumber}</div>
                       {order.customerName && (
-                        <p className="text-2xl font-semibold">{order.customerName}</p>
+                        <p className="text-2xl font-semibold text-white/95">{order.customerName}</p>
                       )}
                     </div>
                   </div>
@@ -172,11 +177,11 @@ const CustomerDisplay = () => {
 
             <div className="space-y-4">
               {isLoading && readyOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">Cargando pedidos...</p>
                 </div>
               ) : readyOrders.length === 0 ? (
-                <div className="text-center py-12 text-primary-foreground/50">
+                <div className="text-center py-12 text-muted-foreground">
                   <p className="text-lg">No hay pedidos listos</p>
                 </div>
               ) : (
@@ -188,12 +193,12 @@ const CustomerDisplay = () => {
                       "border-2 border-success"
                     )}
                   >
-                    <div className="text-center">
-                      <div className="text-7xl font-black mb-2 text-primary">
+                    <div className="text-center text-slate-950 dark:text-white">
+                      <div className="text-7xl font-black mb-2 tracking-tight text-slate-950 dark:text-white dark:drop-shadow-sm">
                         #{order.orderNumber}
                       </div>
                       {order.customerName && (
-                        <p className="text-2xl font-semibold text-primary">
+                        <p className="text-2xl font-semibold text-slate-900 dark:text-white/95">
                           {order.customerName}
                         </p>
                       )}
@@ -206,7 +211,7 @@ const CustomerDisplay = () => {
         </div>
 
         {/* Footer */}
-        <div className="mt-12 text-center text-primary-foreground/60">
+        <div className="mt-12 text-center text-muted-foreground">
           <p className="text-lg">Gracias por tu preferencia</p>
         </div>
       </div>

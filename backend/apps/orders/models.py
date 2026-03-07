@@ -1,6 +1,6 @@
 from django.db import models
 from apps.core.models import Branch, Customer, ServiceType, Table
-from apps.menu.models import Product
+from apps.menu.models import Product, ProductSpecialPriceRule
 
 
 class Order(models.Model):
@@ -29,7 +29,7 @@ class Order(models.Model):
 
     order_number = models.PositiveIntegerField()
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="orders")
-    service_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT, related_name="orders")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
     table = models.ForeignKey(Table, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting_payment")
     customer_name = models.CharField(max_length=120, blank=True)
@@ -130,6 +130,8 @@ class OrderItem(models.Model):
     product_name_snapshot = models.CharField(max_length=160)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.PositiveIntegerField(default=1)
+    assigned_name = models.CharField(max_length=80, blank=True, default="")
+    applied_special_price_rule = models.ForeignKey(ProductSpecialPriceRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
 
     class Meta:
         indexes = [models.Index(fields=["order"]) ]

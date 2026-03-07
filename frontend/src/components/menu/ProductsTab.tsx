@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Plus, Edit, Settings, Trash2, GripVertical, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { ModifierPanel } from "./ModifierPanel";
+import { getEntityImageSrc } from "@/lib/media";
+import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
+import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
 import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -71,9 +74,15 @@ export const ProductsTab = () => {
   const [categoryDeleteError, setCategoryDeleteError] = useState<string | null>(null);
   const [categoryDeleteActiveProducts, setCategoryDeleteActiveProducts] = useState<string[]>([]);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
+  const [isModifierGroupsAdminOpen, setIsModifierGroupsAdminOpen] = useState(false);
+  const [isProductModifiersOpen, setIsProductModifiersOpen] = useState(false);
+  const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
+  const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
+  const [removeEditingCategoryImage, setRemoveEditingCategoryImage] = useState(false);
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
@@ -82,17 +91,26 @@ export const ProductsTab = () => {
   const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
   const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
-    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
-      getCategories(),
-      getProducts(),
-      getModifierGroups(),
-    ]);
-    setCategories(categoriesResponse);
-    setProducts(productsResponse);
-    setModifierGroups(modifierGroupsResponse);
-    if (productId) {
-      const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
-      setSelectedProduct(updatedProduct);
+    setIsMenuLoading(true);
+    setMenuLoadError(null);
+    try {
+      const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+        getCategories(),
+        getProducts(),
+        getModifierGroups(),
+      ]);
+      setCategories(categoriesResponse);
+      setProducts(productsResponse);
+      setModifierGroups(modifierGroupsResponse);
+      if (productId) {
+        const updatedProduct = productsResponse.find((product) => product.id === productId) ?? null;
+        setSelectedProduct(updatedProduct);
+      }
+    } catch (error) {
+      setMenuLoadError(error instanceof Error ? error.message : "No se pudo cargar el menú");
+      throw error;
+    } finally {
+      setIsMenuLoading(false);
     }
   }, [selectedProduct?.id]);
 
@@ -185,7 +203,7 @@ export const ProductsTab = () => {
     const normalized = newCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await createCategory(normalized);
+      await createCategory({ name: normalized });
       setNewCategoryName("");
       await loadMenuData();
       toast.success("Categoría creada");
@@ -199,12 +217,19 @@ export const ProductsTab = () => {
     const normalized = editingCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await updateCategory(editingCategoryId, normalized);
+      await updateCategory(editingCategoryId, {
+        name: normalized,
+        image: editingCategoryImage,
+        removeImage: removeEditingCategoryImage,
+      });
       setEditingCategoryId(null);
       setEditingCategoryName("");
+      setEditingCategoryImage(null);
+      setRemoveEditingCategoryImage(false);
       await loadMenuData();
       toast.success("Categoría actualizada");
-    } catch {
+    } catch (error) {
+      console.error("Failed to update category", error);
       toast.error("No se pudo actualizar la categoría");
     }
   };
@@ -338,15 +363,18 @@ export const ProductsTab = () => {
 
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    <div className="space-y-6">
       {/* Left: Products Table (60%) */}
-      <div className="lg:col-span-3 space-y-4">
+      <div className="space-y-4">
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">Productos del Menú</h2>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setIsCategoryManagerOpen(true)}>
                 Gestionar categorías
+              </Button>
+              <Button variant="outline" onClick={() => setIsModifierGroupsAdminOpen(true)}>
+                Gestionar modificadores
               </Button>
               <Button
                 variant="default"
@@ -360,6 +388,15 @@ export const ProductsTab = () => {
           </div>
 
           <div className="space-y-4">
+            {menuLoadError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                <p>{menuLoadError}</p>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => loadMenuData().catch(() => undefined)}>
+                  Reintentar
+                </Button>
+              </div>
+            )}
+
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -400,7 +437,11 @@ export const ProductsTab = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredProducts.map((product) => (
+                {isMenuLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Cargando productos...</TableCell>
+                  </TableRow>
+                ) : filteredProducts.map((product) => (
                   <TableRow
                     key={product.id}
                     className={cn(
@@ -455,32 +496,38 @@ export const ProductsTab = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleEditProduct(product)}
-                        >
-                          <Edit className="h-4 w-4 mr-1" />
-                          Editar
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelectedProduct(product)}
+                          onClick={() => {
+                            setSelectedProduct(product);
+                            setIsProductModifiersOpen(true);
+                          }}
                         >
                           <Settings className="h-4 w-4 mr-1" />
                           Modificadores
                         </Button>
                         <Button
                           variant="outline"
-                          size="sm"
+                          size="icon"
                           onClick={() => handleDuplicateProduct(product)}
+                          title="Duplicar"
+                          aria-label="Duplicar producto"
                         >
-                          <Copy className="h-4 w-4 mr-1" />
-                          Duplicar
+                          <Copy className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="outline"
-                          size="sm"
+                          size="icon"
+                          onClick={() => handleEditProduct(product)}
+                          title="Editar"
+                          aria-label="Editar producto"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
                           onClick={() => setProductToDelete(product)}
-                          title="Eliminar producto"
+                          title="Eliminar"
+                          aria-label="Eliminar producto"
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -494,14 +541,22 @@ export const ProductsTab = () => {
         </Card>
       </div>
 
-      {/* Right: Modifier Panel (40%) */}
-      <div className="lg:col-span-2">
-        <ModifierPanel
-          selectedProduct={selectedProduct}
-          modifierGroups={modifierGroups}
-          onModifierGroupsUpdated={loadMenuData}
-        />
-      </div>
+
+      <ModifierGroupsAdminModal
+        open={isModifierGroupsAdminOpen}
+        onOpenChange={setIsModifierGroupsAdminOpen}
+        modifierGroups={modifierGroups}
+        onUpdated={() => loadMenuData()}
+      />
+
+      <ProductModifiersModal
+        open={isProductModifiersOpen}
+        onOpenChange={setIsProductModifiersOpen}
+        selectedProduct={selectedProduct}
+        modifierGroups={modifierGroups}
+        onUpdated={loadMenuData}
+      />
+
 
       {/* Product Form Dialog */}
       <ProductFormDialog
@@ -588,12 +643,28 @@ export const ProductsTab = () => {
                   }}
                 >
                   {editingCategoryId === category.id ? (
-                    <>
+                    <div className="flex w-full flex-col gap-2">
                       <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
-                      <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
-                    </>
+                      <ImageUploadField
+                        id={`edit-category-image-${category.id}`}
+                        label="Imagen"
+                        file={editingCategoryImage}
+                        previewUrl={removeEditingCategoryImage ? null : getEntityImageSrc(category)}
+                        onChange={(file) => {
+                          setEditingCategoryImage(file);
+                          if (file) setRemoveEditingCategoryImage(false);
+                        }}
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => { setEditingCategoryImage(null); setRemoveEditingCategoryImage(true); }}>
+                          Quitar imagen
+                        </Button>
+                        <Button size="sm" onClick={handleUpdateCategory}>Guardar</Button>
+                      </div>
+                    </div>
                   ) : (
                     <>
+                      {getEntityImageSrc(category) ? <img src={getEntityImageSrc(category) ?? ""} alt={category.name} className="h-10 w-10 rounded-md border object-cover" /> : null}
                       <button
                         type="button"
                         className="cursor-grab rounded-md border border-border p-1 text-muted-foreground hover:bg-muted"
@@ -606,7 +677,7 @@ export const ProductsTab = () => {
                         <GripVertical className="h-4 w-4" />
                       </button>
                       <div className="flex-1 font-medium">{category.name}</div>
-                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
                         Editar
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => { setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); setCategoryToDelete(category); }}>

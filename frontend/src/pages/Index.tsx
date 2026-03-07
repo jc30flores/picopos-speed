@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import {
@@ -39,6 +39,7 @@ import {
   getProducts,
   getCurrentCashSession,
   getDefaultConsumerCustomer,
+  getServiceTypes,
   listCustomers,
   openCashSession,
   closeCashSession,
@@ -47,6 +48,7 @@ import {
   Category,
   ModifierGroup,
   Product,
+  ServiceType,
   PaymentMethod,
   PaymentMethodOption,
   CashSessionSnapshot,
@@ -76,7 +78,7 @@ const getPaidExtrasLines = (item: CartItem) =>
 const getOrderDisposableTotal = (
   items: CartItem[],
   products: Product[],
-  serviceType: "dine-in" | "takeout" | "delivery"
+  serviceType: string
 ) =>
   items.reduce((sum, item) => {
     const product = products.find((candidate) => candidate.id === item.productId);
@@ -91,7 +93,8 @@ const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [serviceType, setServiceType] = useState<"dine-in" | "takeout" | "delivery">("dine-in");
+  const [serviceType, setServiceType] = useState<string>("MESA");
+  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
 
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
@@ -106,6 +109,8 @@ const POS = () => {
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
+  const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
+  const [modifierValidationErrors, setModifierValidationErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
@@ -157,6 +162,17 @@ const POS = () => {
       .catch((error) => {
         console.error("Failed to load tax config", error);
       });
+    getServiceTypes()
+      .then((data) => {
+        const active = (data || []).filter((item) => item.isActive !== false);
+        setServiceTypes(active);
+        if (active.length && !active.some((item) => item.key === serviceType)) {
+          setServiceType(active[0].key);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load service types", error);
+      });
   }, []);
 
   const filteredProducts = products.filter((product) => {
@@ -181,6 +197,12 @@ const POS = () => {
     }
     setPendingProduct(product);
     setSelectedModifiers({});
+    setModifierValidationErrors({});
+    const collapsed = visibleGroups.reduce<Record<string, boolean>>((acc, group) => {
+      acc[String(group.id)] = false;
+      return acc;
+    }, {});
+    setOpenModifierGroups(collapsed);
     setIsExtrasOpen(true);
   };
 
@@ -312,12 +334,34 @@ const POS = () => {
     setIsExtrasOpen(false);
     setPendingProduct(null);
     setSelectedModifiers({});
+    setOpenModifierGroups({});
+    setModifierValidationErrors({});
   };
 
   const handleAddPendingProductWithExtras = () => {
     if (!pendingProduct) return;
+    const posGroups = getPosModifierGroups(pendingProduct);
+    const nextErrors: Record<string, string> = {};
+    const nextOpenState: Record<string, boolean> = { ...openModifierGroups };
+
+    posGroups.forEach((group) => {
+      const groupId = String(group.id);
+      const selectedCount = (selectedModifiers[groupId] ?? []).length;
+      if (group.required && selectedCount < Math.max(group.minSelection, 1)) {
+        nextErrors[groupId] = `Este grupo es obligatorio (mínimo ${Math.max(group.minSelection, 1)}).`;
+        nextOpenState[groupId] = true;
+      }
+    });
+
+    if (Object.keys(nextErrors).length > 0) {
+      setModifierValidationErrors(nextErrors);
+      setOpenModifierGroups(nextOpenState);
+      toast.error("Completa los modificadores obligatorios");
+      return;
+    }
+
     const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
-    getPosModifierGroups(pendingProduct).forEach((group) => {
+    posGroups.forEach((group) => {
       const groupId = String(group.id);
       (selectedModifiers[groupId] ?? []).forEach((modId) => {
         const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
@@ -328,6 +372,8 @@ const POS = () => {
     setIsExtrasOpen(false);
     setPendingProduct(null);
     setSelectedModifiers({});
+    setOpenModifierGroups({});
+    setModifierValidationErrors({});
   };
 
 
@@ -428,6 +474,8 @@ const POS = () => {
     if (!open) {
       setPendingProduct(null);
       setSelectedModifiers({});
+      setOpenModifierGroups({});
+      setModifierValidationErrors({});
     }
   };
 
@@ -612,7 +660,7 @@ const POS = () => {
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    <p className="text-base font-bold text-secondary">${product.price.toFixed(2)}</p>
+                    <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
                     {product.modifierGroups && product.modifierGroups.length > 0 && (
                       <Badge variant="secondary" className="mt-1 text-xs">
                         <span className="md:hidden">Custom</span>
@@ -633,31 +681,24 @@ const POS = () => {
                 <Button variant="outline" size="sm" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
               </div>
               
-              <div className="flex gap-2">
-                <Button
-                  variant={serviceType === "dine-in" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("dine-in")}
-                  className="flex-1"
-                >
-                  En Local
-                </Button>
-                <Button
-                  variant={serviceType === "takeout" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("takeout")}
-                  className="flex-1"
-                >
-                  Para Llevar
-                </Button>
-                <Button
-                  variant={serviceType === "delivery" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setServiceType("delivery")}
-                  className="flex-1"
-                >
-                  Delivery
-                </Button>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {serviceTypes.length > 0 ? (
+                  serviceTypes.map((type) => (
+                    <Button
+                      key={type.id}
+                      variant={serviceType === type.key ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setServiceType(type.key)}
+                      className="min-w-fit whitespace-nowrap"
+                    >
+                      {type.label}
+                    </Button>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted-foreground">
+                    Configura tipos de pedido en Configuración.
+                  </span>
+                )}
               </div>
             </div>
 
@@ -1074,58 +1115,88 @@ const POS = () => {
             {getPosModifierGroups(pendingProduct).map((group) => {
               const groupId = String(group.id);
               const selectedValues = selectedModifiers[groupId] ?? [];
+              const isOpen = openModifierGroups[groupId] ?? false;
+              const groupError = modifierValidationErrors[groupId];
               return (
-                <div key={group.id} className="rounded-xl border border-border/70 p-3">
-                  <Label className="mb-2 block text-sm font-semibold">{group.name}</Label>
-                  {group.maxSelection === 1 ? (
-                    <RadioGroup
-                      value={selectedValues[0] || ""}
-                      onValueChange={(value) =>
-                        setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }))
-                      }
-                    >
-                      {group.modifiers
-                        .filter((mod) => mod.price > 0)
-                        .map((mod) => (
-                          <Label
-                            key={mod.id}
-                            htmlFor={`pending-${mod.id}`}
-                            className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                          >
-                            <RadioGroupItem id={`pending-${mod.id}`} value={String(mod.id)} />
-                            <span className="flex-1 font-medium">{mod.name}</span>
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          </Label>
-                        ))}
-                    </RadioGroup>
-                  ) : (
-                    <div className="space-y-1">
-                      {group.modifiers
-                        .filter((mod) => mod.price > 0)
-                        .map((mod) => (
-                          <Label
-                            key={mod.id}
-                            htmlFor={`pending-${mod.id}`}
-                            className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                          >
-                            <Checkbox
-                              id={`pending-${mod.id}`}
-                              checked={selectedValues.includes(String(mod.id))}
-                              onCheckedChange={(checked) => {
-                                const current = selectedValues;
-                                if (checked && current.length >= group.maxSelection) return;
-                                setSelectedModifiers((prev) => ({
-                                  ...prev,
-                                  [groupId]: checked
-                                    ? [...current, String(mod.id)]
-                                    : current.filter((id) => id !== String(mod.id)),
-                                }));
-                              }}
-                            />
-                            <span className="flex-1 font-medium">{mod.name}</span>
-                            <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                          </Label>
-                        ))}
+                <div key={group.id} className={cn("rounded-xl border border-border/70", groupError && "border-destructive/60")}> 
+                  <button
+                    type="button"
+                    className="flex min-h-14 w-full items-center justify-between px-4 py-3 text-left"
+                    onClick={() => setOpenModifierGroups((prev) => ({ ...prev, [groupId]: !isOpen }))}
+                    aria-expanded={isOpen}
+                  >
+                    <div>
+                      <Label className="block cursor-pointer text-base font-semibold">{group.name}</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {group.required ? "Obligatorio" : "Opcional"} · Min {group.minSelection} · Max {group.maxSelection}
+                      </p>
+                    </div>
+                    {isOpen ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                  </button>
+                  {groupError && <p className="px-4 pb-2 text-xs text-destructive">{groupError}</p>}
+                  {isOpen && (
+                    <div className="space-y-2 px-3 pb-3">
+                      {group.maxSelection === 1 ? (
+                        <RadioGroup
+                          value={selectedValues[0] || ""}
+                          onValueChange={(value) => {
+                            setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }));
+                            setModifierValidationErrors((prev) => {
+                              const next = { ...prev };
+                              delete next[groupId];
+                              return next;
+                            });
+                          }}
+                        >
+                          {group.modifiers
+                            .filter((mod) => mod.price > 0)
+                            .map((mod) => (
+                              <Label
+                                key={mod.id}
+                                htmlFor={`pending-${group.id}-${mod.id}`}
+                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
+                              >
+                                <RadioGroupItem id={`pending-${group.id}-${mod.id}`} value={String(mod.id)} />
+                                <span className="flex-1 font-medium">{mod.name}</span>
+                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                              </Label>
+                            ))}
+                        </RadioGroup>
+                      ) : (
+                        <div className="space-y-1">
+                          {group.modifiers
+                            .filter((mod) => mod.price > 0)
+                            .map((mod) => (
+                              <Label
+                                key={mod.id}
+                                htmlFor={`pending-${group.id}-${mod.id}`}
+                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
+                              >
+                                <Checkbox
+                                  id={`pending-${group.id}-${mod.id}`}
+                                  checked={selectedValues.includes(String(mod.id))}
+                                  onCheckedChange={(checked) => {
+                                    const current = selectedValues;
+                                    if (checked && current.length >= group.maxSelection) return;
+                                    setSelectedModifiers((prev) => ({
+                                      ...prev,
+                                      [groupId]: checked
+                                        ? [...current, String(mod.id)]
+                                        : current.filter((id) => id !== String(mod.id)),
+                                    }));
+                                    setModifierValidationErrors((prev) => {
+                                      const next = { ...prev };
+                                      delete next[groupId];
+                                      return next;
+                                    });
+                                  }}
+                                />
+                                <span className="flex-1 font-medium">{mod.name}</span>
+                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
+                              </Label>
+                            ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

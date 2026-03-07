@@ -8,22 +8,39 @@ from django.db.models.deletion import ProtectedError
 from rest_framework.permissions import SAFE_METHODS, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError
 from django.conf import settings
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
+from apps.core.models import ServiceType
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount
+from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount, ProductSpecialPriceRule
 from apps.menu.serializers import (
     CategorySerializer,
     ProductSerializer,
     ModifierGroupSerializer,
     ModifierSerializer,
     DiscountSerializer,
+    ProductSpecialPriceRuleSerializer,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def _parse_effective_context(request):
+    order_type = None
+    order_type_id = request.query_params.get("order_type_id")
+    if order_type_id:
+        try:
+            order_type = ServiceType.objects.filter(id=int(order_type_id)).first()
+        except (TypeError, ValueError):
+            order_type = None
+    at = None
+    at_raw = request.query_params.get("at")
+    if at_raw:
+        from django.utils.dateparse import parse_datetime
+        at = parse_datetime(at_raw)
+    return {"order_type": order_type, "at": at}
 
 
 @lru_cache(maxsize=1)
@@ -35,6 +52,7 @@ def _product_sort_order_column_exists() -> bool:
 
 class CategoryListCreateView(generics.ListCreateAPIView):
     serializer_class = CategorySerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         queryset = Category.objects.filter(is_active=True)
@@ -67,13 +85,22 @@ class CategoryListCreateView(generics.ListCreateAPIView):
         name = serializer.validated_data["name"]
         next_position = (Category.objects.aggregate(max_position=models.Max("position")).get("max_position") or -1) + 1
         category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True, "position": next_position})
+
+        update_fields = []
         if not category.is_active:
             category.is_active = True
-            update_fields = ["is_active"]
-            if category.position != next_position:
-                category.position = next_position
-                update_fields.append("position")
+            update_fields.append("is_active")
+        if category.position != next_position:
+            category.position = next_position
+            update_fields.append("position")
+        if update_fields:
             category.save(update_fields=update_fields)
+
+        image_file = request.FILES.get("image")
+        if image_file:
+            category.image = image_file
+            category.save(update_fields=["image", "image_path"])
+
         if created:
             log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
         response_serializer = self.get_serializer(category)
@@ -118,8 +145,13 @@ class ProductListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update(_parse_effective_context(self.request))
+        return context
+
     def get_queryset(self):
-        queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
+        queryset = Product.objects.select_related("category").prefetch_related("modifier_groups", "special_price_rules__order_types")
         query = self.request.query_params.get("search") or self.request.query_params.get("q")
         if query:
             queryset = queryset.filter(name__icontains=query.strip())
@@ -200,7 +232,12 @@ class ProductReorderView(APIView):
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProductSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    queryset = Product.objects.select_related("category").prefetch_related("modifier_groups")
+    queryset = Product.objects.select_related("category").prefetch_related("modifier_groups", "special_price_rules__order_types")
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update(_parse_effective_context(self.request))
+        return context
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -300,6 +337,7 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CategorySerializer
     queryset = Category.objects.all()
     permission_classes = [IsAdminOrManager]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()
@@ -532,6 +570,25 @@ class ModifierGroupOptionsReorderView(APIView):
         group = serializer.save()
         log_audit(self.request, "menu.modifier_group.create", "ModifierGroup", group.id, {"name": group.name})
 
+
+class ProductSpecialPriceListCreateView(generics.ListCreateAPIView):
+    serializer_class = ProductSpecialPriceRuleSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def get_queryset(self):
+        return ProductSpecialPriceRule.objects.filter(product_id=self.kwargs["product_id"]).prefetch_related("order_types").order_by("-priority", "id")
+
+    def perform_create(self, serializer):
+        product = Product.objects.filter(id=self.kwargs["product_id"]).first()
+        if not product:
+            raise ValidationError({"product": "Producto no encontrado."})
+        serializer.save(product=product)
+
+
+class ProductSpecialPriceDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ProductSpecialPriceRuleSerializer
+    permission_classes = [IsAdminOrManager]
+    queryset = ProductSpecialPriceRule.objects.prefetch_related("order_types")
 
 class DiscountListCreateView(generics.ListCreateAPIView):
     serializer_class = DiscountSerializer

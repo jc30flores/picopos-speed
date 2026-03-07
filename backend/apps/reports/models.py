@@ -13,7 +13,7 @@ class SaleSnapshot(models.Model):
     order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="sale_snapshots")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="sale_snapshots")
     order_number = models.CharField(max_length=40)
-    service_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT, related_name="sale_snapshots")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, blank=True, related_name="sale_snapshots")
     channel = models.CharField(max_length=40)
     payment_method = models.CharField(max_length=40)
     items = models.PositiveIntegerField(default=0)
