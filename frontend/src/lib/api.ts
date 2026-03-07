@@ -39,6 +39,9 @@ export type Product = {
   name: string;
   description: string;
   price: number;
+  effectivePrice?: number;
+  appliedSpecialPriceRuleId?: number | null;
+  appliedSpecialPriceRuleName?: string | null;
   sortOrder?: number;
   category: string;
   categoryName?: string | null;
@@ -140,6 +143,25 @@ export type ServiceType = {
   sortOrder?: number;
 };
 
+
+
+export type ProductSpecialPriceRule = {
+  id: number;
+  productId?: number;
+  name?: string;
+  isActive: boolean;
+  priority: number;
+  discountType: "FIXED_PRICE" | "PERCENT_OFF";
+  fixedPrice?: number | null;
+  percentOff?: number | null;
+  daysOfWeek: number[];
+  startTime?: string | null;
+  endTime?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  appliesToAllOrderTypes: boolean;
+  orderTypeIds: number[];
+};
 export type TaxConfig = {
   rate: number;
   taxIncluded: boolean;
@@ -595,6 +617,8 @@ export const getProducts = async (options?: {
   page?: number;
   limit?: number;
   ids?: number[];
+  orderTypeId?: number;
+  at?: string;
 }): Promise<Product[]> => {
   const params = new URLSearchParams();
   if (options?.search) params.set("search", options.search);
@@ -602,6 +626,8 @@ export const getProducts = async (options?: {
   if (options?.page) params.set("page", String(options.page));
   if (options?.limit) params.set("limit", String(options.limit));
   if (options?.ids?.length) params.set("ids", options.ids.join(","));
+  if (options?.orderTypeId) params.set("order_type_id", String(options.orderTypeId));
+  if (options?.at) params.set("at", options.at);
   const query = params.toString();
   const response = await request(`/menu/products/${query ? `?${query}` : ""}`);
   const data = await handleJson<Array<{
@@ -609,6 +635,9 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -632,6 +661,9 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      effectivePrice: item.effective_price != null ? Number(item.effective_price) : Number(item.price),
+      appliedSpecialPriceRuleId: item.applied_special_price_rule_id ?? null,
+      appliedSpecialPriceRuleName: item.applied_special_price_rule_name ?? null,
       sortOrder: Number(item.sort_order ?? 0),
       category: item.category,
       categoryName: item.category_name ?? item.category,
@@ -693,6 +725,9 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -714,6 +749,9 @@ export const createProduct = async (payload: {
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
+    appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
@@ -776,6 +814,9 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    effective_price?: string | null;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
     sort_order?: number;
     category: string;
     category_name?: string;
@@ -794,6 +835,9 @@ export const updateProduct = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
+    appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
     category: data.category,
     categoryName: data.category_name ?? data.category,
@@ -1223,6 +1267,125 @@ export const updateOrderType = async (id: number, payload: Partial<{ key: string
 
 export const deleteOrderType = async (id: number): Promise<void> => {
   await request(`/core/order-types/${id}/`, { method: 'DELETE' });
+};
+
+
+export const listProductSpecialPrices = async (productId: number): Promise<ProductSpecialPriceRule[]> => {
+  const response = await request(`/menu/products/${productId}/special-prices/`);
+  const data = await handleJson<Array<{
+    id: number;
+    product?: number;
+    name?: string;
+    is_active: boolean;
+    priority: number;
+    discount_type: "FIXED_PRICE" | "PERCENT_OFF";
+    fixed_price?: string | null;
+    percent_off?: string | null;
+    days_of_week?: number[];
+    start_time?: string | null;
+    end_time?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    applies_to_all_order_types: boolean;
+    order_type_ids?: number[];
+  }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  }));
+};
+
+export const createProductSpecialPrice = async (productId: number, payload: Omit<ProductSpecialPriceRule, "id" | "productId">): Promise<ProductSpecialPriceRule> => {
+  const response = await request(`/menu/products/${productId}/special-prices/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: payload.name ?? "",
+      is_active: payload.isActive,
+      priority: payload.priority,
+      discount_type: payload.discountType,
+      fixed_price: payload.fixedPrice,
+      percent_off: payload.percentOff,
+      days_of_week: payload.daysOfWeek,
+      start_time: payload.startTime,
+      end_time: payload.endTime,
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      applies_to_all_order_types: payload.appliesToAllOrderTypes,
+      order_type_ids: payload.orderTypeIds,
+    }),
+  });
+  const item = await handleJson<any>(response);
+  return {
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  };
+};
+
+export const updateProductSpecialPrice = async (ruleId: number, payload: Partial<Omit<ProductSpecialPriceRule, "id" | "productId">>): Promise<ProductSpecialPriceRule> => {
+  const body: Record<string, unknown> = {};
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.isActive !== undefined) body.is_active = payload.isActive;
+  if (payload.priority !== undefined) body.priority = payload.priority;
+  if (payload.discountType !== undefined) body.discount_type = payload.discountType;
+  if (payload.fixedPrice !== undefined) body.fixed_price = payload.fixedPrice;
+  if (payload.percentOff !== undefined) body.percent_off = payload.percentOff;
+  if (payload.daysOfWeek !== undefined) body.days_of_week = payload.daysOfWeek;
+  if (payload.startTime !== undefined) body.start_time = payload.startTime;
+  if (payload.endTime !== undefined) body.end_time = payload.endTime;
+  if (payload.startDate !== undefined) body.start_date = payload.startDate;
+  if (payload.endDate !== undefined) body.end_date = payload.endDate;
+  if (payload.appliesToAllOrderTypes !== undefined) body.applies_to_all_order_types = payload.appliesToAllOrderTypes;
+  if (payload.orderTypeIds !== undefined) body.order_type_ids = payload.orderTypeIds;
+
+  const response = await request(`/menu/special-prices/${ruleId}/`, { method: "PATCH", body: JSON.stringify(body) });
+  const item = await handleJson<any>(response);
+  return {
+    id: item.id,
+    productId: item.product,
+    name: item.name ?? "",
+    isActive: item.is_active,
+    priority: item.priority ?? 0,
+    discountType: item.discount_type,
+    fixedPrice: item.fixed_price != null ? Number(item.fixed_price) : null,
+    percentOff: item.percent_off != null ? Number(item.percent_off) : null,
+    daysOfWeek: item.days_of_week ?? [],
+    startTime: item.start_time ?? null,
+    endTime: item.end_time ?? null,
+    startDate: item.start_date ?? null,
+    endDate: item.end_date ?? null,
+    appliesToAllOrderTypes: item.applies_to_all_order_types !== false,
+    orderTypeIds: item.order_type_ids ?? [],
+  };
+};
+
+export const deleteProductSpecialPrice = async (ruleId: number): Promise<void> => {
+  await request(`/menu/special-prices/${ruleId}/`, { method: "DELETE" });
 };
 
 export const getActiveTaxConfig = async (): Promise<TaxConfig> => {

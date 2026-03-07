@@ -572,7 +572,7 @@ const Kiosk = () => {
                     ) : null}
                     <div className={cn("px-5 pb-5", imageSrc ? "pt-3" : "pt-5")}>
                       <h3 className="line-clamp-2 text-2xl font-extrabold leading-tight">{product.name}</h3>
-                      <p className="mt-2 text-3xl font-black text-secondary">${product.price.toFixed(2)}</p>
+                      <p className="mt-2 text-3xl font-black text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
                     </div>
                   </Card>
                 );

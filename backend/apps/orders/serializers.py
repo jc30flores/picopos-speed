@@ -8,6 +8,7 @@ from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts
+from apps.menu.utils.pricing import resolve_effective_price
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -28,6 +29,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "price_snapshot",
             "quantity",
             "assigned_name",
+            "applied_special_price_rule_id",
             "applied_modifiers",
         ]
 
@@ -258,13 +260,20 @@ class OrderCreateSerializer(serializers.Serializer):
             modifiers = item_data.pop("modifiers", [])
             product = item_data.pop("product_id")
             modifiers = self._resolve_modifier_payload(product, modifiers, fast_pos_mode, channel)
-            price_snapshot = item_data["price_snapshot"]
             quantity = item_data["quantity"]
+            pricing_result = resolve_effective_price(product, order_type=service_type, at=timezone.now())
+            price_snapshot = pricing_result.effective_price
+            item_data["price_snapshot"] = price_snapshot
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
             line_total = (price_snapshot + modifiers_total) * quantity
             line_key = f"line-{len(order_lines)}"
 
-            order_item = OrderItem.objects.create(order=order, product=product, **item_data)
+            order_item = OrderItem.objects.create(
+                order=order,
+                product=product,
+                applied_special_price_rule=pricing_result.applied_rule,
+                **item_data,
+            )
             for modifier_data in modifiers:
                 OrderItemModifier.objects.create(
                     order_item=order_item,

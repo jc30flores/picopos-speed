@@ -2,10 +2,12 @@ from rest_framework import serializers
 from django.db import transaction
 import json
 from decimal import Decimal
+from apps.core.models import ServiceType
 from apps.menu.models import (
     Category,
     Product,
     ProductModifierGroup,
+    ProductSpecialPriceRule,
     ModifierGroup,
     Modifier,
     Discount,
@@ -15,12 +17,19 @@ from apps.menu.models import (
 )
 from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 from apps.menu.utils.media import safe_media_url
+from apps.menu.utils.pricing import resolve_effective_price
 
 
 class CategorySerializer(serializers.ModelSerializer):
     image = serializers.FileField(required=False, allow_null=True)
     image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    effective_price = serializers.SerializerMethodField()
+    applied_special_price_rule_id = serializers.SerializerMethodField()
+    applied_special_price_rule_name = serializers.SerializerMethodField()
+    effective_price = serializers.SerializerMethodField()
+    applied_special_price_rule_id = serializers.SerializerMethodField()
+    applied_special_price_rule_name = serializers.SerializerMethodField()
     remove_image = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
@@ -210,6 +219,63 @@ class ModifierGroupSerializer(serializers.ModelSerializer):
             return instance
 
 
+class ProductSpecialPriceRuleSerializer(serializers.ModelSerializer):
+    order_type_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        source="order_types",
+        queryset=ServiceType.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = ProductSpecialPriceRule
+        fields = [
+            "id",
+            "product",
+            "name",
+            "is_active",
+            "priority",
+            "discount_type",
+            "fixed_price",
+            "percent_off",
+            "days_of_week",
+            "start_time",
+            "end_time",
+            "start_date",
+            "end_date",
+            "applies_to_all_order_types",
+            "order_type_ids",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "product"]
+
+    def validate(self, attrs):
+        discount_type = attrs.get("discount_type", getattr(self.instance, "discount_type", None))
+        fixed_price = attrs.get("fixed_price", getattr(self.instance, "fixed_price", None))
+        percent_off = attrs.get("percent_off", getattr(self.instance, "percent_off", None))
+        if discount_type == ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE:
+            if fixed_price is None:
+                raise serializers.ValidationError({"fixed_price": "Requerido para FIXED_PRICE."})
+        if discount_type == ProductSpecialPriceRule.DISCOUNT_TYPE_PERCENT_OFF:
+            if percent_off is None:
+                raise serializers.ValidationError({"percent_off": "Requerido para PERCENT_OFF."})
+            if Decimal(percent_off) < 0 or Decimal(percent_off) > 100:
+                raise serializers.ValidationError({"percent_off": "Debe estar entre 0 y 100."})
+        days = attrs.get("days_of_week", getattr(self.instance, "days_of_week", []))
+        if days:
+            normalized_days = sorted({int(day) for day in days})
+            if any(day < 0 or day > 6 for day in normalized_days):
+                raise serializers.ValidationError({"days_of_week": "Usa valores entre 0 y 6."})
+            attrs["days_of_week"] = normalized_days
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError({"end_date": "Debe ser mayor o igual a start_date."})
+        return attrs
+
+
+
 class ProductSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
@@ -230,6 +296,9 @@ class ProductSerializer(serializers.ModelSerializer):
     )
     image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    effective_price = serializers.SerializerMethodField()
+    applied_special_price_rule_id = serializers.SerializerMethodField()
+    applied_special_price_rule_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -246,6 +315,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "image",
             "image_path",
             "image_url",
+            "effective_price",
+            "applied_special_price_rule_id",
+            "applied_special_price_rule_name",
             "available",
             "is_archived",
             "disposable_fee",
@@ -328,6 +400,31 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_image_path(self, obj: Product) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)
+
+    def _resolve_effective_result(self, obj: Product):
+        cache = self.context.setdefault("_effective_price_cache", {})
+        cached = cache.get(obj.id)
+        if cached is not None:
+            return cached
+        result = resolve_effective_price(
+            obj,
+            order_type=self.context.get("order_type"),
+            at=self.context.get("at"),
+        )
+        cache[obj.id] = result
+        return result
+
+    def get_effective_price(self, obj: Product):
+        result = self._resolve_effective_result(obj)
+        return result.effective_price
+
+    def get_applied_special_price_rule_id(self, obj: Product):
+        rule = self._resolve_effective_result(obj).applied_rule
+        return rule.id if rule else None
+
+    def get_applied_special_price_rule_name(self, obj: Product):
+        rule = self._resolve_effective_result(obj).applied_rule
+        return rule.name if rule else None
 
     def update(self, instance, validated_data):
         disposable_apply_to = validated_data.get("disposable_apply_to")
