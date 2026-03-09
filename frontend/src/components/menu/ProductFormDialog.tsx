@@ -34,6 +34,8 @@ interface ProductFormDialogProps {
 }
 
 const DAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const MIN_RULE_PRIORITY = 0;
+const MAX_RULE_PRIORITY = 1000;
 
 type RuleDraft = Omit<ProductSpecialPriceRule, "id" | "productId">;
 
@@ -52,6 +54,8 @@ const emptyRule = (): RuleDraft => ({
   appliesToAllOrderTypes: true,
   orderTypeIds: [],
 });
+
+const clampRulePriority = (value: number) => Math.min(MAX_RULE_PRIORITY, Math.max(MIN_RULE_PRIORITY, Math.trunc(value)));
 
 export const ProductFormDialog = ({
   open,
@@ -279,10 +283,15 @@ export const ProductFormDialog = ({
       return;
     }
 
+    const payload: RuleDraft = {
+      ...ruleDraft,
+      priority: clampRulePriority(Number(ruleDraft.priority || 0)),
+    };
+
     if (editingRuleId) {
-      await updateProductSpecialPrice(editingRuleId, ruleDraft);
+      await updateProductSpecialPrice(editingRuleId, payload);
     } else {
-      await createProductSpecialPrice(editingProduct.id, ruleDraft);
+      await createProductSpecialPrice(editingProduct.id, payload);
     }
     setSpecialRules(await listProductSpecialPrices(editingProduct.id));
     setRuleOpen(false);
@@ -295,7 +304,7 @@ export const ProductFormDialog = ({
   };
 
   const formatRuleSummary = (rule: ProductSpecialPriceRule) => {
-    const priceText = rule.discountType === "FIXED_PRICE" ? `Precio $${Number(rule.fixedPrice ?? 0).toFixed(2)}` : `${Number(rule.percentOff ?? 0)}% off`;
+    const priceText = rule.discountType === "FIXED_PRICE" ? `Precio $${Number(rule.fixedPrice ?? 0).toFixed(2)}` : `${Number(rule.percentOff ?? 0)}% descuento`;
     const daysText = rule.daysOfWeek.length ? `Días: ${rule.daysOfWeek.map((d) => DAYS[d]).join(", ")}` : "Días: Todos";
     const orderTypesText = rule.appliesToAllOrderTypes
       ? "Tipos: Todos"
@@ -483,10 +492,41 @@ export const ProductFormDialog = ({
             </div>
             <div>
               <Label>Prioridad</Label>
-              <Input type="number" value={ruleDraft.priority} onChange={(e) => setRuleDraft((prev) => ({ ...prev, priority: Number(e.target.value || 0) }))} />
+              <div className="mt-1 flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority((prev.priority ?? 0) - 1) }))}
+                >
+                  -
+                </Button>
+                <Input
+                  type="number"
+                  min={MIN_RULE_PRIORITY}
+                  max={MAX_RULE_PRIORITY}
+                  step={1}
+                  value={ruleDraft.priority}
+                  onChange={(e) => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority(Number(e.target.value || 0)) }))}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority((prev.priority ?? 0) + 1) }))}
+                >
+                  +
+                </Button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 900 }))}>ALTA</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 500 }))}>MEDIA</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 100 }))}>BAJA</Button>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Prioridad: número mayor = se aplica primero. Si varias reglas coinciden, gana la de mayor número.
+              </p>
             </div>
             <div className="flex items-center gap-2">
-              <Checkbox checked={ruleDraft.appliesToAllOrderTypes} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, appliesToAllOrderTypes: Boolean(checked), orderTypeIds: Boolean(checked) ? [] : prev.orderTypeIds }))} id="rule-all-order-types" />
+              <Checkbox checked={ruleDraft.appliesToAllOrderTypes} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, appliesToAllOrderTypes: checked === true, orderTypeIds: checked === true ? [] : prev.orderTypeIds }))} id="rule-all-order-types" />
               <Label htmlFor="rule-all-order-types">Aplica a todos los tipos de pedido</Label>
             </div>
             {!ruleDraft.appliesToAllOrderTypes && (
@@ -509,7 +549,7 @@ export const ProductFormDialog = ({
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Checkbox checked={ruleDraft.isActive} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, isActive: Boolean(checked) }))} id="rule-active" />
+              <Checkbox checked={ruleDraft.isActive} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, isActive: checked === true }))} id="rule-active" />
               <Label htmlFor="rule-active">Regla activa</Label>
             </div>
             <div className="flex gap-2 pt-2">

@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.test import TestCase
 
 from apps.core.models import Branch, ServiceType
-from apps.menu.models import Category, Modifier, ModifierGroup, Product
+from apps.menu.models import Category, Modifier, ModifierGroup, Product, ProductSpecialPriceRule
 from apps.orders.serializers import OrderCreateSerializer
 
 
@@ -60,3 +60,47 @@ class PosFastFlowTests(TestCase):
         names = list(order.items.first().applied_modifiers.values_list("modifier_name_snapshot", flat=True))
         self.assertIn(free_default.name, names)
         self.assertIn(paid_extra.name, names)
+
+    def test_order_item_uses_special_price_override_even_if_higher_than_base(self):
+        product = Product.objects.create(
+            name="Burrito premium",
+            description="",
+            price=Decimal("10.00"),
+            category=self.category,
+            available=True,
+            requires_kitchen=False,
+        )
+        winning_rule = ProductSpecialPriceRule.objects.create(
+            product=product,
+            name="Recargo horario",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("12.00"),
+            priority=10,
+            applies_to_all_order_types=True,
+            is_active=True,
+        )
+
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "source": "pos",
+                "channel": "pos",
+                "items": [
+                    {
+                        "product_id": product.id,
+                        "product_name_snapshot": product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        order_item = order.items.get(product_id=product.id)
+
+        self.assertEqual(order_item.price_snapshot, Decimal("12.00"))
+        self.assertEqual(order_item.applied_special_price_rule_id, winning_rule.id)
+        self.assertEqual(order.total, Decimal("12.00"))
