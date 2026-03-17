@@ -1,5 +1,5 @@
 import { Navigation } from "@/components/Navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -139,6 +139,8 @@ const POS = () => {
   const [tipAmount, setTipAmount] = useState("");
   const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
+  const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
+  const keypadRef = useRef<HTMLDivElement | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
@@ -183,6 +185,25 @@ const POS = () => {
       setServiceType(serviceTypes[0].key);
     }
   }, [serviceTypes, serviceType]);
+
+  useEffect(() => {
+    if (paymentMethod !== "cash") {
+      setActiveTenderField(null);
+    }
+  }, [paymentMethod]);
+
+  useEffect(() => {
+    if (!activeTenderField) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (cashInputsContainerRef.current?.contains(target)) return;
+      if (keypadRef.current?.contains(target)) return;
+      setActiveTenderField(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [activeTenderField]);
 
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
@@ -1024,7 +1045,7 @@ const POS = () => {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label>Monto recibido</Label>
                       <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
@@ -1041,16 +1062,18 @@ const POS = () => {
                     {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
                   </div>
 
-                  <div className="grid grid-cols-4 gap-2">
-                    {DENOMINATION_CENTS.map((value) => (
-                      <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                        {formatMoney(value / 100)}
-                      </Button>
-                    ))}
-                    <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                    <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
-                    <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
-                  </div>
+                  {activeTenderField && (
+                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                      {DENOMINATION_CENTS.map((value) => (
+                        <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                          {formatMoney(value / 100)}
+                        </Button>
+                      ))}
+                      <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                      <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
+                      <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
+                    </div>
+                  )}
 
                   <div className="flex gap-2">
                     <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
