@@ -2,7 +2,8 @@ import { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getCustomerOrders, getServiceTypes, ServiceType } from "@/lib/api";
+import { getCustomerOrders } from "@/lib/api";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 const CustomerDisplay = () => {
   const navigate = useNavigate();
@@ -11,7 +12,7 @@ const CustomerDisplay = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [retryToken, setRetryToken] = useState(0);
   const [serviceFilter, setServiceFilter] = useState<string>("all");
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const pollDelayRef = useRef(5000);
 
   useEffect(() => {
@@ -58,14 +59,6 @@ const CustomerDisplay = () => {
     };
   }, [retryToken, serviceFilter]);
 
-
-  useEffect(() => {
-    getServiceTypes()
-      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
-      .catch((error) => {
-        console.error("Failed to load service types", error);
-      });
-  }, []);
 
   const handleRetry = () => {
     pollDelayRef.current = 2000;

@@ -37,17 +37,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSalesReport, SalesReportRow, SalesReportAggregates } from "@/lib/api";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 type TimeFilter = "daily" | "weekly" | "monthly" | "all";
 
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  "dine-in": "En local",
-  takeout: "Para llevar",
-  delivery: "Delivery",
-  kiosk: "Kiosk",
-};
-
 export const ReportsTab = () => {
+  const { serviceTypes } = useServiceTypes();
+  const serviceTypeLabelByKey = useMemo(() => new Map(serviceTypes.map((item) => [item.key, item.label])), [serviceTypes]);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("daily");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");

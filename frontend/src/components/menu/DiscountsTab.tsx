@@ -8,12 +8,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BxgyConfig, Discount } from "@/types/menu";
 import { DiscountFormDialog } from "./DiscountFormDialog";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 import {
   getCategories,
   getDiscounts,
-  getServiceTypes,
   Category,
-  ServiceType,
   Discount as ApiDiscount,
 } from "@/lib/api";
 
@@ -27,7 +26,7 @@ export const DiscountsTab = () => {
   const [editingDiscount, setEditingDiscount] = useState<Discount | null>(null);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const { serviceTypes } = useServiceTypes();
 
   const categoryMap = useMemo(
     () => new Map(categories.map((category) => [category.id, category.name])),
@@ -65,13 +64,11 @@ export const DiscountsTab = () => {
   };
 
   const loadDiscountData = useCallback(async () => {
-    const [categoriesResponse, serviceTypesResponse, discountsResponse] = await Promise.all([
+    const [categoriesResponse, discountsResponse] = await Promise.all([
       getCategories(),
-      getServiceTypes(),
       getDiscounts(),
     ]);
     setCategories(categoriesResponse);
-    setServiceTypes(serviceTypesResponse);
     mapDiscounts(
       discountsResponse,
       new Map(categoriesResponse.map((category) => [category.id, category.name]))
@@ -125,13 +122,8 @@ export const DiscountsTab = () => {
     }
     
     // Service types
-    const services = discount.serviceTypes.map(s => {
-      if (s === "dine-in") return "En local";
-      if (s === "takeout") return "Para llevar";
-      if (s === "delivery") return "Delivery";
-      if (s === "kiosk") return "Kiosk";
-      return s;
-    }).join(", ");
+    const serviceMap = new Map(serviceTypes.map((item) => [item.key, item.label]));
+    const services = discount.serviceTypes.map((key) => serviceMap.get(key) ?? key).join(", ");
     if (services) parts.push(services);
     
     // Min amount

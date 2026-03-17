@@ -5,14 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Clock, ChefHat } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createPrintJob, markPrintJobPrinted, getActiveOrders, getServiceTypes, updateOrderStatus, Order, PrintJob, ServiceType } from "@/lib/api";
+import { createPrintJob, markPrintJobPrinted, getActiveOrders, updateOrderStatus, Order, PrintJob } from "@/lib/api";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
 
 const Kitchen = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<string>("all");
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [kitchenJob, setKitchenJob] = useState<PrintJob | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -35,14 +36,6 @@ const Kitchen = () => {
     return () => clearInterval(interval);
   }, [loadOrders]);
 
-
-  useEffect(() => {
-    getServiceTypes()
-      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
-      .catch((error) => {
-        console.error("Failed to load service types", error);
-      });
-  }, []);
 
   const getStatusColor = (prepTime: number) => {
     if (prepTime < 10) return "status-new";

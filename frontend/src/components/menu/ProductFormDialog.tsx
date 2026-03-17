@@ -12,18 +12,17 @@ import {
   Category,
   Product,
   ProductSpecialPriceRule,
-  ServiceType,
   createCategory,
   createProduct,
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
-  getServiceTypes,
   listProductSpecialPrices,
   updateProduct,
   updateProductSpecialPrice,
 } from "@/lib/api";
 import { toast } from "sonner";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface ProductFormDialogProps {
   open: boolean;
@@ -81,7 +80,7 @@ export const ProductFormDialog = ({
   const [disposableFee, setDisposableFee] = useState("0");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
 
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [specialRules, setSpecialRules] = useState<ProductSpecialPriceRule[]>([]);
   const [ruleOpen, setRuleOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
@@ -115,12 +114,6 @@ export const ProductFormDialog = ({
     }
   }, [editingProduct, open]);
 
-  useEffect(() => {
-    if (!open) return;
-    getServiceTypes()
-      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
-      .catch(() => setServiceTypes([]));
-  }, [open]);
 
   useEffect(() => {
     if (!open || !editingProduct) {
@@ -376,12 +369,34 @@ export const ProductFormDialog = ({
 
               <div className="space-y-2 pt-1">
                 <Label>Aplicar desechables en</Label>
-                {[{ key: "MESA", label: "Mesa" }, { key: "PARA_LLEVAR", label: "Para llevar" }, { key: "PEDIDOS_YA", label: "Pedidos Ya" }].map((item) => (
-                  <div key={item.key} className="flex items-center space-x-2">
-                    <Checkbox id={`disposable-${item.key}`} checked={disposableApplyTo.includes(item.key)} onCheckedChange={(checked) => setDisposableApplyTo((prev) => checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key))} />
-                    <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
-                  </div>
-                ))}
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="disposable-all-service-types"
+                    checked={serviceTypes.length > 0 && disposableApplyTo.length === serviceTypes.length}
+                    onCheckedChange={(checked) => setDisposableApplyTo(checked === true ? serviceTypes.map((item) => item.key) : [])}
+                  />
+                  <Label htmlFor="disposable-all-service-types">Aplica a todos los tipos de pedido</Label>
+                </div>
+                <div className="max-h-28 space-y-2 overflow-y-auto rounded-md border p-2">
+                  {serviceTypes.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Sin tipos de pedido configurados.</p>
+                  ) : (
+                    serviceTypes.map((item) => (
+                      <div key={item.key} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`disposable-${item.key}`}
+                          checked={disposableApplyTo.includes(item.key)}
+                          onCheckedChange={(checked) =>
+                            setDisposableApplyTo((prev) =>
+                              checked === true ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key),
+                            )
+                          }
+                        />
+                        <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center space-x-2 pt-2">

@@ -1,5 +1,5 @@
 import { Navigation } from "@/components/Navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,7 +39,6 @@ import {
   getProducts,
   getCurrentCashSession,
   getDefaultConsumerCustomer,
-  getServiceTypes,
   listCustomers,
   openCashSession,
   closeCashSession,
@@ -48,7 +47,6 @@ import {
   Category,
   ModifierGroup,
   Product,
-  ServiceType,
   PaymentMethod,
   PaymentMethodOption,
   CashSessionSnapshot,
@@ -58,6 +56,7 @@ import {
 } from "@/lib/api";
 import { toast } from "sonner";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface CartItem {
   id: string;
@@ -89,12 +88,24 @@ const getOrderDisposableTotal = (
     return sum + fee * item.quantity;
   }, 0);
 
+const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
+
+const parseMoneyToCents = (value: string): number => {
+  const normalized = value.replace(/[^\d.]/g, "");
+  const amount = Number(normalized || 0);
+  if (!Number.isFinite(amount) || amount < 0) return 0;
+  return Math.round(amount * 100);
+};
+
+const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
+
+
 const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [serviceType, setServiceType] = useState<string>("MESA");
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const [serviceType, setServiceType] = useState<string>("");
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
 
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
@@ -126,6 +137,8 @@ const POS = () => {
   const [ivaExempt, setIvaExempt] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [tipAmount, setTipAmount] = useState("");
+  const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
+  const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
@@ -162,18 +175,14 @@ const POS = () => {
       .catch((error) => {
         console.error("Failed to load tax config", error);
       });
-    getServiceTypes()
-      .then((data) => {
-        const active = (data || []).filter((item) => item.isActive !== false);
-        setServiceTypes(active);
-        if (active.length && !active.some((item) => item.key === serviceType)) {
-          setServiceType(active[0].key);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load service types", error);
-      });
   }, []);
+
+  useEffect(() => {
+    if (!serviceTypes.length) return;
+    if (!serviceType || !serviceTypes.some((item) => item.key === serviceType)) {
+      setServiceType(serviceTypes[0].key);
+    }
+  }, [serviceTypes, serviceType]);
 
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
@@ -287,9 +296,14 @@ const POS = () => {
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
   const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
-  const paidTotal = paymentAmountValue + tipAmountValue;
-  const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
-  const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
+  const checkoutTotalCents = Math.round(checkoutTotal * 100);
+  const paymentAmountCents = parseMoneyToCents(paymentAmount);
+  const tipAmountCents = parseMoneyToCents(tipAmount);
+  const totalDueCents = checkoutTotalCents + tipAmountCents;
+  const changeCents = paymentAmountCents - totalDueCents;
+  const remainingTotal = Math.max(totalDueCents - paymentAmountCents, 0) / 100;
+  const changeTotal = Math.max(changeCents, 0) / 100;
+  const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDisposableTotal = checkoutDraft
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
@@ -479,6 +493,43 @@ const POS = () => {
     }
   };
 
+  const focusTenderField = (field: "payment" | "tip") => {
+    setActiveTenderField(field);
+    setShouldResetTenderOnFirstTap(true);
+  };
+
+  const applyTenderDenomination = (amountCents: number) => {
+    if (!activeTenderField) return;
+    const current = activeTenderField === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
+    const next = shouldResetTenderOnFirstTap ? amountCents : current + amountCents;
+    const value = centsToInput(next);
+    if (activeTenderField === "payment") setPaymentAmount(value);
+    if (activeTenderField === "tip") setTipAmount(value);
+    setShouldResetTenderOnFirstTap(false);
+  };
+
+  const clearTenderField = () => {
+    if (!activeTenderField) return;
+    if (activeTenderField === "payment") setPaymentAmount("");
+    if (activeTenderField === "tip") setTipAmount("");
+    setShouldResetTenderOnFirstTap(true);
+  };
+
+  const backspaceTenderField = () => {
+    if (!activeTenderField) return;
+    const currentRaw = activeTenderField === "payment" ? paymentAmount : tipAmount;
+    const nextRaw = currentRaw.slice(0, -1);
+    if (activeTenderField === "payment") setPaymentAmount(nextRaw);
+    if (activeTenderField === "tip") setTipAmount(nextRaw);
+    setShouldResetTenderOnFirstTap(false);
+  };
+
+  const setExactTenderAmount = () => {
+    if (activeTenderField !== "payment") return;
+    setPaymentAmount(centsToInput(totalDueCents));
+    setShouldResetTenderOnFirstTap(false);
+  };
+
   const handleSubmitPayment = async () => {
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
       toast.error("No hay productos en el pedido");
@@ -486,7 +537,7 @@ const POS = () => {
     }
     const amountReceived = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
-    const remaining = toNumber(paymentTotal);
+    const totalDue = totalDueCents / 100;
 
     if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
@@ -496,8 +547,8 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (amountReceived < remaining) {
-      toast.error("El monto recibido debe cubrir el total de la orden");
+    if (amountReceived < totalDue) {
+      toast.error("El monto recibido debe cubrir total + propina");
       return;
     }
     const selected = customers.find((c) => String(c.id) === selectedCustomerId);
@@ -887,210 +938,133 @@ const POS = () => {
 
       {/* Payment Dialog */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Cobrar pedido</DialogTitle>
-            <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
-          </DialogHeader>
-          {checkoutDraft ? (
-            <div className="space-y-5">
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                <div className="mt-2 text-3xl font-bold text-secondary">
-                  {formatMoney(checkoutDraft.total)}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm font-semibold">
-                  <span>Detalle</span>
-                  <span className="text-xs text-muted-foreground">
-                    {activeOrder?.orderNumber
-                      ? `Pedido #${activeOrder.orderNumber}`
-                      : createdOrderNumber
-                        ? `Pedido #${createdOrderNumber}`
-                        : "Pedido (pendiente)"}
-                  </span>
-                </div>
-                <div className="rounded-md border">
-                  <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
-                    {checkoutDraft.items.map((item) => (
-                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{item.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatMoney(toNumber(item.price))} c/u
-                          </div>
-                          {getPaidExtrasLines(item).length > 0 && (
-                            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                              {getPaidExtrasLines(item).map((extra, index) => (
-                                <div key={`${item.id}-${extra.name}-${index}`} className="flex justify-between gap-2 pl-3">
-                                  <span>+ {extra.name}</span>
-                                  <span>{formatMoney(extra.price)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
-                        <div className="text-right font-semibold">
-                          {formatMoney(toNumber(item.price) * toNumber(item.quantity))}
-                        </div>
-                      </div>
-                    ))}
+        <DialogContent className="w-[96vw] max-w-3xl p-0">
+          <div className="flex max-h-[90vh] flex-col">
+            <DialogHeader className="border-b px-4 py-3 sm:px-6">
+              <DialogTitle>Cobrar pedido</DialogTitle>
+              <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
+            </DialogHeader>
+            {checkoutDraft ? (
+              <>
+                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6">
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
+                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(checkoutDraft.total)}</div>
                   </div>
-                </div>
-              </div>
 
-              <div className="rounded-md border p-3 text-sm">
-                <div className="mb-2 font-semibold">Resumen</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div className="flex justify-between">
-                    <span>Subtotal (productos)</span>
-                    <span>{formatMoney(checkoutDraft.subtotal)}</span>
-                  </div>
-                  {checkoutDisposableTotal > 0 && (
-                    <div className="flex justify-between">
-                      <span>Desechables</span>
-                      <span>{formatMoney(checkoutDisposableTotal)}</span>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm font-semibold">
+                      <span>Detalle</span>
+                      <span className="text-xs text-muted-foreground">
+                        {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : createdOrderNumber ? `Pedido #${createdOrderNumber}` : "Pedido (pendiente)"}
+                      </span>
                     </div>
-                  )}
-                  <div className="flex justify-between font-semibold text-foreground">
-                    <span>Total</span>
-                    <span>{formatMoney(checkoutDraft.total)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="text-sm font-semibold">Pago</div>
-                <div className="space-y-2">
-                  <Label>Cliente</Label>
-                  <div className="flex gap-2">
-                    <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                      <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
-                      <SelectContent>
-                        {customers.map((c) => (
-                          <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>
+                    <div className="rounded-md border">
+                      <div className="max-h-40 divide-y divide-border overflow-y-auto text-sm">
+                        {checkoutDraft.items.map((item) => (
+                          <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{item.name}</div>
+                              <div className="text-xs text-muted-foreground">{formatMoney(toNumber(item.price))} c/u</div>
+                            </div>
+                            <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
+                            <div className="text-right font-semibold">{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</div>
+                          </div>
                         ))}
-                      </SelectContent>
-                    </Select>
-                    <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                      </div>
+                    </div>
                   </div>
+
+                  <div className="rounded-md border p-3 text-sm">
+                    <div className="mb-2 font-semibold">Resumen</div>
+                    <div className="space-y-1 text-muted-foreground">
+                      <div className="flex justify-between"><span>Subtotal (productos)</span><span>{formatMoney(checkoutDraft.subtotal)}</span></div>
+                      {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutDraft.total)}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Cliente</Label>
+                    <div className="flex gap-2">
+                      <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                        <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
+                        <SelectContent>{customers.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>)}</SelectContent>
+                      </Select>
+                      <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Tipo DTE</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                    </div>
+                  </div>
+                  {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
+                  <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Tipo DTE</Label>
+                <div className="shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Método</Label>
+                      <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{paymentMethods.map((m) => <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                      <div className="space-y-2">
+                        <Label>Referencia</Label>
+                        <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label>Monto recibido</Label>
+                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Propina</Label>
+                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+                    {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2">
+                    {DENOMINATION_CENTS.map((value) => (
+                      <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                        {formatMoney(value / 100)}
+                      </Button>
+                    ))}
+                    <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                    <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
+                    <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
+                  </div>
+
                   <div className="flex gap-2">
-                    <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                    <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                    <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                    <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0}>
+                      {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                    </Button>
                   </div>
+                  {isPaid && <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>Imprimir recibo</Button>}
                 </div>
-                {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && (
-                  <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>
-                )}
-
-                <div className="flex items-center justify-between rounded-md border p-2 text-sm">
-                  <span>Exento IVA</span>
-                  <Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(Boolean(v))} />
-                </div>
-                {ivaExempt && (
-                  <p className="text-xs text-muted-foreground">Aplicando exención: se descuenta IVA del total.</p>
-                )}
-
-                <div className="space-y-2">
-                  <Label>Método</Label>
-                  <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {paymentMethods.map((m) => (
-                        <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>Monto recibido</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                />
-              </div>
-                  <div className="space-y-2">
-                    <Label>Propina</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={tipAmount}
-                      onChange={(e) => setTipAmount(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                {(paymentMethod === "card" || paymentMethod === "transfer") && (
-                  <div className="space-y-2">
-                    <Label>Referencia</Label>
-                    <Input
-                      value={paymentReference}
-                      onChange={(e) => setPaymentReference(e.target.value)}
-                      placeholder="Opcional"
-                    />
-                  </div>
-                )}
-
-                <div className="rounded-md border px-3 py-2 text-sm">
-                  {paidTotal === 0 && checkoutTotal > 0 && (
-                    <span className="text-muted-foreground">
-                      Pendiente: {formatMoney(checkoutTotal)}
-                    </span>
-                  )}
-                  {paidTotal > 0 && remainingTotal > 0 && (
-                    <span className="text-destructive">
-                      Pendiente: {formatMoney(remainingTotal)}
-                    </span>
-                  )}
-                  {paidTotal > 0 && remainingTotal === 0 && changeTotal === 0 && (
-                    <span className="text-muted-foreground">Listo: pago exacto</span>
-                  )}
-                  {paidTotal > 0 && changeTotal > 0 && (
-                    <span className="text-emerald-400">
-                      Cambio: {formatMoney(changeTotal)}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>
-                  Cerrar
-                </Button>
-                <Button
-                  className="flex-1"
-                  onClick={handleSubmitPayment}
-                  disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0}
-                >
-                  {isProcessingPayment ? "Procesando..." : "Registrar pago"}
-                </Button>
-              </div>
-
-              {isPaid && (
-                <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>
-                  Imprimir recibo
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">No hay pedido activo.</div>
-          )}
+              </>
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
