@@ -8,7 +8,8 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
-import { recalcUnlockedParts, splitEqually, SplitPart, validateParts } from "@/lib/splitPayments";
+import { SplitPanel } from "@/components/pos/SplitPanel";
+import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
 import {
   Dialog,
   DialogContent,
@@ -145,9 +146,8 @@ const POS = () => {
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
-  const [splitCount, setSplitCount] = useState("2");
   const [parts, setParts] = useState<SplitPart[]>([]);
-  const [activePart, setActivePart] = useState(0);
+  const [activePartId, setActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
@@ -261,9 +261,9 @@ const POS = () => {
     setTipAmount("0");
     setPaymentReference("");
     setSplitEnabled(false);
-    setSplitCount("2");
-    setParts(splitEqually(draft.total, 1));
-    setActivePart(0);
+    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    setParts(initialParts);
+    setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
   };
 
@@ -326,14 +326,13 @@ const POS = () => {
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
   const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
-  const normalizedSplitCount = Math.max(2, Math.min(12, Number(splitCount || 2)));
-  const activeSplitPart = parts[activePart];
-  const splitValidation = splitEnabled ? validateParts(parts, checkoutTotal) : null;
-  const expectedPaymentAmount = splitEnabled ? (activeSplitPart?.amount ?? 0) : checkoutTotal;
   const checkoutTotalCents = Math.round(checkoutTotal * 100);
+  const splitValidation = validateParts(checkoutTotalCents, parts);
+  const activeSplitPart = parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.isPaid) ?? parts[0];
+  const expectedPaymentCents = splitEnabled ? (activeSplitPart?.amountCents ?? checkoutTotalCents) : checkoutTotalCents;
   const paymentAmountCents = parseMoneyToCents(paymentAmount);
   const tipAmountCents = parseMoneyToCents(tipAmount);
-  const totalDueCents = checkoutTotalCents + tipAmountCents;
+  const totalDueCents = expectedPaymentCents + tipAmountCents;
   const changeCents = paymentAmountCents - totalDueCents;
   const remainingTotal = Math.max(totalDueCents - paymentAmountCents, 0) / 100;
   const changeTotal = Math.max(changeCents, 0) / 100;
@@ -374,9 +373,9 @@ const POS = () => {
     setTipAmount("0");
     setPaymentReference("");
     setSplitEnabled(false);
-    setSplitCount("2");
-    setParts(splitEqually(draft.total, 1));
-    setActivePart(0);
+    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    setParts(initialParts);
+    setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
   };
 
@@ -473,26 +472,22 @@ const POS = () => {
   useEffect(() => {
     if (isPaymentOpen) {
       if (splitEnabled) {
-        const targetAmount = parts[activePart]?.amount ?? checkoutTotal;
+        const targetAmount = (activeSplitPart?.amountCents ?? checkoutTotalCents) / 100;
         setPaymentAmount(toNumber(targetAmount).toFixed(2));
       } else {
         setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
       }
     }
-  }, [checkoutTotal, isPaymentOpen, splitEnabled, parts, activePart]);
+  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
 
   useEffect(() => {
     if (!isPaymentOpen || !checkoutDraft) return;
-    if (!splitEnabled) {
-      setParts(splitEqually(checkoutTotal, 1));
-      setActivePart(0);
-      return;
+    if (parts.length === 0) {
+      const initialParts = splitEvenly(checkoutTotalCents, 1);
+      setParts(initialParts);
+      setActivePartId(initialParts[0]?.id ?? null);
     }
-
-    const nextParts = recalcUnlockedParts(splitEqually(checkoutTotal, normalizedSplitCount), checkoutTotal);
-    setParts(nextParts);
-    setActivePart(0);
-  }, [splitEnabled, normalizedSplitCount, checkoutTotal, isPaymentOpen, checkoutDraft]);
+  }, [checkoutTotalCents, isPaymentOpen, checkoutDraft, parts.length]);
 
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
@@ -593,8 +588,9 @@ const POS = () => {
     }
     const amountReceived = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
-    const totalDue = splitEnabled ? expectedPaymentAmount + tipValue : totalDueCents / 100;
-    const paymentAmountForApi = splitEnabled ? expectedPaymentAmount : checkoutTotal;
+    const totalDue = totalDueCents / 100;
+    const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
+    const paymentAmountForApi = splitEnabled ? expectedPaymentCents / 100 : remainingOrderAmount;
 
     if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
@@ -604,8 +600,8 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (splitEnabled && splitValidation) {
-      toast.error(splitValidation);
+    if (splitEnabled && !splitValidation.isValid) {
+      toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
     if (amountReceived < totalDue) {
@@ -672,8 +668,11 @@ const POS = () => {
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
-        const nextPart = Math.min(activePart + 1, Math.max(parts.length - 1, 0));
-        setActivePart(nextPart);
+        const paidPartId = activeSplitPart?.id;
+        const nextParts = parts.map((part) => (part.id === paidPartId ? { ...part, isPaid: true, locked: true } : part));
+        setParts(nextParts);
+        const nextUnpaid = nextParts.find((part) => !part.isPaid);
+        setActivePartId(nextUnpaid?.id ?? nextParts[0]?.id ?? null);
       }
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
@@ -687,7 +686,7 @@ const POS = () => {
         setCreatedOrderNumber(null);
         setSplitEnabled(false);
         setParts([]);
-        setActivePart(0);
+        setActivePartId(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -1076,43 +1075,21 @@ const POS = () => {
                 </div>
 
                 <div className="shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="rounded-md border p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-semibold">Dividir cuenta</div>
-                        <p className="text-xs text-muted-foreground">Divide el cobro en partes iguales</p>
-                      </div>
-                      <Checkbox checked={splitEnabled} onCheckedChange={(checked) => setSplitEnabled(checked === true)} />
+                  <SplitPanel
+                    enabled={splitEnabled}
+                    onEnabledChange={setSplitEnabled}
+                    totalCents={checkoutTotalCents}
+                    parts={parts}
+                    onPartsChange={setParts}
+                    activePartId={activePartId}
+                    onActivePartIdChange={setActivePartId}
+                  />
+
+                  {splitEnabled && activeSplitPart && (
+                    <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
+                      Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
-                    {splitEnabled && (
-                      <div className="mt-3 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs text-muted-foreground">Partes</Label>
-                          <Input
-                            value={splitCount}
-                            onChange={(event) => setSplitCount(event.target.value.replace(/[^\d]/g, ""))}
-                            className="h-8 w-20"
-                            inputMode="numeric"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                          {parts.map((part, index) => (
-                            <Button
-                              key={part.id}
-                              type="button"
-                              variant={activePart === index ? "default" : "outline"}
-                              onClick={() => setActivePart(index)}
-                              className="justify-between"
-                            >
-                              <span>Parte {index + 1}</span>
-                              <span>{formatMoney(part.amount)}</span>
-                            </Button>
-                          ))}
-                        </div>
-                        {splitValidation && <p className="text-xs text-destructive">{splitValidation}</p>}
-                      </div>
-                    )}
-                  </div>
+                  )}
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-2">
@@ -1162,7 +1139,7 @@ const POS = () => {
 
                   <div className="flex gap-2">
                     <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || Boolean(splitValidation)}>
+                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
                       {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                     </Button>
                   </div>
