@@ -64,8 +64,6 @@ class PaymentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Order is already paid")
         if amount > remaining:
             raise serializers.ValidationError("Payment exceeds remaining balance")
-        if order.channel == "pos" and amount < remaining:
-            raise serializers.ValidationError("POS payments must be full amount")
 
         return attrs
 
