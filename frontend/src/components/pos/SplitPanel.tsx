@@ -165,8 +165,8 @@ export function SplitPanel({
   };
 
   return (
-    <div className="rounded-md border p-3">
-      <div className="flex items-center justify-between gap-2">
+    <div className="flex min-h-0 flex-col overflow-hidden rounded-md border">
+      <div className="flex items-center justify-between gap-2 border-b bg-background px-3 py-2">
         <div>
           <div className="text-sm font-semibold">Dividir cuenta</div>
           <p className="text-xs text-muted-foreground">Controla y cobra cada parte con precisión</p>
@@ -175,8 +175,8 @@ export function SplitPanel({
       </div>
 
       {enabled && (
-        <div className="mt-3 space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-h-0 flex-col">
+          <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
             <Label className="text-xs text-muted-foreground">Partes</Label>
             <div className="flex items-center rounded-md border">
               <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-none" onClick={decrementParts}>
@@ -208,91 +208,95 @@ export function SplitPanel({
             </Button>
           </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {safeParts.map((part, index) => {
-              const isActive = part.id === activePartId;
-              const isEditing = editingPartId === part.id;
+          <div className="min-h-0 max-h-[clamp(220px,35vh,420px)] overflow-y-auto px-3 py-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {safeParts.map((part, index) => {
+                const isActive = part.id === activePartId;
+                const isEditing = editingPartId === part.id;
 
-              return (
-                <div
-                  key={part.id}
-                  className={cn(
-                    "rounded-lg border p-3 transition-colors",
-                    isActive && "border-primary bg-primary/5",
-                    part.isPaid && "opacity-70"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <button
-                      type="button"
-                      className="text-left"
-                      onClick={() => onActivePartIdChange(part.id)}
-                    >
-                      <div className="text-sm font-semibold">Parte {index + 1}</div>
-                      <div className="text-[11px] text-muted-foreground">{part.locked ? "Manual" : "Auto"}</div>
-                    </button>
-                    <div className="flex items-center gap-1">
-                      {part.locked && !part.isPaid && (
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAuto(part.id)} title="Volver a auto">
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => removePart(part.id)}
-                        disabled={Boolean(part.isPaid)}
-                        title={part.isPaid ? "No puedes eliminar una parte ya pagada" : "Eliminar parte"}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    {isEditing ? (
-                      <Input
-                        value={editingRawValue}
-                        onChange={(event) => setEditingRawValue(event.target.value.replace(/[^\d.]/g, ""))}
-                        onBlur={() => commitEdit(part.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") commitEdit(part.id);
-                          if (event.key === "Escape") {
-                            setEditingPartId(null);
-                            setEditingRawValue("");
-                          }
-                        }}
-                        inputMode="decimal"
-                        autoFocus
-                      />
-                    ) : (
+                return (
+                  <div
+                    key={part.id}
+                    className={cn(
+                      "rounded-lg border p-3 transition-colors",
+                      isActive && "border-primary bg-primary/5",
+                      part.isPaid && "opacity-70"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
                       <button
                         type="button"
                         className="text-left"
-                        onClick={() => beginEdit(part)}
-                        disabled={Boolean(part.isPaid)}
+                        onClick={() => onActivePartIdChange(part.id)}
                       >
-                        <div className="text-2xl font-bold tracking-tight">{formatMoney(part.amountCents / 100)}</div>
+                        <div className="text-sm font-semibold">Parte {index + 1}</div>
+                        <div className="text-[11px] text-muted-foreground">{part.locked ? "Manual" : "Auto"}</div>
                       </button>
-                    )}
+                      <div className="flex items-center gap-1">
+                        {part.locked && !part.isPaid && (
+                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAuto(part.id)} title="Volver a auto">
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => removePart(part.id)}
+                          disabled={Boolean(part.isPaid)}
+                          title={part.isPaid ? "No puedes eliminar una parte ya pagada" : "Eliminar parte"}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      {isEditing ? (
+                        <Input
+                          value={editingRawValue}
+                          onChange={(event) => setEditingRawValue(event.target.value.replace(/[^\d.]/g, ""))}
+                          onBlur={() => commitEdit(part.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") commitEdit(part.id);
+                            if (event.key === "Escape") {
+                              setEditingPartId(null);
+                              setEditingRawValue("");
+                            }
+                          }}
+                          inputMode="decimal"
+                          autoFocus
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="text-left"
+                          onClick={() => beginEdit(part)}
+                          disabled={Boolean(part.isPaid)}
+                        >
+                          <div className="text-2xl font-bold tracking-tight">{formatMoney(part.amountCents / 100)}</div>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
 
-          <div className="rounded-md border bg-muted/30 p-2 text-xs">
-            <div className="flex justify-between"><span>Total</span><span>{formatMoney(totalCents / 100)}</span></div>
-            <div className={cn("flex justify-between", validation.diffCents === 0 ? "text-emerald-500" : "text-destructive")}>
-              <span>Suma partes</span><span>{formatMoney(validation.partsSumCents / 100)}</span>
+          <div className="sticky bottom-0 z-20 border-t bg-background px-3 py-2">
+            <div className="rounded-md border bg-muted/30 p-2 text-xs">
+              <div className="flex justify-between"><span>Total</span><span>{formatMoney(totalCents / 100)}</span></div>
+              <div className={cn("flex justify-between", validation.diffCents === 0 ? "text-emerald-500" : "text-destructive")}>
+                <span>Suma partes</span><span>{formatMoney(validation.partsSumCents / 100)}</span>
+              </div>
+              <div className={cn("flex justify-between", validation.diffCents === 0 ? "text-muted-foreground" : "text-destructive")}>
+                <span>Diferencia</span>
+                <span>{validation.diffCents >= 0 ? "Faltan" : "Exceden"} {formatMoney(Math.abs(validation.diffCents) / 100)}</span>
+              </div>
+              {validation.error && <div className="mt-1 text-destructive">{validation.error}</div>}
             </div>
-            <div className={cn("flex justify-between", validation.diffCents === 0 ? "text-muted-foreground" : "text-destructive")}>
-              <span>Diferencia</span>
-              <span>{validation.diffCents >= 0 ? "Faltan" : "Exceden"} {formatMoney(Math.abs(validation.diffCents) / 100)}</span>
-            </div>
-            {validation.error && <div className="mt-1 text-destructive">{validation.error}</div>}
           </div>
         </div>
       )}

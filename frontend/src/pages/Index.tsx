@@ -1005,15 +1005,15 @@ const POS = () => {
 
       {/* Payment Dialog */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
-        <DialogContent className="w-[96vw] max-w-3xl p-0">
-          <div className="flex max-h-[90vh] flex-col">
+        <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
+          <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
               <DialogTitle>Cobrar pedido</DialogTitle>
               <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
             </DialogHeader>
             {checkoutDraft ? (
               <>
-                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6">
+                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
                   <div className="rounded-lg border bg-muted/30 p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
                     <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(checkoutDraft.total)}</div>
@@ -1072,9 +1072,6 @@ const POS = () => {
                   </div>
                   {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
                   <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
-                </div>
-
-                <div className="shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <SplitPanel
                     enabled={splitEnabled}
                     onEnabledChange={setSplitEnabled}
@@ -1090,7 +1087,9 @@ const POS = () => {
                       Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
                   )}
+                </div>
 
+                <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label>Método</Label>
