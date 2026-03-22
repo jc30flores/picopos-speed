@@ -65,8 +65,10 @@ interface CartItem {
   productId: number;
   name: string;
   basePrice: number;
+  originalBasePrice?: number;
   price: number;
   quantity: number;
+  appliedSpecialPriceRuleName?: string | null;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
@@ -162,10 +164,10 @@ const POS = () => {
     createdAt: number;
   } | null>(null);
 
-  const loadMenuData = async () => {
+  const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
-      getProducts(),
+      getProducts(orderTypeId ? { orderTypeId } : undefined),
       getModifierGroups(),
     ]);
     setCategories(categoriesResponse);
@@ -190,6 +192,15 @@ const POS = () => {
       setServiceType(serviceTypes[0].key);
     }
   }, [serviceTypes, serviceType]);
+
+  useEffect(() => {
+    const selectedServiceType = serviceTypes.find((item) => item.key === serviceType);
+    getProducts(selectedServiceType ? { orderTypeId: selectedServiceType.id } : undefined)
+      .then(setProducts)
+      .catch((error) => {
+        console.error("Failed to refresh products for service type", error);
+      });
+  }, [serviceType, serviceTypes]);
 
   useEffect(() => {
     if (paymentMethod !== "cash") {
@@ -268,8 +279,9 @@ const POS = () => {
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
+    const effectiveBasePrice = product.effectivePrice ?? product.price;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
-    const totalPrice = product.price + modifierPrice;
+    const totalPrice = effectiveBasePrice + modifierPrice;
 
     const existingItemIndex = cart.findIndex(
       (item) =>
@@ -288,9 +300,11 @@ const POS = () => {
           id: `${product.id}-${Date.now()}`,
           productId: product.id,
           name: product.name,
-          basePrice: product.price,
+          basePrice: effectiveBasePrice,
+          originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
           price: totalPrice,
           quantity: 1,
+          appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
           modifiers,
         },
       ];
@@ -778,7 +792,15 @@ const POS = () => {
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                    {product.isSpecialPriceActiveNow && (
+                      <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
+                    )}
+                    <div className="space-y-0.5">
+                      {product.isSpecialPriceActiveNow && (
+                        <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                      )}
+                      <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                    </div>
                     {product.modifierGroups && product.modifierGroups.length > 0 && (
                       <Badge variant="secondary" className="mt-1 text-xs">
                         <span className="md:hidden">Custom</span>
@@ -834,6 +856,15 @@ const POS = () => {
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
                           <h4 className="font-semibold text-sm">{item.name}</h4>
+                          {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                            <p className="text-xs text-muted-foreground">
+                              <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                              <span className="text-emerald-600 font-medium">Oferta aplicada</span>
+                            </p>
+                          )}
+                          {item.appliedSpecialPriceRuleName && (
+                            <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                          )}
                           {item.modifiers.length > 0 && (
                             <div className="text-xs text-muted-foreground mt-1">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
@@ -1032,7 +1063,15 @@ const POS = () => {
                           <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                             <div className="min-w-0">
                               <div className="truncate font-medium">{item.name}</div>
-                              <div className="text-xs text-muted-foreground">{formatMoney(toNumber(item.price))} c/u</div>
+                              <div className="text-xs text-muted-foreground">
+                                {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                                  <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                                )}
+                                {formatMoney(toNumber(item.price))} c/u
+                              </div>
+                              {item.appliedSpecialPriceRuleName && (
+                                <div className="text-[11px] text-emerald-600">Oferta aplicada</div>
+                              )}
                             </div>
                             <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
                             <div className="text-right font-semibold">{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</div>

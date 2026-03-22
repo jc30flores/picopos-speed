@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -41,6 +41,13 @@ def _ensure_register(register_id=None):
     return Register.objects.create(name="CAJA 1", station_name="POS 1", branch=branch, is_active=True)
 
 
+def _parse_decimal(value, *, field_label: str) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else "0"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(f"{field_label} inválido")
+
+
 class RegisterListCreateView(generics.ListCreateAPIView):
     queryset = Register.objects.select_related("branch").all()
     serializer_class = RegisterSerializer
@@ -66,7 +73,13 @@ class CashSessionOpenView(APIView):
         if _get_open_session_for_user(request.user):
             return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_409_CONFLICT)
 
-        opening_cash = Decimal(str(request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0"))
+        try:
+            opening_cash = _parse_decimal(
+                request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0",
+                field_label="Monto inicial",
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if opening_cash < 0:
             return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -90,10 +103,18 @@ class CashSessionCloseView(APIView):
     def post(self, request):
         session = _get_open_session_for_user(request.user)
         if not session:
-            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_409_CONFLICT)
+            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
-        counted_cash = Decimal(str(request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0"))
+        try:
+            counted_cash = _parse_decimal(
+                request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0",
+                field_label="Monto contado",
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notes = str(request.data.get("notes", "")).strip()
+        if counted_cash < 0:
+            return Response({"detail": "Monto contado inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         session.status = "closed"
         session.closed_by = request.user
@@ -131,7 +152,10 @@ class CashTransactionListCreateView(APIView):
         if not session:
             return Response({"detail": "No hay caja abierta"}, status=status.HTTP_409_CONFLICT)
 
-        amount = Decimal(str(request.data.get("amount", "0")))
+        try:
+            amount = _parse_decimal(request.data.get("amount", "0"), field_label="Monto")
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         description = str(request.data.get("description", "")).strip()
         transaction_type = str(request.data.get("type", "cash_out")).strip().lower()
 

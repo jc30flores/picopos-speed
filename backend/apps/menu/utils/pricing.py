@@ -97,14 +97,14 @@ def _normalize_sort_dt(value: datetime | None) -> datetime:
 def _rule_sort_key(rule: ProductSpecialPriceRule) -> tuple[float | int, ...]:
     order_type_specific, has_date_range, has_time_range, has_days = _rule_specificity(rule)
     return (
-        -rule.priority,
+        rule.priority,
         -order_type_specific,
         -has_date_range,
         -has_time_range,
         -has_days,
         -_normalize_sort_dt(rule.updated_at).timestamp(),
         -_normalize_sort_dt(rule.created_at).timestamp(),
-        -rule.id,
+        rule.id,
     )
 
 

@@ -40,6 +40,8 @@ export type Product = {
   description: string;
   price: number;
   effectivePrice?: number;
+  originalPrice?: number;
+  isSpecialPriceActiveNow?: boolean;
   appliedSpecialPriceRuleId?: number | null;
   appliedSpecialPriceRuleName?: string | null;
   sortOrder?: number;
@@ -635,7 +637,9 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -661,7 +665,9 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      originalPrice: item.original_price != null ? Number(item.original_price) : Number(item.price),
       effectivePrice: item.effective_price != null ? Number(item.effective_price) : Number(item.price),
+      isSpecialPriceActiveNow: Boolean(item.is_special_price_active_now ?? item.applied_special_price_rule_id != null),
       appliedSpecialPriceRuleId: item.applied_special_price_rule_id ?? null,
       appliedSpecialPriceRuleName: item.applied_special_price_rule_name ?? null,
       sortOrder: Number(item.sort_order ?? 0),
@@ -725,7 +731,9 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -749,7 +757,9 @@ export const createProduct = async (payload: {
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    originalPrice: data.original_price != null ? Number(data.original_price) : Number(data.price),
     effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    isSpecialPriceActiveNow: Boolean(data.is_special_price_active_now ?? data.applied_special_price_rule_id != null),
     appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
     appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
@@ -814,7 +824,9 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -835,7 +847,9 @@ export const updateProduct = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    originalPrice: data.original_price != null ? Number(data.original_price) : Number(data.price),
     effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    isSpecialPriceActiveNow: Boolean(data.is_special_price_active_now ?? data.applied_special_price_rule_id != null),
     appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
     appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),

@@ -217,18 +217,9 @@ class OrderCreateSerializer(serializers.Serializer):
             service_type = ServiceType.objects.filter(id=service_type_id).first()
         if service_type is None and service_type_key:
             normalized_key = service_type_key.strip().upper().replace("-", "_")
-            legacy_map = {
-                "DINE_IN": "MESA",
-                "EN_LOCAL": "MESA",
-                "MESA": "MESA",
-                "TAKEOUT": "PARA_LLEVAR",
-                "PARA_LLEVAR": "PARA_LLEVAR",
-                "DELIVERY": "PEDIDOS_YA",
-                "PEDIDOS_YA": "PEDIDOS_YA",
-                "KIOSK": "KIOSK",
-            }
-            mapped_key = legacy_map.get(normalized_key, normalized_key)
-            service_type = ServiceType.objects.filter(key__iexact=mapped_key).first()
+            service_type = ServiceType.objects.filter(key__iexact=normalized_key).first()
+            if service_type is None:
+                service_type = ServiceType.objects.filter(key__iexact=service_type_key.strip()).first()
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
         service_type_key = service_type.key

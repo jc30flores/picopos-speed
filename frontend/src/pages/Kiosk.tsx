@@ -23,6 +23,7 @@ import { getEntityImageSrc, getProductImageSrc } from "@/lib/media";
 import { KioskImage } from "@/components/kiosk/KioskImage";
 import { KioskImageLightbox } from "@/components/kiosk/KioskImageLightbox";
 import { toast } from "sonner";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
@@ -38,9 +39,11 @@ interface CartItem {
   productId: number;
   name: string;
   basePrice: number;
+  originalBasePrice?: number;
   quantity: number;
   modifiers: CartModifier[];
   assignedName: string;
+  appliedSpecialPriceRuleName?: string | null;
 }
 
 interface PreviewState {
@@ -80,12 +83,20 @@ const Kiosk = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [preview, setPreview] = useState<PreviewState>({ open: false, title: "" });
+  const { activeServiceTypes } = useServiceTypes();
 
   const categoriesForGrid = useMemo(() => categories.filter((cat) => !cat.isHidden), [categories]);
 
 
   useEffect(() => {
-    Promise.all([getCategories(), getProducts(), getModifierGroups()])
+    const kioskType =
+      activeServiceTypes.find((type) => type.key.toUpperCase() === "KIOSK") ??
+      activeServiceTypes[0];
+    Promise.all([
+      getCategories(),
+      getProducts(kioskType ? { orderTypeId: kioskType.id } : undefined),
+      getModifierGroups(),
+    ])
       .then(([categoriesResponse, productsResponse, modifierGroupsResponse]) => {
         setCategories(categoriesResponse);
         setProducts(productsResponse);
@@ -94,7 +105,7 @@ const Kiosk = () => {
       .catch((error) => {
         console.error("Failed to load kiosk menu data", error);
       });
-  }, []);
+  }, [activeServiceTypes]);
 
   useEffect(() => {
     const preload = (urls: Array<string | null>) => {
@@ -165,16 +176,19 @@ const Kiosk = () => {
   };
 
   const addToCart = (product: Product, modifiers: CartModifier[], assignedName: string) => {
+    const effectiveBasePrice = product.effectivePrice ?? product.price;
     setCart((previous) => [
       ...previous,
       {
         id: `${product.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         productId: product.id,
         name: product.name,
-        basePrice: product.price,
+        basePrice: effectiveBasePrice,
+        originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
         quantity: 1,
         modifiers,
         assignedName,
+        appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
       },
     ]);
   };
@@ -572,7 +586,15 @@ const Kiosk = () => {
                     ) : null}
                     <div className={cn("px-5 pb-5", imageSrc ? "pt-3" : "pt-5")}>
                       <h3 className="line-clamp-2 text-2xl font-extrabold leading-tight">{product.name}</h3>
-                      <p className="mt-2 text-3xl font-black text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                      {product.isSpecialPriceActiveNow && (
+                        <Badge className="mt-2 bg-emerald-600 text-white">OFERTA</Badge>
+                      )}
+                      <div className="mt-2">
+                        {product.isSpecialPriceActiveNow && (
+                          <p className="text-sm text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                        )}
+                        <p className="text-3xl font-black text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                      </div>
                     </div>
                   </Card>
                 );
@@ -727,6 +749,15 @@ const Kiosk = () => {
                       <div className="flex-1">
                         <h3 className="text-xl font-bold">{item.name}</h3>
                         <p className="mt-1 text-sm font-semibold text-secondary">A nombre de: {item.assignedName}</p>
+                        {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            <span className="line-through mr-1">${item.originalBasePrice.toFixed(2)}</span>
+                            <span className="text-emerald-600 font-semibold">Oferta aplicada</span>
+                          </p>
+                        )}
+                        {item.appliedSpecialPriceRuleName && (
+                          <p className="mt-1 text-xs text-emerald-600">{item.appliedSpecialPriceRuleName}</p>
+                        )}
                         {item.modifiers.length > 0 && (
                           <div className="text-sm text-muted-foreground mt-2 space-y-1">
                             {item.modifiers.map((mod, idx) => (

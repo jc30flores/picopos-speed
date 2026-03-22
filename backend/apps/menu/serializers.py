@@ -290,7 +290,9 @@ class ProductSerializer(serializers.ModelSerializer):
     )
     image_path = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    original_price = serializers.DecimalField(source="price", max_digits=10, decimal_places=2, read_only=True)
     effective_price = serializers.SerializerMethodField()
+    is_special_price_active_now = serializers.SerializerMethodField()
     applied_special_price_rule_id = serializers.SerializerMethodField()
     applied_special_price_rule_name = serializers.SerializerMethodField()
 
@@ -309,7 +311,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "image",
             "image_path",
             "image_url",
+            "original_price",
             "effective_price",
+            "is_special_price_active_now",
             "applied_special_price_rule_id",
             "applied_special_price_rule_name",
             "available",
@@ -419,6 +423,9 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_applied_special_price_rule_name(self, obj: Product):
         rule = self._resolve_effective_result(obj).applied_rule
         return rule.name if rule else None
+
+    def get_is_special_price_active_now(self, obj: Product):
+        return self._resolve_effective_result(obj).applied_rule is not None
 
     def update(self, instance, validated_data):
         disposable_apply_to = validated_data.get("disposable_apply_to")

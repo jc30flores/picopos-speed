@@ -32,3 +32,14 @@ class CashierFlowTests(TestCase):
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
+
+    def test_close_without_open_session_returns_400(self):
+        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
+        self.assertEqual(close.status_code, 400)
+        self.assertIn('No hay caja abierta', str(close.data))
+
+    def test_close_with_invalid_amount_returns_400(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': 'abc'}, format='json')
+        self.assertEqual(close.status_code, 400)
+        self.assertIn('Monto contado inválido', str(close.data))
