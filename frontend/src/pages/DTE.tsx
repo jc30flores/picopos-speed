@@ -16,6 +16,7 @@ import {
   dteSendWhatsapp,
   type DTERecord,
 } from "@/lib/api";
+import { formatDateTimeSV } from "@/lib/datetime";
 
 const canResend = (s: string) => ["PENDIENTE", "RECHAZADO"].includes(s);
 
@@ -84,7 +85,7 @@ export default function DTEPage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} className="border-t">
-                  <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
+                  <td className="p-2">{formatDateTimeSV(r.created_at)}</td>
                   <td className="p-2"><Badge>{r.status}</Badge></td>
                   <td className="p-2">{r.dte_type}</td>
                   <td className="p-2">{r.control_number}</td>
@@ -93,7 +94,7 @@ export default function DTEPage() {
                   <td className="p-2">{r.receiver_name}</td>
                   <td className="p-2">${Number(r.total_amount).toFixed(2)}</td>
                   <td className="p-2">{r.attempts ?? "-"}</td>
-                  <td className="p-2">{r.last_sent_at ? new Date(r.last_sent_at).toLocaleString() : "-"}</td>
+                  <td className="p-2">{r.last_sent_at ? formatDateTimeSV(r.last_sent_at) : "-"}</td>
                   <td className="p-2 flex gap-2">
                     <Button size="sm" variant="outline" onClick={async () => setSelected(await dteIssuedDetail(r.id))}>Ver</Button>
                     <Button size="sm" variant="outline" disabled={!canResend(r.status)} onClick={async () => { await dteResend(r.id); await load(); }}>Reenviar</Button>

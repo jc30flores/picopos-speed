@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getSalesReport, SalesReportRow, SalesReportAggregates } from "@/lib/api";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { formatDateTimeSV, getHourSV, getLocalDateSV } from "@/lib/datetime";
 
 type TimeFilter = "daily" | "weekly" | "monthly" | "all";
 
@@ -78,9 +79,8 @@ export const ReportsTab = () => {
 
   const getDateRange = (filter: TimeFilter) => {
     if (filter === "all") return {};
-    const now = new Date();
-    const end = new Date(now);
-    const start = new Date(now);
+    const end = new Date();
+    const start = new Date();
     if (filter === "daily") {
       start.setDate(end.getDate());
     } else if (filter === "weekly") {
@@ -89,8 +89,8 @@ export const ReportsTab = () => {
       start.setDate(end.getDate() - 30);
     }
     return {
-      dateFrom: start.toISOString().slice(0, 10),
-      dateTo: end.toISOString().slice(0, 10),
+      dateFrom: getLocalDateSV(start),
+      dateTo: getLocalDateSV(end),
     };
   };
 
@@ -122,7 +122,8 @@ export const ReportsTab = () => {
   const salesByHour = useMemo(() => {
     const map = new Map<string, number>();
     sales.forEach((sale) => {
-      const hours = sale.createdAt.getHours();
+      const hours = getHourSV(sale.createdAt);
+      if (hours === null) return;
       const label = `${hours}:00`;
       map.set(label, (map.get(label) ?? 0) + sale.total);
     });
@@ -370,7 +371,7 @@ export const ReportsTab = () => {
                     {filteredSales.map((sale) => (
                       <TableRow key={sale.orderId}>
                         <TableCell className="text-muted-foreground">
-                          {sale.createdAt.toLocaleString()}
+                          {formatDateTimeSV(sale.createdAt)}
                         </TableCell>
                         <TableCell className="font-medium">#{sale.orderNumber}</TableCell>
                         <TableCell>

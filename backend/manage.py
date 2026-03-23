@@ -1,6 +1,14 @@
 #!/usr/bin/env python
 import os
 import sys
+import time
+
+
+os.environ.setdefault("TZ", "America/El_Salvador")
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 
 def main() -> None:

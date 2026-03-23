@@ -5,6 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { downloadCashSessionTicketPdf, getCashSessionsHistory, type CashSessionHistoryRow } from "@/lib/api";
+import { formatDateTimeSV } from "@/lib/datetime";
 import { formatMoney } from "@/lib/money";
 
 export const CashHistoryTab = () => {
@@ -47,8 +48,8 @@ export const CashHistoryTab = () => {
         <TableBody>
           {sortedRows.map((r) => (
             <TableRow key={r.id}>
-              <TableCell>{new Date(r.openedAt).toLocaleString()}</TableCell>
-              <TableCell>{r.closedAt ? new Date(r.closedAt).toLocaleString() : "-"}</TableCell>
+              <TableCell>{formatDateTimeSV(r.openedAt)}</TableCell>
+              <TableCell>{r.closedAt ? formatDateTimeSV(r.closedAt) : "-"}</TableCell>
               <TableCell>{r.openedByUsername}</TableCell>
               <TableCell>{formatMoney(r.expectedCash)}</TableCell>
               <TableCell>{formatMoney(r.countedCash)}</TableCell>

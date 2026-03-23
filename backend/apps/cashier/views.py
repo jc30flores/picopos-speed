@@ -20,6 +20,7 @@ from apps.cashier.serializers import (
 from apps.core.audit import log_audit
 from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
+from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
 
 
@@ -142,6 +143,10 @@ class CashTransactionListCreateView(APIView):
 
     def get(self, request):
         session_id = request.query_params.get("session_id")
+        start_at, end_at = parse_business_date_range(
+            request.query_params.get("date_from"),
+            request.query_params.get("date_to"),
+        )
         if session_id:
             session = CashSession.objects.filter(pk=session_id).first()
         else:
@@ -149,6 +154,10 @@ class CashTransactionListCreateView(APIView):
         if not session:
             return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(session=session).order_by("-created_at")
+        if start_at:
+            items = items.filter(created_at__gte=start_at)
+        if end_at:
+            items = items.filter(created_at__lte=end_at)
         return Response(CashTransactionSerializer(items, many=True).data)
 
     @transaction.atomic
@@ -182,13 +191,15 @@ class CashSessionListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").all()
-        date_from = self.request.query_params.get("date_from")
-        date_to = self.request.query_params.get("date_to")
+        start_at, end_at = parse_business_date_range(
+            self.request.query_params.get("date_from"),
+            self.request.query_params.get("date_to"),
+        )
         register_id = self.request.query_params.get("register_id")
-        if date_from:
-            qs = qs.filter(opened_at__date__gte=date_from)
-        if date_to:
-            qs = qs.filter(opened_at__date__lte=date_to)
+        if start_at:
+            qs = qs.filter(opened_at__gte=start_at)
+        if end_at:
+            qs = qs.filter(opened_at__lte=end_at)
         if register_id:
             qs = qs.filter(register_id=register_id)
         return qs
@@ -205,15 +216,17 @@ class CashSessionHistoryView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
+        start_at, end_at = parse_business_date_range(
+            request.query_params.get("date_from"),
+            request.query_params.get("date_to"),
+        )
         register_id = request.query_params.get("register_id")
 
         queryset = CashSession.objects.select_related("register", "opened_by", "closed_by").all()
-        if date_from:
-            queryset = queryset.filter(opened_at__date__gte=date_from)
-        if date_to:
-            queryset = queryset.filter(opened_at__date__lte=date_to)
+        if start_at:
+            queryset = queryset.filter(opened_at__gte=start_at)
+        if end_at:
+            queryset = queryset.filter(opened_at__lte=end_at)
         if register_id:
             queryset = queryset.filter(register_id=register_id)
 

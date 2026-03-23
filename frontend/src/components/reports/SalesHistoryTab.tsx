@@ -25,7 +25,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { CalendarIcon, Search, Download } from "lucide-react";
-import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   createRefund,
@@ -49,6 +48,7 @@ import { Label } from "@/components/ui/label";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
@@ -107,8 +107,8 @@ export const SalesHistoryTab = () => {
   const [refundIdForReprint, setRefundIdForReprint] = useState<number | null>(null);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
 
-  const dateFrom = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
-  const dateTo = endDate ? format(endDate, "yyyy-MM-dd") : undefined;
+  const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
+  const dateTo = endDate ? getLocalDateSV(endDate) : undefined;
 
   useEffect(() => {
     const now = new Date();
@@ -358,7 +358,7 @@ export const SalesHistoryTab = () => {
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                     <span className="truncate">
-                      {startDate ? format(startDate, "dd/MM/yyyy") : "Fecha inicio"}
+                      {startDate ? formatDateSV(startDate) : "Fecha inicio"}
                     </span>
                   </Button>
                 </PopoverTrigger>
@@ -390,7 +390,7 @@ export const SalesHistoryTab = () => {
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                     <span className="truncate">
-                      {endDate ? format(endDate, "dd/MM/yyyy") : "Fecha fin"}
+                      {endDate ? formatDateSV(endDate) : "Fecha fin"}
                     </span>
                   </Button>
                 </PopoverTrigger>
@@ -516,7 +516,7 @@ export const SalesHistoryTab = () => {
                   filteredSales.map((sale) => (
                     <TableRow key={sale.id}>
                       <TableCell className="font-medium">
-                        {format(sale.date, "dd/MM/yyyy HH:mm")}
+                        {formatDateTimeSV(sale.date)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {sale.orderNumber}

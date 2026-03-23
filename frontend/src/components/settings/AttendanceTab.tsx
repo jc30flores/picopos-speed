@@ -12,6 +12,7 @@ import { AttendanceTable } from "./AttendanceTable";
 import { AttendanceDetailSheet } from "./AttendanceDetailSheet";
 import { AttendanceRecord, DailyAttendance, Employee } from "@/types/employee";
 import { createAttendance, getAttendance, getEmployeeStats, getEmployees } from "@/lib/api";
+import { getLocalDateSV } from "@/lib/datetime";
 import { toast } from "sonner";
 
 export const AttendanceTab = () => {
@@ -39,10 +40,9 @@ export const AttendanceTab = () => {
     const [year, month] = selectedMonth.split("-").map(Number);
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 0);
-    const toDateString = (date: Date) => date.toISOString().slice(0, 10);
     return {
-      start: toDateString(start),
-      end: toDateString(end),
+      start: getLocalDateSV(start),
+      end: getLocalDateSV(end),
     };
   }, [selectedMonth]);
 

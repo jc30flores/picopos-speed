@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
+import { formatDateTimeSV } from "@/lib/datetime";
 import { SplitPanel } from "@/components/pos/SplitPanel";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
 import {
@@ -1000,7 +1001,7 @@ const POS = () => {
                   <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
                     <div>
                       <div className="font-medium">{tx.description}</div>
-                      <div className="text-xs text-muted-foreground">{new Date(tx.createdAt).toLocaleString()}</div>
+                      <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
                     </div>
                     <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
                   </div>

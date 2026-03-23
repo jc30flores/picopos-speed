@@ -1,6 +1,5 @@
 from django.conf import settings
 from django.db.models import Q
-from django.utils.dateparse import parse_date
 from rest_framework import generics, status
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
@@ -8,6 +7,7 @@ from rest_framework.views import APIView
 
 from apps.core.audit import log_audit
 from apps.core.permissions import _get_profile
+from apps.core.timezone_utils import parse_business_date_range
 from apps.dte.models import CreditNote, DTEInvalidation, DTERecord
 from apps.dte.serializers import (
     CreditNoteSerializer,
@@ -39,18 +39,20 @@ class DTEIssuedListView(generics.ListAPIView):
         qs = DTERecord.objects.select_related("order", "branch")
         status_filter = self.request.query_params.get("status")
         dte_type = self.request.query_params.get("dte_type")
-        date_from = parse_date(self.request.query_params.get("date_from", ""))
-        date_to = parse_date(self.request.query_params.get("date_to", ""))
+        start_at, end_at = parse_business_date_range(
+            self.request.query_params.get("date_from"),
+            self.request.query_params.get("date_to"),
+        )
         query = self.request.query_params.get("q")
 
         if status_filter:
             qs = qs.filter(status=status_filter.upper())
         if dte_type:
             qs = qs.filter(dte_type=dte_type.upper())
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
+        if start_at:
+            qs = qs.filter(created_at__gte=start_at)
+        if end_at:
+            qs = qs.filter(created_at__lte=end_at)
         if query:
             qs = qs.filter(
                 Q(receiver_name__icontains=query)

@@ -93,6 +93,9 @@ DATABASES = {
         "PASSWORD": os.environ.get("DB_PASSWORD", "diez2030"),
         "NAME": os.environ.get("DB_NAME", "gallo_db"),
         "PORT": os.environ.get("DB_PORT", "5432"),
+        "OPTIONS": {
+            "options": "-c timezone=America/El_Salvador",
+        },
     }
 }
 
@@ -112,7 +115,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+TIME_ZONE = "America/El_Salvador"
 USE_I18N = True
 USE_TZ = True
 
