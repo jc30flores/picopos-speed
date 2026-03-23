@@ -2847,12 +2847,12 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string }> => {
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
-  return { ticketText: data.ticket_text };
+  return { ticketText: data.ticket_text, printed: Boolean(data.printed), printError: data.print_error ?? null };
 };
 
 export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {

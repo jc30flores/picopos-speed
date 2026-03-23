@@ -27,6 +27,15 @@ CASH_DRAWER_USB_IN_ENDPOINT=0x81
 # opcional:
 # CASH_DRAWER_PIN=2
 # CASH_DRAWER_PULSE_COMMAND=1B 70 00 19 FA
+
+# impresión de tickets (cierre de caja)
+PRINTER_ENABLED=1
+PRINTER_MODE=usb
+PRINTER_USB_VENDOR_ID=0x1fc9
+PRINTER_USB_PRODUCT_ID=0x2016
+PRINTER_USB_INTERFACE=0
+PRINTER_USB_OUT_ENDPOINT=0x03
+PRINTER_USB_IN_ENDPOINT=0x81
 ```
 
 ## 3) Permisos USB (servicio en producción)
@@ -72,6 +81,7 @@ python manage.py cash_drawer_test
 
 - Abrir cajón: `POST /api/cashier/drawer/open/`
 - Estado cajón: `GET /api/cashier/drawer/status/`
+- Cierre de caja imprime ticket automáticamente al cerrar sesión.
 
 Respuesta exitosa esperada:
 

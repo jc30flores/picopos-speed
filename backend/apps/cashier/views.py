@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.cashier.models import Register, CashSession, CashTransaction
-from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf
+from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf, print_ticket_text
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
@@ -137,9 +137,10 @@ class CashSessionCloseView(APIView):
         session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
 
         ticket_text = build_end_of_day_ticket(session.id)
+        printed, print_error = print_ticket_text(ticket_text)
         PrintJob.objects.create(type="closeout", status="rendered", content_text=ticket_text, meta={"cash_session_id": session.id, "event": "cash_session.closed"}, requested_by=request.user)
         log_audit(request, "cash_session.close", "CashSession", session.id, {"counted_cash": str(counted_cash)})
-        return Response({"session": CashSessionSerializer(session).data, "summary": snapshot, "ticket_text": ticket_text})
+        return Response({"session": CashSessionSerializer(session).data, "summary": snapshot, "ticket_text": ticket_text, "printed": printed, "print_error": print_error})
 
 
 class CashTransactionListCreateView(APIView):

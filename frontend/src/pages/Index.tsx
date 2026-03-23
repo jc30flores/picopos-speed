@@ -117,15 +117,18 @@ const POS = () => {
 
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
+  const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
-  const [openingCashInput, setOpeningCashInput] = useState("");
+  const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closingCashInput, setClosingCashInput] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
+  const openSessionInputRef = useRef<HTMLInputElement | null>(null);
+  const postOpenSessionActionRef = useRef<(() => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
@@ -359,7 +362,7 @@ const POS = () => {
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
 
-  const handleCheckout = async () => {
+  const proceedToCheckout = () => {
     if (cart.length === 0) return;
 
     const draftItemsGross = calculateCartTotals(cart, taxRate).total;
@@ -397,6 +400,32 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
+  const requestOpenSession = (postAction?: () => void) => {
+    postOpenSessionActionRef.current = postAction ?? null;
+    setOpenSessionAmount("0.00");
+    setIsOpenSessionModalOpen(true);
+    setTimeout(() => openSessionInputRef.current?.select(), 0);
+  };
+
+  const ensureCashSessionOpen = async (postAction: () => void) => {
+    try {
+      const current = await getCurrentCashSession();
+      setCashSnapshot(current);
+      if (current.open) {
+        postAction();
+        return;
+      }
+      requestOpenSession(postAction);
+    } catch {
+      requestOpenSession(postAction);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    await ensureCashSessionOpen(proceedToCheckout);
+  };
+
   const getPendingSelectionValidation = () => {
     if (!pendingProduct) return { errors: {} as Record<string, string>, selectedMods: [] as Array<{ id?: number; name: string; price: number }> };
     const posGroups = getPosModifierGroups(pendingProduct);
@@ -407,7 +436,7 @@ const POS = () => {
       const groupId = String(group.id);
       const selectedCount = (selectedModifiers[groupId] ?? []).length;
       if (group.required && selectedCount < Math.max(group.minSelection, 1)) {
-        nextErrors[groupId] = `Este grupo es obligatorio (mínimo ${Math.max(group.minSelection, 1)}).`;
+        nextErrors[groupId] = `Selecciona al menos ${Math.max(group.minSelection, 1)}.`;
       }
       (selectedModifiers[groupId] ?? []).forEach((modId) => {
         const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
@@ -506,11 +535,15 @@ const POS = () => {
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
     try {
-      await openCashSession(Number(openingCashInput || 0));
+      await openCashSession(Number(openSessionAmount || 0));
       await loadCashData();
-      toast.success("Caja abierta");
+      toast.success("Caja aperturada");
+      setIsOpenSessionModalOpen(false);
+      const action = postOpenSessionActionRef.current;
+      postOpenSessionActionRef.current = null;
+      action?.();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo abrir caja");
+      toast.error(`No se pudo aperturar la caja: ${error instanceof Error ? error.message : "Error desconocido"}`);
     } finally {
       setIsSavingCashAction(false);
     }
@@ -520,8 +553,10 @@ const POS = () => {
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
-      if (closeResp.ticketText) {
-        toast.success("Caja cerrada. Ticket generado");
+      if (closeResp.printed) {
+        toast.success("Caja cerrada. Ticket impreso");
+      } else {
+        toast.success(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
       
@@ -966,8 +1001,22 @@ const POS = () => {
       <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Transacciones de Caja</DialogTitle>
-            <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <DialogTitle>Transacciones de Caja</DialogTitle>
+                <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
+              </div>
+              <TooltipProvider delayDuration={120}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon" variant="outline" onClick={handleOpenDrawer} disabled={isOpeningDrawer}>
+                      <DoorOpen className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Abrir cajón</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
           </DialogHeader>
           <div className="space-y-4">
             <div className="rounded-md border p-3 text-sm">
@@ -984,27 +1033,13 @@ const POS = () => {
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <TooltipProvider delayDuration={120}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button className="h-14 text-base font-semibold" variant="outline" onClick={handleOpenDrawer} disabled={isOpeningDrawer}>
-                      <DoorOpen className="mr-2 h-4 w-4" />
-                      {isOpeningDrawer ? "ABRIENDO..." : "ABRIR CAJÓN"}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Abrir cajón</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open}>
+                {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
+              </Button>
               <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
             </div>
 
-            {!cashSnapshot.open ? (
-              <div className="space-y-2 rounded-md border p-3">
-                <Label>Apertura de sesión (efectivo inicial)</Label>
-                <Input type="number" min="0" step="0.01" value={openingCashInput} onChange={(e) => setOpeningCashInput(e.target.value)} />
-                <Button onClick={handleOpenCashSession} disabled={isSavingCashAction}>APERTURAR CAJA</Button>
-              </div>
-            ) : (
+            {cashSnapshot.open ? (
               <div className="space-y-2 rounded-md border p-3">
                 <Label>Efectivo contado al cierre</Label>
                 <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
@@ -1012,7 +1047,7 @@ const POS = () => {
                 <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                 <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
               </div>
-            )}
+            ) : null}
 
             <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
               {cashTransactions.length === 0 ? (
@@ -1028,6 +1063,31 @@ const POS = () => {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isOpenSessionModalOpen} onOpenChange={setIsOpenSessionModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Aperturar caja</DialogTitle>
+            <DialogDescription>Ingresa el efectivo inicial para abrir la sesión.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label>Efectivo inicial</Label>
+            <Input
+              ref={openSessionInputRef}
+              value={openSessionAmount}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setOpenSessionAmount(event.target.value)}
+              inputMode="decimal"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
+                {isSavingCashAction ? "Aperturando..." : "Aperturar"}
+              </Button>
             </div>
           </div>
         </DialogContent>
