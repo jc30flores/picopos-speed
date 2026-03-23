@@ -9,7 +9,7 @@ from apps.cashier.models import CashSession
 from apps.cashier.serializers import calculate_shift_summary
 from apps.core.models import ServiceType
 from apps.orders.models import Order
-from apps.payments.models import PaymentMethod
+from apps.payments.models import Payment, PaymentMethod
 
 
 def _money(v) -> str:
@@ -103,9 +103,8 @@ def build_end_of_day_ticket(session_id: int) -> str:
     closed_at = timezone.localtime(session.closed_at or timezone.now())
     width = 42
 
-    payments = Payment.objects.filter(created_at__gte=session.opened_at)
-    if session.closed_at:
-        payments = payments.filter(created_at__lte=session.closed_at)
+    close_cutoff = session.closed_at or timezone.now()
+    payments = Payment.objects.filter(created_at__gte=session.opened_at, created_at__lte=close_cutoff)
     order_ids = payments.values_list("order_id", flat=True).distinct()
     orders = Order.objects.filter(id__in=order_ids)
 
