@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+import json
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch
@@ -29,6 +30,8 @@ class CashierFlowTests(TestCase):
         close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
         self.assertEqual(close.status_code, 200)
         session_id = close.data['session']['id']
+        session = CashSession.objects.get(id=session_id)
+        json.dumps(session.summary_snapshot)
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')

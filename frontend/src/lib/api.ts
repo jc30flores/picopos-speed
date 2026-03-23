@@ -2797,13 +2797,16 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
 export type CashSessionHistoryRow = {
   id: number;
   registerName: string;
-  stationName: string;
   openedByUsername: string;
+  closedByUsername?: string | null;
   openedAt: string;
   closedAt?: string | null;
-  openingCash: number;
-  closingCountedCash?: number | null;
+  expectedCash: number;
+  countedCash: number;
+  difference: number;
   status: "open" | "closed";
+  notes?: string;
+  summarySnapshot?: Record<string, unknown>;
   summary: CashSessionSnapshot["summary"];
 };
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
@@ -2878,32 +2881,35 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
   if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
   if (filters?.dateTo) params.set('date_to', filters.dateTo);
   if (filters?.registerId) params.set('register_id', String(filters.registerId));
-  const response = await request(`/cashier/sessions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const response = await request(`/cashier/session/history/${params.toString() ? `?${params.toString()}` : ''}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((row) => ({
     id: row.id,
-    registerName: row.register_name,
-    stationName: row.station_name,
-    openedByUsername: row.opened_by_username,
+    registerName: row.register_name ?? "-",
+    openedByUsername: row.opened_by ?? "-",
+    closedByUsername: row.closed_by ?? null,
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    openingCash: Number(row.opening_cash ?? 0),
-    closingCountedCash: row.closing_counted_cash != null ? Number(row.closing_counted_cash) : null,
+    expectedCash: Number(row.expected_cash ?? 0),
+    countedCash: Number(row.counted_cash ?? 0),
+    difference: Number(row.difference ?? 0),
     status: row.status,
+    notes: row.notes ?? "",
+    summarySnapshot: row.summary_snapshot ?? {},
     summary: {
-      openingCash: Number(row.summary.opening_cash ?? 0),
-      totalCashSales: Number(row.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(row.summary.cash_expenses_total ?? 0),
-      expectedCashInDrawer: Number(row.summary.expected_cash_in_drawer ?? 0),
-      countedCash: Number(row.summary.counted_cash ?? 0),
-      overShortCash: Number(row.summary.difference ?? 0),
+      openingCash: Number(row.summary_snapshot?.opening_cash ?? 0),
+      totalCashSales: Number(row.summary_snapshot?.total_cash_sales ?? 0),
+      totalCashOut: Number(row.summary_snapshot?.cash_expenses_total ?? 0),
+      expectedCashInDrawer: Number(row.summary_snapshot?.expected_cash_in_drawer ?? 0),
+      countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
+      overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
-        cash: Number(row.summary.methods?.CASH?.total ?? 0),
-        card: Number(row.summary.methods?.CARD?.total ?? 0),
-        transfer: Number(row.summary.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(row.summary.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(row.summary.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(row.summary.cash_in_total ?? 0),
+        cash: Number(row.summary_snapshot?.methods?.CASH?.total ?? 0),
+        card: Number(row.summary_snapshot?.methods?.CARD?.total ?? 0),
+        transfer: Number(row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary_snapshot?.cash_in_total ?? 0),
       },
     },
   }));

@@ -112,7 +112,7 @@ export const ReportsTab = () => {
 
   const filteredSales = sales.filter((sale) => {
     const orderNumber = `#${sale.orderNumber}`;
-    const serviceLabel = SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType;
+    const serviceLabel = serviceTypeLabelByKey.get(sale.serviceType ?? "") || sale.serviceType;
     return (
       orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       serviceLabel.toLowerCase().includes(searchQuery.toLowerCase())
@@ -149,12 +149,12 @@ export const ReportsTab = () => {
       "hsl(var(--warning))",
     ];
     return Array.from(map.entries()).map(([key, value], index) => ({
-      name: SERVICE_TYPE_LABELS[key] || key,
+      name: serviceTypeLabelByKey.get(key) || key,
       value: Math.round((value.count / total) * 100),
       amount: value.amount,
       color: colors[index % colors.length],
     }));
-  }, [sales]);
+  }, [sales, serviceTypeLabelByKey]);
 
   return (
     <div className="space-y-6">
@@ -375,7 +375,7 @@ export const ReportsTab = () => {
                         <TableCell className="font-medium">#{sale.orderNumber}</TableCell>
                         <TableCell>
                           <Badge variant="outline">
-                            {SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType}
+                            {serviceTypeLabelByKey.get(sale.serviceType ?? "") || sale.serviceType}
                           </Badge>
                         </TableCell>
                         <TableCell>

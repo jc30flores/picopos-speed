@@ -6,6 +6,7 @@ urlpatterns = [
     path("session/current/", views.CashSessionCurrentView.as_view(), name="cashier-session-current"),
     path("session/open/", views.CashSessionOpenView.as_view(), name="cashier-session-open"),
     path("session/close/", views.CashSessionCloseView.as_view(), name="cashier-session-close"),
+    path("session/history/", views.CashSessionHistoryView.as_view(), name="cashier-session-history"),
     path("sessions/", views.CashSessionListView.as_view(), name="cashier-sessions"),
     path("sessions/<int:pk>/", views.CashSessionDetailView.as_view(), name="cashier-session-detail"),
     path("sessions/<int:pk>/ticket.pdf", views.CashSessionTicketPDFView.as_view(), name="cashier-session-ticket-pdf"),

@@ -1,22 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { downloadCashSessionTicketPdf, getCashSessionDetail, getCashSessionsHistory, type CashSessionHistoryRow, type CashTransaction } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { downloadCashSessionTicketPdf, getCashSessionsHistory, type CashSessionHistoryRow } from "@/lib/api";
+import { formatMoney } from "@/lib/money";
 
 export const CashHistoryTab = () => {
   const [rows, setRows] = useState<CashSessionHistoryRow[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [openDetail, setOpenDetail] = useState(false);
-  const [detailTx, setDetailTx] = useState<CashTransaction[]>([]);
+  const [selectedRow, setSelectedRow] = useState<CashSessionHistoryRow | null>(null);
 
   const load = async () => {
     setRows(await getCashSessionsHistory({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }));
   };
 
   useEffect(() => { load(); }, []);
+  const sortedRows = useMemo(
+    () => [...rows].sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime()),
+    [rows]
+  );
 
   return (
     <div className="space-y-3">
@@ -28,38 +34,47 @@ export const CashHistoryTab = () => {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Apertura</TableHead><TableHead>Cierre</TableHead><TableHead>Caja</TableHead><TableHead>Usuario</TableHead><TableHead>Inicial</TableHead><TableHead>Esperado</TableHead><TableHead>Contado</TableHead><TableHead>Diferencia</TableHead><TableHead>Métodos</TableHead><TableHead>Acciones</TableHead>
+            <TableHead>Fecha apertura</TableHead>
+            <TableHead>Fecha cierre</TableHead>
+            <TableHead>Usuario</TableHead>
+            <TableHead>Esperado</TableHead>
+            <TableHead>Contado</TableHead>
+            <TableHead>Diferencia</TableHead>
+            <TableHead>Estado</TableHead>
+            <TableHead>Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((r) => (
+          {sortedRows.map((r) => (
             <TableRow key={r.id}>
               <TableCell>{new Date(r.openedAt).toLocaleString()}</TableCell>
               <TableCell>{r.closedAt ? new Date(r.closedAt).toLocaleString() : "-"}</TableCell>
-              <TableCell>{r.registerName}</TableCell>
               <TableCell>{r.openedByUsername}</TableCell>
-              <TableCell>${r.openingCash.toFixed(2)}</TableCell>
-              <TableCell>${r.summary?.expectedCashInDrawer.toFixed(2)}</TableCell>
-              <TableCell>${(r.closingCountedCash ?? 0).toFixed(2)}</TableCell>
-              <TableCell>${(r.summary?.overShortCash ?? 0).toFixed(2)}</TableCell>
-              <TableCell>E: ${r.summary?.methods.cash.toFixed(2)} / Tj: ${r.summary?.methods.card.toFixed(2)} / Tr: ${r.summary?.methods.transfer.toFixed(2)} / PY: ${r.summary?.methods.pedidosYa.toFixed(2)} / PP: ${r.summary?.methods.payPal.toFixed(2)}</TableCell>
-              <TableCell className="flex gap-2"><Button size="sm" variant="outline" onClick={async () => { const d = await getCashSessionDetail(r.id); setDetailTx(d.transactions); setOpenDetail(true); }}>Detalle</Button><Button size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button></TableCell>
+              <TableCell>{formatMoney(r.expectedCash)}</TableCell>
+              <TableCell>{formatMoney(r.countedCash)}</TableCell>
+              <TableCell className={r.difference === 0 ? "" : r.difference > 0 ? "text-emerald-600 font-semibold" : "text-destructive font-semibold"}>{formatMoney(r.difference)}</TableCell>
+              <TableCell>
+                <Badge variant={r.status === "closed" ? "default" : "secondary"}>{r.status === "closed" ? "Cerrada" : "Abierta"}</Badge>
+              </TableCell>
+              <TableCell className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => { setSelectedRow(r); setOpenDetail(true); }}>Ver detalle</Button>
+                <Button size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
 
       <Dialog open={openDetail} onOpenChange={setOpenDetail}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Transacciones de sesión</DialogTitle></DialogHeader>
-          <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-            {detailTx.map((tx) => (
-              <div key={tx.id} className="border rounded px-2 py-1 text-sm flex justify-between">
-                <span>{tx.type} - {tx.description}</span>
-                <span>${tx.amount.toFixed(2)}</span>
-              </div>
-            ))}
-            {detailTx.length === 0 && <div className="text-sm text-muted-foreground">Sin transacciones</div>}
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Detalle de cierre de caja</DialogTitle></DialogHeader>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span>Ventas efectivo</span><span>{formatMoney(selectedRow?.summary?.methods.cash ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Ventas tarjeta</span><span>{formatMoney(selectedRow?.summary?.methods.card ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Ventas transferencia</span><span>{formatMoney(selectedRow?.summary?.methods.transfer ?? 0)}</span></div>
+            <div className="flex justify-between font-semibold"><span>Total ventas</span><span>{formatMoney((selectedRow?.summary?.totalCashSales ?? 0) + (selectedRow?.summary?.methods.card ?? 0) + (selectedRow?.summary?.methods.transfer ?? 0) + (selectedRow?.summary?.methods.pedidosYa ?? 0) + (selectedRow?.summary?.methods.payPal ?? 0))}</span></div>
+            <div className="flex justify-between"><span>Diferencia</span><span>{formatMoney(selectedRow?.difference ?? 0)}</span></div>
+            <div className="rounded-md border p-2 text-muted-foreground">{selectedRow?.notes?.trim() || "Sin notas"}</div>
           </div>
         </DialogContent>
       </Dialog>

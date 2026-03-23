@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+import json
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -46,6 +47,10 @@ def _parse_decimal(value, *, field_label: str) -> Decimal:
         return Decimal(str(value if value is not None else "0"))
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError(f"{field_label} inválido")
+
+
+def _to_json_compatible(value):
+    return json.loads(json.dumps(value, default=str))
 
 
 class RegisterListCreateView(generics.ListCreateAPIView):
@@ -123,7 +128,7 @@ class CashSessionCloseView(APIView):
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
-        session.summary_snapshot = snapshot
+        session.summary_snapshot = _to_json_compatible(snapshot)
         session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
 
         ticket_text = build_end_of_day_ticket(session.id)
@@ -193,6 +198,44 @@ class CashSessionListView(generics.ListAPIView):
         for session in self.get_queryset():
             summary = calculate_shift_summary(session)
             payload.append({**CashSessionSerializer(session).data, "summary": summary})
+        return Response(payload)
+
+
+class CashSessionHistoryView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        register_id = request.query_params.get("register_id")
+
+        queryset = CashSession.objects.select_related("register", "opened_by", "closed_by").all()
+        if date_from:
+            queryset = queryset.filter(opened_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(opened_at__date__lte=date_to)
+        if register_id:
+            queryset = queryset.filter(register_id=register_id)
+
+        payload = []
+        for session in queryset:
+            summary = calculate_shift_summary(session)
+            payload.append(
+                {
+                    "id": session.id,
+                    "opened_at": session.opened_at,
+                    "closed_at": session.closed_at,
+                    "opened_by": getattr(session.opened_by, "username", ""),
+                    "closed_by": getattr(session.closed_by, "username", ""),
+                    "expected_cash": summary.get("expected_cash_in_drawer", Decimal("0")),
+                    "counted_cash": summary.get("counted_cash", Decimal("0")),
+                    "difference": summary.get("difference", Decimal("0")),
+                    "summary_snapshot": _to_json_compatible(summary),
+                    "status": session.status,
+                    "notes": session.notes,
+                    "register_name": getattr(session.register, "name", ""),
+                }
+            )
         return Response(payload)
 
 
