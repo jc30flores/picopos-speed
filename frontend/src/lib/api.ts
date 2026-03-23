@@ -2876,7 +2876,7 @@ export const createCashPayout = async (amount: number, description: string): Pro
   }));
 };
 
-export const openCashDrawer = async (): Promise<{ ok: boolean; message: string }> => {
+export const openCashDrawer = async (): Promise<{ success: boolean; message: string }> => {
   return handleJson(await request('/cashier/drawer/open/', { method: 'POST' }));
 };
 

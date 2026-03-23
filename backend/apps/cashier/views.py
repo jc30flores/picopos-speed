@@ -287,26 +287,27 @@ class CashDrawerOpenView(APIView):
         session = _get_open_session_for_user(request.user)
         branch_name = getattr(getattr(session, "register", None), "branch", None)
         branch_name = getattr(branch_name, "name", None)
+        log_extra = {
+            "event": "cash_drawer.open",
+            "user": getattr(request.user, "username", "unknown"),
+            "branch": branch_name or "N/A",
+            "session_id": getattr(session, "id", None),
+        }
         try:
             CashDrawerService().open_drawer(print_test_line=True)
         except CashDrawerError as exc:
-            logger.warning(
-                "cash_drawer.open.failed user=%s branch=%s reason=%s",
-                getattr(request.user, "username", "unknown"),
-                branch_name or "N/A",
-                str(exc),
-            )
-            return Response({"ok": False, "message": str(exc), "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.warning("cash_drawer.open.failed", extra={**log_extra, "error": str(exc)})
+            return Response({"success": False, "error": str(exc), "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
-            logger.exception("cash_drawer.open.error user=%s branch=%s", getattr(request.user, "username", "unknown"), branch_name or "N/A")
+            logger.exception("cash_drawer.open.failed", extra={**log_extra, "error": "unexpected_error"})
             return Response(
-                {"ok": False, "message": "Failed to open drawer", "detail": "Failed to open drawer"},
+                {"success": False, "error": "Failed to open drawer", "detail": "Failed to open drawer"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        logger.info("cash_drawer.open.success user=%s branch=%s", getattr(request.user, "username", "unknown"), branch_name or "N/A")
+        logger.info("cash_drawer.open.success", extra=log_extra)
         log_audit(request, "cash_drawer.open", "CashSession", getattr(session, "id", None), {"branch": branch_name or ""})
-        return Response({"ok": True, "message": "Drawer signal sent"})
+        return Response({"success": True, "message": "Cash drawer opened successfully"})
 
 
 ShiftOpenView = CashSessionOpenView

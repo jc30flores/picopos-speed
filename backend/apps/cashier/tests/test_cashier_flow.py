@@ -51,10 +51,11 @@ class CashierFlowTests(TestCase):
         with override_settings(CASH_DRAWER_ENABLED=True, CASH_DRAWER_MODE="mock"):
             res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data.get("ok"), True)
+        self.assertEqual(res.data.get("success"), True)
+        self.assertEqual(res.data.get("message"), "Cash drawer opened successfully")
 
     def test_open_drawer_without_config_returns_400(self):
         with override_settings(CASH_DRAWER_ENABLED=False, CASH_DRAWER_MODE="usb"):
             res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.data.get("ok"), False)
+        self.assertEqual(res.data.get("success"), False)
