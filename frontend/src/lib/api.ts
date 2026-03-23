@@ -2876,8 +2876,18 @@ export const createCashPayout = async (amount: number, description: string): Pro
   }));
 };
 
-export const openCashDrawer = async (): Promise<{ success: boolean; message: string }> => {
-  return handleJson(await request('/cashier/drawer/open/', { method: 'POST' }));
+export const openCashDrawer = async (): Promise<{ ok: boolean; message: string }> => {
+  const response = await request('/cashier/drawer/open/', { method: 'POST' });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const reason = String(payload.reason || payload.error || payload.detail || `Error del servidor (${response.status})`);
+    const hint = payload.hint ? ` ${String(payload.hint)}` : "";
+    throw new Error(`${reason}${hint}`.trim());
+  }
+  return {
+    ok: Boolean(payload.ok ?? true),
+    message: String(payload.message ?? "ABRIENDO CAJON DE DINERO."),
+  };
 };
 
 export const getCashSessionsHistory = async (filters?: { dateFrom?: string; dateTo?: string; registerId?: number }): Promise<CashSessionHistoryRow[]> => {

@@ -1,3 +1,3 @@
-from .cash_drawer import CashDrawerError, CashDrawerService
+from .cash_drawer import CashDrawerError, CashDrawerRuntimeError, CashDrawerService
 
-__all__ = ["CashDrawerError", "CashDrawerService"]
+__all__ = ["CashDrawerError", "CashDrawerRuntimeError", "CashDrawerService"]

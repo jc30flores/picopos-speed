@@ -397,47 +397,43 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const handleAddPendingProductWithoutExtras = () => {
-    if (!pendingProduct) return;
-    addToCart(pendingProduct, []);
-    setIsExtrasOpen(false);
-    setPendingProduct(null);
-    setSelectedModifiers({});
-    setOpenModifierGroups({});
-    setModifierValidationErrors({});
-  };
-
-  const handleAddPendingProductWithExtras = () => {
-    if (!pendingProduct) return;
+  const getPendingSelectionValidation = () => {
+    if (!pendingProduct) return { errors: {} as Record<string, string>, selectedMods: [] as Array<{ id?: number; name: string; price: number }> };
     const posGroups = getPosModifierGroups(pendingProduct);
     const nextErrors: Record<string, string> = {};
-    const nextOpenState: Record<string, boolean> = { ...openModifierGroups };
+    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
 
     posGroups.forEach((group) => {
       const groupId = String(group.id);
       const selectedCount = (selectedModifiers[groupId] ?? []).length;
       if (group.required && selectedCount < Math.max(group.minSelection, 1)) {
         nextErrors[groupId] = `Este grupo es obligatorio (mínimo ${Math.max(group.minSelection, 1)}).`;
-        nextOpenState[groupId] = true;
       }
-    });
-
-    if (Object.keys(nextErrors).length > 0) {
-      setModifierValidationErrors(nextErrors);
-      setOpenModifierGroups(nextOpenState);
-      toast.error("Completa los modificadores obligatorios");
-      return;
-    }
-
-    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
-    posGroups.forEach((group) => {
-      const groupId = String(group.id);
       (selectedModifiers[groupId] ?? []).forEach((modId) => {
         const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
         if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
       });
     });
-    addToCart(pendingProduct, selectedMods);
+    return { errors: nextErrors, selectedMods };
+  };
+
+  const pendingSelectionValidation = getPendingSelectionValidation();
+  const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
+  const canAddPendingProduct = Object.keys(pendingSelectionValidation.errors).length === 0;
+
+  const handleAddPendingProduct = () => {
+    if (!pendingProduct) return;
+    if (!canAddPendingProduct) {
+      setModifierValidationErrors(pendingSelectionValidation.errors);
+      const nextOpenState: Record<string, boolean> = { ...openModifierGroups };
+      Object.keys(pendingSelectionValidation.errors).forEach((groupId) => {
+        nextOpenState[groupId] = true;
+      });
+      setOpenModifierGroups(nextOpenState);
+      toast.error("Completa los modificadores obligatorios");
+      return;
+    }
+    addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
     setIsExtrasOpen(false);
     setPendingProduct(null);
     setSelectedModifiers({});
@@ -555,8 +551,8 @@ const POS = () => {
   const handleOpenDrawer = async () => {
     setIsOpeningDrawer(true);
     try {
-      const response = await openCashDrawer();
-      toast.success(response.message || "Cajón abierto");
+      await openCashDrawer();
+      toast.success("ABRIENDO CAJON DE DINERO.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
     } finally {
@@ -993,7 +989,7 @@ const POS = () => {
                   <TooltipTrigger asChild>
                     <Button className="h-14 text-base font-semibold" variant="outline" onClick={handleOpenDrawer} disabled={isOpeningDrawer}>
                       <DoorOpen className="mr-2 h-4 w-4" />
-                      ABRIR CAJÓN
+                      {isOpeningDrawer ? "ABRIENDO..." : "ABRIR CAJÓN"}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Abrir cajón</TooltipContent>
@@ -1327,12 +1323,9 @@ const POS = () => {
             })}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <Button variant="outline" className="h-12" onClick={handleAddPendingProductWithoutExtras}>
-              Sin extras
-            </Button>
-            <Button className="h-12" onClick={handleAddPendingProductWithExtras}>
-              Agregar
+          <div className="pt-2">
+            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
+              {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
             </Button>
           </div>
         </DialogContent>
