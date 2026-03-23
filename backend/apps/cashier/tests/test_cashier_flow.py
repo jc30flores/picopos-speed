@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 import json
 from rest_framework.test import APIClient
 
@@ -46,3 +46,15 @@ class CashierFlowTests(TestCase):
         close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': 'abc'}, format='json')
         self.assertEqual(close.status_code, 400)
         self.assertIn('Monto contado inválido', str(close.data))
+
+    def test_open_drawer_mock_mode_returns_ok(self):
+        with override_settings(CASH_DRAWER_ENABLED=True, CASH_DRAWER_MODE="mock"):
+            res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("ok"), True)
+
+    def test_open_drawer_without_config_returns_400(self):
+        with override_settings(CASH_DRAWER_ENABLED=False, CASH_DRAWER_MODE="usb"):
+            res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data.get("ok"), False)

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, DoorOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -21,6 +21,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -47,6 +48,7 @@ import {
   closeCashSession,
   getCashTransactions,
   createCashPayout,
+  openCashDrawer,
   Category,
   ModifierGroup,
   Product,
@@ -123,6 +125,7 @@ const POS = () => {
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
+  const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
@@ -546,6 +549,18 @@ const POS = () => {
       toast.error(error instanceof Error ? error.message : "No se pudo registrar pago");
     } finally {
       setIsSavingCashAction(false);
+    }
+  };
+
+  const handleOpenDrawer = async () => {
+    setIsOpeningDrawer(true);
+    try {
+      const response = await openCashDrawer();
+      toast.success(response.message || "Cajón abierto");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
+    } finally {
+      setIsOpeningDrawer(false);
     }
   };
 
@@ -973,7 +988,17 @@ const POS = () => {
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Button className="h-14 text-base font-semibold" variant="outline" disabled title="Próximamente: apertura de cajón de dinero">ABRIR CAJA</Button>
+              <TooltipProvider delayDuration={120}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button className="h-14 text-base font-semibold" variant="outline" onClick={handleOpenDrawer} disabled={isOpeningDrawer}>
+                      <DoorOpen className="mr-2 h-4 w-4" />
+                      ABRIR CAJÓN
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Abrir cajón</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
             </div>
 
@@ -981,7 +1006,7 @@ const POS = () => {
               <div className="space-y-2 rounded-md border p-3">
                 <Label>Apertura de sesión (efectivo inicial)</Label>
                 <Input type="number" min="0" step="0.01" value={openingCashInput} onChange={(e) => setOpeningCashInput(e.target.value)} />
-                <Button onClick={handleOpenCashSession} disabled={isSavingCashAction}>Abrir Caja (Sesión)</Button>
+                <Button onClick={handleOpenCashSession} disabled={isSavingCashAction}>APERTURAR CAJA</Button>
               </div>
             ) : (
               <div className="space-y-2 rounded-md border p-3">

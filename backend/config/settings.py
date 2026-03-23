@@ -25,6 +25,21 @@ def _load_env_file(base_dir: Path) -> None:
 BASE_DIR = Path(__file__).resolve().parent.parent
 _load_env_file(BASE_DIR)
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int | None = None) -> int | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value, 0)
+    except ValueError:
+        return default
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
@@ -168,3 +183,14 @@ CSRF_COOKIE_SAMESITE = "Lax"
 
 PRINT_WIDTH = 42
 PRINT_DRIVER = "dummy"
+
+CASH_DRAWER_ENABLED = _env_bool("CASH_DRAWER_ENABLED", default=False)
+CASH_DRAWER_MODE = os.environ.get("CASH_DRAWER_MODE", "mock").strip().lower()
+CASH_DRAWER_VENDOR_ID = _env_int("CASH_DRAWER_VENDOR_ID")
+CASH_DRAWER_PRODUCT_ID = _env_int("CASH_DRAWER_PRODUCT_ID")
+CASH_DRAWER_INTERFACE = _env_int("CASH_DRAWER_INTERFACE", 0)
+CASH_DRAWER_IN_EP = _env_int("CASH_DRAWER_IN_EP")
+CASH_DRAWER_OUT_EP = _env_int("CASH_DRAWER_OUT_EP")
+CASH_DRAWER_PIN = _env_int("CASH_DRAWER_PIN", 2) or 2
+CASH_DRAWER_PULSE_ON = _env_int("CASH_DRAWER_PULSE_ON", 25) or 25
+CASH_DRAWER_PULSE_OFF = _env_int("CASH_DRAWER_PULSE_OFF", 250) or 250

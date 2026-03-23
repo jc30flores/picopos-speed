@@ -1,5 +1,6 @@
 from decimal import Decimal, InvalidOperation
 import json
+import logging
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -22,6 +23,9 @@ from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
+from apps.cashier.services import CashDrawerError, CashDrawerService
+
+logger = logging.getLogger(__name__)
 
 
 def _get_open_session_for_user(user):
@@ -274,6 +278,35 @@ class CashSessionTicketPDFView(APIView):
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="cierre_caja_{pk}.pdf"'
         return response
+
+
+class CashDrawerOpenView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        session = _get_open_session_for_user(request.user)
+        branch_name = getattr(getattr(session, "register", None), "branch", None)
+        branch_name = getattr(branch_name, "name", None)
+        try:
+            CashDrawerService().open_drawer(print_test_line=True)
+        except CashDrawerError as exc:
+            logger.warning(
+                "cash_drawer.open.failed user=%s branch=%s reason=%s",
+                getattr(request.user, "username", "unknown"),
+                branch_name or "N/A",
+                str(exc),
+            )
+            return Response({"ok": False, "message": str(exc), "detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("cash_drawer.open.error user=%s branch=%s", getattr(request.user, "username", "unknown"), branch_name or "N/A")
+            return Response(
+                {"ok": False, "message": "Failed to open drawer", "detail": "Failed to open drawer"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info("cash_drawer.open.success user=%s branch=%s", getattr(request.user, "username", "unknown"), branch_name or "N/A")
+        log_audit(request, "cash_drawer.open", "CashSession", getattr(session, "id", None), {"branch": branch_name or ""})
+        return Response({"ok": True, "message": "Drawer signal sent"})
 
 
 ShiftOpenView = CashSessionOpenView

@@ -2876,6 +2876,10 @@ export const createCashPayout = async (amount: number, description: string): Pro
   }));
 };
 
+export const openCashDrawer = async (): Promise<{ ok: boolean; message: string }> => {
+  return handleJson(await request('/cashier/drawer/open/', { method: 'POST' }));
+};
+
 export const getCashSessionsHistory = async (filters?: { dateFrom?: string; dateTo?: string; registerId?: number }): Promise<CashSessionHistoryRow[]> => {
   const params = new URLSearchParams();
   if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
