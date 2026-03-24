@@ -29,7 +29,7 @@ def _ambiente() -> str:
     return _normalize_ambiente(raw)
 
 
-def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False) -> DTERecord:
+def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False, payment_id: int | None = None) -> DTERecord:
     order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
     if order.dte_document_type != "CF":
         raise DTEPreflightError(f"Tipo DTE aún no implementado: {order.dte_document_type}")
@@ -61,7 +61,14 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
-        response = send_to_bridge(dte_type, payload, branch_name=order.branch.name)
+        response = send_to_bridge(
+            dte_type,
+            payload,
+            branch_name=order.branch.name,
+            order_id=order.id,
+            payment_id=payment_id,
+            branch_id=order.branch_id,
+        )
         parsed = interpret_dte_response(response)
 
     with transaction.atomic():

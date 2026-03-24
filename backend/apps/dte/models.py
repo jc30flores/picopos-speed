@@ -157,3 +157,24 @@ class DTEBranchConfig(models.Model):
             models.UniqueConstraint(fields=["branch"], name="dte_branch_config_branch_unique")
         ]
 
+
+class DTETransmissionLog(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    request_payload = models.JSONField(default=dict, blank=True)
+    response_status = models.IntegerField(default=0)
+    response_body = models.JSONField(default=dict, blank=True)
+    success = models.BooleanField(default=False)
+    remote_uuid = models.CharField(max_length=160, blank=True, default="")
+    sello_recibido = models.CharField(max_length=160, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["success"]),
+            models.Index(fields=["response_status"]),
+        ]

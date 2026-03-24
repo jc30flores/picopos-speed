@@ -1161,7 +1161,7 @@ const POS = () => {
                       </span>
                     </div>
                     <div className="rounded-md border">
-                      <div className="max-h-40 divide-y divide-border overflow-y-auto text-sm">
+                      <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
                         {checkoutDraft.items.map((item) => (
                           <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                             <div className="min-w-0">
