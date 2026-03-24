@@ -52,6 +52,13 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         payment = serializer.save(
             cash_session=_get_open_session(request.user),
         )
+        logger.info(
+            "payment.created order_id=%s payment_id=%s amount=%s method=%s",
+            payment.order_id,
+            payment.id,
+            payment.amount,
+            payment.method,
+        )
         payment.order.recalculate_financials()
         total_paid = payment.order.net_paid + payment.order.refund_total
         remaining = (payment.order.total - total_paid).quantize(Decimal("0.01"))
@@ -91,6 +98,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
             try:
+                logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
                 print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
                 dte_record = transmit_sale_dte(payment.order_id, source="normal_send", payment_id=payment.id)
                 log_audit(

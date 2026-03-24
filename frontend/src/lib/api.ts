@@ -2413,15 +2413,18 @@ export const createPayment = async (payload: {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
   }
+  const amountStr = Number(payload.amount || 0).toFixed(2);
+  const cashReceivedStr = payload.cashReceived == null ? undefined : Number(payload.cashReceived || 0).toFixed(2);
+  const tipAmountStr = Number(payload.tipAmount ?? 0).toFixed(2);
   const response = await request("/payments/", {
     method: "POST",
     body: JSON.stringify({
       order: payload.orderId,
       method: payload.method,
       payment_method_code: payload.paymentMethodCode,
-      amount: payload.amount,
-      cash_received: payload.cashReceived,
-      tip_amount: payload.tipAmount ?? 0,
+      amount: amountStr,
+      cash_received: cashReceivedStr,
+      tip_amount: tipAmountStr,
       reference: payload.reference ?? "",
     }),
   });

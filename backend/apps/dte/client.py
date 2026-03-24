@@ -5,6 +5,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urljoin
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -27,9 +28,9 @@ class DTEClientResult:
 
 def _mask_token(token: str) -> str:
     token = (token or "").strip()
-    if len(token) <= 10:
-        return "***"
-    return f"{token[:6]}...{token[-4:]}"
+    if len(token) <= 4:
+        return "****"
+    return f"api_****{token[-4:]}"
 
 
 class DTEClient:
@@ -40,6 +41,13 @@ class DTEClient:
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
         self.timeout = int(getattr(settings, "DTE_TIMEOUT_SECONDS", 30) or 30)
         self.debug = str(getattr(settings, "DTE_DEBUG", "0")) in {"1", "true", "True"}
+
+    def _build_url(self, path: str) -> str:
+        if not self.base_url:
+            raise ValueError("DTE_BASE_URL is not configured")
+        if not (self.base_url.startswith("http://") or self.base_url.startswith("https://")):
+            raise ValueError("DTE_BASE_URL must start with http:// or https://")
+        return urljoin(f"{self.base_url.rstrip('/')}/", path.lstrip("/"))
 
     def _headers(self) -> dict[str, str]:
         token_value = f"{self.auth_prefix} {self.api_token}".strip()
@@ -67,7 +75,29 @@ class DTEClient:
         payment_id: int | None = None,
         branch_id: int | None = None,
     ) -> DTEClientResult:
-        url = f"{self.base_url}{path}" if self.base_url else path
+        try:
+            url = self._build_url(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[DTE] URL BUILD ERROR path=%s", path)
+            DTETransmissionLog.objects.create(
+                order_id=order_id,
+                payment_id=payment_id,
+                branch_id=branch_id,
+                request_payload=payload,
+                response_status=0,
+                response_body={"success": False, "error": {"message": str(exc), "type": "CONFIG_ERROR"}},
+                success=False,
+                error_message=str(exc),
+            )
+            return DTEClientResult(
+                status_code=0,
+                json_body={"success": False, "error": {"message": str(exc), "type": "CONFIG_ERROR"}},
+                text_body=str(exc),
+                success=False,
+                remote_uuid="",
+                sello_recibido="",
+                error_message=str(exc),
+            )
         started = time.perf_counter()
         status_code = 0
         text_body = ""

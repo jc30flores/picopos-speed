@@ -651,6 +651,7 @@ const POS = () => {
   };
 
   const handleSubmitPayment = async () => {
+    if (isProcessingPayment) return;
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
       toast.error("No hay productos en el pedido");
       return;

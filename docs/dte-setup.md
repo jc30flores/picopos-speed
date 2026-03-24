@@ -21,4 +21,5 @@ DTE_DEBUG=0
 
 ```bash
 python manage.py dte_send_test --order-id 48
+python manage.py dte_test_send --order 48
 ```
