@@ -14,10 +14,13 @@ from apps.payments.models import Payment, PaymentMethod, Refund
 from apps.printing.services.usb_printer import USBPrinterService
 
 TZ_SV = ZoneInfo("America/El_Salvador")
-SEP_HYPHEN = "-" * 37
-SEP_DOTS = "." * 36
-SEP_UNDERSCORE = "_" * 36
-SEP_TOTAL = "=========="
+TICKET_WIDTH = 39
+INNER_WIDTH = 37
+PREFIX = "  "
+SEP_HYPHEN = f"{PREFIX}{'-' * INNER_WIDTH}"
+SEP_DOTS = f"{PREFIX}{'.' * 36}"
+SEP_UNDERSCORE = f"{PREFIX}{'_' * 36}"
+SEP_TOTAL = f"{PREFIX}=========="
 
 
 def _money(value: Decimal | float | int | None) -> str:
@@ -32,8 +35,17 @@ def _format_dt_sv(value) -> str:
 
 def _line_item(label: str, amount: Decimal, count: int | None = None) -> str:
     if count is None:
-        return f"{label} {_money(amount)}"
-    return f"{label}({int(count)}) {_money(amount)}"
+        return _row(label, _money(amount))
+    return _row(f"{label}({int(count)})", _money(amount))
+
+
+def _row(left: str, right: str) -> str:
+    left = (left or "").strip()
+    right = (right or "").strip()
+    if not right:
+        return f"{PREFIX}{left[:INNER_WIDTH]}"
+    space = max(1, INNER_WIDTH - len(left) - len(right))
+    return f"{PREFIX}{left[:INNER_WIDTH]}{' ' * space}{right}"
 
 
 def _parse_branch_address(address: str) -> tuple[str, str, str]:
@@ -225,31 +237,31 @@ def build_end_of_day_ticket(session_id: int) -> str:
         SEP_HYPHEN,
         *payment_rows,
         SEP_TOTAL,
-        _money(payment_total),
+        _row("", _money(payment_total)),
         SEP_HYPHEN,
         "RESUMEN DE VENTAS POR TIPO DE ORDE",
         SEP_HYPHEN,
         *service_rows,
         SEP_TOTAL,
-        _money(service_total),
+        _row("", _money(service_total)),
         SEP_HYPHEN,
         "SUBTOTAL POR TIPO DE ITEM",
         SEP_HYPHEN,
         *item_rows,
         SEP_TOTAL,
-        _money(item_total),
+        _row("", _money(item_total)),
         SEP_HYPHEN,
         "RESUMEN DE VENTAS POR MESERO",
         SEP_HYPHEN,
         "SIN MESERO(0) $0.00",
         SEP_TOTAL,
-        _money(Decimal("0")),
+        _row("", _money(Decimal("0"))),
         SEP_HYPHEN,
         "FIXED DISCOUNTS SUMMARY",
         SEP_HYPHEN,
         *discount_rows,
         SEP_TOTAL,
-        _money(discount_total),
+        _row("", _money(discount_total)),
         f"End Of Day Log Id {session.id}",
         SEP_UNDERSCORE,
         SEP_HYPHEN,

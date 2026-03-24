@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.response import Response
@@ -9,9 +10,15 @@ from apps.payments.models import Payment, Refund, PaymentMethod
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
+from apps.printing.services.renderers import render_customer_ticket
+from apps.printing.services.usb_printer import USBPrinterService
 from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
 from apps.dte.services import transmit_sale_dte
+from apps.cashier.services import CashDrawerService
+
+
+logger = logging.getLogger(__name__)
 
 
 def _get_open_session(user):
@@ -60,6 +67,8 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 "tip_amount": str(payment.tip_amount),
             },
         )
+        print_result = {"printed": False, "print_error": None, "drawer_opened": False, "drawer_error": None}
+
         if remaining <= 0:
             log_audit(
                 request,
@@ -102,6 +111,32 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
+
+            def _after_commit_print():
+                try:
+                    payload = render_customer_ticket(payment.order)
+                    printed, print_error = USBPrinterService().print_text(payload["text"])
+                    print_result["printed"] = printed
+                    print_result["print_error"] = print_error
+                    if payment.method == "cash":
+                        try:
+                            CashDrawerService().open_drawer()
+                            print_result["drawer_opened"] = True
+                        except Exception as drawer_exc:  # noqa: BLE001
+                            print_result["drawer_error"] = str(drawer_exc)
+                    if printed:
+                        logger.info("payment.print.success", extra={"payment_id": payment.id, "order_id": payment.order_id})
+                    else:
+                        logger.warning(
+                            "payment.print.failed",
+                            extra={"payment_id": payment.id, "order_id": payment.order_id, "print_error": print_error},
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    print_result["printed"] = False
+                    print_result["print_error"] = str(exc)
+                    logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
+
+            transaction.on_commit(_after_commit_print)
         else:
             log_audit(
                 request,
@@ -112,6 +147,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             )
 
         data = dict(serializer.data)
+        data["printed"] = bool(print_result["printed"])
+        data["print_error"] = print_result["print_error"]
+        data["drawer_opened"] = bool(print_result["drawer_opened"])
+        data["drawer_error"] = print_result["drawer_error"]
         if remaining <= 0 and hasattr(payment.order, "invoice"):
             data["invoice_status"] = payment.order.invoice.status
             data["invoice_id"] = payment.order.invoice.id

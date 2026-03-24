@@ -307,6 +307,10 @@ export type Payment = {
   reference?: string;
   receivedBy?: string | null;
   createdAt: Date;
+  printed?: boolean;
+  printError?: string | null;
+  drawerOpened?: boolean;
+  drawerError?: string | null;
 };
 
 export type PrintJob = {
@@ -2430,6 +2434,10 @@ export const createPayment = async (payload: {
     reference: string;
     received_by: string | null;
     created_at: string;
+    printed?: boolean;
+    print_error?: string | null;
+    drawer_opened?: boolean;
+    drawer_error?: string | null;
   }>(response);
   return {
     id: data.id,
@@ -2441,6 +2449,10 @@ export const createPayment = async (payload: {
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,
     createdAt: new Date(data.created_at),
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+    drawerOpened: Boolean(data.drawer_opened),
+    drawerError: data.drawer_error ?? null,
   };
 };
 

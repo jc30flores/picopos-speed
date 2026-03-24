@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, DoorOpen } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -105,6 +105,14 @@ const parseMoneyToCents = (value: string): number => {
 };
 
 const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
+
+const DrawerIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 11h18" />
+    <rect x="8" y="13" width="8" height="4" rx="1" />
+  </svg>
+);
 
 
 const POS = () => {
@@ -717,7 +725,7 @@ const POS = () => {
       if (!orderId) {
         throw new Error("createOrder did not return an id");
       }
-      await createPayment({
+      const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
         amount: paymentAmountForApi,
@@ -726,6 +734,11 @@ const POS = () => {
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
       });
+      if (paymentResult.printed) {
+        toast.success("Ticket impreso");
+      } else if (paymentResult.printError) {
+        toast.warning(`Venta registrada, pero no se pudo imprimir: ${paymentResult.printError}`);
+      }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
@@ -1006,16 +1019,6 @@ const POS = () => {
                 <DialogTitle>Transacciones de Caja</DialogTitle>
                 <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
               </div>
-              <TooltipProvider delayDuration={120}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button size="icon" variant="outline" onClick={handleOpenDrawer} disabled={isOpeningDrawer}>
-                      <DoorOpen className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Abrir cajón</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
             </div>
           </DialogHeader>
           <div className="space-y-4">
@@ -1032,11 +1035,29 @@ const POS = () => {
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
               <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
+              <TooltipProvider delayDuration={120}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      onClick={handleOpenDrawer}
+                      disabled={isOpeningDrawer}
+                      className="h-14 w-full"
+                      aria-label="Abrir cajón"
+                      title="Abrir cajón"
+                    >
+                      <DrawerIcon className="h-6 w-6" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Abrir cajón</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
 
             {cashSnapshot.open ? (
