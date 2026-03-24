@@ -149,6 +149,10 @@ class CashSessionCloseView(APIView):
                 meta={"cash_session_id": session.id, "event": "cash_session.closed", "printed": printed, "print_error": print_error},
                 requested_by=request.user,
             )
+            logger.info(
+                "cash_session.close.print_attempted",
+                extra={"cash_session_id": session.id, "user_id": getattr(request.user, "id", None), "printed": printed},
+            )
             if not printed:
                 logger.warning(
                     "cash_session.close.print_unavailable",
