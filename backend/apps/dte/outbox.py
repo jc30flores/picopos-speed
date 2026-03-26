@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import timedelta
 
 from django.conf import settings
@@ -28,6 +29,69 @@ def _preview(text: str, max_len: int = 500) -> str:
 def _extract(payload: dict) -> tuple[str, str]:
     ident = (payload or {}).get("dte", {}).get("identificacion", {})
     return str(ident.get("numeroControl") or ""), str(ident.get("codigoGeneracion") or "")
+
+
+def _payload_log_enabled() -> bool:
+    return bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False))
+
+
+def _payload_to_file_enabled() -> bool:
+    return bool(getattr(settings, "DTE_LOG_PAYLOAD_TO_FILE", False))
+
+
+def _payload_max_chars() -> int:
+    return int(getattr(settings, "DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0)
+
+
+def _payload_dir() -> str:
+    return str(getattr(settings, "DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
+
+
+def _serialize_payload(payload: dict) -> str:
+    rendered = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
+    max_chars = _payload_max_chars()
+    if max_chars > 0:
+        return rendered[:max_chars]
+    return rendered
+
+
+def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_control: str, codigo_generacion: str) -> None:
+    if not _payload_to_file_enabled():
+        return
+    base_path = _payload_dir()
+    os.makedirs(base_path, exist_ok=True)
+    safe_control = (numero_control or "").replace("/", "_").replace(":", "_").replace(" ", "_")
+    safe_codigo = (codigo_generacion or "").replace("/", "_").replace(":", "_").replace(" ", "_")
+    if safe_control or safe_codigo:
+        filename = f"{safe_control or 'nocontrol'}_{safe_codigo or 'nocodigo'}.json"
+    else:
+        ts = timezone.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{ts}_outbox_{outbox_id or 'na'}.json"
+    file_path = os.path.join(base_path, filename)
+    with open(file_path, "w", encoding="utf-8") as fh:
+        fh.write(payload_text)
+    DTE_LOGGER.info("[DTE PAYLOAD] saved_to=%s bytes=%s", file_path, len(payload_text.encode("utf-8")))
+
+
+def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None) -> None:
+    if not _payload_log_enabled():
+        return
+    payload_text = _serialize_payload(payload)
+    DTE_LOGGER.info(
+        "[DTE PAYLOAD] BEGIN order=%s payment=%s numero_control=%s codigo_generacion=%s",
+        order_id,
+        payment_id,
+        numero_control,
+        codigo_generacion,
+    )
+    DTE_LOGGER.info("%s", payload_text)
+    DTE_LOGGER.info("[DTE PAYLOAD] END order=%s payment=%s", order_id, payment_id)
+    _save_payload_file(
+        outbox_id=outbox_id,
+        payload_text=payload_text,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+    )
 
 
 def parse_response_outcome(body: dict) -> str:
@@ -140,6 +204,12 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
 
     if 500 <= (result.status_code or 0) <= 599:
         _register_send_failure()
+        DTE_LOGGER.info(
+            "[DTE] QUEUED order=%s payment=%s reason=http_5xx http=%s",
+            outbox.order_id,
+            outbox.payment_id,
+            result.status_code,
+        )
     elif final_status in {DTEOutbox.STATUS_ACCEPTED, DTEOutbox.STATUS_REJECTED, DTEOutbox.STATUS_FAILED}:
         _reset_circuit()
 
@@ -168,6 +238,14 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
             payload_json=payload,
             payload=payload,
             status=DTEOutbox.STATUS_PENDING,
+        )
+        _log_full_payload(
+            payload=payload,
+            order_id=order.id,
+            payment_id=getattr(payment, "id", None),
+            numero_control=numero_control,
+            codigo_generacion=codigo_generacion,
+            outbox_id=outbox.id,
         )
 
         stale_seconds = 2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
@@ -227,6 +305,15 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
 
 def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
     payload = outbox.payload or outbox.payload_json or {}
+    numero_control, codigo_generacion = _extract(payload)
+    _log_full_payload(
+        payload=payload,
+        order_id=outbox.order_id,
+        payment_id=outbox.payment_id,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        outbox_id=outbox.id,
+    )
     outbox.status = DTEOutbox.STATUS_SENDING
     outbox.attempts += 1
     outbox.last_attempt_at = timezone.now()

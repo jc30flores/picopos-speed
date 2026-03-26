@@ -229,6 +229,10 @@ DTE_RETRY_BACKOFF_SECONDS = _env_int("DTE_RETRY_BACKOFF_SECONDS", 30) or 30
 DTE_PENDING_BATCH_SIZE = _env_int("DTE_PENDING_BATCH_SIZE", 50) or 50
 DTE_CIRCUIT_FAIL_THRESHOLD = _env_int("DTE_CIRCUIT_FAIL_THRESHOLD", 3) or 3
 DTE_CIRCUIT_OPEN_SECONDS = _env_int("DTE_CIRCUIT_OPEN_SECONDS", 60) or 60
+DTE_LOG_PAYLOAD_FULL = _env_bool("DTE_LOG_PAYLOAD_FULL", default=False)
+DTE_LOG_PAYLOAD_TO_FILE = _env_bool("DTE_LOG_PAYLOAD_TO_FILE", default=DTE_LOG_PAYLOAD_FULL)
+DTE_LOG_PAYLOAD_DIR = os.environ.get("DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads").strip() or "tmp/dte_payloads"
+DTE_LOG_PAYLOAD_MAX_CHARS = _env_int("DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0
 
 logging.getLogger(__name__).info(
     "[DTE CONFIG] base_url=%r mh_ambiente=%r",
