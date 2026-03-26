@@ -726,10 +726,20 @@ const POS = () => {
       if (!orderId) {
         throw new Error("createOrder did not return an id");
       }
+      const latestOrder = await getOrderById(Number(orderId));
+      setActiveOrder(latestOrder);
+      const latestRemaining = Math.max(0, toNumber(latestOrder.remaining));
+      const amountForApi =
+        splitEnabled
+          ? paymentAmountForApi
+          : paymentMethod === "cash"
+            ? latestRemaining
+            : Math.min(paymentAmountForApi, latestRemaining);
+
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        amount: paymentAmountForApi,
+        amount: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,

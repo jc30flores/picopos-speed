@@ -64,6 +64,10 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             "status": DTERecord.STATUS_REJECTED,
             "hacienda_uuid": "",
             "sello_recepcion": "",
+            "sello_recibido": "",
+            "firma": "",
+            "recibido_at": None,
+            "estado_mh": "",
             "hacienda_state": "PRECHECK",
             "error_code": "PRECHECK",
             "error_message": str(exc),
@@ -87,6 +91,15 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             parsed["status"] = DTERecord.STATUS_REJECTED
         elif outbox.status in {"PENDING", "SENT"}:
             parsed["status"] = DTERecord.STATUS_PENDING
+        DTE_LOGGER.info(
+            "[CF01] RECEIPT order=%s payment=%s estado=%s sello=%s firma=%s recibido_at=%s",
+            sale_id,
+            payment_id,
+            parsed.get("estado_mh") or parsed.get("hacienda_state") or "",
+            parsed.get("sello_recibido") or parsed.get("sello_recepcion") or "-",
+            parsed.get("firma") or "-",
+            parsed.get("recibido_at") or "-",
+        )
 
     with transaction.atomic():
         record = DTERecord.objects.create(
@@ -99,6 +112,8 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             codigo_generacion=codigo_generacion,
             request_payload={**payload, "branch": order.branch.name},
             response_payload=response,
+            mh_response_json=response if isinstance(response, dict) else {},
+            mh_response_text=json.dumps(response, ensure_ascii=False, default=str) if isinstance(response, dict) else str(response),
             receiver_name=(order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final",
             issue_date=timezone.localdate(),
             total_amount=order.total,
@@ -109,6 +124,10 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             last_sent_at=now,
             hacienda_uuid=parsed["hacienda_uuid"],
             sello_recepcion=parsed["sello_recepcion"],
+            sello_recibido=parsed.get("sello_recibido", parsed["sello_recepcion"]),
+            firma=parsed.get("firma", ""),
+            recibido_at=parsed.get("recibido_at"),
+            estado_mh=parsed.get("estado_mh", ""),
             hacienda_state=parsed["hacienda_state"],
         )
 

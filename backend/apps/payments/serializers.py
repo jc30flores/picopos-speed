@@ -1,8 +1,11 @@
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import logging
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund, PaymentMethod
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
@@ -13,6 +16,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=18, decimal_places=6)
+    amount_applied = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, write_only=True)
     tip_amount = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, default=Decimal("0"))
     cash_received = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, allow_null=True)
     received_by = serializers.CharField(source="received_by.username", read_only=True)
@@ -29,6 +33,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "payment_method_code",
             "payment_method_name",
             "amount",
+            "amount_applied",
             "cash_received",
             "tip_amount",
             "reference",
@@ -37,8 +42,10 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        attrs.pop("amount_applied", None)
         order = attrs.get("order")
-        amount = self._normalize_money(attrs.get("amount"), field="amount")
+        raw_amount = attrs.get("amount_applied", attrs.get("amount"))
+        amount = self._normalize_money(raw_amount, field="amount")
         tip_amount = self._normalize_money(attrs.get("tip_amount") or Decimal("0"), field="tip_amount")
         attrs["amount"] = amount
         attrs["tip_amount"] = tip_amount
@@ -69,7 +76,15 @@ class PaymentSerializer(serializers.ModelSerializer):
         remaining = self._remaining_balance(order)
         if remaining <= 0:
             raise serializers.ValidationError("Order is already paid")
-        if amount > remaining:
+        diff = (amount - remaining).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if diff > Decimal("0.01"):
+            logger.warning(
+                "payment.validation.exceeds_remaining order_id=%s remaining=%s amount=%s diff=%s",
+                getattr(order, "id", None),
+                remaining,
+                amount,
+                diff,
+            )
             raise serializers.ValidationError("Payment exceeds remaining balance")
 
         return attrs

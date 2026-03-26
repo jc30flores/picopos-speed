@@ -9,6 +9,7 @@ from django.conf import settings
 
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTERecord
+from apps.dte.services.dte_parser import parse_hacienda_response
 
 
 logger = logging.getLogger(__name__)
@@ -378,6 +379,7 @@ def send_to_bridge(
 
 
 def interpret_dte_response(response: dict) -> dict:
+    parsed_receipt = parse_hacienda_response(response or {})
     estado_top = str(response.get("estado") or "").upper()
     rh = response.get("respuesta_hacienda") or {}
     estado = str(rh.get("estado") or "").upper()
@@ -405,9 +407,13 @@ def interpret_dte_response(response: dict) -> dict:
 
     return {
         "status": status,
-        "hacienda_uuid": response.get("uuid") or rh.get("codigoGeneracion") or "",
-        "sello_recepcion": rh.get("selloRecibido") or "",
-        "hacienda_state": rh.get("estado") or "",
+        "hacienda_uuid": parsed_receipt.get("hacienda_uuid") or response.get("uuid") or rh.get("codigoGeneracion") or "",
+        "sello_recepcion": parsed_receipt.get("sello_recibido") or rh.get("selloRecibido") or "",
+        "sello_recibido": parsed_receipt.get("sello_recibido") or rh.get("selloRecibido") or "",
+        "firma": parsed_receipt.get("firma") or "",
+        "recibido_at": parsed_receipt.get("recibido_at"),
+        "estado_mh": parsed_receipt.get("estado_mh") or rh.get("estado") or "",
+        "hacienda_state": parsed_receipt.get("hacienda_state") or rh.get("estado") or "",
         "error_code": str(error.get("codigo_msg") or ""),
         "error_message": str(error_message),
     }

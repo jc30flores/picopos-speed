@@ -11,6 +11,7 @@ import requests
 from django.conf import settings
 
 from apps.dte.models import DTETransmissionLog
+from apps.dte.services.dte_parser import parse_hacienda_response
 
 DTE_LOGGER = logging.getLogger("apps.dte")
 
@@ -264,10 +265,18 @@ class DTEClient:
             authorization_present=bool((self.api_token or "").strip()),
         )
 
-        rh = parsed_json.get("respuesta_hacienda") if isinstance(parsed_json, dict) else {}
-        rh = rh if isinstance(rh, dict) else {}
-        remote_uuid = str(parsed_json.get("uuid") or rh.get("codigoGeneracion") or "") if isinstance(parsed_json, dict) else ""
-        sello = str(rh.get("selloRecibido") or parsed_json.get("selloRecibido") or "") if isinstance(parsed_json, dict) else ""
+        parsed_receipt = parse_hacienda_response(parsed_json if isinstance(parsed_json, dict) else {})
+        remote_uuid = str(parsed_receipt.get("hacienda_uuid") or "")
+        sello = str(parsed_receipt.get("sello_recibido") or parsed_receipt.get("sello_recepcion") or "")
+        DTE_LOGGER.info(
+            "[CF01] RECEIPT order=%s payment=%s estado=%s sello=%s firma=%s recibido_at=%s",
+            order_id,
+            payment_id,
+            parsed_receipt.get("estado_mh") or parsed_receipt.get("hacienda_state") or "",
+            sello or "-",
+            parsed_receipt.get("firma") or "-",
+            parsed_receipt.get("recibido_at") or "-",
+        )
 
         success = status_code in {200, 201}
         if not error_message and isinstance(parsed_json, dict):

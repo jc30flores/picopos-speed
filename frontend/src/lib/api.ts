@@ -2423,6 +2423,7 @@ export const createPayment = async (payload: {
       method: payload.method,
       payment_method_code: payload.paymentMethodCode,
       amount: amountStr,
+      amount_applied: amountStr,
       cash_received: cashReceivedStr,
       tip_amount: tipAmountStr,
       reference: payload.reference ?? "",
@@ -3002,6 +3003,12 @@ export type DTERecord = {
   total_amount: number;
   hacienda_uuid?: string;
   sello_recepcion?: string;
+  sello_recibido?: string;
+  firma?: string;
+  recibido_at?: string;
+  estado_mh?: string;
+  mh_response_json?: Record<string, unknown>;
+  mh_response_text?: string;
   request_payload?: Record<string, unknown>;
   response_payload?: Record<string, unknown>;
   hacienda_state?: string;
