@@ -378,16 +378,20 @@ def send_to_bridge(
 
 
 def interpret_dte_response(response: dict) -> dict:
+    estado_top = str(response.get("estado") or "").upper()
     rh = response.get("respuesta_hacienda") or {}
     estado = str(rh.get("estado") or "").upper()
+    http_status = int(response.get("http_status", 0) or 0)
 
-    if response.get("success") is True and estado in {"PROCESADO", "RECIBIDO"}:
+    if estado_top == "ACEPTADO" or (response.get("success") is True and estado in {"PROCESADO", "RECIBIDO", "ACEPTADO"}):
         status = DTERecord.STATUS_ACCEPTED
-    elif response.get("success") is False and rh:
+    elif estado_top == "RECHAZADO" or (response.get("success") is False and rh):
         status = DTERecord.STATUS_REJECTED
     elif str(rh.get("status") or "").upper() == "PROCESSING":
         status = DTERecord.STATUS_PENDING
-    elif response.get("offline") or int(response.get("http_status", 0) or 0) >= 500:
+    elif http_status in {401, 403}:
+        status = DTERecord.STATUS_REJECTED
+    elif response.get("offline") or http_status >= 500:
         status = DTERecord.STATUS_PENDING
     else:
         status = DTERecord.STATUS_PENDING

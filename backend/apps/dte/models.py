@@ -178,3 +178,39 @@ class DTETransmissionLog(models.Model):
             models.Index(fields=["success"]),
             models.Index(fields=["response_status"]),
         ]
+
+
+class DTEOutbox(models.Model):
+    STATUS_PENDING = "PENDING"
+    STATUS_SENT = "SENT"
+    STATUS_ACCEPTED = "ACCEPTED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_FAILED = "FAILED"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_outbox")
+    payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_outbox")
+    payload_json = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    response_status_code = models.IntegerField(null=True, blank=True)
+    response_body = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["order", "status"]),
+            models.Index(fields=["last_attempt_at"]),
+        ]

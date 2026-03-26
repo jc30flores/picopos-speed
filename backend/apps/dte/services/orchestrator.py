@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 from django.db import transaction
 from django.utils import timezone
 
 from apps.dte.models import DTERecord
+from apps.dte.outbox import enqueue_or_send_immediately
 from apps.dte.services.control import build_generation_code, next_control_number
 from apps.dte.services.dte_service import (
+    DTE_ENDPOINT_BY_TYPE,
     DTEPreflightError,
     build_payload_cf,
     interpret_dte_response,
-    send_to_bridge,
 )
 from apps.orders.models import Order, OrderInvoice
 
@@ -61,15 +63,27 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
-        response = send_to_bridge(
-            dte_type,
-            payload,
-            branch_name=order.branch.name,
+        outbox = enqueue_or_send_immediately(
             order_id=order.id,
             payment_id=payment_id,
-            branch_id=order.branch_id,
+            payload=payload,
+            path=DTE_ENDPOINT_BY_TYPE.get(dte_type, "/api/v1/dte/factura"),
         )
+        response = {}
+        if outbox.response_body:
+            try:
+                response = json.loads(outbox.response_body)
+            except Exception:
+                response = {"raw": outbox.response_body}
         parsed = interpret_dte_response(response)
+        if outbox.status == "ACCEPTED":
+            parsed["status"] = DTERecord.STATUS_ACCEPTED
+        elif outbox.status == "REJECTED":
+            parsed["status"] = DTERecord.STATUS_REJECTED
+        elif outbox.status == "FAILED":
+            parsed["status"] = DTERecord.STATUS_REJECTED
+        elif outbox.status in {"PENDING", "SENT"}:
+            parsed["status"] = DTERecord.STATUS_PENDING
 
     with transaction.atomic():
         record = DTERecord.objects.create(
