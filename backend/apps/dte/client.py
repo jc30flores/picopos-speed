@@ -28,6 +28,10 @@ class DTEClientResult:
     elapsed_ms: int
 
 
+def _pretty_json(payload: dict) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
 def _preview(text: str) -> str:
     raw = (text or "").replace("\n", " ").strip()
     truncate = int(getattr(settings, "DTE_LOG_TRUNCATE_CHARS", 0) or 0)
@@ -36,37 +40,84 @@ def _preview(text: str) -> str:
     return raw
 
 
-def _pretty_json(payload: dict) -> str:
-    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+def _payload_dir() -> str:
+    return str(getattr(settings, "DTE_LOG_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
 
 
-def _sanitize_for_log(payload: dict) -> dict:
-    if bool(getattr(settings, "DTE_LOG_INCLUDE_SIGNED_DOCUMENT", False)):
-        return payload
-    data = dict(payload or {})
-    for key in ["documento_firmado", "signed_document", "firma"]:
-        if key in data:
-            data[key] = "<omitted>"
-    if "dte" in data and isinstance(data["dte"], dict):
-        dte = dict(data["dte"])
-        if "documento_firmado" in dte:
-            dte["documento_firmado"] = "<omitted>"
-        data["dte"] = dte
-    return data
-
-
-def _maybe_write_file(*, suffix: str, numero_control: str, codigo_generacion: str, content: str) -> None:
+def _write_log_file(*, suffix: str, numero_control: str, codigo_generacion: str, content: str, is_json: bool) -> None:
     if not bool(getattr(settings, "DTE_LOG_TO_FILE", False)):
         return
-    base_dir = str(getattr(settings, "DTE_LOG_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
-    os.makedirs(base_dir, exist_ok=True)
+    os.makedirs(_payload_dir(), exist_ok=True)
     safe_control = (numero_control or "nocontrol").replace("/", "_").replace(":", "_").replace(" ", "_")
     safe_codigo = (codigo_generacion or "nocodigo").replace("/", "_").replace(":", "_").replace(" ", "_")
-    ext = "json" if suffix.endswith("request") or suffix.endswith("response_json") else "txt"
-    path = os.path.join(base_dir, f"{safe_control}_{safe_codigo}_{suffix}.{ext}")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    ext = "json" if is_json else "txt"
+    path = os.path.join(_payload_dir(), f"{safe_control}_{safe_codigo}_{suffix}.{ext}")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
     DTE_LOGGER.info("[CF01] %s saved_to=%s bytes=%s", suffix.upper(), path, len(content.encode("utf-8")))
+
+
+def log_dte_request(context: dict, url: str, payload_dict: dict) -> None:
+    numero_control = context.get("numero_control") or ""
+    codigo_generacion = context.get("codigo_generacion") or ""
+    pretty = _pretty_json(payload_dict)
+
+    DTE_LOGGER.info("ENDPOINT DTE: %s", url)
+    DTE_LOGGER.info("JSON DTE ENVIO:\n%s", pretty)
+    DTE_LOGGER.info(
+        "[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s",
+        context.get("invoice_id"),
+        context.get("order_id"),
+        context.get("payment_id"),
+        numero_control,
+        codigo_generacion,
+    )
+    DTE_LOGGER.info("[CF01] REQUEST:\n%s", pretty)
+    DTE_LOGGER.info(
+        "[CF01] REQUEST END invoice=%s order=%s payment=%s",
+        context.get("invoice_id"),
+        context.get("order_id"),
+        context.get("payment_id"),
+    )
+    _write_log_file(
+        suffix="request",
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        content=pretty,
+        is_json=True,
+    )
+
+
+def log_dte_response(context: dict, *, status_code: int, body_text: str, parsed_json: dict | None, authorization_present: bool) -> None:
+    numero_control = context.get("numero_control") or ""
+    codigo_generacion = context.get("codigo_generacion") or ""
+
+    DTE_LOGGER.info("[CF01] Authorization presente=%s", authorization_present)
+    if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)):
+        DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, body_text)
+    else:
+        DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, _preview(body_text))
+
+    if parsed_json is not None:
+        pretty = _pretty_json(parsed_json)
+        DTE_LOGGER.info("[CF01] RESPONSE JSON:\n%s", pretty)
+        _write_log_file(
+            suffix="response",
+            numero_control=numero_control,
+            codigo_generacion=codigo_generacion,
+            content=pretty,
+            is_json=True,
+        )
+    else:
+        body_display = body_text if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)) else _preview(body_text)
+        DTE_LOGGER.info("[CF01] RESPONSE BODY (non-json):\n%s", body_display)
+        _write_log_file(
+            suffix="response",
+            numero_control=numero_control,
+            codigo_generacion=codigo_generacion,
+            content=body_display,
+            is_json=False,
+        )
 
 
 class DTEClient:
@@ -126,33 +177,29 @@ class DTEClient:
         ident = (payload or {}).get("dte", {}).get("identificacion", {})
         numero_control = str(ident.get("numeroControl") or "")
         codigo_generacion = str(ident.get("codigoGeneracion") or "")
-        dte_type = str(ident.get("tipoDte") or "CF")
-        sanitized_payload = _sanitize_for_log(payload)
-        payload_pretty = _pretty_json(sanitized_payload)
+        context = {
+            "invoice_id": order_id,
+            "order_id": order_id,
+            "payment_id": payment_id,
+            "numero_control": numero_control,
+            "codigo_generacion": codigo_generacion,
+        }
 
-        if bool(getattr(settings, "DTE_LOG_VERBOSE", False)) or bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)):
-            DTE_LOGGER.info("ENDPOINT DTE: %s", url)
-            DTE_LOGGER.info(
-                "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s",
-                order_id,
-                url,
-                numero_control,
-                codigo_generacion,
-                dte_type,
-            )
-            DTE_LOGGER.info("JSON DTE ENVIO:\n%s", payload_pretty)
-            DTE_LOGGER.info("[CF01] REQUEST:\n%s", payload_pretty)
-            _maybe_write_file(
-                suffix="request",
-                numero_control=numero_control,
-                codigo_generacion=codigo_generacion,
-                content=payload_pretty,
-            )
+        DTE_LOGGER.info(
+            "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s",
+            order_id,
+            url,
+            numero_control,
+            codigo_generacion,
+            "CF",
+        )
+        log_dte_request(context, url, payload)
 
         started = time.perf_counter()
         status_code = 0
         text_body = ""
         parsed_json: dict = {}
+        parsed_json_valid = False
         error_message = ""
         error_type = ""
 
@@ -162,8 +209,10 @@ class DTEClient:
             text_body = response.text or ""
             try:
                 parsed_json = response.json() if response.text else {}
+                parsed_json_valid = True
             except Exception:
                 parsed_json = {"raw": text_body}
+                parsed_json_valid = False
 
             if status_code in {401, 403}:
                 error_type = "AUTH"
@@ -177,11 +226,13 @@ class DTEClient:
             error_message = str(exc)
             error_type = "TIMEOUT"
             parsed_json = {"success": False, "error": {"message": error_message, "type": error_type}, "offline": True}
+            parsed_json_valid = True
             text_body = json.dumps(parsed_json, ensure_ascii=False)
         except requests.ConnectionError as exc:
             error_message = str(exc)
             error_type = "CONNECTION_ERROR"
             parsed_json = {"success": False, "error": {"message": error_message, "type": error_type}, "offline": True}
+            parsed_json_valid = True
             text_body = json.dumps(parsed_json, ensure_ascii=False)
         except requests.HTTPError as exc:
             response = exc.response
@@ -189,40 +240,29 @@ class DTEClient:
             text_body = response.text if response is not None else str(exc)
             if not error_type:
                 error_type = "AUTH" if status_code in {401, 403} else "VALIDATION" if 400 <= status_code < 500 else "SERVER_ERROR"
+            try:
+                parsed_json = response.json() if response is not None and response.text else {}
+                parsed_json_valid = True
+            except Exception:
+                parsed_json = {"raw": text_body}
+                parsed_json_valid = False
             error_message = text_body[:500]
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
             error_type = "NETWORK_ERROR"
             parsed_json = {"success": False, "error": {"message": error_message, "type": error_type}, "offline": True}
+            parsed_json_valid = True
             text_body = json.dumps(parsed_json, ensure_ascii=False)
             DTE_LOGGER.exception("[DTE HTTP] unexpected error order=%s payment=%s", order_id, payment_id)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        DTE_LOGGER.info("[CF01] Authorization presente=%s", bool((self.api_token or "").strip()))
-
-        if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)):
-            DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, text_body)
-        else:
-            DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, _preview(text_body))
-
-        try:
-            response_pretty = _pretty_json(parsed_json if isinstance(parsed_json, dict) else {"raw": text_body})
-            DTE_LOGGER.info("[CF01] RESPONSE JSON:\n%s", response_pretty)
-            _maybe_write_file(
-                suffix="response_json",
-                numero_control=numero_control,
-                codigo_generacion=codigo_generacion,
-                content=response_pretty,
-            )
-        except Exception:
-            body_display = text_body if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)) else _preview(text_body)
-            DTE_LOGGER.info("[CF01] RESPONSE BODY (non-json):\n%s", body_display)
-            _maybe_write_file(
-                suffix="response",
-                numero_control=numero_control,
-                codigo_generacion=codigo_generacion,
-                content=body_display,
-            )
+        log_dte_response(
+            context,
+            status_code=status_code,
+            body_text=text_body,
+            parsed_json=parsed_json if parsed_json_valid else None,
+            authorization_present=bool((self.api_token or "").strip()),
+        )
 
         rh = parsed_json.get("respuesta_hacienda") if isinstance(parsed_json, dict) else {}
         rh = rh if isinstance(rh, dict) else {}

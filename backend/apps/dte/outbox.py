@@ -31,61 +31,42 @@ def _extract(payload: dict) -> tuple[str, str]:
     return str(ident.get("numeroControl") or ""), str(ident.get("codigoGeneracion") or "")
 
 
-def _payload_log_enabled() -> bool:
-    return bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)) or bool(getattr(settings, "DTE_LOG_VERBOSE", False))
-
-
-def _payload_to_file_enabled() -> bool:
-    return bool(getattr(settings, "DTE_LOG_TO_FILE", False)) or bool(getattr(settings, "DTE_LOG_PAYLOAD_TO_FILE", False))
-
-
-def _payload_max_chars() -> int:
-    return int(getattr(settings, "DTE_LOG_TRUNCATE_CHARS", 0) or getattr(settings, "DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0)
-
-
 def _payload_dir() -> str:
-    return str(getattr(settings, "DTE_LOG_DIR", getattr(settings, "DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads")) or "tmp/dte_payloads")
-
-
-def _serialize_payload(payload: dict) -> str:
-    rendered = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
-    max_chars = _payload_max_chars()
-    if max_chars > 0:
-        return rendered[:max_chars]
-    return rendered
+    return str(getattr(settings, "DTE_LOG_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
 
 
 def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_control: str, codigo_generacion: str) -> None:
-    if not _payload_to_file_enabled():
+    if not bool(getattr(settings, "DTE_LOG_TO_FILE", False)):
         return
-    base_path = _payload_dir()
-    os.makedirs(base_path, exist_ok=True)
+    os.makedirs(_payload_dir(), exist_ok=True)
     safe_control = (numero_control or "").replace("/", "_").replace(":", "_").replace(" ", "_")
     safe_codigo = (codigo_generacion or "").replace("/", "_").replace(":", "_").replace(" ", "_")
     if safe_control or safe_codigo:
-        filename = f"{safe_control or 'nocontrol'}_{safe_codigo or 'nocodigo'}.json"
+        filename = f"{safe_control or 'nocontrol'}_{safe_codigo or 'nocodigo'}_request.json"
     else:
         ts = timezone.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"{ts}_outbox_{outbox_id or 'na'}.json"
-    file_path = os.path.join(base_path, filename)
+        filename = f"{ts}_outbox_{outbox_id or 'na'}_request.json"
+    file_path = os.path.join(_payload_dir(), filename)
     with open(file_path, "w", encoding="utf-8") as fh:
         fh.write(payload_text)
     DTE_LOGGER.info("[CF01] REQUEST saved_to=%s bytes=%s", file_path, len(payload_text.encode("utf-8")))
 
 
-def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None) -> None:
-    if not _payload_log_enabled():
-        return
-    payload_text = _serialize_payload(payload)
+def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None, endpoint_url: str = "") -> None:
+    payload_text = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
+    if endpoint_url:
+        DTE_LOGGER.info("ENDPOINT DTE: %s", endpoint_url)
+    DTE_LOGGER.info("JSON DTE ENVIO:\n%s", payload_text)
     DTE_LOGGER.info(
-        "[CF01] REQUEST BEGIN order=%s payment=%s numeroControl=%s codigoGeneracion=%s",
+        "[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s",
+        order_id,
         order_id,
         payment_id,
         numero_control,
         codigo_generacion,
     )
-    DTE_LOGGER.info("%s", payload_text)
-    DTE_LOGGER.info("[CF01] REQUEST END order=%s payment=%s", order_id, payment_id)
+    DTE_LOGGER.info("[CF01] REQUEST:\n%s", payload_text)
+    DTE_LOGGER.info("[CF01] REQUEST END invoice=%s order=%s payment=%s", order_id, order_id, payment_id)
     _save_payload_file(
         outbox_id=outbox_id,
         payload_text=payload_text,
@@ -204,12 +185,7 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
 
     if 500 <= (result.status_code or 0) <= 599:
         _register_send_failure()
-        DTE_LOGGER.info(
-            "[DTE] QUEUED order=%s payment=%s reason=http_5xx http=%s",
-            outbox.order_id,
-            outbox.payment_id,
-            result.status_code,
-        )
+        DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=http_5xx http=%s", outbox.order_id, outbox.payment_id, result.status_code)
     elif final_status in {DTEOutbox.STATUS_ACCEPTED, DTEOutbox.STATUS_REJECTED, DTEOutbox.STATUS_FAILED}:
         _reset_circuit()
 
@@ -229,6 +205,7 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
 
 def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
     numero_control, codigo_generacion = _extract(payload)
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     with transaction.atomic():
         outbox = DTEOutbox.objects.create(
             order=order,
@@ -246,6 +223,7 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
             numero_control=numero_control,
             codigo_generacion=codigo_generacion,
             outbox_id=outbox.id,
+            endpoint_url=endpoint_url,
         )
 
         stale_seconds = 2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
@@ -306,6 +284,7 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
 def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
     payload = outbox.payload or outbox.payload_json or {}
     numero_control, codigo_generacion = _extract(payload)
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     _log_full_payload(
         payload=payload,
         order_id=outbox.order_id,
@@ -313,6 +292,7 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
         numero_control=numero_control,
         codigo_generacion=codigo_generacion,
         outbox_id=outbox.id,
+        endpoint_url=endpoint_url,
     )
     outbox.status = DTEOutbox.STATUS_SENDING
     outbox.attempts += 1

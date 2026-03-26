@@ -50,6 +50,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     ambiente = _ambiente()
     numero_control = invoice.numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
     codigo_generacion = build_generation_code(invoice.codigo_generacion)
+    DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
 
     attempts = (invoice.dte_send_attempts or 0) + 1
     now = timezone.now()
