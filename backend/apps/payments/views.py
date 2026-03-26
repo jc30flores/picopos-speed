@@ -14,7 +14,7 @@ from apps.printing.services.renderers import render_customer_ticket
 from apps.printing.services.usb_printer import USBPrinterService
 from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
-from apps.dte.services import transmit_sale_dte
+from apps.dte.services.dte_service import send_dte_for_order
 from apps.cashier.services import CashDrawerService
 
 
@@ -101,7 +101,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 try:
                     logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
                     print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
-                    dte_record = transmit_sale_dte(payment.order_id, source="normal_send", payment_id=payment.id)
+                    dte_record = send_dte_for_order(payment.order, payment=payment)
                     logger.info("payment.dte.done order_id=%s payment_id=%s dte_status=%s", payment.order_id, payment.id, dte_record.status)
                     log_audit(
                         request,

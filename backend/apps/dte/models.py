@@ -36,11 +36,14 @@ class DTERecord(models.Model):
     ]
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_records")
+    payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_records")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="dte_records")
+    credit_note = models.ForeignKey("CreditNote", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_records")
     dte_type = models.CharField(max_length=20, choices=DTE_TYPE_CHOICES, default="CF_01")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     ambiente = models.CharField(max_length=2, choices=AMBIENTE_CHOICES, default=AMBIENTE_TEST)
     control_number = models.CharField(max_length=80)
+    generation_code = models.CharField(max_length=40, default="", blank=True)
     codigo_generacion = models.CharField(max_length=40, default="", blank=True)
     hacienda_uuid = models.CharField(max_length=160, blank=True, default="")
     sello_recepcion = models.CharField(max_length=160, blank=True, default="")
@@ -53,14 +56,19 @@ class DTERecord(models.Model):
     hacienda_state = models.CharField(max_length=80, blank=True, default="")
     request_payload = models.JSONField(default=dict, blank=True)
     response_payload = models.JSONField(default=dict, blank=True)
+    response_text = models.TextField(blank=True, default="")
     receiver_nit = models.CharField(max_length=20, blank=True, default="")
     receiver_name = models.CharField(max_length=180, blank=True, default="")
     issue_date = models.DateField(default=timezone.localdate)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     send_attempts = models.PositiveIntegerField(default=0)
+    attempts = models.PositiveIntegerField(default=0)
     source = models.CharField(max_length=40, default="normal_send")
     error_message = models.TextField(blank=True, default="")
     error_code = models.CharField(max_length=80, blank=True, default="")
+    last_error_message = models.TextField(blank=True, default="")
+    last_error_code = models.CharField(max_length=80, blank=True, default="")
+    hacienda_processed_at = models.DateTimeField(null=True, blank=True)
     last_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -69,22 +77,37 @@ class DTERecord(models.Model):
         ordering = ["-created_at"]
         constraints = [
             models.CheckConstraint(check=models.Q(ambiente__in=["00", "01"]), name="dte_record_ambiente_valid"),
-            models.UniqueConstraint(fields=["control_number", "dte_type"], name="dte_record_control_type_uniq"),
+            models.UniqueConstraint(fields=["control_number"], condition=~models.Q(control_number=""), name="dte_record_control_uniq_not_empty"),
+            models.UniqueConstraint(fields=["generation_code"], condition=~models.Q(generation_code=""), name="dte_record_generation_uniq_not_empty"),
             models.UniqueConstraint(fields=["codigo_generacion"], condition=~models.Q(codigo_generacion=""), name="dte_record_codigo_uniq"),
             models.UniqueConstraint(fields=["hacienda_uuid"], condition=~models.Q(hacienda_uuid=""), name="dte_record_hacienda_uuid_uniq"),
+            models.UniqueConstraint(
+                fields=["order", "dte_type"],
+                condition=models.Q(credit_note__isnull=True),
+                name="dte_record_order_type_uniq_no_credit_note",
+            ),
         ]
         indexes = [
             models.Index(fields=["dte_type", "status"]),
             models.Index(fields=["issue_date"]),
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["control_number"]),
+            models.Index(fields=["generation_code"]),
             models.Index(fields=["codigo_generacion"]),
             models.Index(fields=["hacienda_uuid"]),
+            models.Index(fields=["last_sent_at"]),
         ]
 
     def save(self, *args, **kwargs):
+        if self.generation_code and not self.codigo_generacion:
+            self.codigo_generacion = self.generation_code
         if not self.codigo_generacion:
             self.codigo_generacion = str(uuid.uuid4()).upper()
+        if not self.generation_code:
+            self.generation_code = self.codigo_generacion
+        self.attempts = self.send_attempts
+        self.last_error_code = self.error_code
+        self.last_error_message = self.error_message
         super().save(*args, **kwargs)
 
 
@@ -92,9 +115,13 @@ class DTEControlCounter(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="dte_counters")
     ambiente = models.CharField(max_length=2, choices=DTERecord.AMBIENTE_CHOICES, default=DTERecord.AMBIENTE_TEST)
     dte_type = models.CharField(max_length=20, default="CF_01")
+    tipo_dte = models.CharField(max_length=20, default="CF_01")
     year = models.PositiveIntegerField()
+    anio_emision = models.PositiveIntegerField(default=0)
     establishment_code = models.CharField(max_length=4, default="M001")
+    est_code = models.CharField(max_length=4, default="M001")
     pos_code = models.CharField(max_length=4, default="P001")
+    pv_code = models.CharField(max_length=4, default="P001")
     last_number = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -104,8 +131,23 @@ class DTEControlCounter(models.Model):
             models.UniqueConstraint(
                 fields=["branch", "dte_type", "year", "establishment_code", "pos_code", "ambiente"],
                 name="dte_counter_context_uniq",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["ambiente", "tipo_dte", "anio_emision", "est_code", "pv_code"],
+                name="dte_counter_segment_uniq",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        self.tipo_dte = self.tipo_dte or self.dte_type
+        self.dte_type = self.dte_type or self.tipo_dte
+        self.anio_emision = self.anio_emision or self.year
+        self.year = self.year or self.anio_emision
+        self.est_code = self.est_code or self.establishment_code
+        self.pv_code = self.pv_code or self.pos_code
+        self.establishment_code = self.establishment_code or self.est_code
+        self.pos_code = self.pos_code or self.pv_code
+        super().save(*args, **kwargs)
 
 
 class DTEInvalidation(models.Model):
@@ -125,15 +167,25 @@ class DTEInvalidation(models.Model):
 
 class CreditNote(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="credit_notes")
+    original_dte_record = models.ForeignKey(DTERecord, on_delete=models.SET_NULL, null=True, blank=True, related_name="credit_notes")
     motivo = models.TextField()
+    items = models.JSONField(default=list, blank=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     dte_numero_control = models.CharField(max_length=80, blank=True, default="")
     dte_codigo_generacion = models.CharField(max_length=40, blank=True, default="")
     status = models.CharField(max_length=20, choices=DTERecord.STATUS_CHOICES, default=DTERecord.STATUS_PENDING)
     request_payload = models.JSONField(default=dict, blank=True)
     response_payload = models.JSONField(default=dict, blank=True)
+    response_text = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["order", "status"]),
+            models.Index(fields=["created_at"]),
+        ]
 
 
 class DTEBranchConfig(models.Model):
@@ -228,3 +280,36 @@ class DTEOutbox(models.Model):
             models.Index(fields=["order", "status"]),
             models.Index(fields=["last_attempt_at"]),
         ]
+
+
+class DteInvalidationAttempt(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_invalidation_attempts")
+    tipo_dte = models.CharField(max_length=20, default="CF_01")
+    payload_request = models.JSONField(default=dict, blank=True)
+    payload_response = models.TextField(blank=True, default="")
+    provider_status = models.IntegerField(null=True, blank=True)
+    provider_body = models.JSONField(default=dict, blank=True)
+    cf_ray = models.CharField(max_length=120, blank=True, default="")
+    success = models.BooleanField(default=False)
+    error_type = models.CharField(max_length=80, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["order"]),
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["provider_status"]),
+        ]
+
+
+class DteDeliveryAttempt(models.Model):
+    TYPE_EMAIL = "EMAIL"
+    TYPE_WA = "WA"
+    delivery_type = models.CharField(max_length=10, choices=[(TYPE_EMAIL, "Email"), (TYPE_WA, "WhatsApp")], default=TYPE_EMAIL)
+    status = models.CharField(max_length=20, default="PENDING")
+    dte_record = models.ForeignKey(DTERecord, on_delete=models.CASCADE, related_name="delivery_attempts")
+    provider_status = models.IntegerField(null=True, blank=True)
+    provider_body = models.JSONField(default=dict, blank=True)
+    retries = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)

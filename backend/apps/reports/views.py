@@ -146,3 +146,18 @@ class SalesReportListView(generics.ListAPIView):
             },
         }
         return Response({"results": serializer.data, "aggregates": aggregates})
+
+
+class SalesBookJsonView(SalesReportListView):
+    permission_classes = [IsAdminOrManager]
+
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+
+class SalesBookPdfView(SalesReportListView):
+    permission_classes = [IsAdminOrManager]
+
+    def get(self, request, *args, **kwargs):
+        data = self.list(request, *args, **kwargs).data
+        return Response({"message": "PDF export placeholder", "data": data})

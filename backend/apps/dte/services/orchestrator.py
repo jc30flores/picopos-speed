@@ -82,7 +82,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
                 response = json.loads(outbox.response_body)
             except Exception:
                 response = {"raw": outbox.response_body}
-        parsed = interpret_dte_response(response)
+        parsed = interpret_dte_response({**response, "http_status": outbox.response_status_code or 0, "response_text": outbox.response_body or ""})
         if outbox.status == "ACCEPTED":
             parsed["status"] = DTERecord.STATUS_ACCEPTED
         elif outbox.status == "REJECTED":
@@ -104,23 +104,29 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     with transaction.atomic():
         record = DTERecord.objects.create(
             order=order,
+            payment=payment,
             branch=order.branch,
             dte_type=dte_type,
             status=parsed["status"],
             ambiente=ambiente,
             control_number=numero_control,
+            generation_code=codigo_generacion,
             codigo_generacion=codigo_generacion,
             request_payload={**payload, "branch": order.branch.name},
             response_payload=response,
+            response_text=parsed.get("response_text", ""),
             mh_response_json=response if isinstance(response, dict) else {},
             mh_response_text=json.dumps(response, ensure_ascii=False, default=str) if isinstance(response, dict) else str(response),
             receiver_name=(order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final",
             issue_date=timezone.localdate(),
             total_amount=order.total,
             source=source,
+            attempts=attempts,
             send_attempts=attempts,
             error_message=parsed["error_message"],
             error_code=parsed["error_code"],
+            last_error_message=parsed["error_message"],
+            last_error_code=parsed["error_code"],
             last_sent_at=now,
             hacienda_uuid=parsed["hacienda_uuid"],
             sello_recepcion=parsed["sello_recepcion"],
@@ -129,6 +135,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             recibido_at=parsed.get("recibido_at"),
             estado_mh=parsed.get("estado_mh", ""),
             hacienda_state=parsed["hacienda_state"],
+            hacienda_processed_at=parsed.get("recibido_at"),
         )
 
     invoice.status = "sent" if record.status == DTERecord.STATUS_ACCEPTED else "failed" if record.status == DTERecord.STATUS_REJECTED else "pending"

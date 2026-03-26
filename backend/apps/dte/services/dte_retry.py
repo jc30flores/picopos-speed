@@ -17,6 +17,7 @@ def resend_record(record: DTERecord) -> DTERecord:
     parsed = interpret_dte_response(response)
 
     record.response_payload = response
+    record.response_text = parsed.get("response_text", "")
     record.status = parsed["status"]
     record.hacienda_state = parsed["hacienda_state"]
     record.sello_recepcion = parsed["sello_recepcion"]
@@ -24,6 +25,9 @@ def resend_record(record: DTERecord) -> DTERecord:
     record.error_message = parsed["error_message"]
     record.error_code = parsed["error_code"]
     record.send_attempts += 1
+    record.attempts = record.send_attempts
+    record.last_error_code = record.error_code
+    record.last_error_message = record.error_message
     record.last_sent_at = timezone.now()
     record.save()
     return record

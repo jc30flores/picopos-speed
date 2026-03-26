@@ -54,6 +54,9 @@ def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_contr
 
 def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None, endpoint_url: str = "") -> None:
     payload_text = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
+    if not bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)):
+        DTE_LOGGER.info("[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s", order_id, order_id, payment_id, numero_control, codigo_generacion)
+        return
     if endpoint_url:
         DTE_LOGGER.info("ENDPOINT DTE: %s", endpoint_url)
     DTE_LOGGER.info("JSON DTE ENVIO:\n%s", payload_text)
@@ -199,8 +202,16 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
         result.elapsed_ms,
         _preview(outbox.response_body),
     )
+    DTE_LOGGER.info("PERSIST order_id=%s dte_record_id=%s status=%s", outbox.order_id, None, final_status)
     _sync_invoice(outbox, parsed)
     return outbox
+
+
+def process_pending_dtes(limit: int = 25, batch_size: int = 25, backoff_seconds: int | None = None) -> int:
+    _ = batch_size
+    if backoff_seconds:
+        setattr(settings, "DTE_RETRY_BACKOFF_SECONDS", int(backoff_seconds))
+    return process_pending_outbox(limit=limit)
 
 
 def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
