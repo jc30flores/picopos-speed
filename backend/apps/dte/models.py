@@ -182,6 +182,7 @@ class DTETransmissionLog(models.Model):
 
 class DTEOutbox(models.Model):
     STATUS_PENDING = "PENDING"
+    STATUS_SENDING = "SENDING"
     STATUS_SENT = "SENT"
     STATUS_ACCEPTED = "ACCEPTED"
     STATUS_REJECTED = "REJECTED"
@@ -189,6 +190,7 @@ class DTEOutbox(models.Model):
 
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
+        (STATUS_SENDING, "Sending"),
         (STATUS_SENT, "Sent"),
         (STATUS_ACCEPTED, "Accepted"),
         (STATUS_REJECTED, "Rejected"),
@@ -197,10 +199,16 @@ class DTEOutbox(models.Model):
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_outbox")
     payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_outbox")
+    numero_control = models.CharField(max_length=80, blank=True, default="")
+    codigo_generacion = models.CharField(max_length=40, blank=True, default="")
     payload_json = models.JSONField(default=dict, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
     attempts = models.PositiveIntegerField(default=0)
     last_attempt_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_health_status = models.IntegerField(null=True, blank=True)
+    last_health_body = models.TextField(blank=True, default="")
     response_status_code = models.IntegerField(null=True, blank=True)
     response_body = models.TextField(blank=True, default="")
     error_message = models.TextField(blank=True, default="")

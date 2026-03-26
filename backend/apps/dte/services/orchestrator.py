@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from django.db import transaction
 from django.utils import timezone
 
 from apps.dte.models import DTERecord
-from apps.dte.outbox import enqueue_or_send_immediately
+from apps.dte.outbox import send_or_queue_dte
 from apps.dte.services.control import build_generation_code, next_control_number
 from apps.dte.services.dte_service import (
-    DTE_ENDPOINT_BY_TYPE,
     DTEPreflightError,
     build_payload_cf,
     interpret_dte_response,
 )
 from apps.orders.models import Order, OrderInvoice
+
+DTE_LOGGER = logging.getLogger("apps.dte")
 
 
 def _normalize_ambiente(raw_value: str | None) -> str:
@@ -32,13 +34,16 @@ def _ambiente() -> str:
 
 
 def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False, payment_id: int | None = None) -> DTERecord:
+    DTE_LOGGER.info("[DTE] send_dte.start order=%s payment=%s source=%s", sale_id, payment_id, source)
     order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
     if order.dte_document_type != "CF":
+        DTE_LOGGER.info("[DTE] send_dte.skip order=%s reason=unsupported_doc_type type=%s", sale_id, order.dte_document_type)
         raise DTEPreflightError(f"Tipo DTE aún no implementado: {order.dte_document_type}")
     dte_type = "CF_01"
 
     accepted = DTERecord.objects.filter(order=order, dte_type=dte_type, status=DTERecord.STATUS_ACCEPTED).first()
     if accepted and not force:
+        DTE_LOGGER.info("[DTE] send_dte.return_existing order=%s dte_record=%s", sale_id, accepted.id)
         return accepted
 
     invoice, _ = OrderInvoice.objects.get_or_create(order=order)
@@ -52,6 +57,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     try:
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
     except DTEPreflightError as exc:
+        DTE_LOGGER.info("[DTE] send_dte.preflight_failed order=%s error=%s", sale_id, exc)
         payload = {}
         parsed = {
             "status": DTERecord.STATUS_REJECTED,
@@ -63,12 +69,8 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
-        outbox = enqueue_or_send_immediately(
-            order_id=order.id,
-            payment_id=payment_id,
-            payload=payload,
-            path=DTE_ENDPOINT_BY_TYPE.get(dte_type, "/api/v1/dte/factura"),
-        )
+        payment = order.payments.filter(id=payment_id).first() if payment_id else None
+        outbox = send_or_queue_dte(order=order, payment=payment, payload=payload)
         response = {}
         if outbox.response_body:
             try:
@@ -125,5 +127,6 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     if record.status == DTERecord.STATUS_ACCEPTED:
         invoice.sent_at = now
     invoice.save()
+    DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record

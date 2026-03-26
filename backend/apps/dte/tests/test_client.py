@@ -15,7 +15,7 @@ class DTEClientTests(TestCase):
         DTE_API_AUTH_HEADER="Authorization",
         DTE_API_AUTH_PREFIX="Bearer",
     )
-    @patch("apps.dte.client.requests.post")
+    @patch("apps.dte.client.requests.Session.post")
     def test_send_persists_transmission_log(self, mock_post):
         response = Mock()
         response.status_code = 200

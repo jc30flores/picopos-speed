@@ -101,6 +101,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
                 print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
                 dte_record = transmit_sale_dte(payment.order_id, source="normal_send", payment_id=payment.id)
+                logger.info("payment.dte.done order_id=%s payment_id=%s dte_status=%s", payment.order_id, payment.id, dte_record.status)
                 log_audit(
                     request,
                     "invoice.processed",
@@ -109,6 +110,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     {"order_id": payment.order_id, "status": dte_record.status},
                 )
             except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
+                logger.exception("payment.dte.failed order_id=%s payment_id=%s", payment.order_id, payment.id)
                 log_audit(
                     request,
                     "invoice.failed_non_blocking",

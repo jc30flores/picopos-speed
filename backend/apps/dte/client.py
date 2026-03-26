@@ -11,7 +11,7 @@ from django.conf import settings
 
 from apps.dte.models import DTETransmissionLog
 
-logger = logging.getLogger(__name__)
+DTE_LOGGER = logging.getLogger("apps.dte")
 
 
 @dataclass
@@ -26,6 +26,10 @@ class DTEClientResult:
     error_type: str
 
 
+def _preview(text: str, max_len: int = 500) -> str:
+    return (text or "").replace("\n", " ").strip()[:max_len]
+
+
 class DTEClient:
     def __init__(self, base_url: str | None = None):
         self.base_url = (base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip().rstrip("/")
@@ -34,6 +38,7 @@ class DTEClient:
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
         self.timeout = int(getattr(settings, "DTE_TIMEOUT_SECONDS", 30) or 30)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
+        self.session = requests.Session()
 
     def _build_url(self, path: str) -> str:
         base_url = (self.base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip()
@@ -65,7 +70,7 @@ class DTEClient:
         try:
             url = self._build_url(path)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("[DTE] URL BUILD ERROR path=%s", path)
+            DTE_LOGGER.exception("[DTE HTTP] URL BUILD ERROR path=%s", path)
             body = {"success": False, "error": {"message": str(exc), "type": "CONFIG_ERROR"}}
             DTETransmissionLog.objects.create(
                 order_id=order_id,
@@ -79,6 +84,21 @@ class DTEClient:
             )
             return DTEClientResult(0, body, str(exc), False, "", "", str(exc), "CONFIG_ERROR")
 
+        payload_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        ident = (payload or {}).get("dte", {}).get("identificacion", {})
+        numero_control = ident.get("numeroControl")
+        codigo_generacion = ident.get("codigoGeneracion")
+        DTE_LOGGER.info(
+            "[DTE HTTP] POST url=%s order=%s payment=%s bytes=%s attempt=%s numero_control=%s codigo_generacion=%s",
+            url,
+            order_id,
+            payment_id,
+            len(payload_str.encode("utf-8")),
+            attempt_number,
+            numero_control,
+            codigo_generacion,
+        )
+
         started = time.perf_counter()
         status_code = 0
         text_body = ""
@@ -87,7 +107,7 @@ class DTEClient:
         error_type = ""
 
         try:
-            response = requests.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
+            response = self.session.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
             status_code = int(response.status_code)
             text_body = response.text or ""
             try:
@@ -95,9 +115,7 @@ class DTEClient:
             except Exception:
                 parsed_json = {"raw": text_body}
 
-            if status_code in {200, 201}:
-                pass
-            elif status_code in {401, 403}:
+            if status_code in {401, 403}:
                 error_type = "AUTH"
             elif 400 <= status_code < 500:
                 error_type = "VALIDATION"
@@ -120,27 +138,17 @@ class DTEClient:
             status_code = int(response.status_code) if response is not None else 0
             text_body = response.text if response is not None else str(exc)
             if not error_type:
-                if status_code in {401, 403}:
-                    error_type = "AUTH"
-                elif 400 <= status_code < 500:
-                    error_type = "VALIDATION"
-                else:
-                    error_type = "SERVER_ERROR"
+                error_type = "AUTH" if status_code in {401, 403} else "VALIDATION" if 400 <= status_code < 500 else "SERVER_ERROR"
             error_message = text_body[:500]
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
             error_type = "NETWORK_ERROR"
             parsed_json = {"success": False, "error": {"message": error_message, "type": error_type}, "offline": True}
             text_body = json.dumps(parsed_json, ensure_ascii=False)
+            DTE_LOGGER.exception("[DTE HTTP] unexpected error order=%s payment=%s", order_id, payment_id)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        logger.info(
-            "[DTE SEND] order_id=%s status_code=%s elapsed_ms=%s attempt_number=%s",
-            order_id,
-            status_code,
-            elapsed_ms,
-            attempt_number,
-        )
+        DTE_LOGGER.info("[DTE HTTP] RESP status=%s elapsed_ms=%s body_preview=%s", status_code, elapsed_ms, _preview(text_body))
 
         rh = parsed_json.get("respuesta_hacienda") if isinstance(parsed_json, dict) else {}
         rh = rh if isinstance(rh, dict) else {}

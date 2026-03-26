@@ -7,7 +7,7 @@ from django.conf import settings
 from django.utils.autoreload import autoreload_started
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("apps.dte")
 
 
 def _mask_token(token: str) -> str:
@@ -48,7 +48,10 @@ class DTEConfig(AppConfig):
 
         from apps.dte.monitor import start_monitor
 
-        start_monitor()
+        try:
+            start_monitor()
+        except Exception:  # noqa: BLE001
+            logger.exception("[DTE MONITOR] failed to start")
         token = _env("DTE_API_TOKEN", "")
         token_display = token if _log_secrets_enabled() else _mask_token(token)
         interval = _env("DTE_MONITOR_INTERVAL_SECONDS", "10")
