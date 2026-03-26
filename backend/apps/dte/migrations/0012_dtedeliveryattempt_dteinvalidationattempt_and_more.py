@@ -126,26 +126,6 @@ class Migration(migrations.Migration):
             field=models.TextField(blank=True, default=""),
         ),
         migrations.AddField(
-            model_name="dtecontrolcounter",
-            name="anio_emision",
-            field=models.PositiveIntegerField(default=0),
-        ),
-        migrations.AddField(
-            model_name="dtecontrolcounter",
-            name="est_code",
-            field=models.CharField(default="M001", max_length=4),
-        ),
-        migrations.AddField(
-            model_name="dtecontrolcounter",
-            name="pv_code",
-            field=models.CharField(default="P001", max_length=4),
-        ),
-        migrations.AddField(
-            model_name="dtecontrolcounter",
-            name="tipo_dte",
-            field=models.CharField(default="CF_01", max_length=20),
-        ),
-        migrations.AddField(
             model_name="dterecord",
             name="attempts",
             field=models.PositiveIntegerField(default=0),
@@ -219,13 +199,6 @@ class Migration(migrations.Migration):
             model_name="dterecord",
             index=models.Index(
                 fields=["last_sent_at"], name="dte_dtereco_last_se_646af0_idx"
-            ),
-        ),
-        migrations.AddConstraint(
-            model_name="dtecontrolcounter",
-            constraint=models.UniqueConstraint(
-                fields=("ambiente", "tipo_dte", "anio_emision", "est_code", "pv_code"),
-                name="dte_counter_segment_uniq",
             ),
         ),
         migrations.AddConstraint(

@@ -115,13 +115,9 @@ class DTEControlCounter(models.Model):
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="dte_counters")
     ambiente = models.CharField(max_length=2, choices=DTERecord.AMBIENTE_CHOICES, default=DTERecord.AMBIENTE_TEST)
     dte_type = models.CharField(max_length=20, default="CF_01")
-    tipo_dte = models.CharField(max_length=20, default="CF_01")
     year = models.PositiveIntegerField()
-    anio_emision = models.PositiveIntegerField(default=0)
     establishment_code = models.CharField(max_length=4, default="M001")
-    est_code = models.CharField(max_length=4, default="M001")
     pos_code = models.CharField(max_length=4, default="P001")
-    pv_code = models.CharField(max_length=4, default="P001")
     last_number = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -132,22 +128,7 @@ class DTEControlCounter(models.Model):
                 fields=["branch", "dte_type", "year", "establishment_code", "pos_code", "ambiente"],
                 name="dte_counter_context_uniq",
             ),
-            models.UniqueConstraint(
-                fields=["ambiente", "tipo_dte", "anio_emision", "est_code", "pv_code"],
-                name="dte_counter_segment_uniq",
-            ),
         ]
-
-    def save(self, *args, **kwargs):
-        self.tipo_dte = self.tipo_dte or self.dte_type
-        self.dte_type = self.dte_type or self.tipo_dte
-        self.anio_emision = self.anio_emision or self.year
-        self.year = self.year or self.anio_emision
-        self.est_code = self.est_code or self.establishment_code
-        self.pv_code = self.pv_code or self.pos_code
-        self.establishment_code = self.establishment_code or self.est_code
-        self.pos_code = self.pos_code or self.pv_code
-        super().save(*args, **kwargs)
 
 
 class DTEInvalidation(models.Model):

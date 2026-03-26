@@ -30,13 +30,9 @@ def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "
         counter, _ = DTEControlCounter.objects.select_for_update().get_or_create(
             branch=order.branch,
             dte_type=dte_type,
-            tipo_dte=dte_type,
             year=now.year,
-            anio_emision=now.year,
             establishment_code=est_code,
-            est_code=est_code,
             pos_code=pv_code,
-            pv_code=pv_code,
             ambiente=ambiente,
             defaults={"last_number": 0},
         )
