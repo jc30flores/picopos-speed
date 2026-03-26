@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import timedelta
+
+from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
+
+from apps.dte.client import DTEClient
+from apps.dte.models import DTEOutbox, DTERecord
+from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
+from apps.orders.models import OrderInvoice
+
+DTE_LOGGER = logging.getLogger("apps.dte")
+
+CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
+CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
+
+
+def _preview(text: str, max_len: int = 500) -> str:
+    return (text or "").replace("\n", " ").strip()[:max_len]
+
+
+def _extract(payload: dict) -> tuple[str, str]:
+    ident = (payload or {}).get("dte", {}).get("identificacion", {})
+    return str(ident.get("numeroControl") or ""), str(ident.get("codigoGeneracion") or "")
+
+
+def _payload_dir() -> str:
+    return str(getattr(settings, "DTE_LOG_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
+
+
+def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_control: str, codigo_generacion: str) -> None:
+    if not bool(getattr(settings, "DTE_LOG_TO_FILE", False)):
+        return
+    os.makedirs(_payload_dir(), exist_ok=True)
+    safe_control = (numero_control or "").replace("/", "_").replace(":", "_").replace(" ", "_")
+    safe_codigo = (codigo_generacion or "").replace("/", "_").replace(":", "_").replace(" ", "_")
+    if safe_control or safe_codigo:
+        filename = f"{safe_control or 'nocontrol'}_{safe_codigo or 'nocodigo'}_request.json"
+    else:
+        ts = timezone.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{ts}_outbox_{outbox_id or 'na'}_request.json"
+    file_path = os.path.join(_payload_dir(), filename)
+    with open(file_path, "w", encoding="utf-8") as fh:
+        fh.write(payload_text)
+    DTE_LOGGER.info("[CF01] REQUEST saved_to=%s bytes=%s", file_path, len(payload_text.encode("utf-8")))
+
+
+def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None, endpoint_url: str = "") -> None:
+    payload_text = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
+    if endpoint_url:
+        DTE_LOGGER.info("ENDPOINT DTE: %s", endpoint_url)
+    DTE_LOGGER.info("JSON DTE ENVIO:\n%s", payload_text)
+    DTE_LOGGER.info(
+        "[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s",
+        order_id,
+        order_id,
+        payment_id,
+        numero_control,
+        codigo_generacion,
+    )
+    DTE_LOGGER.info("[CF01] REQUEST:\n%s", payload_text)
+    DTE_LOGGER.info("[CF01] REQUEST END invoice=%s order=%s payment=%s", order_id, order_id, payment_id)
+    _save_payload_file(
+        outbox_id=outbox_id,
+        payload_text=payload_text,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+    )
+
+
+def parse_response_outcome(body: dict) -> str:
+    data = body or {}
+    values = {
+        str(data.get("estado") or "").upper(),
+        str(data.get("status") or "").upper(),
+        str(data.get("result") or "").upper(),
+        str((data.get("respuesta_hacienda") or {}).get("estado") or "").upper(),
+    }
+    if data.get("aceptado") is True or data.get("accepted") is True or values & {"ACEPTADO", "ACCEPTED", "PROCESADO", "RECIBIDO", "OK"}:
+        return DTEOutbox.STATUS_ACCEPTED
+    if data.get("rechazado") is True or data.get("rejected") is True or values & {"RECHAZADO", "REJECTED", "ERROR"}:
+        return DTEOutbox.STATUS_REJECTED
+    return DTEOutbox.STATUS_SENT
+
+
+def _sync_invoice(outbox: DTEOutbox, response_body: dict) -> None:
+    invoice = OrderInvoice.objects.filter(order_id=outbox.order_id).first()
+    if not invoice:
+        return
+    status_map = {
+        DTEOutbox.STATUS_ACCEPTED: ("sent", DTERecord.STATUS_ACCEPTED),
+        DTEOutbox.STATUS_REJECTED: ("failed", DTERecord.STATUS_REJECTED),
+        DTEOutbox.STATUS_FAILED: ("failed", DTERecord.STATUS_REJECTED),
+        DTEOutbox.STATUS_PENDING: ("pending", DTERecord.STATUS_PENDING),
+        DTEOutbox.STATUS_SENDING: ("pending", DTERecord.STATUS_PENDING),
+        DTEOutbox.STATUS_SENT: ("pending", DTERecord.STATUS_PENDING),
+    }
+    invoice_status, dte_status = status_map.get(outbox.status, ("pending", DTERecord.STATUS_PENDING))
+    invoice.status = invoice_status
+    invoice.dte_status = dte_status
+    invoice.hacienda_response = response_body or {}
+    invoice.last_error = outbox.error_message or ""
+    invoice.last_dte_error = outbox.error_message or ""
+    if outbox.status == DTEOutbox.STATUS_ACCEPTED:
+        invoice.sent_at = timezone.now()
+    invoice.save(update_fields=["status", "dte_status", "hacienda_response", "last_error", "last_dte_error", "sent_at", "updated_at"])
+
+
+def _health_snapshot(stale_seconds: int):
+    snapshot = get_monitor().get_cached_snapshot()
+    now_ts = timezone.now().timestamp()
+    is_stale = (now_ts - (snapshot.last_checked_at or 0)) > stale_seconds
+    if is_stale:
+        snapshot = check_health_now(force_log=True)
+    return snapshot
+
+
+def _compute_backoff(attempts: int) -> timedelta:
+    base = int(getattr(settings, "DTE_RETRY_BACKOFF_SECONDS", 30) or 30)
+    return timedelta(seconds=base * max(1, attempts))
+
+
+def _is_circuit_open() -> tuple[bool, float | None]:
+    open_until = cache.get(CIRCUIT_OPEN_UNTIL)
+    if not open_until:
+        return False, None
+    if timezone.now().timestamp() < float(open_until):
+        return True, float(open_until)
+    cache.delete(CIRCUIT_OPEN_UNTIL)
+    cache.set(CIRCUIT_FAIL_COUNT, 0, timeout=None)
+    return False, None
+
+
+def _register_send_failure() -> None:
+    threshold = int(getattr(settings, "DTE_CIRCUIT_FAIL_THRESHOLD", 3) or 3)
+    open_seconds = int(getattr(settings, "DTE_CIRCUIT_OPEN_SECONDS", 60) or 60)
+    count = int(cache.get(CIRCUIT_FAIL_COUNT, 0) or 0) + 1
+    cache.set(CIRCUIT_FAIL_COUNT, count, timeout=None)
+    if count >= threshold:
+        open_until = timezone.now().timestamp() + open_seconds
+        cache.set(CIRCUIT_OPEN_UNTIL, open_until, timeout=None)
+
+
+def _reset_circuit() -> None:
+    cache.set(CIRCUIT_FAIL_COUNT, 0, timeout=None)
+    cache.delete(CIRCUIT_OPEN_UNTIL)
+
+
+def _endpoint_for_payload(payload: dict) -> str:
+    tipo = str((payload or {}).get("dte", {}).get("identificacion", {}).get("tipoDte") or "01")
+    return {
+        "01": "/api/v1/dte/factura",
+        "03": "/api/v1/dte/credito-fiscal",
+        "14": "/api/v1/dte/sujeto-excluido",
+        "05": "/api/v1/dte/nota-credito",
+    }.get(tipo, "/api/v1/dte/factura")
+
+
+def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
+    parsed = result.json_body if isinstance(result.json_body, dict) else {}
+    inferred = parse_response_outcome(parsed)
+
+    if result.status_code in {401, 403}:
+        final_status = DTEOutbox.STATUS_FAILED
+    elif 500 <= (result.status_code or 0) <= 599:
+        final_status = DTEOutbox.STATUS_PENDING
+    elif 400 <= (result.status_code or 0) <= 499:
+        final_status = DTEOutbox.STATUS_FAILED if inferred == DTEOutbox.STATUS_SENT else inferred
+    else:
+        final_status = inferred
+
+    outbox.status = final_status
+    outbox.response_status_code = result.status_code or None
+    outbox.response_body = result.text_body or json.dumps(parsed, ensure_ascii=False)
+    outbox.error_message = result.error_message or ""
+    outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts) if final_status == DTEOutbox.STATUS_PENDING else None
+    outbox.save(update_fields=["status", "response_status_code", "response_body", "error_message", "next_attempt_at", "updated_at"])
+
+    if 500 <= (result.status_code or 0) <= 599:
+        _register_send_failure()
+        DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=http_5xx http=%s", outbox.order_id, outbox.payment_id, result.status_code)
+    elif final_status in {DTEOutbox.STATUS_ACCEPTED, DTEOutbox.STATUS_REJECTED, DTEOutbox.STATUS_FAILED}:
+        _reset_circuit()
+
+    DTE_LOGGER.info(
+        "[DTE] RESULT order=%s payment=%s attempt=%s status=%s http=%s elapsed_ms=%s body_preview=%s",
+        outbox.order_id,
+        outbox.payment_id,
+        outbox.attempts,
+        final_status,
+        result.status_code,
+        result.elapsed_ms,
+        _preview(outbox.response_body),
+    )
+    _sync_invoice(outbox, parsed)
+    return outbox
+
+
+def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
+    numero_control, codigo_generacion = _extract(payload)
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
+    with transaction.atomic():
+        outbox = DTEOutbox.objects.create(
+            order=order,
+            payment=payment,
+            numero_control=numero_control,
+            codigo_generacion=codigo_generacion,
+            payload_json=payload,
+            payload=payload,
+            status=DTEOutbox.STATUS_PENDING,
+        )
+        _log_full_payload(
+            payload=payload,
+            order_id=order.id,
+            payment_id=getattr(payment, "id", None),
+            numero_control=numero_control,
+            codigo_generacion=codigo_generacion,
+            outbox_id=outbox.id,
+            endpoint_url=endpoint_url,
+        )
+
+        stale_seconds = 2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
+        health = _health_snapshot(stale_seconds=stale_seconds)
+        outbox.last_health_status = health.health_status_code
+        outbox.last_health_body = health.health_body
+
+        circuit_open, open_until = _is_circuit_open()
+        if circuit_open:
+            outbox.status = DTEOutbox.STATUS_PENDING
+            outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts + 1)
+            outbox.save(update_fields=["status", "next_attempt_at", "last_health_status", "last_health_body", "updated_at"])
+            DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=circuit_open open_until=%s", order.id, getattr(payment, "id", None), open_until)
+            return outbox
+
+        if health.state != STATE_UP:
+            outbox.status = DTEOutbox.STATUS_PENDING
+            outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts + 1)
+            outbox.save(update_fields=["status", "next_attempt_at", "last_health_status", "last_health_body", "updated_at"])
+            DTE_LOGGER.info(
+                "[DTE] QUEUED order=%s payment=%s reason=health_%s health_code=%s factura_code=%s health_body_preview=%s factura_body_preview=%s",
+                order.id,
+                getattr(payment, "id", None),
+                health.state.lower(),
+                health.health_status_code,
+                health.factura_code,
+                _preview(health.health_body),
+                _preview(health.factura_body),
+            )
+            return outbox
+
+        outbox.status = DTEOutbox.STATUS_SENDING
+        outbox.attempts += 1
+        outbox.last_attempt_at = timezone.now()
+        outbox.save(update_fields=["status", "attempts", "last_attempt_at", "last_health_status", "last_health_body", "updated_at"])
+
+        try:
+            result = DTEClient().send(
+                path=_endpoint_for_payload(payload),
+                payload=payload,
+                order_id=order.id,
+                payment_id=getattr(payment, "id", None),
+                branch_id=order.branch_id,
+                attempt_number=outbox.attempts,
+            )
+            return _apply_result(outbox, result)
+        except Exception:  # noqa: BLE001
+            outbox.status = DTEOutbox.STATUS_PENDING
+            outbox.error_message = "network_exception"
+            outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts)
+            outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+            _register_send_failure()
+            DTE_LOGGER.exception("[DTE] send_or_queue_dte exception order=%s payment=%s", order.id, getattr(payment, "id", None))
+            _sync_invoice(outbox, {})
+            return outbox
+
+
+def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
+    payload = outbox.payload or outbox.payload_json or {}
+    numero_control, codigo_generacion = _extract(payload)
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
+    _log_full_payload(
+        payload=payload,
+        order_id=outbox.order_id,
+        payment_id=outbox.payment_id,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        outbox_id=outbox.id,
+        endpoint_url=endpoint_url,
+    )
+    outbox.status = DTEOutbox.STATUS_SENDING
+    outbox.attempts += 1
+    outbox.last_attempt_at = timezone.now()
+    outbox.save(update_fields=["status", "attempts", "last_attempt_at", "updated_at"])
+
+    result = DTEClient().send(
+        path=_endpoint_for_payload(payload),
+        payload=payload,
+        order_id=outbox.order_id,
+        payment_id=outbox.payment_id,
+        branch_id=outbox.order.branch_id,
+        attempt_number=outbox.attempts,
+    )
+    return _apply_result(outbox, result)
+
+
+def process_pending_outbox(limit: int = 50) -> int:
+    health = _health_snapshot(stale_seconds=2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10))
+    circuit_open, open_until = _is_circuit_open()
+
+    if health.state != STATE_UP:
+        DTE_LOGGER.info(
+            "[DTE] process_pending_outbox skipped reason=health_%s health_code=%s factura_code=%s health_body_preview=%s",
+            health.state.lower(),
+            health.health_status_code,
+            health.factura_code,
+            _preview(health.health_body),
+        )
+        return 0
+    if circuit_open:
+        DTE_LOGGER.info("[DTE] process_pending_outbox skipped reason=circuit_open open_until=%s", open_until)
+        return 0
+
+    max_retries = int(getattr(settings, "DTE_MAX_RETRIES", 5) or 5)
+    now = timezone.now()
+    pending = (
+        DTEOutbox.objects.select_related("order", "payment")
+        .filter(status=DTEOutbox.STATUS_PENDING, attempts__lt=max_retries)
+        .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
+        .order_by("created_at")[:limit]
+    )
+
+    DTE_LOGGER.info("[DTE] processing pending count=%s", pending.count())
+    processed = 0
+    for outbox in pending:
+        try:
+            _resend_existing_outbox(outbox)
+            processed += 1
+        except Exception:  # noqa: BLE001
+            DTE_LOGGER.exception("[DTE] process_pending_outbox exception outbox_id=%s", outbox.id)
+
+    DTEOutbox.objects.filter(status=DTEOutbox.STATUS_PENDING, attempts__gte=max_retries).update(
+        status=DTEOutbox.STATUS_FAILED,
+        error_message="Max retries reached",
+        next_attempt_at=None,
+    )
+    return processed

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 from django.utils import timezone
 
@@ -42,7 +41,7 @@ def _build_dte_payload(order: Order) -> dict[str, Any]:
 
 def send_dte_to_hacienda(payload: dict[str, Any]) -> dict[str, Any]:
     """Stub for Hacienda integration. Replace with real API adapter."""
-    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    now = timezone.localtime(timezone.now()).strftime("%Y%m%d%H%M%S")
     return {
         "ok": True,
         "status": "SENT",

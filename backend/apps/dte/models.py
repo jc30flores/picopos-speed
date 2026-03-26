@@ -44,6 +44,12 @@ class DTERecord(models.Model):
     codigo_generacion = models.CharField(max_length=40, default="", blank=True)
     hacienda_uuid = models.CharField(max_length=160, blank=True, default="")
     sello_recepcion = models.CharField(max_length=160, blank=True, default="")
+    sello_recibido = models.CharField(max_length=160, blank=True, default="")
+    firma = models.CharField(max_length=255, blank=True, default="")
+    recibido_at = models.DateTimeField(null=True, blank=True)
+    estado_mh = models.CharField(max_length=80, blank=True, default="")
+    mh_response_json = models.JSONField(default=dict, blank=True)
+    mh_response_text = models.TextField(blank=True, default="")
     hacienda_state = models.CharField(max_length=80, blank=True, default="")
     request_payload = models.JSONField(default=dict, blank=True)
     response_payload = models.JSONField(default=dict, blank=True)
@@ -157,3 +163,68 @@ class DTEBranchConfig(models.Model):
             models.UniqueConstraint(fields=["branch"], name="dte_branch_config_branch_unique")
         ]
 
+
+class DTETransmissionLog(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_transmissions")
+    request_payload = models.JSONField(default=dict, blank=True)
+    response_status = models.IntegerField(default=0)
+    response_body = models.JSONField(default=dict, blank=True)
+    success = models.BooleanField(default=False)
+    remote_uuid = models.CharField(max_length=160, blank=True, default="")
+    sello_recibido = models.CharField(max_length=160, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["success"]),
+            models.Index(fields=["response_status"]),
+        ]
+
+
+class DTEOutbox(models.Model):
+    STATUS_PENDING = "PENDING"
+    STATUS_SENDING = "SENDING"
+    STATUS_SENT = "SENT"
+    STATUS_ACCEPTED = "ACCEPTED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_FAILED = "FAILED"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SENDING, "Sending"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_outbox")
+    payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_outbox")
+    numero_control = models.CharField(max_length=80, blank=True, default="")
+    codigo_generacion = models.CharField(max_length=40, blank=True, default="")
+    payload_json = models.JSONField(default=dict, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_health_status = models.IntegerField(null=True, blank=True)
+    last_health_body = models.TextField(blank=True, default="")
+    response_status_code = models.IntegerField(null=True, blank=True)
+    response_body = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["order", "status"]),
+            models.Index(fields=["last_attempt_at"]),
+        ]

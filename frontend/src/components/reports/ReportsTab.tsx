@@ -37,17 +37,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSalesReport, SalesReportRow, SalesReportAggregates } from "@/lib/api";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { formatDateTimeSV, getHourSV, getLocalDateSV } from "@/lib/datetime";
 
 type TimeFilter = "daily" | "weekly" | "monthly" | "all";
 
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  "dine-in": "En local",
-  takeout: "Para llevar",
-  delivery: "Delivery",
-  kiosk: "Kiosk",
-};
-
 export const ReportsTab = () => {
+  const { serviceTypes } = useServiceTypes();
+  const serviceTypeLabelByKey = useMemo(() => new Map(serviceTypes.map((item) => [item.key, item.label])), [serviceTypes]);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("daily");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("all");
@@ -82,9 +79,8 @@ export const ReportsTab = () => {
 
   const getDateRange = (filter: TimeFilter) => {
     if (filter === "all") return {};
-    const now = new Date();
-    const end = new Date(now);
-    const start = new Date(now);
+    const end = new Date();
+    const start = new Date();
     if (filter === "daily") {
       start.setDate(end.getDate());
     } else if (filter === "weekly") {
@@ -93,8 +89,8 @@ export const ReportsTab = () => {
       start.setDate(end.getDate() - 30);
     }
     return {
-      dateFrom: start.toISOString().slice(0, 10),
-      dateTo: end.toISOString().slice(0, 10),
+      dateFrom: getLocalDateSV(start),
+      dateTo: getLocalDateSV(end),
     };
   };
 
@@ -116,7 +112,7 @@ export const ReportsTab = () => {
 
   const filteredSales = sales.filter((sale) => {
     const orderNumber = `#${sale.orderNumber}`;
-    const serviceLabel = SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType;
+    const serviceLabel = serviceTypeLabelByKey.get(sale.serviceType ?? "") || sale.serviceType;
     return (
       orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       serviceLabel.toLowerCase().includes(searchQuery.toLowerCase())
@@ -126,7 +122,8 @@ export const ReportsTab = () => {
   const salesByHour = useMemo(() => {
     const map = new Map<string, number>();
     sales.forEach((sale) => {
-      const hours = sale.createdAt.getHours();
+      const hours = getHourSV(sale.createdAt);
+      if (hours === null) return;
       const label = `${hours}:00`;
       map.set(label, (map.get(label) ?? 0) + sale.total);
     });
@@ -153,12 +150,12 @@ export const ReportsTab = () => {
       "hsl(var(--warning))",
     ];
     return Array.from(map.entries()).map(([key, value], index) => ({
-      name: SERVICE_TYPE_LABELS[key] || key,
+      name: serviceTypeLabelByKey.get(key) || key,
       value: Math.round((value.count / total) * 100),
       amount: value.amount,
       color: colors[index % colors.length],
     }));
-  }, [sales]);
+  }, [sales, serviceTypeLabelByKey]);
 
   return (
     <div className="space-y-6">
@@ -374,12 +371,12 @@ export const ReportsTab = () => {
                     {filteredSales.map((sale) => (
                       <TableRow key={sale.orderId}>
                         <TableCell className="text-muted-foreground">
-                          {sale.createdAt.toLocaleString()}
+                          {formatDateTimeSV(sale.createdAt)}
                         </TableCell>
                         <TableCell className="font-medium">#{sale.orderNumber}</TableCell>
                         <TableCell>
                           <Badge variant="outline">
-                            {SERVICE_TYPE_LABELS[sale.serviceType] || sale.serviceType}
+                            {serviceTypeLabelByKey.get(sale.serviceType ?? "") || sale.serviceType}
                           </Badge>
                         </TableCell>
                         <TableCell>

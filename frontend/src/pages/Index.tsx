@@ -1,5 +1,5 @@
 import { Navigation } from "@/components/Navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,6 +8,9 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
+import { formatDateTimeSV } from "@/lib/datetime";
+import { SplitPanel } from "@/components/pos/SplitPanel";
+import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +21,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -39,16 +43,15 @@ import {
   getProducts,
   getCurrentCashSession,
   getDefaultConsumerCustomer,
-  getServiceTypes,
   listCustomers,
   openCashSession,
   closeCashSession,
   getCashTransactions,
   createCashPayout,
+  openCashDrawer,
   Category,
   ModifierGroup,
   Product,
-  ServiceType,
   PaymentMethod,
   PaymentMethodOption,
   CashSessionSnapshot,
@@ -58,14 +61,17 @@ import {
 } from "@/lib/api";
 import { toast } from "sonner";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface CartItem {
   id: string;
   productId: number;
   name: string;
   basePrice: number;
+  originalBasePrice?: number;
   price: number;
   quantity: number;
+  appliedSpecialPriceRuleName?: string | null;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
@@ -89,24 +95,48 @@ const getOrderDisposableTotal = (
     return sum + fee * item.quantity;
   }, 0);
 
+const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
+
+const parseMoneyToCents = (value: string): number => {
+  const normalized = value.replace(/[^\d.]/g, "");
+  const amount = Number(normalized || 0);
+  if (!Number.isFinite(amount) || amount < 0) return 0;
+  return Math.round(amount * 100);
+};
+
+const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
+
+const DrawerIcon = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 11h18" />
+    <rect x="8" y="13" width="8" height="4" rx="1" />
+  </svg>
+);
+
+
 const POS = () => {
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [serviceType, setServiceType] = useState<string>("MESA");
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const [serviceType, setServiceType] = useState<string>("");
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
 
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
+  const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
-  const [openingCashInput, setOpeningCashInput] = useState("");
+  const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closingCashInput, setClosingCashInput] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
+  const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
+  const openSessionInputRef = useRef<HTMLInputElement | null>(null);
+  const postOpenSessionActionRef = useRef<(() => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
@@ -126,8 +156,15 @@ const POS = () => {
   const [ivaExempt, setIvaExempt] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [tipAmount, setTipAmount] = useState("");
+  const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
+  const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
+  const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
+  const keypadRef = useRef<HTMLDivElement | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [parts, setParts] = useState<SplitPart[]>([]);
+  const [activePartId, setActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
@@ -142,10 +179,10 @@ const POS = () => {
     createdAt: number;
   } | null>(null);
 
-  const loadMenuData = async () => {
+  const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
-      getProducts(),
+      getProducts(orderTypeId ? { orderTypeId } : undefined),
       getModifierGroups(),
     ]);
     setCategories(categoriesResponse);
@@ -162,18 +199,42 @@ const POS = () => {
       .catch((error) => {
         console.error("Failed to load tax config", error);
       });
-    getServiceTypes()
-      .then((data) => {
-        const active = (data || []).filter((item) => item.isActive !== false);
-        setServiceTypes(active);
-        if (active.length && !active.some((item) => item.key === serviceType)) {
-          setServiceType(active[0].key);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load service types", error);
-      });
   }, []);
+
+  useEffect(() => {
+    if (!serviceTypes.length) return;
+    if (!serviceType || !serviceTypes.some((item) => item.key === serviceType)) {
+      setServiceType(serviceTypes[0].key);
+    }
+  }, [serviceTypes, serviceType]);
+
+  useEffect(() => {
+    const selectedServiceType = serviceTypes.find((item) => item.key === serviceType);
+    getProducts(selectedServiceType ? { orderTypeId: selectedServiceType.id } : undefined)
+      .then(setProducts)
+      .catch((error) => {
+        console.error("Failed to refresh products for service type", error);
+      });
+  }, [serviceType, serviceTypes]);
+
+  useEffect(() => {
+    if (paymentMethod !== "cash") {
+      setActiveTenderField(null);
+    }
+  }, [paymentMethod]);
+
+  useEffect(() => {
+    if (!activeTenderField) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (cashInputsContainerRef.current?.contains(target)) return;
+      if (keypadRef.current?.contains(target)) return;
+      setActiveTenderField(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [activeTenderField]);
 
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
@@ -225,12 +286,17 @@ const POS = () => {
     setPaymentAmount(toNumber(draft.total).toFixed(2));
     setTipAmount("0");
     setPaymentReference("");
+    setSplitEnabled(false);
+    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    setParts(initialParts);
+    setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
+    const effectiveBasePrice = product.effectivePrice ?? product.price;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
-    const totalPrice = product.price + modifierPrice;
+    const totalPrice = effectiveBasePrice + modifierPrice;
 
     const existingItemIndex = cart.findIndex(
       (item) =>
@@ -249,9 +315,11 @@ const POS = () => {
           id: `${product.id}-${Date.now()}`,
           productId: product.id,
           name: product.name,
-          basePrice: product.price,
+          basePrice: effectiveBasePrice,
+          originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
           price: totalPrice,
           quantity: 1,
+          appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
           modifiers,
         },
       ];
@@ -287,14 +355,22 @@ const POS = () => {
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
   const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
-  const paidTotal = paymentAmountValue + tipAmountValue;
-  const remainingTotal = Math.max(checkoutTotal - paidTotal, 0);
-  const changeTotal = Math.max(paidTotal - checkoutTotal, 0);
+  const checkoutTotalCents = Math.round(checkoutTotal * 100);
+  const splitValidation = validateParts(checkoutTotalCents, parts);
+  const activeSplitPart = parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.isPaid) ?? parts[0];
+  const expectedPaymentCents = splitEnabled ? (activeSplitPart?.amountCents ?? checkoutTotalCents) : checkoutTotalCents;
+  const paymentAmountCents = parseMoneyToCents(paymentAmount);
+  const tipAmountCents = parseMoneyToCents(tipAmount);
+  const totalDueCents = expectedPaymentCents + tipAmountCents;
+  const changeCents = paymentAmountCents - totalDueCents;
+  const remainingTotal = Math.max(totalDueCents - paymentAmountCents, 0) / 100;
+  const changeTotal = Math.max(changeCents, 0) / 100;
+  const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDisposableTotal = checkoutDraft
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
 
-  const handleCheckout = async () => {
+  const proceedToCheckout = () => {
     if (cart.length === 0) return;
 
     const draftItemsGross = calculateCartTotals(cart, taxRate).total;
@@ -325,50 +401,76 @@ const POS = () => {
     setPaymentAmount(toNumber(draft.total).toFixed(2));
     setTipAmount("0");
     setPaymentReference("");
+    setSplitEnabled(false);
+    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    setParts(initialParts);
+    setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
   };
 
-  const handleAddPendingProductWithoutExtras = () => {
-    if (!pendingProduct) return;
-    addToCart(pendingProduct, []);
-    setIsExtrasOpen(false);
-    setPendingProduct(null);
-    setSelectedModifiers({});
-    setOpenModifierGroups({});
-    setModifierValidationErrors({});
+  const requestOpenSession = (postAction?: () => void) => {
+    postOpenSessionActionRef.current = postAction ?? null;
+    setOpenSessionAmount("0.00");
+    setIsOpenSessionModalOpen(true);
+    setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
-  const handleAddPendingProductWithExtras = () => {
-    if (!pendingProduct) return;
+  const ensureCashSessionOpen = async (postAction: () => void) => {
+    try {
+      const current = await getCurrentCashSession();
+      setCashSnapshot(current);
+      if (current.open) {
+        postAction();
+        return;
+      }
+      requestOpenSession(postAction);
+    } catch {
+      requestOpenSession(postAction);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (cart.length === 0) return;
+    await ensureCashSessionOpen(proceedToCheckout);
+  };
+
+  const getPendingSelectionValidation = () => {
+    if (!pendingProduct) return { errors: {} as Record<string, string>, selectedMods: [] as Array<{ id?: number; name: string; price: number }> };
     const posGroups = getPosModifierGroups(pendingProduct);
     const nextErrors: Record<string, string> = {};
-    const nextOpenState: Record<string, boolean> = { ...openModifierGroups };
+    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
 
     posGroups.forEach((group) => {
       const groupId = String(group.id);
       const selectedCount = (selectedModifiers[groupId] ?? []).length;
       if (group.required && selectedCount < Math.max(group.minSelection, 1)) {
-        nextErrors[groupId] = `Este grupo es obligatorio (mínimo ${Math.max(group.minSelection, 1)}).`;
-        nextOpenState[groupId] = true;
+        nextErrors[groupId] = `Selecciona al menos ${Math.max(group.minSelection, 1)}.`;
       }
-    });
-
-    if (Object.keys(nextErrors).length > 0) {
-      setModifierValidationErrors(nextErrors);
-      setOpenModifierGroups(nextOpenState);
-      toast.error("Completa los modificadores obligatorios");
-      return;
-    }
-
-    const selectedMods: Array<{ id?: number; name: string; price: number }> = [];
-    posGroups.forEach((group) => {
-      const groupId = String(group.id);
       (selectedModifiers[groupId] ?? []).forEach((modId) => {
         const mod = group.modifiers.find((candidate) => String(candidate.id) === modId);
         if (mod) selectedMods.push({ id: mod.id, name: mod.name, price: mod.price });
       });
     });
-    addToCart(pendingProduct, selectedMods);
+    return { errors: nextErrors, selectedMods };
+  };
+
+  const pendingSelectionValidation = getPendingSelectionValidation();
+  const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
+  const canAddPendingProduct = Object.keys(pendingSelectionValidation.errors).length === 0;
+
+  const handleAddPendingProduct = () => {
+    if (!pendingProduct) return;
+    if (!canAddPendingProduct) {
+      setModifierValidationErrors(pendingSelectionValidation.errors);
+      const nextOpenState: Record<string, boolean> = { ...openModifierGroups };
+      Object.keys(pendingSelectionValidation.errors).forEach((groupId) => {
+        nextOpenState[groupId] = true;
+      });
+      setOpenModifierGroups(nextOpenState);
+      toast.error("Completa los modificadores obligatorios");
+      return;
+    }
+    addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
     setIsExtrasOpen(false);
     setPendingProduct(null);
     setSelectedModifiers({});
@@ -420,18 +522,36 @@ const POS = () => {
 
   useEffect(() => {
     if (isPaymentOpen) {
-      setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
+      if (splitEnabled) {
+        const targetAmount = (activeSplitPart?.amountCents ?? checkoutTotalCents) / 100;
+        setPaymentAmount(toNumber(targetAmount).toFixed(2));
+      } else {
+        setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
+      }
     }
-  }, [checkoutTotal, isPaymentOpen]);
+  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
+
+  useEffect(() => {
+    if (!isPaymentOpen || !checkoutDraft) return;
+    if (parts.length === 0) {
+      const initialParts = splitEvenly(checkoutTotalCents, 1);
+      setParts(initialParts);
+      setActivePartId(initialParts[0]?.id ?? null);
+    }
+  }, [checkoutTotalCents, isPaymentOpen, checkoutDraft, parts.length]);
 
   const handleOpenCashSession = async () => {
     setIsSavingCashAction(true);
     try {
-      await openCashSession(Number(openingCashInput || 0));
+      await openCashSession(Number(openSessionAmount || 0));
       await loadCashData();
-      toast.success("Caja abierta");
+      toast.success("Caja aperturada");
+      setIsOpenSessionModalOpen(false);
+      const action = postOpenSessionActionRef.current;
+      postOpenSessionActionRef.current = null;
+      action?.();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo abrir caja");
+      toast.error(`No se pudo aperturar la caja: ${error instanceof Error ? error.message : "Error desconocido"}`);
     } finally {
       setIsSavingCashAction(false);
     }
@@ -441,8 +561,10 @@ const POS = () => {
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
-      if (closeResp.ticketText) {
-        toast.success("Caja cerrada. Ticket generado");
+      if (closeResp.printed) {
+        toast.success("Caja cerrada. Ticket impreso");
+      } else {
+        toast.success(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
       
@@ -469,6 +591,18 @@ const POS = () => {
     }
   };
 
+  const handleOpenDrawer = async () => {
+    setIsOpeningDrawer(true);
+    try {
+      await openCashDrawer();
+      toast.success("ABRIENDO CAJON DE DINERO.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
+    } finally {
+      setIsOpeningDrawer(false);
+    }
+  };
+
   const closeExtrasDialog = (open: boolean) => {
     setIsExtrasOpen(open);
     if (!open) {
@@ -479,14 +613,54 @@ const POS = () => {
     }
   };
 
+  const focusTenderField = (field: "payment" | "tip") => {
+    setActiveTenderField(field);
+    setShouldResetTenderOnFirstTap(true);
+  };
+
+  const applyTenderDenomination = (amountCents: number) => {
+    if (!activeTenderField) return;
+    const current = activeTenderField === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
+    const next = shouldResetTenderOnFirstTap ? amountCents : current + amountCents;
+    const value = centsToInput(next);
+    if (activeTenderField === "payment") setPaymentAmount(value);
+    if (activeTenderField === "tip") setTipAmount(value);
+    setShouldResetTenderOnFirstTap(false);
+  };
+
+  const clearTenderField = () => {
+    if (!activeTenderField) return;
+    if (activeTenderField === "payment") setPaymentAmount("");
+    if (activeTenderField === "tip") setTipAmount("");
+    setShouldResetTenderOnFirstTap(true);
+  };
+
+  const backspaceTenderField = () => {
+    if (!activeTenderField) return;
+    const currentRaw = activeTenderField === "payment" ? paymentAmount : tipAmount;
+    const nextRaw = currentRaw.slice(0, -1);
+    if (activeTenderField === "payment") setPaymentAmount(nextRaw);
+    if (activeTenderField === "tip") setTipAmount(nextRaw);
+    setShouldResetTenderOnFirstTap(false);
+  };
+
+  const setExactTenderAmount = () => {
+    if (activeTenderField !== "payment") return;
+    setPaymentAmount(centsToInput(totalDueCents));
+    setShouldResetTenderOnFirstTap(false);
+  };
+
   const handleSubmitPayment = async () => {
+    if (isProcessingPayment) return;
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
       toast.error("No hay productos en el pedido");
       return;
     }
     const amountReceived = toNumber(paymentAmount);
     const tipValue = toNumber(tipAmount);
-    const remaining = toNumber(paymentTotal);
+    const totalDue = totalDueCents / 100;
+    const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
+    const paymentAmountForApi = splitEnabled ? expectedPaymentCents / 100 : remainingOrderAmount;
 
     if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
@@ -496,8 +670,12 @@ const POS = () => {
       toast.error("La propina no puede ser negativa");
       return;
     }
-    if (amountReceived < remaining) {
-      toast.error("El monto recibido debe cubrir el total de la orden");
+    if (splitEnabled && !splitValidation.isValid) {
+      toast.error(splitValidation.error || "Los montos de partes no cuadran");
+      return;
+    }
+    if (amountReceived < totalDue) {
+      toast.error("El monto recibido debe cubrir total + propina");
       return;
     }
     const selected = customers.find((c) => String(c.id) === selectedCustomerId);
@@ -548,17 +726,39 @@ const POS = () => {
       if (!orderId) {
         throw new Error("createOrder did not return an id");
       }
-      await createPayment({
+      const latestOrder = await getOrderById(Number(orderId));
+      setActiveOrder(latestOrder);
+      const latestRemaining = Math.max(0, toNumber(latestOrder.remaining));
+      const amountForApi =
+        splitEnabled
+          ? paymentAmountForApi
+          : paymentMethod === "cash"
+            ? latestRemaining
+            : Math.min(paymentAmountForApi, latestRemaining);
+
+      const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        amount: remaining,
+        amount: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
       });
+      if (paymentResult.printed) {
+        toast.success("Ticket impreso");
+      } else if (paymentResult.printError) {
+        toast.warning(`Venta registrada, pero no se pudo imprimir: ${paymentResult.printError}`);
+      }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
+      if (splitEnabled) {
+        const paidPartId = activeSplitPart?.id;
+        const nextParts = parts.map((part) => (part.id === paidPartId ? { ...part, isPaid: true, locked: true } : part));
+        setParts(nextParts);
+        const nextUnpaid = nextParts.find((part) => !part.isPaid);
+        setActivePartId(nextUnpaid?.id ?? nextParts[0]?.id ?? null);
+      }
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
@@ -569,6 +769,9 @@ const POS = () => {
         setCheckoutDraft(null);
         setCreatedOrderId(null);
         setCreatedOrderNumber(null);
+        setSplitEnabled(false);
+        setParts([]);
+        setActivePartId(null);
       } else {
         toast.success("Pago registrado");
       }
@@ -660,7 +863,15 @@ const POS = () => {
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                    {product.isSpecialPriceActiveNow && (
+                      <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
+                    )}
+                    <div className="space-y-0.5">
+                      {product.isSpecialPriceActiveNow && (
+                        <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                      )}
+                      <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                    </div>
                     {product.modifierGroups && product.modifierGroups.length > 0 && (
                       <Badge variant="secondary" className="mt-1 text-xs">
                         <span className="md:hidden">Custom</span>
@@ -716,6 +927,15 @@ const POS = () => {
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
                           <h4 className="font-semibold text-sm">{item.name}</h4>
+                          {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                            <p className="text-xs text-muted-foreground">
+                              <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                              <span className="text-emerald-600 font-medium">Oferta aplicada</span>
+                            </p>
+                          )}
+                          {item.appliedSpecialPriceRuleName && (
+                            <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                          )}
                           {item.modifiers.length > 0 && (
                             <div className="text-xs text-muted-foreground mt-1">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
@@ -805,8 +1025,12 @@ const POS = () => {
       <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Transacciones de Caja</DialogTitle>
-            <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <DialogTitle>Transacciones de Caja</DialogTitle>
+                <DialogDescription>Control de sesión, pagos y cierre de caja.</DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
           <div className="space-y-4">
             <div className="rounded-md border p-3 text-sm">
@@ -822,18 +1046,32 @@ const POS = () => {
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Button className="h-14 text-base font-semibold" variant="outline" disabled title="Próximamente: apertura de cajón de dinero">ABRIR CAJA</Button>
+            <div className="grid grid-cols-3 gap-3">
+              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open}>
+                {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
+              </Button>
               <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
+              <TooltipProvider delayDuration={120}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      onClick={handleOpenDrawer}
+                      disabled={isOpeningDrawer}
+                      className="h-14 w-full"
+                      aria-label="Abrir cajón"
+                      title="Abrir cajón"
+                    >
+                      <DrawerIcon className="h-6 w-6" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Abrir cajón</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
 
-            {!cashSnapshot.open ? (
-              <div className="space-y-2 rounded-md border p-3">
-                <Label>Apertura de sesión (efectivo inicial)</Label>
-                <Input type="number" min="0" step="0.01" value={openingCashInput} onChange={(e) => setOpeningCashInput(e.target.value)} />
-                <Button onClick={handleOpenCashSession} disabled={isSavingCashAction}>Abrir Caja (Sesión)</Button>
-              </div>
-            ) : (
+            {cashSnapshot.open ? (
               <div className="space-y-2 rounded-md border p-3">
                 <Label>Efectivo contado al cierre</Label>
                 <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
@@ -841,7 +1079,7 @@ const POS = () => {
                 <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                 <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
               </div>
-            )}
+            ) : null}
 
             <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
               {cashTransactions.length === 0 ? (
@@ -851,12 +1089,37 @@ const POS = () => {
                   <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
                     <div>
                       <div className="font-medium">{tx.description}</div>
-                      <div className="text-xs text-muted-foreground">{new Date(tx.createdAt).toLocaleString()}</div>
+                      <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
                     </div>
                     <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isOpenSessionModalOpen} onOpenChange={setIsOpenSessionModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Aperturar caja</DialogTitle>
+            <DialogDescription>Ingresa el efectivo inicial para abrir la sesión.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label>Efectivo inicial</Label>
+            <Input
+              ref={openSessionInputRef}
+              value={openSessionAmount}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setOpenSessionAmount(event.target.value)}
+              inputMode="decimal"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+              <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
+                {isSavingCashAction ? "Aperturando..." : "Aperturar"}
+              </Button>
             </div>
           </div>
         </DialogContent>
@@ -887,210 +1150,158 @@ const POS = () => {
 
       {/* Payment Dialog */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Cobrar pedido</DialogTitle>
-            <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
-          </DialogHeader>
-          {checkoutDraft ? (
-            <div className="space-y-5">
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                <div className="mt-2 text-3xl font-bold text-secondary">
-                  {formatMoney(checkoutDraft.total)}
-                </div>
-              </div>
+        <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <DialogHeader className="border-b px-4 py-3 sm:px-6">
+              <DialogTitle>Cobrar pedido</DialogTitle>
+              <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
+            </DialogHeader>
+            {checkoutDraft ? (
+              <>
+                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
+                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(checkoutDraft.total)}</div>
+                  </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm font-semibold">
-                  <span>Detalle</span>
-                  <span className="text-xs text-muted-foreground">
-                    {activeOrder?.orderNumber
-                      ? `Pedido #${activeOrder.orderNumber}`
-                      : createdOrderNumber
-                        ? `Pedido #${createdOrderNumber}`
-                        : "Pedido (pendiente)"}
-                  </span>
-                </div>
-                <div className="rounded-md border">
-                  <div className="max-h-40 overflow-y-auto divide-y divide-border text-sm">
-                    {checkoutDraft.items.map((item) => (
-                      <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{item.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatMoney(toNumber(item.price))} c/u
-                          </div>
-                          {getPaidExtrasLines(item).length > 0 && (
-                            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                              {getPaidExtrasLines(item).map((extra, index) => (
-                                <div key={`${item.id}-${extra.name}-${index}`} className="flex justify-between gap-2 pl-3">
-                                  <span>+ {extra.name}</span>
-                                  <span>{formatMoney(extra.price)}</span>
-                                </div>
-                              ))}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm font-semibold">
+                      <span>Detalle</span>
+                      <span className="text-xs text-muted-foreground">
+                        {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : createdOrderNumber ? `Pedido #${createdOrderNumber}` : "Pedido (pendiente)"}
+                      </span>
+                    </div>
+                    <div className="rounded-md border">
+                      <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
+                        {checkoutDraft.items.map((item) => (
+                          <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{item.name}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                                  <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                                )}
+                                {formatMoney(toNumber(item.price))} c/u
+                              </div>
+                              {item.appliedSpecialPriceRuleName && (
+                                <div className="text-[11px] text-emerald-600">Oferta aplicada</div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
-                        <div className="text-right font-semibold">
-                          {formatMoney(toNumber(item.price) * toNumber(item.quantity))}
-                        </div>
+                            <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
+                            <div className="text-right font-semibold">{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div className="rounded-md border p-3 text-sm">
-                <div className="mb-2 font-semibold">Resumen</div>
-                <div className="space-y-1 text-muted-foreground">
-                  <div className="flex justify-between">
-                    <span>Subtotal (productos)</span>
-                    <span>{formatMoney(checkoutDraft.subtotal)}</span>
+                  <div className="rounded-md border p-3 text-sm">
+                    <div className="mb-2 font-semibold">Resumen</div>
+                    <div className="space-y-1 text-muted-foreground">
+                      <div className="flex justify-between"><span>Subtotal (productos)</span><span>{formatMoney(checkoutDraft.subtotal)}</span></div>
+                      {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutDraft.total)}</span></div>
+                    </div>
                   </div>
-                  {checkoutDisposableTotal > 0 && (
-                    <div className="flex justify-between">
-                      <span>Desechables</span>
-                      <span>{formatMoney(checkoutDisposableTotal)}</span>
+
+                  <div className="space-y-2">
+                    <Label>Cliente</Label>
+                    <div className="flex gap-2">
+                      <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                        <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
+                        <SelectContent>{customers.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>)}</SelectContent>
+                      </Select>
+                      <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Tipo DTE</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                    </div>
+                  </div>
+                  {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
+                  <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+                  <SplitPanel
+                    enabled={splitEnabled}
+                    onEnabledChange={setSplitEnabled}
+                    totalCents={checkoutTotalCents}
+                    parts={parts}
+                    onPartsChange={setParts}
+                    activePartId={activePartId}
+                    onActivePartIdChange={setActivePartId}
+                  />
+
+                  {splitEnabled && activeSplitPart && (
+                    <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
+                      Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
                   )}
-                  <div className="flex justify-between font-semibold text-foreground">
-                    <span>Total</span>
-                    <span>{formatMoney(checkoutDraft.total)}</span>
+                </div>
+
+                <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Método</Label>
+                      <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{paymentMethods.map((m) => <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                      <div className="space-y-2">
+                        <Label>Referencia</Label>
+                        <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
 
-              <div className="space-y-3">
-                <div className="text-sm font-semibold">Pago</div>
-                <div className="space-y-2">
-                  <Label>Cliente</Label>
-                  <div className="flex gap-2">
-                    <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                      <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
-                      <SelectContent>
-                        {customers.map((c) => (
-                          <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
+                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label>Monto recibido</Label>
+                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Propina</Label>
+                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+                    </div>
                   </div>
-                </div>
 
-                <div className="space-y-2">
-                  <Label>Tipo DTE</Label>
-                  <div className="flex gap-2">
-                    <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                    <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                    <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                  <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+                    {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
                   </div>
-                </div>
-                {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && (
-                  <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>
-                )}
 
-                <div className="flex items-center justify-between rounded-md border p-2 text-sm">
-                  <span>Exento IVA</span>
-                  <Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(Boolean(v))} />
-                </div>
-                {ivaExempt && (
-                  <p className="text-xs text-muted-foreground">Aplicando exención: se descuenta IVA del total.</p>
-                )}
-
-                <div className="space-y-2">
-                  <Label>Método</Label>
-                  <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {paymentMethods.map((m) => (
-                        <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>
+                  {activeTenderField && (
+                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                      {DENOMINATION_CENTS.map((value) => (
+                        <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                          {formatMoney(value / 100)}
+                        </Button>
                       ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                      <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                      <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
+                      <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
+                    </div>
+                  )}
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>Monto recibido</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                />
-              </div>
-                  <div className="space-y-2">
-                    <Label>Propina</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={tipAmount}
-                      onChange={(e) => setTipAmount(e.target.value)}
-                    />
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
+                      {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                    </Button>
                   </div>
+                  {isPaid && <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>Imprimir recibo</Button>}
                 </div>
-
-                {(paymentMethod === "card" || paymentMethod === "transfer") && (
-                  <div className="space-y-2">
-                    <Label>Referencia</Label>
-                    <Input
-                      value={paymentReference}
-                      onChange={(e) => setPaymentReference(e.target.value)}
-                      placeholder="Opcional"
-                    />
-                  </div>
-                )}
-
-                <div className="rounded-md border px-3 py-2 text-sm">
-                  {paidTotal === 0 && checkoutTotal > 0 && (
-                    <span className="text-muted-foreground">
-                      Pendiente: {formatMoney(checkoutTotal)}
-                    </span>
-                  )}
-                  {paidTotal > 0 && remainingTotal > 0 && (
-                    <span className="text-destructive">
-                      Pendiente: {formatMoney(remainingTotal)}
-                    </span>
-                  )}
-                  {paidTotal > 0 && remainingTotal === 0 && changeTotal === 0 && (
-                    <span className="text-muted-foreground">Listo: pago exacto</span>
-                  )}
-                  {paidTotal > 0 && changeTotal > 0 && (
-                    <span className="text-emerald-400">
-                      Cambio: {formatMoney(changeTotal)}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>
-                  Cerrar
-                </Button>
-                <Button
-                  className="flex-1"
-                  onClick={handleSubmitPayment}
-                  disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0}
-                >
-                  {isProcessingPayment ? "Procesando..." : "Registrar pago"}
-                </Button>
-              </div>
-
-              {isPaid && (
-                <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>
-                  Imprimir recibo
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">No hay pedido activo.</div>
-          )}
+              </>
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1204,12 +1415,9 @@ const POS = () => {
             })}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <Button variant="outline" className="h-12" onClick={handleAddPendingProductWithoutExtras}>
-              Sin extras
-            </Button>
-            <Button className="h-12" onClick={handleAddPendingProductWithExtras}>
-              Agregar
+          <div className="pt-2">
+            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
+              {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
             </Button>
           </div>
         </DialogContent>

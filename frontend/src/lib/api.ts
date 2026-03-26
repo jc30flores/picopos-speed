@@ -40,6 +40,8 @@ export type Product = {
   description: string;
   price: number;
   effectivePrice?: number;
+  originalPrice?: number;
+  isSpecialPriceActiveNow?: boolean;
   appliedSpecialPriceRuleId?: number | null;
   appliedSpecialPriceRuleName?: string | null;
   sortOrder?: number;
@@ -305,6 +307,10 @@ export type Payment = {
   reference?: string;
   receivedBy?: string | null;
   createdAt: Date;
+  printed?: boolean;
+  printError?: string | null;
+  drawerOpened?: boolean;
+  drawerError?: string | null;
 };
 
 export type PrintJob = {
@@ -635,7 +641,9 @@ export const getProducts = async (options?: {
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -661,7 +669,9 @@ export const getProducts = async (options?: {
       name: item.name,
       description: item.description,
       price: Number(item.price),
+      originalPrice: item.original_price != null ? Number(item.original_price) : Number(item.price),
       effectivePrice: item.effective_price != null ? Number(item.effective_price) : Number(item.price),
+      isSpecialPriceActiveNow: Boolean(item.is_special_price_active_now ?? item.applied_special_price_rule_id != null),
       appliedSpecialPriceRuleId: item.applied_special_price_rule_id ?? null,
       appliedSpecialPriceRuleName: item.applied_special_price_rule_name ?? null,
       sortOrder: Number(item.sort_order ?? 0),
@@ -725,7 +735,9 @@ export const createProduct = async (payload: {
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -749,7 +761,9 @@ export const createProduct = async (payload: {
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    originalPrice: data.original_price != null ? Number(data.original_price) : Number(data.price),
     effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    isSpecialPriceActiveNow: Boolean(data.is_special_price_active_now ?? data.applied_special_price_rule_id != null),
     appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
     appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
@@ -814,7 +828,9 @@ export const updateProduct = async (
     name: string;
     description: string;
     price: string;
+    original_price?: string | null;
     effective_price?: string | null;
+    is_special_price_active_now?: boolean;
     applied_special_price_rule_id?: number | null;
     applied_special_price_rule_name?: string | null;
     sort_order?: number;
@@ -835,7 +851,9 @@ export const updateProduct = async (
     name: data.name,
     description: data.description,
     price: Number(data.price),
+    originalPrice: data.original_price != null ? Number(data.original_price) : Number(data.price),
     effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    isSpecialPriceActiveNow: Boolean(data.is_special_price_active_now ?? data.applied_special_price_rule_id != null),
     appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
     appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
     sortOrder: Number(data.sort_order ?? 0),
@@ -2395,15 +2413,19 @@ export const createPayment = async (payload: {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
   }
+  const amountStr = Number(payload.amount || 0).toFixed(2);
+  const cashReceivedStr = payload.cashReceived == null ? undefined : Number(payload.cashReceived || 0).toFixed(2);
+  const tipAmountStr = Number(payload.tipAmount ?? 0).toFixed(2);
   const response = await request("/payments/", {
     method: "POST",
     body: JSON.stringify({
       order: payload.orderId,
       method: payload.method,
       payment_method_code: payload.paymentMethodCode,
-      amount: payload.amount,
-      cash_received: payload.cashReceived,
-      tip_amount: payload.tipAmount ?? 0,
+      amount: amountStr,
+      amount_applied: amountStr,
+      cash_received: cashReceivedStr,
+      tip_amount: tipAmountStr,
       reference: payload.reference ?? "",
     }),
   });
@@ -2416,6 +2438,10 @@ export const createPayment = async (payload: {
     reference: string;
     received_by: string | null;
     created_at: string;
+    printed?: boolean;
+    print_error?: string | null;
+    drawer_opened?: boolean;
+    drawer_error?: string | null;
   }>(response);
   return {
     id: data.id,
@@ -2427,6 +2453,10 @@ export const createPayment = async (payload: {
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,
     createdAt: new Date(data.created_at),
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+    drawerOpened: Boolean(data.drawer_opened),
+    drawerError: data.drawer_error ?? null,
   };
 };
 
@@ -2783,13 +2813,16 @@ export const reorderCategories = async (orderedIds: number[]): Promise<Category[
 export type CashSessionHistoryRow = {
   id: number;
   registerName: string;
-  stationName: string;
   openedByUsername: string;
+  closedByUsername?: string | null;
   openedAt: string;
   closedAt?: string | null;
-  openingCash: number;
-  closingCountedCash?: number | null;
+  expectedCash: number;
+  countedCash: number;
+  difference: number;
   status: "open" | "closed";
+  notes?: string;
+  summarySnapshot?: Record<string, unknown>;
   summary: CashSessionSnapshot["summary"];
 };
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
@@ -2830,12 +2863,12 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string }> => {
+export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
-  return { ticketText: data.ticket_text };
+  return { ticketText: data.ticket_text, printed: Boolean(data.printed), printError: data.print_error ?? null };
 };
 
 export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
@@ -2859,37 +2892,54 @@ export const createCashPayout = async (amount: number, description: string): Pro
   }));
 };
 
+export const openCashDrawer = async (): Promise<{ ok: boolean; message: string }> => {
+  const response = await request('/cashier/drawer/open/', { method: 'POST' });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const reason = String(payload.reason || payload.error || payload.detail || `Error del servidor (${response.status})`);
+    const hint = payload.hint ? ` ${String(payload.hint)}` : "";
+    throw new Error(`${reason}${hint}`.trim());
+  }
+  return {
+    ok: Boolean(payload.ok ?? true),
+    message: String(payload.message ?? "ABRIENDO CAJON DE DINERO."),
+  };
+};
+
 export const getCashSessionsHistory = async (filters?: { dateFrom?: string; dateTo?: string; registerId?: number }): Promise<CashSessionHistoryRow[]> => {
   const params = new URLSearchParams();
   if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
   if (filters?.dateTo) params.set('date_to', filters.dateTo);
   if (filters?.registerId) params.set('register_id', String(filters.registerId));
-  const response = await request(`/cashier/sessions/${params.toString() ? `?${params.toString()}` : ''}`);
+  const response = await request(`/cashier/session/history/${params.toString() ? `?${params.toString()}` : ''}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((row) => ({
     id: row.id,
-    registerName: row.register_name,
-    stationName: row.station_name,
-    openedByUsername: row.opened_by_username,
+    registerName: row.register_name ?? "-",
+    openedByUsername: row.opened_by ?? "-",
+    closedByUsername: row.closed_by ?? null,
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    openingCash: Number(row.opening_cash ?? 0),
-    closingCountedCash: row.closing_counted_cash != null ? Number(row.closing_counted_cash) : null,
+    expectedCash: Number(row.expected_cash ?? 0),
+    countedCash: Number(row.counted_cash ?? 0),
+    difference: Number(row.difference ?? 0),
     status: row.status,
+    notes: row.notes ?? "",
+    summarySnapshot: row.summary_snapshot ?? {},
     summary: {
-      openingCash: Number(row.summary.opening_cash ?? 0),
-      totalCashSales: Number(row.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(row.summary.cash_expenses_total ?? 0),
-      expectedCashInDrawer: Number(row.summary.expected_cash_in_drawer ?? 0),
-      countedCash: Number(row.summary.counted_cash ?? 0),
-      overShortCash: Number(row.summary.difference ?? 0),
+      openingCash: Number(row.summary_snapshot?.opening_cash ?? 0),
+      totalCashSales: Number(row.summary_snapshot?.total_cash_sales ?? 0),
+      totalCashOut: Number(row.summary_snapshot?.cash_expenses_total ?? 0),
+      expectedCashInDrawer: Number(row.summary_snapshot?.expected_cash_in_drawer ?? 0),
+      countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
+      overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
-        cash: Number(row.summary.methods?.CASH?.total ?? 0),
-        card: Number(row.summary.methods?.CARD?.total ?? 0),
-        transfer: Number(row.summary.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(row.summary.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(row.summary.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(row.summary.cash_in_total ?? 0),
+        cash: Number(row.summary_snapshot?.methods?.CASH?.total ?? 0),
+        card: Number(row.summary_snapshot?.methods?.CARD?.total ?? 0),
+        transfer: Number(row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary_snapshot?.cash_in_total ?? 0),
       },
     },
   }));
@@ -2953,6 +3003,12 @@ export type DTERecord = {
   total_amount: number;
   hacienda_uuid?: string;
   sello_recepcion?: string;
+  sello_recibido?: string;
+  firma?: string;
+  recibido_at?: string;
+  estado_mh?: string;
+  mh_response_json?: Record<string, unknown>;
+  mh_response_text?: string;
   request_payload?: Record<string, unknown>;
   response_payload?: Record<string, unknown>;
   hacienda_state?: string;

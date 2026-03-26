@@ -30,7 +30,7 @@ export interface Discount {
   days: number[]; // 0-6 (Mon-Sun)
   startTime?: string;
   endTime?: string;
-  serviceTypes: ('dine-in' | 'takeout' | 'delivery' | 'kiosk')[];
+  serviceTypes: string[];
   minAmount?: number | null;
   autoApply: boolean;
   active: boolean;

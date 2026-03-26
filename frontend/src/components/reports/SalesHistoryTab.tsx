@@ -25,7 +25,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { CalendarIcon, Search, Download } from "lucide-react";
-import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   createRefund,
@@ -48,9 +47,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
-type ServiceType = "all" | "en-local" | "para-llevar" | "delivery" | "kiosk";
+type ServiceTypeFilter = "all" | string;
 type PaymentMethodFilter = "all" | "efectivo" | "tarjeta" | "transferencia";
 
 interface Sale {
@@ -71,13 +72,6 @@ interface Sale {
   netPaid: number;
 }
 
-const SERVICE_TYPE_LABELS: Record<string, string> = {
-  "dine-in": "En local",
-  takeout: "Para llevar",
-  delivery: "Delivery",
-  kiosk: "Kiosk",
-};
-
 const mapStatus = (
   status: SalesReportRow["status"],
   financialStatus: SalesReportRow["financialStatus"]
@@ -93,7 +87,9 @@ export const SalesHistoryTab = () => {
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
-  const [serviceType, setServiceType] = useState<ServiceType>("all");
+  const [serviceType, setServiceType] = useState<ServiceTypeFilter>("all");
+  const { serviceTypes } = useServiceTypes();
+  const serviceTypeLabelByKey = useMemo(() => new Map(serviceTypes.map((item) => [item.key, item.label])), [serviceTypes]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [sales, setSales] = useState<Sale[]>([]);
@@ -111,8 +107,8 @@ export const SalesHistoryTab = () => {
   const [refundIdForReprint, setRefundIdForReprint] = useState<number | null>(null);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
 
-  const dateFrom = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
-  const dateTo = endDate ? format(endDate, "yyyy-MM-dd") : undefined;
+  const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
+  const dateTo = endDate ? getLocalDateSV(endDate) : undefined;
 
   useEffect(() => {
     const now = new Date();
@@ -135,14 +131,7 @@ export const SalesHistoryTab = () => {
   }, [timeRange]);
 
   const loadSales = () => {
-    const serviceTypeFilter =
-      serviceType === "all"
-        ? undefined
-        : serviceType === "en-local"
-          ? "dine-in"
-          : serviceType === "para-llevar"
-            ? "takeout"
-            : serviceType;
+    const serviceTypeFilter = serviceType === "all" ? undefined : serviceType;
     return getSalesReport({
       dateFrom,
       dateTo,
@@ -153,7 +142,7 @@ export const SalesHistoryTab = () => {
           id: String(row.orderId),
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
-          serviceType: SERVICE_TYPE_LABELS[row.serviceType] || row.serviceType,
+          serviceType: serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
           paymentMethod: "N/A",
           items: 0,
@@ -193,13 +182,13 @@ export const SalesHistoryTab = () => {
   const totalSales = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
 
   const getStatusBadge = (status: Sale["status"]) => {
-    const variants = {
+    const variants: Record<Sale["status"], "default" | "destructive" | "secondary"> = {
       completado: "default",
       anulado: "destructive",
       reembolsado: "secondary",
     };
     return (
-      <Badge variant={variants[status] as any}>
+      <Badge variant={variants[status]}>
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </Badge>
     );
@@ -369,7 +358,7 @@ export const SalesHistoryTab = () => {
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                     <span className="truncate">
-                      {startDate ? format(startDate, "dd/MM/yyyy") : "Fecha inicio"}
+                      {startDate ? formatDateSV(startDate) : "Fecha inicio"}
                     </span>
                   </Button>
                 </PopoverTrigger>
@@ -401,7 +390,7 @@ export const SalesHistoryTab = () => {
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                     <span className="truncate">
-                      {endDate ? format(endDate, "dd/MM/yyyy") : "Fecha fin"}
+                      {endDate ? formatDateSV(endDate) : "Fecha fin"}
                     </span>
                   </Button>
                 </PopoverTrigger>
@@ -424,17 +413,16 @@ export const SalesHistoryTab = () => {
               </label>
               <Select
                 value={serviceType}
-                onValueChange={(value) => setServiceType(value as ServiceType)}
+                onValueChange={(value) => setServiceType(value as ServiceTypeFilter)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="en-local">En local</SelectItem>
-                  <SelectItem value="kiosk">Kiosk</SelectItem>
-                  <SelectItem value="para-llevar">Para llevar</SelectItem>
-                  <SelectItem value="delivery">Delivery</SelectItem>
+                  {serviceTypes.map((item) => (
+                    <SelectItem key={item.id} value={item.key}>{item.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -528,7 +516,7 @@ export const SalesHistoryTab = () => {
                   filteredSales.map((sale) => (
                     <TableRow key={sale.id}>
                       <TableCell className="font-medium">
-                        {format(sale.date, "dd/MM/yyyy HH:mm")}
+                        {formatDateTimeSV(sale.date)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {sale.orderNumber}

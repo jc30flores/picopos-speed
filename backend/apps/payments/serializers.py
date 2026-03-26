@@ -1,8 +1,11 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import logging
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund, PaymentMethod
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
@@ -12,6 +15,10 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
+    amount = serializers.DecimalField(max_digits=18, decimal_places=6)
+    amount_applied = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, write_only=True)
+    tip_amount = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, default=Decimal("0"))
+    cash_received = serializers.DecimalField(max_digits=18, decimal_places=6, required=False, allow_null=True)
     received_by = serializers.CharField(source="received_by.username", read_only=True)
     payment_method_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
@@ -26,6 +33,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "payment_method_code",
             "payment_method_name",
             "amount",
+            "amount_applied",
             "cash_received",
             "tip_amount",
             "reference",
@@ -34,9 +42,15 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        attrs.pop("amount_applied", None)
         order = attrs.get("order")
-        amount = attrs.get("amount") or Decimal("0")
-        tip_amount = attrs.get("tip_amount") or Decimal("0")
+        raw_amount = attrs.get("amount_applied", attrs.get("amount"))
+        amount = self._normalize_money(raw_amount, field="amount")
+        tip_amount = self._normalize_money(attrs.get("tip_amount") or Decimal("0"), field="tip_amount")
+        attrs["amount"] = amount
+        attrs["tip_amount"] = tip_amount
+        if attrs.get("cash_received") is not None:
+            attrs["cash_received"] = self._normalize_money(attrs.get("cash_received"), field="cash_received")
 
         code = (attrs.pop("payment_method_code", "") or "").strip().upper()
         payment_method = attrs.get("payment_method")
@@ -62,12 +76,29 @@ class PaymentSerializer(serializers.ModelSerializer):
         remaining = self._remaining_balance(order)
         if remaining <= 0:
             raise serializers.ValidationError("Order is already paid")
-        if amount > remaining:
+        diff = (amount - remaining).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if diff > Decimal("0.01"):
+            logger.warning(
+                "payment.validation.exceeds_remaining order_id=%s remaining=%s amount=%s diff=%s",
+                getattr(order, "id", None),
+                remaining,
+                amount,
+                diff,
+            )
             raise serializers.ValidationError("Payment exceeds remaining balance")
-        if order.channel == "pos" and amount < remaining:
-            raise serializers.ValidationError("POS payments must be full amount")
 
         return attrs
+
+    def _normalize_money(self, value: Decimal | str | float | None, *, field: str) -> Decimal:
+        try:
+            normalized = Decimal(str(value if value is not None else "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, ValueError, TypeError):
+            raise serializers.ValidationError({field: "Monto inválido"})
+        digits = normalized.as_tuple().digits
+        integer_digits = len(digits) - 2
+        if integer_digits > 8:
+            raise serializers.ValidationError({field: "El monto excede el máximo permitido"})
+        return normalized
 
     def create(self, validated_data):
         request = self.context.get("request")

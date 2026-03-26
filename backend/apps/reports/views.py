@@ -1,8 +1,8 @@
-from django.utils.dateparse import parse_date
 from decimal import Decimal
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import generics
 from rest_framework.response import Response
+from apps.core.timezone_utils import parse_business_date_range
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund
 from apps.reports.serializers import SalesReportSerializer
@@ -15,15 +15,17 @@ class SalesReportListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = Order.objects.select_related("service_type").all()
-        date_from = parse_date(self.request.query_params.get("date_from") or "")
-        date_to = parse_date(self.request.query_params.get("date_to") or "")
+        start_at, end_at = parse_business_date_range(
+            self.request.query_params.get("date_from"),
+            self.request.query_params.get("date_to"),
+        )
         service_type = self.request.query_params.get("service_type")
         status = self.request.query_params.get("status")
 
-        if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
-        if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+        if start_at:
+            queryset = queryset.filter(created_at__gte=start_at)
+        if end_at:
+            queryset = queryset.filter(created_at__lte=end_at)
         if service_type:
             queryset = queryset.filter(service_type__key=service_type)
         if status:

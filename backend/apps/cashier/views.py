@@ -1,4 +1,6 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import json
+import logging
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -8,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.cashier.models import Register, CashSession, CashTransaction
-from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf
+from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf, print_ticket_text
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
@@ -19,7 +21,11 @@ from apps.cashier.serializers import (
 from apps.core.audit import log_audit
 from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
+from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
+from apps.cashier.services import CashDrawerError, CashDrawerRuntimeError, CashDrawerService
+
+logger = logging.getLogger(__name__)
 
 
 def _get_open_session_for_user(user):
@@ -39,6 +45,17 @@ def _ensure_register(register_id=None):
     if not branch:
         raise ValueError("No hay sucursales configuradas")
     return Register.objects.create(name="CAJA 1", station_name="POS 1", branch=branch, is_active=True)
+
+
+def _parse_decimal(value, *, field_label: str) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else "0"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(f"{field_label} inválido")
+
+
+def _to_json_compatible(value):
+    return json.loads(json.dumps(value, default=str))
 
 
 class RegisterListCreateView(generics.ListCreateAPIView):
@@ -66,7 +83,13 @@ class CashSessionOpenView(APIView):
         if _get_open_session_for_user(request.user):
             return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_409_CONFLICT)
 
-        opening_cash = Decimal(str(request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0"))
+        try:
+            opening_cash = _parse_decimal(
+                request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0",
+                field_label="Monto inicial",
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         if opening_cash < 0:
             return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -90,10 +113,18 @@ class CashSessionCloseView(APIView):
     def post(self, request):
         session = _get_open_session_for_user(request.user)
         if not session:
-            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_409_CONFLICT)
+            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
-        counted_cash = Decimal(str(request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0"))
+        try:
+            counted_cash = _parse_decimal(
+                request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0",
+                field_label="Monto contado",
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notes = str(request.data.get("notes", "")).strip()
+        if counted_cash < 0:
+            return Response({"detail": "Monto contado inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         session.status = "closed"
         session.closed_by = request.user
@@ -102,13 +133,52 @@ class CashSessionCloseView(APIView):
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
-        session.summary_snapshot = snapshot
+        session.summary_snapshot = _to_json_compatible(snapshot)
         session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
 
-        ticket_text = build_end_of_day_ticket(session.id)
-        PrintJob.objects.create(type="closeout", status="rendered", content_text=ticket_text, meta={"cash_session_id": session.id, "event": "cash_session.closed"}, requested_by=request.user)
+        ticket_text = ""
+        printed = False
+        print_error = None
+        try:
+            ticket_text = build_end_of_day_ticket(session.id)
+            printed, print_error = print_ticket_text(ticket_text)
+            PrintJob.objects.create(
+                type="closeout",
+                status="rendered",
+                content_text=ticket_text,
+                meta={"cash_session_id": session.id, "event": "cash_session.closed", "printed": printed, "print_error": print_error},
+                requested_by=request.user,
+            )
+            logger.info(
+                "cash_session.close.print_attempted",
+                extra={"cash_session_id": session.id, "user_id": getattr(request.user, "id", None), "printed": printed},
+            )
+            if not printed:
+                logger.warning(
+                    "cash_session.close.print_unavailable",
+                    extra={
+                        "cash_session_id": session.id,
+                        "user_id": getattr(request.user, "id", None),
+                        "print_error": print_error,
+                    },
+                )
+        except Exception as exc:
+            print_error = str(exc)
+            logger.exception(
+                "cash_session.close.print_failed",
+                extra={"cash_session_id": session.id, "user_id": getattr(request.user, "id", None)},
+            )
         log_audit(request, "cash_session.close", "CashSession", session.id, {"counted_cash": str(counted_cash)})
-        return Response({"session": CashSessionSerializer(session).data, "summary": snapshot, "ticket_text": ticket_text})
+        return Response(
+            {
+                "ok": True,
+                "session": CashSessionSerializer(session).data,
+                "summary": snapshot,
+                "ticket_text": ticket_text,
+                "printed": printed,
+                "print_error": print_error,
+            }
+        )
 
 
 class CashTransactionListCreateView(APIView):
@@ -116,6 +186,10 @@ class CashTransactionListCreateView(APIView):
 
     def get(self, request):
         session_id = request.query_params.get("session_id")
+        start_at, end_at = parse_business_date_range(
+            request.query_params.get("date_from"),
+            request.query_params.get("date_to"),
+        )
         if session_id:
             session = CashSession.objects.filter(pk=session_id).first()
         else:
@@ -123,6 +197,10 @@ class CashTransactionListCreateView(APIView):
         if not session:
             return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(session=session).order_by("-created_at")
+        if start_at:
+            items = items.filter(created_at__gte=start_at)
+        if end_at:
+            items = items.filter(created_at__lte=end_at)
         return Response(CashTransactionSerializer(items, many=True).data)
 
     @transaction.atomic
@@ -131,7 +209,10 @@ class CashTransactionListCreateView(APIView):
         if not session:
             return Response({"detail": "No hay caja abierta"}, status=status.HTTP_409_CONFLICT)
 
-        amount = Decimal(str(request.data.get("amount", "0")))
+        try:
+            amount = _parse_decimal(request.data.get("amount", "0"), field_label="Monto")
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         description = str(request.data.get("description", "")).strip()
         transaction_type = str(request.data.get("type", "cash_out")).strip().lower()
 
@@ -153,13 +234,15 @@ class CashSessionListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").all()
-        date_from = self.request.query_params.get("date_from")
-        date_to = self.request.query_params.get("date_to")
+        start_at, end_at = parse_business_date_range(
+            self.request.query_params.get("date_from"),
+            self.request.query_params.get("date_to"),
+        )
         register_id = self.request.query_params.get("register_id")
-        if date_from:
-            qs = qs.filter(opened_at__date__gte=date_from)
-        if date_to:
-            qs = qs.filter(opened_at__date__lte=date_to)
+        if start_at:
+            qs = qs.filter(opened_at__gte=start_at)
+        if end_at:
+            qs = qs.filter(opened_at__lte=end_at)
         if register_id:
             qs = qs.filter(register_id=register_id)
         return qs
@@ -169,6 +252,46 @@ class CashSessionListView(generics.ListAPIView):
         for session in self.get_queryset():
             summary = calculate_shift_summary(session)
             payload.append({**CashSessionSerializer(session).data, "summary": summary})
+        return Response(payload)
+
+
+class CashSessionHistoryView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        start_at, end_at = parse_business_date_range(
+            request.query_params.get("date_from"),
+            request.query_params.get("date_to"),
+        )
+        register_id = request.query_params.get("register_id")
+
+        queryset = CashSession.objects.select_related("register", "opened_by", "closed_by").all()
+        if start_at:
+            queryset = queryset.filter(opened_at__gte=start_at)
+        if end_at:
+            queryset = queryset.filter(opened_at__lte=end_at)
+        if register_id:
+            queryset = queryset.filter(register_id=register_id)
+
+        payload = []
+        for session in queryset:
+            summary = calculate_shift_summary(session)
+            payload.append(
+                {
+                    "id": session.id,
+                    "opened_at": session.opened_at,
+                    "closed_at": session.closed_at,
+                    "opened_by": getattr(session.opened_by, "username", ""),
+                    "closed_by": getattr(session.closed_by, "username", ""),
+                    "expected_cash": summary.get("expected_cash_in_drawer", Decimal("0")),
+                    "counted_cash": summary.get("counted_cash", Decimal("0")),
+                    "difference": summary.get("difference", Decimal("0")),
+                    "summary_snapshot": _to_json_compatible(summary),
+                    "status": session.status,
+                    "notes": session.notes,
+                    "register_name": getattr(session.register, "name", ""),
+                }
+            )
         return Response(payload)
 
 
@@ -194,6 +317,77 @@ class CashSessionTicketPDFView(APIView):
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="cierre_caja_{pk}.pdf"'
         return response
+
+
+class CashDrawerOpenView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        session = _get_open_session_for_user(request.user)
+        branch_name = getattr(getattr(session, "register", None), "branch", None)
+        branch_name = getattr(branch_name, "name", None)
+        log_extra = {
+            "event": "cash_drawer.open",
+            "user": getattr(request.user, "username", "unknown"),
+            "branch": branch_name or "N/A",
+            "session_id": getattr(session, "id", None),
+        }
+        try:
+            result = CashDrawerService().open_drawer()
+        except CashDrawerRuntimeError as exc:
+            message = str(exc)
+            logger.exception("cash_drawer.open.failed", extra={**log_extra, "error": message})
+            return Response(
+                {
+                    "ok": False,
+                    "success": False,
+                    "error": message,
+                    "reason": message,
+                    "hint": "Revisa permisos USB/udev y si el dispositivo está ocupado.",
+                    "detail": message,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        except CashDrawerError as exc:
+            message = str(exc)
+            logger.warning("cash_drawer.open.failed", extra={**log_extra, "error": message})
+            return Response(
+                {
+                    "ok": False,
+                    "success": False,
+                    "error": message,
+                    "reason": message,
+                    "hint": "Configura CASH_DRAWER_USB_* y habilita CASH_DRAWER_ENABLED=1.",
+                    "detail": message,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception("cash_drawer.open.failed", extra={**log_extra, "error": "unexpected_error"})
+            return Response({"ok": False, "success": False, "error": "Failed to open drawer", "reason": "Failed to open drawer"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        logger.info(
+            "cash_drawer.open.success",
+            extra={
+                **log_extra,
+                "vendor_id": hex(result.vendor_id),
+                "product_id": hex(result.product_id),
+                "interface": result.interface,
+                "out_endpoint": hex(result.out_endpoint),
+                "in_endpoint": (hex(result.in_endpoint) if result.in_endpoint is not None else None),
+            },
+        )
+        log_audit(request, "cash_drawer.open", "CashSession", getattr(session, "id", None), {"branch": branch_name or ""})
+        return Response({"ok": True, "success": True, "message": "Cash drawer opened successfully"})
+
+
+class CashDrawerStatusView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request):
+        payload = CashDrawerService().status()
+        payload["ok"] = True
+        return Response(payload)
 
 
 ShiftOpenView = CashSessionOpenView

@@ -6,7 +6,7 @@ import urllib.request
 
 
 def send_payload(payload: dict) -> dict:
-    mode = os.environ.get("DTE_BRIDGE_MODE", "mock").lower()
+    mode = os.environ.get("DTE_BRIDGE_MODE", "http").lower()
     if mode == "mock":
         force = str(payload.get("meta", {}).get("mock_status", "accepted")).lower()
         if force == "rejected":

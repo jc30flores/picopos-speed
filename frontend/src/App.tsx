@@ -2,13 +2,14 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Kiosk from "./pages/Kiosk";
 import Kitchen from "./pages/Kitchen";
 import CustomerDisplay from "./pages/CustomerDisplay";
 import Menu from "./pages/Menu";
-import ReportsHistory from "./pages/ReportsHistory";
+import RegistrosVentas from "./pages/RegistrosVentas";
+import RegistrosCaja from "./pages/RegistrosCaja";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
@@ -61,13 +62,22 @@ const App = () => (
               }
             />
             <Route
-              path="/reports-history"
+              path="/registros/ventas"
               element={
                 <ProtectedRoute allowedRoles={["admin", "manager"]}>
-                  <ReportsHistory />
+                  <RegistrosVentas />
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/registros/caja"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                  <RegistrosCaja />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/reports-history" element={<Navigate to="/registros/ventas" replace />} />
             <Route
               path="/dte"
               element={

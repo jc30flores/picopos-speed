@@ -7,7 +7,7 @@ from django.conf import settings
 from django.utils.autoreload import autoreload_started
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("apps.dte")
 
 
 def _mask_token(token: str) -> str:
@@ -46,12 +46,15 @@ class DTEConfig(AppConfig):
         if os.environ.get("RUN_MAIN") != "true":
             return
 
-        from apps.dte.services.health_sentinel import start_health_sentinel
+        from apps.dte.monitor import start_monitor
 
-        health_url = start_health_sentinel()
+        try:
+            start_monitor()
+        except Exception:  # noqa: BLE001
+            logger.exception("[DTE MONITOR] failed to start")
         token = _env("DTE_API_TOKEN", "")
         token_display = token if _log_secrets_enabled() else _mask_token(token)
-        interval = _env("DTE_HEALTH_INTERVAL_SECONDS", "5")
+        interval = _env("DTE_MONITOR_INTERVAL_SECONDS", "10")
         config_msg = (
             "[DTE] Config loaded "
             f"MH_AMBIENTE={_env('MH_AMBIENTE', _env('DTE_AMBIENTE', '00'))} "
@@ -59,8 +62,7 @@ class DTEConfig(AppConfig):
             f"AUTH_HEADER={_env('DTE_API_AUTH_HEADER', 'Authorization')} "
             f"AUTH_PREFIX={_env('DTE_API_AUTH_PREFIX', 'Bearer')} "
             f"TOKEN={token_display} "
-            f"HEALTH_URL={health_url} "
+            f"HEALTH_ENDPOINT={_env('DTE_HEALTH_ENDPOINT', '/health')} "
             f"INTERVAL={interval}s"
         )
-        print(config_msg)
         logger.info(config_msg)

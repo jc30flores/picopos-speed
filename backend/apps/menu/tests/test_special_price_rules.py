@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -29,26 +29,95 @@ class ProductSpecialPriceRuleTests(APITestCase):
         self.mesa = ServiceType.objects.create(key="MESA", label="Mesa", is_active=True)
         self.para_llevar = ServiceType.objects.create(key="PARA_LLEVAR", label="Para llevar", is_active=True)
 
-    def test_resolve_rule_by_priority_then_best_price(self):
+    def test_priority_tie_no_longer_uses_lowest_price(self):
         now = timezone.localtime(timezone.now())
-        ProductSpecialPriceRule.objects.create(
+        newer_rule = ProductSpecialPriceRule.objects.create(
             product=self.product,
-            name="10%",
-            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_PERCENT_OFF,
-            percent_off=Decimal("10"),
+            name="Precio alto",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("12.00"),
             priority=2,
         )
         ProductSpecialPriceRule.objects.create(
             product=self.product,
-            name="20%",
-            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_PERCENT_OFF,
-            percent_off=Decimal("20"),
+            name="Precio bajo",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("8.00"),
             priority=2,
         )
 
+        # Forzamos regla estable por updated_at para no depender del orden de creación.
+        ProductSpecialPriceRule.objects.filter(id=newer_rule.id).update(updated_at=timezone.now() + timedelta(seconds=5))
+        newer_rule.refresh_from_db()
+
         result = resolve_effective_price(self.product, order_type=self.mesa, at=now)
+        self.assertEqual(result.effective_price, Decimal("12.00"))
+        self.assertEqual(result.applied_rule.id, newer_rule.id)
+
+    def test_fixed_price_can_be_greater_than_base_price(self):
+        rule = ProductSpecialPriceRule.objects.create(
+            product=self.product,
+            name="Recargo nocturno",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("12.00"),
+            priority=1,
+        )
+
+        result = resolve_effective_price(self.product, order_type=self.mesa, at=timezone.now())
+        self.assertEqual(result.effective_price, Decimal("12.00"))
+        self.assertEqual(result.applied_rule.id, rule.id)
+
+    def test_fixed_price_can_be_lower_than_base_price(self):
+        rule = ProductSpecialPriceRule.objects.create(
+            product=self.product,
+            name="Promo",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("8.00"),
+            priority=1,
+        )
+
+        result = resolve_effective_price(self.product, order_type=self.mesa, at=timezone.now())
         self.assertEqual(result.effective_price, Decimal("8.00"))
-        self.assertEqual(result.applied_rule.name, "20%")
+        self.assertEqual(result.applied_rule.id, rule.id)
+
+    def test_better_priority_wins_even_if_price_is_higher(self):
+        ProductSpecialPriceRule.objects.create(
+            product=self.product,
+            name="Prioridad baja",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("8.00"),
+            priority=10,
+        )
+        winning_rule = ProductSpecialPriceRule.objects.create(
+            product=self.product,
+            name="Prioridad alta",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("12.00"),
+            priority=20,
+        )
+
+        result = resolve_effective_price(self.product, order_type=self.mesa, at=timezone.now())
+        self.assertEqual(result.effective_price, Decimal("12.00"))
+        self.assertEqual(result.applied_rule.id, winning_rule.id)
+
+    def test_empty_conditions_apply_by_default(self):
+        rule = ProductSpecialPriceRule.objects.create(
+            product=self.product,
+            name="Siempre activo",
+            discount_type=ProductSpecialPriceRule.DISCOUNT_TYPE_FIXED_PRICE,
+            fixed_price=Decimal("12.00"),
+            priority=1,
+            applies_to_all_order_types=True,
+            days_of_week=[],
+            start_time=None,
+            end_time=None,
+            start_date=None,
+            end_date=None,
+        )
+
+        result = resolve_effective_price(self.product, order_type=None, at=timezone.now())
+        self.assertEqual(result.effective_price, Decimal("12.00"))
+        self.assertEqual(result.applied_rule.id, rule.id)
 
     def test_cross_midnight_window_matches(self):
         rule = ProductSpecialPriceRule.objects.create(

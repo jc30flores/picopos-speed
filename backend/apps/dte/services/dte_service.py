@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 
+from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTERecord
+from apps.dte.services.dte_parser import parse_hacienda_response
 
 
 logger = logging.getLogger(__name__)
@@ -316,9 +316,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     }}
 
 
-def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
-    mode = _get_env("DTE_BRIDGE_MODE", "mock").lower()
-    timeout = int(_get_env("DTE_TIMEOUT_SECONDS", "30"))
+def send_to_bridge(
+    dte_type: str,
+    payload: dict,
+    branch_name: str = "",
+    *,
+    order_id: int | None = None,
+    payment_id: int | None = None,
+    branch_id: int | None = None,
+) -> dict:
     ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -335,24 +341,10 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         print(payload_pretty)
         return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
-    token = _get_env("DTE_API_TOKEN", "")
-    auth_header = _get_env("DTE_API_AUTH_HEADER", "Authorization")
-    auth_prefix = _get_env("DTE_API_AUTH_PREFIX", "Bearer")
-    token_for_log = _display_token(token)
-    payload_min = json.dumps(payload, ensure_ascii=False)
-    payload_for_shell = payload_min.replace("'", "'\"'\"'")
-    curl_cmd = (
-        f"curl -X POST \"{url}\" \\\n+"
-        f"  -H \"{auth_header}: {auth_prefix} {token_for_log}\" \\\n+"
-        f"  -H \"Content-Type: application/json\" \\\n+"
-        f"  -d '{payload_for_shell}'"
-    )
-
     print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
     print(f"[DTE] DTE ENDPOINT >>> path={DTE_ENDPOINT_BY_TYPE.get(dte_type)} url={url}")
     print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
     print(payload_pretty)
-    print(f"[DTE] CURL >>>\n{curl_cmd}")
     logger.info("DTE ENDPOINT >>> %s", url)
     logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, ambiente, payload_pretty)
 
@@ -363,77 +355,45 @@ def send_to_bridge(dte_type: str, payload: dict, branch_name: str = "") -> dict:
         return {"success": False, "error": {"message": "DTE_BASE_URL no configurado", "type": "NETWORK_ERROR"}, "offline": True}
 
     try:
-        headers = build_headers()
+        build_headers()
     except DTEPreflightError as exc:
         msg = f"[DTE] DTE auth/header error: {exc}"
         logger.error(msg)
         print(msg)
         return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
-    if mode == "mock":
-        mock_resp = {
-            "success": True,
-            "uuid": payload.get("dte", {}).get("identificacion", {}).get("codigoGeneracion", ""),
-            "respuesta_hacienda": {"estado": "PROCESADO", "selloRecibido": "SELLO-MOCK"},
-            "http_status": 200,
-        }
-        body_pretty = json.dumps(mock_resp, ensure_ascii=False, indent=2)
-        print(f"[DTE] DTE RESP <<< status=200 body=\n{body_pretty}")
-        logger.info("DTE RESP <<<\n%s", body_pretty)
-        return mock_resp
-
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            status_code = response.getcode()
-            raw_body = response.read().decode("utf-8")
-            try:
-                parsed = json.loads(raw_body) if raw_body else {}
-            except Exception:
-                parsed = {"raw": raw_body}
-            body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2) if isinstance(parsed, dict) else str(parsed)
-            print(f"[DTE] DTE RESP <<< status={status_code} body=\n{body_pretty}")
-            logger.info("DTE RESP <<< status=%s body=\n%s", status_code, body_pretty)
-            if isinstance(parsed, dict):
-                parsed.setdefault("http_status", status_code)
-            return parsed
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8") if exc.fp else ""
-        try:
-            parsed = json.loads(body) if body else {}
-        except Exception:
-            parsed = {"error": {"message": body}}
-        parsed.setdefault("success", False)
-        parsed.setdefault("http_status", exc.code)
-        msg = f"[DTE] DTE HTTP ERROR endpoint={url} status={exc.code} body={body}"
-        logger.error(msg)
-        print(msg)
-        body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        print(f"[DTE] DTE RESP <<< status={exc.code} body=\n{body_pretty}")
-        logger.info("DTE RESP <<< status=%s body=\n%s", exc.code, body_pretty)
-        return parsed
-    except Exception as exc:
-        parsed = {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
-        msg = f"[DTE] DTE SEND ERROR endpoint={url} error={exc}"
-        logger.error(msg)
-        print(msg)
-        body_pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-        print(f"[DTE] DTE RESP <<< status=0 body=\n{body_pretty}")
-        logger.info("DTE RESP <<< status=%s body=\n%s", 0, body_pretty)
-        return parsed
+    client = DTEClient()
+    result = client.send(
+        path=DTE_ENDPOINT_BY_TYPE.get(dte_type, ""),
+        payload=payload,
+        order_id=order_id,
+        payment_id=payment_id,
+        branch_id=branch_id,
+    )
+    body_pretty = json.dumps(result.json_body, ensure_ascii=False, indent=2)
+    print(f"[DTE] DTE RESP <<< status={result.status_code} body=\n{body_pretty}")
+    logger.info("DTE RESP <<< status=%s body=\n%s", result.status_code, body_pretty)
+    parsed = dict(result.json_body)
+    parsed.setdefault("http_status", result.status_code)
+    return parsed
 
 
 def interpret_dte_response(response: dict) -> dict:
+    parsed_receipt = parse_hacienda_response(response or {})
+    estado_top = str(response.get("estado") or "").upper()
     rh = response.get("respuesta_hacienda") or {}
     estado = str(rh.get("estado") or "").upper()
+    http_status = int(response.get("http_status", 0) or 0)
 
-    if response.get("success") is True and estado in {"PROCESADO", "RECIBIDO"}:
+    if estado_top == "ACEPTADO" or (response.get("success") is True and estado in {"PROCESADO", "RECIBIDO", "ACEPTADO"}):
         status = DTERecord.STATUS_ACCEPTED
-    elif response.get("success") is False and rh:
+    elif estado_top == "RECHAZADO" or (response.get("success") is False and rh):
         status = DTERecord.STATUS_REJECTED
     elif str(rh.get("status") or "").upper() == "PROCESSING":
         status = DTERecord.STATUS_PENDING
-    elif response.get("offline") or int(response.get("http_status", 0) or 0) >= 500:
+    elif http_status in {401, 403}:
+        status = DTERecord.STATUS_REJECTED
+    elif response.get("offline") or http_status >= 500:
         status = DTERecord.STATUS_PENDING
     else:
         status = DTERecord.STATUS_PENDING
@@ -447,9 +407,13 @@ def interpret_dte_response(response: dict) -> dict:
 
     return {
         "status": status,
-        "hacienda_uuid": response.get("uuid") or rh.get("codigoGeneracion") or "",
-        "sello_recepcion": rh.get("selloRecibido") or "",
-        "hacienda_state": rh.get("estado") or "",
+        "hacienda_uuid": parsed_receipt.get("hacienda_uuid") or response.get("uuid") or rh.get("codigoGeneracion") or "",
+        "sello_recepcion": parsed_receipt.get("sello_recibido") or rh.get("selloRecibido") or "",
+        "sello_recibido": parsed_receipt.get("sello_recibido") or rh.get("selloRecibido") or "",
+        "firma": parsed_receipt.get("firma") or "",
+        "recibido_at": parsed_receipt.get("recibido_at"),
+        "estado_mh": parsed_receipt.get("estado_mh") or rh.get("estado") or "",
+        "hacienda_state": parsed_receipt.get("hacienda_state") or rh.get("estado") or "",
         "error_code": str(error.get("codigo_msg") or ""),
         "error_message": str(error_message),
     }

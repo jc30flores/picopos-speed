@@ -12,18 +12,17 @@ import {
   Category,
   Product,
   ProductSpecialPriceRule,
-  ServiceType,
   createCategory,
   createProduct,
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
-  getServiceTypes,
   listProductSpecialPrices,
   updateProduct,
   updateProductSpecialPrice,
 } from "@/lib/api";
 import { toast } from "sonner";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface ProductFormDialogProps {
   open: boolean;
@@ -34,6 +33,8 @@ interface ProductFormDialogProps {
 }
 
 const DAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const MIN_RULE_PRIORITY = 0;
+const MAX_RULE_PRIORITY = 1000;
 
 type RuleDraft = Omit<ProductSpecialPriceRule, "id" | "productId">;
 
@@ -52,6 +53,8 @@ const emptyRule = (): RuleDraft => ({
   appliesToAllOrderTypes: true,
   orderTypeIds: [],
 });
+
+const clampRulePriority = (value: number) => Math.min(MAX_RULE_PRIORITY, Math.max(MIN_RULE_PRIORITY, Math.trunc(value)));
 
 export const ProductFormDialog = ({
   open,
@@ -77,7 +80,7 @@ export const ProductFormDialog = ({
   const [disposableFee, setDisposableFee] = useState("0");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
 
-  const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
+  const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [specialRules, setSpecialRules] = useState<ProductSpecialPriceRule[]>([]);
   const [ruleOpen, setRuleOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
@@ -111,12 +114,6 @@ export const ProductFormDialog = ({
     }
   }, [editingProduct, open]);
 
-  useEffect(() => {
-    if (!open) return;
-    getServiceTypes()
-      .then((data) => setServiceTypes((data || []).filter((item) => item.isActive !== false)))
-      .catch(() => setServiceTypes([]));
-  }, [open]);
 
   useEffect(() => {
     if (!open || !editingProduct) {
@@ -279,10 +276,15 @@ export const ProductFormDialog = ({
       return;
     }
 
+    const payload: RuleDraft = {
+      ...ruleDraft,
+      priority: clampRulePriority(Number(ruleDraft.priority || 0)),
+    };
+
     if (editingRuleId) {
-      await updateProductSpecialPrice(editingRuleId, ruleDraft);
+      await updateProductSpecialPrice(editingRuleId, payload);
     } else {
-      await createProductSpecialPrice(editingProduct.id, ruleDraft);
+      await createProductSpecialPrice(editingProduct.id, payload);
     }
     setSpecialRules(await listProductSpecialPrices(editingProduct.id));
     setRuleOpen(false);
@@ -295,7 +297,7 @@ export const ProductFormDialog = ({
   };
 
   const formatRuleSummary = (rule: ProductSpecialPriceRule) => {
-    const priceText = rule.discountType === "FIXED_PRICE" ? `Precio $${Number(rule.fixedPrice ?? 0).toFixed(2)}` : `${Number(rule.percentOff ?? 0)}% off`;
+    const priceText = rule.discountType === "FIXED_PRICE" ? `Precio $${Number(rule.fixedPrice ?? 0).toFixed(2)}` : `${Number(rule.percentOff ?? 0)}% descuento`;
     const daysText = rule.daysOfWeek.length ? `Días: ${rule.daysOfWeek.map((d) => DAYS[d]).join(", ")}` : "Días: Todos";
     const orderTypesText = rule.appliesToAllOrderTypes
       ? "Tipos: Todos"
@@ -367,12 +369,34 @@ export const ProductFormDialog = ({
 
               <div className="space-y-2 pt-1">
                 <Label>Aplicar desechables en</Label>
-                {[{ key: "MESA", label: "Mesa" }, { key: "PARA_LLEVAR", label: "Para llevar" }, { key: "PEDIDOS_YA", label: "Pedidos Ya" }].map((item) => (
-                  <div key={item.key} className="flex items-center space-x-2">
-                    <Checkbox id={`disposable-${item.key}`} checked={disposableApplyTo.includes(item.key)} onCheckedChange={(checked) => setDisposableApplyTo((prev) => checked ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key))} />
-                    <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
-                  </div>
-                ))}
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="disposable-all-service-types"
+                    checked={serviceTypes.length > 0 && disposableApplyTo.length === serviceTypes.length}
+                    onCheckedChange={(checked) => setDisposableApplyTo(checked === true ? serviceTypes.map((item) => item.key) : [])}
+                  />
+                  <Label htmlFor="disposable-all-service-types">Aplica a todos los tipos de pedido</Label>
+                </div>
+                <div className="max-h-28 space-y-2 overflow-y-auto rounded-md border p-2">
+                  {serviceTypes.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Sin tipos de pedido configurados.</p>
+                  ) : (
+                    serviceTypes.map((item) => (
+                      <div key={item.key} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`disposable-${item.key}`}
+                          checked={disposableApplyTo.includes(item.key)}
+                          onCheckedChange={(checked) =>
+                            setDisposableApplyTo((prev) =>
+                              checked === true ? [...new Set([...prev, item.key])] : prev.filter((value) => value !== item.key),
+                            )
+                          }
+                        />
+                        <Label htmlFor={`disposable-${item.key}`}>{item.label}</Label>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center space-x-2 pt-2">
@@ -430,14 +454,14 @@ export const ProductFormDialog = ({
 
       <Dialog open={ruleOpen} onOpenChange={setRuleOpen}>
         <DialogContent className="max-w-2xl p-0">
-          <div className="flex max-h-[90vh] flex-col overflow-hidden rounded-lg">
+          <div className="flex max-h-[90vh] flex-col">
             <DialogHeader className="border-b px-6 py-4 pr-12">
               <DialogTitle>{editingRuleId ? "Editar" : "Nuevo"} precio especial</DialogTitle>
               <DialogDescription>
                 Configura reglas por días, horas, fechas y tipos de pedido.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3 overflow-y-auto px-6 py-4">
+            <div className="space-y-3 overflow-y-auto overflow-x-visible px-6 py-4">
             <div>
               <Label>Nombre (opcional)</Label>
               <Input value={ruleDraft.name ?? ""} onChange={(e) => setRuleDraft((prev) => ({ ...prev, name: e.target.value }))} />
@@ -483,10 +507,41 @@ export const ProductFormDialog = ({
             </div>
             <div>
               <Label>Prioridad</Label>
-              <Input type="number" value={ruleDraft.priority} onChange={(e) => setRuleDraft((prev) => ({ ...prev, priority: Number(e.target.value || 0) }))} />
+              <div className="mt-1 flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority((prev.priority ?? 0) - 1) }))}
+                >
+                  -
+                </Button>
+                <Input
+                  type="number"
+                  min={MIN_RULE_PRIORITY}
+                  max={MAX_RULE_PRIORITY}
+                  step={1}
+                  value={ruleDraft.priority}
+                  onChange={(e) => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority(Number(e.target.value || 0)) }))}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRuleDraft((prev) => ({ ...prev, priority: clampRulePriority((prev.priority ?? 0) + 1) }))}
+                >
+                  +
+                </Button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 900 }))}>ALTA</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 500 }))}>MEDIA</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setRuleDraft((prev) => ({ ...prev, priority: 100 }))}>BAJA</Button>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Prioridad: número mayor = se aplica primero. Si varias reglas coinciden, gana la de mayor número.
+              </p>
             </div>
             <div className="flex items-center gap-2">
-              <Checkbox checked={ruleDraft.appliesToAllOrderTypes} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, appliesToAllOrderTypes: Boolean(checked), orderTypeIds: Boolean(checked) ? [] : prev.orderTypeIds }))} id="rule-all-order-types" />
+              <Checkbox checked={ruleDraft.appliesToAllOrderTypes} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, appliesToAllOrderTypes: checked === true, orderTypeIds: checked === true ? [] : prev.orderTypeIds }))} id="rule-all-order-types" />
               <Label htmlFor="rule-all-order-types">Aplica a todos los tipos de pedido</Label>
             </div>
             {!ruleDraft.appliesToAllOrderTypes && (
@@ -509,7 +564,7 @@ export const ProductFormDialog = ({
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Checkbox checked={ruleDraft.isActive} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, isActive: Boolean(checked) }))} id="rule-active" />
+              <Checkbox checked={ruleDraft.isActive} onCheckedChange={(checked) => setRuleDraft((prev) => ({ ...prev, isActive: checked === true }))} id="rule-active" />
               <Label htmlFor="rule-active">Regla activa</Label>
             </div>
             <div className="flex gap-2 pt-2">

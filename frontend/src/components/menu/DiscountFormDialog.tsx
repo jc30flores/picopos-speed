@@ -27,16 +27,14 @@ const DAYS_SHORT = ["D", "L", "M", "X", "J", "V", "S"];
 
 type DiscountType = "percent" | "fixed" | "bxgy";
 type AppliesTo = "order" | "categories" | "products";
-type ServiceTypeKey = "dine-in" | "takeout" | "delivery" | "kiosk";
+type ServiceTypeKey = string;
 type BxgyRewardType = "percent" | "fixed_amount" | "fixed_price";
 type BxgyApplyTo = "cheapest" | "most_expensive";
 type BxgyMode = "same_pool" | "separate_pool";
 
-const SERVICE_TYPE_KEYS: readonly ServiceTypeKey[] = ["dine-in", "takeout", "delivery", "kiosk"];
 const BXGY_REWARD_TYPES: readonly BxgyRewardType[] = ["percent", "fixed_amount", "fixed_price"];
 const BXGY_APPLY_TO: readonly BxgyApplyTo[] = ["cheapest", "most_expensive"];
 
-const isServiceTypeKey = (value: string): value is ServiceTypeKey => SERVICE_TYPE_KEYS.includes(value as ServiceTypeKey);
 const isDiscountType = (value: string): value is DiscountType => ["percent", "fixed", "bxgy"].includes(value);
 const isAppliesTo = (value: string): value is AppliesTo => ["order", "categories", "products"].includes(value);
 const isBxgyRewardType = (value: string): value is BxgyRewardType => BXGY_REWARD_TYPES.includes(value as BxgyRewardType);
@@ -61,6 +59,7 @@ export const DiscountFormDialog = ({
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [serviceTypes, setServiceTypes] = useState<ServiceTypeKey[]>([]);
+  const serviceTypeLabelByKey = useMemo(() => new Map(availableServiceTypes.map((service) => [service.key, service.label])), [availableServiceTypes]);
   const [minAmount, setMinAmount] = useState("");
   const [autoApply, setAutoApply] = useState(true);
 
@@ -378,13 +377,7 @@ export const DiscountFormDialog = ({
     }
     
     // Service types
-    const services = serviceTypes.map(s => {
-      if (s === "dine-in") return "En local";
-      if (s === "takeout") return "Para llevar";
-      if (s === "delivery") return "Delivery";
-      if (s === "kiosk") return "Kiosk";
-      return s;
-    });
+    const services = serviceTypes.map((s) => serviceTypeLabelByKey.get(s) ?? s);
     if (services.length > 0) parts.push(`para ${services.join(", ")}`);
     
     // Min amount
@@ -421,7 +414,7 @@ export const DiscountFormDialog = ({
       .filter((category) => targetCategories.includes(category.name))
       .map((category) => category.id);
     const serviceTypeKeys = availableServiceTypes
-      .filter((service) => isServiceTypeKey(service.key) && serviceTypes.includes(service.key))
+      .filter((service) => serviceTypes.includes(service.key))
       .map((service) => service.key);
     const valueNumber = parseNumber(value);
     const minAmountNumber = parseNumber(minAmount);
@@ -1090,9 +1083,9 @@ export const DiscountFormDialog = ({
                   {availableServiceTypes.map((service) => (
                     <Badge
                       key={service.id}
-                      variant={isServiceTypeKey(service.key) && serviceTypes.includes(service.key) ? "default" : "outline"}
+                      variant={serviceTypes.includes(service.key) ? "default" : "outline"}
                       className="cursor-pointer"
-                      onClick={() => { if (isServiceTypeKey(service.key)) toggleServiceType(service.key); }}
+                      onClick={() => toggleServiceType(service.key)}
                     >
                       {service.label}
                     </Badge>

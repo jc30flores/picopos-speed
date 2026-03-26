@@ -77,6 +77,37 @@ def _calculate_rule_price(base_price: Decimal, rule: ProductSpecialPriceRule) ->
     return candidate.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _rule_specificity(rule: ProductSpecialPriceRule) -> tuple[int, int, int, int]:
+    return (
+        int(not rule.applies_to_all_order_types),
+        int(bool(rule.start_date or rule.end_date)),
+        int(bool(rule.start_time or rule.end_time)),
+        int(bool(rule.days_of_week)),
+    )
+
+
+def _normalize_sort_dt(value: datetime | None) -> datetime:
+    if value is None:
+        return timezone.make_aware(datetime.min, timezone.get_current_timezone())
+    if timezone.is_naive(value):
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    return value
+
+
+def _rule_sort_key(rule: ProductSpecialPriceRule) -> tuple[float | int, ...]:
+    order_type_specific, has_date_range, has_time_range, has_days = _rule_specificity(rule)
+    return (
+        rule.priority,
+        -order_type_specific,
+        -has_date_range,
+        -has_time_range,
+        -has_days,
+        -_normalize_sort_dt(rule.updated_at).timestamp(),
+        -_normalize_sort_dt(rule.created_at).timestamp(),
+        rule.id,
+    )
+
+
 def resolve_effective_price(
     product: Product,
     *,
@@ -100,6 +131,6 @@ def resolve_effective_price(
     if not matched:
         return EffectivePriceResult(effective_price=base_price, applied_rule=None)
 
-    matched.sort(key=lambda item: (-item[0].priority, item[1], -item[0].id))
+    matched.sort(key=lambda item: _rule_sort_key(item[0]))
     chosen_rule, chosen_price = matched[0]
     return EffectivePriceResult(effective_price=chosen_price, applied_rule=chosen_rule)

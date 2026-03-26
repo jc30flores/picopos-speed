@@ -14,8 +14,10 @@ import {
   dteResend,
   dteSendEmail,
   dteSendWhatsapp,
+  downloadOrderReceiptPdf,
   type DTERecord,
 } from "@/lib/api";
+import { formatDateTimeSV } from "@/lib/datetime";
 
 const canResend = (s: string) => ["PENDIENTE", "RECHAZADO"].includes(s);
 
@@ -84,16 +86,16 @@ export default function DTEPage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} className="border-t">
-                  <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
+                  <td className="p-2">{formatDateTimeSV(r.created_at)}</td>
                   <td className="p-2"><Badge>{r.status}</Badge></td>
                   <td className="p-2">{r.dte_type}</td>
                   <td className="p-2">{r.control_number}</td>
                   <td className="p-2">{r.codigo_generacion}</td>
-                  <td className="p-2">{r.sello_recepcion || "-"}</td>
+                  <td className="p-2">{r.sello_recibido || r.sello_recepcion || "-"}</td>
                   <td className="p-2">{r.receiver_name}</td>
                   <td className="p-2">${Number(r.total_amount).toFixed(2)}</td>
                   <td className="p-2">{r.attempts ?? "-"}</td>
-                  <td className="p-2">{r.last_sent_at ? new Date(r.last_sent_at).toLocaleString() : "-"}</td>
+                  <td className="p-2">{r.last_sent_at ? formatDateTimeSV(r.last_sent_at) : "-"}</td>
                   <td className="p-2 flex gap-2">
                     <Button size="sm" variant="outline" onClick={async () => setSelected(await dteIssuedDetail(r.id))}>Ver</Button>
                     <Button size="sm" variant="outline" disabled={!canResend(r.status)} onClick={async () => { await dteResend(r.id); await load(); }}>Reenviar</Button>
@@ -113,6 +115,9 @@ export default function DTEPage() {
               <p><strong>No. Control:</strong> {selected.control_number}</p>
               <p><strong>Código generación:</strong> {selected.codigo_generacion}</p>
               <p><strong>Sello recepción:</strong> {selected.sello_recepcion || "-"}</p>
+              <p><strong>Firma:</strong> {selected.firma || "-"}</p>
+              <p><strong>Recibido MH:</strong> {selected.recibido_at ? formatDateTimeSV(selected.recibido_at) : "-"}</p>
+              <p><strong>Estado MH:</strong> {selected.estado_mh || selected.hacienda_state || "-"}</p>
               <p><strong>Estado Hacienda:</strong> {selected.hacienda_state || "-"}</p>
               <p><strong>Error:</strong> {selected.error_message || "-"}</p>
               <div className="flex gap-2 flex-wrap">
@@ -134,7 +139,11 @@ export default function DTEPage() {
                 <Button size="sm" variant="secondary" onClick={async () => { await dteCreateCreditNote(selected.id, "Nota de crédito desde panel"); toast({ title: "Nota de crédito creada" }); }}>Nota de crédito</Button>
               </div>
               {selected.request_payload && <pre className="bg-muted p-3 rounded text-xs overflow-auto">{JSON.stringify(selected.request_payload, null, 2)}</pre>}
-              {selected.response_payload && <pre className="bg-muted p-3 rounded text-xs overflow-auto">{JSON.stringify(selected.response_payload, null, 2)}</pre>}
+              {(selected.mh_response_json || selected.response_payload) && (
+                <pre className="bg-muted p-3 rounded text-xs overflow-auto">
+                  {JSON.stringify(selected.mh_response_json || selected.response_payload, null, 2)}
+                </pre>
+              )}
             </div>
           )}
         </DialogContent>
