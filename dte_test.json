@@ -1,0 +1,156 @@
+{
+  "dte": {
+    "identificacion": {
+      "version": 1,
+      "ambiente": "00",
+      "tipoDte": "01",
+      "numeroControl": "DTE-01-M001P001-000000000000011",
+      "codigoGeneracion": "758FFF1B-8A01-4FF7-ABF0-BE0A13325CC6",
+      "fecEmi": "2026-03-25",
+      "horEmi": "15:28:39",
+      "tipoOperacion": 1,
+      "tipoModelo": 1,
+      "tipoMoneda": "USD",
+      "tipoContingencia": null,
+      "motivoContin": null
+    },
+    "emisor": {
+      "nit": "048143931",
+      "nrc": "2564720",
+      "nombre": "Pico de Gallo",
+      "nombreComercial": "Pico de Gallo",
+      "codActividad": "56101",
+      "descActividad": "Restaurantes y puestos de comidas",
+      "tipoEstablecimiento": "02",
+      "codEstableMH": "M001",
+      "codEstable": "M001",
+      "codPuntoVentaMH": "P001",
+      "codPuntoVenta": "P001",
+      "telefono": "60038807",
+      "correo": "facturasPDG23@GMAIL.COM",
+      "direccion": {
+        "departamento": "12",
+        "municipio": "22",
+        "complemento": "9AV NORTE BO SAN FRANCISCO,#507, FRENTE COSTADO SUR DEL PENAL,SAN MIGUEL SAN MIGUEL"
+      }
+    },
+    "receptor": {
+      "tipoDocumento": "13",
+      "numDocumento": "00000000-0",
+      "nombre": "CONSUMIDOR FINAL",
+      "nrc": null,
+      "codActividad": null,
+      "descActividad": null,
+      "direccion": {
+        "departamento": "12",
+        "municipio": "22",
+        "complemento": "Direccion del cliente"
+      },
+      "telefono": "00000000",
+      "correo": null
+    },
+    "cuerpoDocumento": [
+      {
+        "numItem": 1,
+        "tipoItem": 1,
+        "codigo": "PROD-10",
+        "descripcion": "Carne Asada Quesadilla",
+        "cantidad": 1,
+        "uniMedida": 59,
+        "precioUni": "9.99",
+        "montoDescu": "0.00",
+        "ventaNoSuj": "0.00",
+        "ventaExenta": "0.00",
+        "ventaGravada": "9.99",
+        "tributos": null,
+        "psv": "0.00",
+        "noGravado": "0.00",
+        "ivaItem": "1.15",
+        "codTributo": null,
+        "numeroDocumento": null
+      },
+      {
+        "numItem": 2,
+        "tipoItem": 1,
+        "codigo": "PROD-50",
+        "descripcion": "Grilled Chicken Nachos (NEGROS / BLACK BEANS, FUEGO)",
+        "cantidad": 1,
+        "uniMedida": 59,
+        "precioUni": "9.48",
+        "montoDescu": "0.00",
+        "ventaNoSuj": "0.00",
+        "ventaExenta": "0.00",
+        "ventaGravada": "9.48",
+        "tributos": null,
+        "psv": "0.00",
+        "noGravado": "0.00",
+        "ivaItem": "1.09",
+        "codTributo": null,
+        "numeroDocumento": null
+      },
+      {
+        "numItem": 3,
+        "tipoItem": 1,
+        "codigo": "PROD-11",
+        "descripcion": "Carne Asada Burrito (CILANTRO LIMON, NEGROS / BLACK BEANS, FUEGO)",
+        "cantidad": 1,
+        "uniMedida": 59,
+        "precioUni": "8.99",
+        "montoDescu": "0.00",
+        "ventaNoSuj": "0.00",
+        "ventaExenta": "0.00",
+        "ventaGravada": "8.99",
+        "tributos": null,
+        "psv": "0.00",
+        "noGravado": "0.00",
+        "ivaItem": "1.03",
+        "codTributo": null,
+        "numeroDocumento": null
+      }
+    ],
+    "resumen": {
+      "totalNoSuj": "0.00",
+      "totalExenta": "0.00",
+      "totalGravada": "28.46",
+      "subTotalVentas": "28.46",
+      "descuNoSuj": "0.00",
+      "descuExenta": "0.00",
+      "descuGravada": "0.00",
+      "porcentajeDescuento": "0.00",
+      "totalDescu": "0.00",
+      "tributos": null,
+      "subTotal": "28.46",
+      "ivaRete1": "0.00",
+      "reteRenta": "0.00",
+      "montoTotalOperacion": "28.46",
+      "totalNoGravado": "0.00",
+      "totalPagar": "28.46",
+      "totalLetras": "VEINTIOCHO DOLARES CON 46 CENTAVOS",
+      "totalIva": "3.27",
+      "saldoFavor": "0.00",
+      "condicionOperacion": 1,
+      "pagos": [
+        {
+          "codigo": "01",
+          "montoPago": "28.46",
+          "referencia": null,
+          "plazo": null,
+          "periodo": null
+        }
+      ],
+      "numPagoElectronico": null
+    },
+    "extension": {
+      "observaciones": "Venta consumidor final - Pico de Gallo",
+      "placaVehiculo": null,
+      "docuRecibe": null,
+      "nombEntrega": null,
+      "nombRecibe": null,
+      "docuEntrega": null
+    },
+    "apendice": null,
+    "documentoRelacionado": null,
+    "ventaTercero": null,
+    "otrosDocumentos": null
+  }
+}
