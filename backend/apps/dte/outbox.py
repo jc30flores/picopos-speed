@@ -32,19 +32,19 @@ def _extract(payload: dict) -> tuple[str, str]:
 
 
 def _payload_log_enabled() -> bool:
-    return bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False))
+    return bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)) or bool(getattr(settings, "DTE_LOG_VERBOSE", False))
 
 
 def _payload_to_file_enabled() -> bool:
-    return bool(getattr(settings, "DTE_LOG_PAYLOAD_TO_FILE", False))
+    return bool(getattr(settings, "DTE_LOG_TO_FILE", False)) or bool(getattr(settings, "DTE_LOG_PAYLOAD_TO_FILE", False))
 
 
 def _payload_max_chars() -> int:
-    return int(getattr(settings, "DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0)
+    return int(getattr(settings, "DTE_LOG_TRUNCATE_CHARS", 0) or getattr(settings, "DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0)
 
 
 def _payload_dir() -> str:
-    return str(getattr(settings, "DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
+    return str(getattr(settings, "DTE_LOG_DIR", getattr(settings, "DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads")) or "tmp/dte_payloads")
 
 
 def _serialize_payload(payload: dict) -> str:
@@ -70,7 +70,7 @@ def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_contr
     file_path = os.path.join(base_path, filename)
     with open(file_path, "w", encoding="utf-8") as fh:
         fh.write(payload_text)
-    DTE_LOGGER.info("[DTE PAYLOAD] saved_to=%s bytes=%s", file_path, len(payload_text.encode("utf-8")))
+    DTE_LOGGER.info("[CF01] REQUEST saved_to=%s bytes=%s", file_path, len(payload_text.encode("utf-8")))
 
 
 def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None) -> None:
@@ -78,14 +78,14 @@ def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | 
         return
     payload_text = _serialize_payload(payload)
     DTE_LOGGER.info(
-        "[DTE PAYLOAD] BEGIN order=%s payment=%s numero_control=%s codigo_generacion=%s",
+        "[CF01] REQUEST BEGIN order=%s payment=%s numeroControl=%s codigoGeneracion=%s",
         order_id,
         payment_id,
         numero_control,
         codigo_generacion,
     )
     DTE_LOGGER.info("%s", payload_text)
-    DTE_LOGGER.info("[DTE PAYLOAD] END order=%s payment=%s", order_id, payment_id)
+    DTE_LOGGER.info("[CF01] REQUEST END order=%s payment=%s", order_id, payment_id)
     _save_payload_file(
         outbox_id=outbox_id,
         payload_text=payload_text,
@@ -220,7 +220,7 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
         outbox.attempts,
         final_status,
         result.status_code,
-        "n/a",
+        result.elapsed_ms,
         _preview(outbox.response_body),
     )
     _sync_invoice(outbox, parsed)

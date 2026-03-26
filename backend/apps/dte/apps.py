@@ -65,5 +65,4 @@ class DTEConfig(AppConfig):
             f"HEALTH_ENDPOINT={_env('DTE_HEALTH_ENDPOINT', '/health')} "
             f"INTERVAL={interval}s"
         )
-        print(config_msg)
         logger.info(config_msg)

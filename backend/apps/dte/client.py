@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
@@ -24,10 +25,48 @@ class DTEClientResult:
     sello_recibido: str
     error_message: str
     error_type: str
+    elapsed_ms: int
 
 
-def _preview(text: str, max_len: int = 500) -> str:
-    return (text or "").replace("\n", " ").strip()[:max_len]
+def _preview(text: str) -> str:
+    raw = (text or "").replace("\n", " ").strip()
+    truncate = int(getattr(settings, "DTE_LOG_TRUNCATE_CHARS", 0) or 0)
+    if truncate > 0:
+        return raw[:truncate]
+    return raw
+
+
+def _pretty_json(payload: dict) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _sanitize_for_log(payload: dict) -> dict:
+    if bool(getattr(settings, "DTE_LOG_INCLUDE_SIGNED_DOCUMENT", False)):
+        return payload
+    data = dict(payload or {})
+    for key in ["documento_firmado", "signed_document", "firma"]:
+        if key in data:
+            data[key] = "<omitted>"
+    if "dte" in data and isinstance(data["dte"], dict):
+        dte = dict(data["dte"])
+        if "documento_firmado" in dte:
+            dte["documento_firmado"] = "<omitted>"
+        data["dte"] = dte
+    return data
+
+
+def _maybe_write_file(*, suffix: str, numero_control: str, codigo_generacion: str, content: str) -> None:
+    if not bool(getattr(settings, "DTE_LOG_TO_FILE", False)):
+        return
+    base_dir = str(getattr(settings, "DTE_LOG_DIR", "tmp/dte_payloads") or "tmp/dte_payloads")
+    os.makedirs(base_dir, exist_ok=True)
+    safe_control = (numero_control or "nocontrol").replace("/", "_").replace(":", "_").replace(" ", "_")
+    safe_codigo = (codigo_generacion or "nocodigo").replace("/", "_").replace(":", "_").replace(" ", "_")
+    ext = "json" if suffix.endswith("request") or suffix.endswith("response_json") else "txt"
+    path = os.path.join(base_dir, f"{safe_control}_{safe_codigo}_{suffix}.{ext}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    DTE_LOGGER.info("[CF01] %s saved_to=%s bytes=%s", suffix.upper(), path, len(content.encode("utf-8")))
 
 
 class DTEClient:
@@ -82,22 +121,33 @@ class DTEClient:
                 success=False,
                 error_message=str(exc),
             )
-            return DTEClientResult(0, body, str(exc), False, "", "", str(exc), "CONFIG_ERROR")
+            return DTEClientResult(0, body, str(exc), False, "", "", str(exc), "CONFIG_ERROR", 0)
 
-        payload_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         ident = (payload or {}).get("dte", {}).get("identificacion", {})
-        numero_control = ident.get("numeroControl")
-        codigo_generacion = ident.get("codigoGeneracion")
-        DTE_LOGGER.info(
-            "[DTE HTTP] POST url=%s order=%s payment=%s bytes=%s attempt=%s numero_control=%s codigo_generacion=%s",
-            url,
-            order_id,
-            payment_id,
-            len(payload_str.encode("utf-8")),
-            attempt_number,
-            numero_control,
-            codigo_generacion,
-        )
+        numero_control = str(ident.get("numeroControl") or "")
+        codigo_generacion = str(ident.get("codigoGeneracion") or "")
+        dte_type = str(ident.get("tipoDte") or "CF")
+        sanitized_payload = _sanitize_for_log(payload)
+        payload_pretty = _pretty_json(sanitized_payload)
+
+        if bool(getattr(settings, "DTE_LOG_VERBOSE", False)) or bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)):
+            DTE_LOGGER.info("ENDPOINT DTE: %s", url)
+            DTE_LOGGER.info(
+                "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s",
+                order_id,
+                url,
+                numero_control,
+                codigo_generacion,
+                dte_type,
+            )
+            DTE_LOGGER.info("JSON DTE ENVIO:\n%s", payload_pretty)
+            DTE_LOGGER.info("[CF01] REQUEST:\n%s", payload_pretty)
+            _maybe_write_file(
+                suffix="request",
+                numero_control=numero_control,
+                codigo_generacion=codigo_generacion,
+                content=payload_pretty,
+            )
 
         started = time.perf_counter()
         status_code = 0
@@ -148,7 +198,31 @@ class DTEClient:
             DTE_LOGGER.exception("[DTE HTTP] unexpected error order=%s payment=%s", order_id, payment_id)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        DTE_LOGGER.info("[DTE HTTP] RESP status=%s elapsed_ms=%s body_preview=%s", status_code, elapsed_ms, _preview(text_body))
+        DTE_LOGGER.info("[CF01] Authorization presente=%s", bool((self.api_token or "").strip()))
+
+        if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)):
+            DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, text_body)
+        else:
+            DTE_LOGGER.info("[CF01] RESPONSE status=%s:\n%s", status_code, _preview(text_body))
+
+        try:
+            response_pretty = _pretty_json(parsed_json if isinstance(parsed_json, dict) else {"raw": text_body})
+            DTE_LOGGER.info("[CF01] RESPONSE JSON:\n%s", response_pretty)
+            _maybe_write_file(
+                suffix="response_json",
+                numero_control=numero_control,
+                codigo_generacion=codigo_generacion,
+                content=response_pretty,
+            )
+        except Exception:
+            body_display = text_body if bool(getattr(settings, "DTE_LOG_RESPONSE_FULL", False)) else _preview(text_body)
+            DTE_LOGGER.info("[CF01] RESPONSE BODY (non-json):\n%s", body_display)
+            _maybe_write_file(
+                suffix="response",
+                numero_control=numero_control,
+                codigo_generacion=codigo_generacion,
+                content=body_display,
+            )
 
         rh = parsed_json.get("respuesta_hacienda") if isinstance(parsed_json, dict) else {}
         rh = rh if isinstance(rh, dict) else {}
@@ -161,7 +235,7 @@ class DTEClient:
             if isinstance(maybe_err, dict):
                 error_message = str(maybe_err.get("message") or "")
 
-        DTETransmissionLog.objects.create(
+        log_row = DTETransmissionLog.objects.create(
             order_id=order_id,
             payment_id=payment_id,
             branch_id=branch_id,
@@ -174,6 +248,14 @@ class DTEClient:
             error_message=error_message,
         )
 
+        DTE_LOGGER.info(
+            "INFO DTE_MH_PERSIST invoice_id=%s dte_record_id=%s estado=%s sello_present=%s",
+            order_id,
+            log_row.id,
+            (parsed_json.get("estado") if isinstance(parsed_json, dict) else ""),
+            bool(sello),
+        )
+
         return DTEClientResult(
             status_code=status_code,
             json_body=parsed_json if isinstance(parsed_json, dict) else {"raw": text_body},
@@ -183,4 +265,5 @@ class DTEClient:
             sello_recibido=sello,
             error_message=error_message,
             error_type=error_type,
+            elapsed_ms=elapsed_ms,
         )
