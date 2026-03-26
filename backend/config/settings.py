@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import os
 
 try:
@@ -210,3 +211,17 @@ RECEIPT_PRINTER_USB_PRODUCT_ID = _env_int("RECEIPT_PRINTER_USB_PRODUCT_ID", PRIN
 RECEIPT_PRINTER_USB_INTERFACE = _env_int("RECEIPT_PRINTER_USB_INTERFACE", PRINTER_USB_INTERFACE or CASH_DRAWER_USB_INTERFACE)
 RECEIPT_PRINTER_USB_OUT_ENDPOINT = _env_int("RECEIPT_PRINTER_USB_OUT_ENDPOINT", PRINTER_USB_OUT_ENDPOINT or CASH_DRAWER_USB_OUT_ENDPOINT)
 RECEIPT_PRINTER_CUT_ENABLED = _env_bool("RECEIPT_PRINTER_CUT_ENABLED", default=True)
+
+MH_AMBIENTE = os.environ.get("MH_AMBIENTE", "").strip()
+DTE_BASE_URL = os.environ.get("DTE_BASE_URL", "").strip()
+DTE_API_TOKEN = os.environ.get("DTE_API_TOKEN", "").strip()
+DTE_API_AUTH_HEADER = os.environ.get("DTE_API_AUTH_HEADER", "Authorization").strip() or "Authorization"
+DTE_API_AUTH_PREFIX = os.environ.get("DTE_API_AUTH_PREFIX", "Bearer").strip() or "Bearer"
+DTE_TIMEOUT_SECONDS = _env_int("DTE_TIMEOUT_SECONDS", 30) or 30
+DTE_DEBUG = _env_bool("DTE_DEBUG", default=False)
+
+logging.getLogger(__name__).info(
+    "[DTE CONFIG] base_url=%r mh_ambiente=%r",
+    DTE_BASE_URL,
+    MH_AMBIENTE,
+)

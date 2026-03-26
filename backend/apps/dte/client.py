@@ -34,8 +34,8 @@ def _mask_token(token: str) -> str:
 
 
 class DTEClient:
-    def __init__(self):
-        self.base_url = (getattr(settings, "DTE_BASE_URL", "") or "").rstrip("/")
+    def __init__(self, base_url: str | None = None):
+        self.base_url = (base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip().rstrip("/")
         self.auth_header = getattr(settings, "DTE_API_AUTH_HEADER", "Authorization")
         self.auth_prefix = getattr(settings, "DTE_API_AUTH_PREFIX", "Bearer")
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
@@ -43,11 +43,12 @@ class DTEClient:
         self.debug = str(getattr(settings, "DTE_DEBUG", "0")) in {"1", "true", "True"}
 
     def _build_url(self, path: str) -> str:
-        if not self.base_url:
+        base_url = (self.base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip()
+        if not base_url:
             raise ValueError("DTE_BASE_URL is not configured")
-        if not (self.base_url.startswith("http://") or self.base_url.startswith("https://")):
+        if not (base_url.startswith("http://") or base_url.startswith("https://")):
             raise ValueError("DTE_BASE_URL must start with http:// or https://")
-        return urljoin(f"{self.base_url.rstrip('/')}/", path.lstrip("/"))
+        return urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
 
     def _headers(self) -> dict[str, str]:
         token_value = f"{self.auth_prefix} {self.api_token}".strip()
@@ -76,6 +77,12 @@ class DTEClient:
         branch_id: int | None = None,
     ) -> DTEClientResult:
         try:
+            logger.info(
+                "[DTE] URL CONFIG >>> self.base_url=%r settings.DTE_BASE_URL=%r path=%r",
+                self.base_url,
+                getattr(settings, "DTE_BASE_URL", ""),
+                path,
+            )
             url = self._build_url(path)
         except Exception as exc:  # noqa: BLE001
             logger.exception("[DTE] URL BUILD ERROR path=%s", path)
