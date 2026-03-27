@@ -25,6 +25,7 @@ import { toast } from "sonner";
 
 type ClientType = "CF" | "CCF" | "SX";
 type FormState = Partial<Customer> & { fullName: string; clientType: ClientType };
+const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
 
 const emptyForm: FormState = {
   fullName: "",
@@ -34,7 +35,7 @@ const emptyForm: FormState = {
   nit: "",
   nrc: "",
   phone: "",
-  email: "",
+  email: DEFAULT_CUSTOMER_EMAIL,
   direccion: "",
   departmentCode: "",
   municipalityCode: "",
@@ -160,7 +161,7 @@ export default function CustomersPage() {
       nit: c.nit || "",
       nrc: c.nrc || "",
       phone: c.phone || "",
-      email: c.email || "",
+      email: c.email || DEFAULT_CUSTOMER_EMAIL,
       direccion: c.direccion || "",
       departmentCode: c.departmentCode || "",
       municipalityCode: c.municipalityCode || "",
@@ -491,6 +492,7 @@ export default function CustomersPage() {
                 <div>
                   <Label>Email {isCcf(form.clientType) ? "*" : "(opcional)"}</Label>
                   <Input disabled={!canWrite} value={form.email || ""} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+                  <Badge variant="secondary" className="mt-1">Default: {DEFAULT_CUSTOMER_EMAIL}</Badge>
                   {fieldErrors.email ? <p className="text-xs text-red-600">{fieldErrors.email}</p> : null}
                 </div>
               </TabsContent>

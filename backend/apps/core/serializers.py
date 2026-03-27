@@ -55,6 +55,7 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 
 class ClientSerializer(serializers.ModelSerializer):
+    DEFAULT_EMAIL = "facturasPDG23@gmail.com"
     is_deleted = serializers.BooleanField(read_only=True)
 
     class Meta:
@@ -82,6 +83,10 @@ class ClientSerializer(serializers.ModelSerializer):
 
     phone = serializers.CharField(source="telefono", required=False, allow_blank=True)
     email = serializers.EmailField(source="correo", required=False, allow_blank=True, allow_null=True)
+
+    def _default_email_if_empty(self, value: str | None) -> str:
+        email = (value or "").strip()
+        return email or self.DEFAULT_EMAIL
 
     def _digits(self, value: str | None) -> str:
         return re.sub(r"[^0-9]", "", value or "")
@@ -153,7 +158,7 @@ class ClientSerializer(serializers.ModelSerializer):
                 data["dui"] = ""
 
             data["telefono"] = self._format_phone(data.get("telefono"))
-            data["correo"] = (data.get("correo") or "").strip()
+            data["correo"] = self._default_email_if_empty(data.get("correo"))
             data["company_name"] = (data.get("company_name") or "").strip().upper()
             data["nrc"] = (data.get("nrc") or "").strip()
 
@@ -181,7 +186,7 @@ class ClientSerializer(serializers.ModelSerializer):
                 "nit": nit_digits,
                 "nrc": (data.get("nrc") or "").strip(),
                 "telefono": self._digits(data.get("telefono")),
-                "correo": (data.get("correo") or "").strip(),
+                "correo": self._default_email_if_empty(data.get("correo")),
                 "direccion": (data.get("direccion") or "").strip(),
                 "department_code": dept_code,
                 "municipality_code": muni_code,
@@ -194,7 +199,7 @@ class ClientSerializer(serializers.ModelSerializer):
             phone_digits = self._digits(data.get("telefono"))
             if len(phone_digits) != 8:
                 errors["phone"] = "Teléfono debe tener 8 dígitos."
-            email = (data.get("correo") or "").strip()
+            email = self._default_email_if_empty(data.get("correo"))
             if "@" not in email or "." not in email:
                 errors["email"] = "Email inválido."
             if not ((data.get("activity_code") or "").strip() or (data.get("activity_description") or "").strip()):
@@ -212,6 +217,17 @@ class ClientSerializer(serializers.ModelSerializer):
 
         attrs.update(data)
         return attrs
+
+    def create(self, validated_data):
+        validated_data["correo"] = self._default_email_if_empty(validated_data.get("correo"))
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if "correo" in validated_data:
+            validated_data["correo"] = self._default_email_if_empty(validated_data.get("correo"))
+        elif not instance.correo:
+            validated_data["correo"] = self.DEFAULT_EMAIL
+        return super().update(instance, validated_data)
 
 
 class GeoDepartmentSerializer(serializers.ModelSerializer):

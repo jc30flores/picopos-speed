@@ -3,6 +3,7 @@ from django.db import connection
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from apps.core.models import Customer
 from apps.core.serializers import ClientSerializer
 
 
@@ -143,3 +144,34 @@ class ClientSerializerRulesTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["dui"], "00000000-0")
         self.assertEqual(serializer.validated_data["telefono"], "7123-4567")
+
+    def test_serializer_assigns_default_email_on_create(self):
+        serializer = ClientSerializer(data={"full_name": "Cliente Rapido", "client_type": "CF", "email": ""})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        instance = serializer.save()
+        self.assertEqual(instance.correo, "facturasPDG23@gmail.com")
+
+    def test_serializer_reassigns_default_email_on_update_when_cleared(self):
+        customer = Customer.objects.create(full_name="Cliente Update", client_type="CF", correo="custom@example.com")
+        serializer = ClientSerializer(instance=customer, data={"email": ""}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        updated = serializer.save()
+        self.assertEqual(updated.correo, "facturasPDG23@gmail.com")
+
+    def test_serializer_ccf_uses_default_email_when_missing(self):
+        serializer = ClientSerializer(
+            data={
+                "full_name": "Empresa X",
+                "client_type": "CCF",
+                "company_name": "Empresa X",
+                "nit": "06141234567890",
+                "nrc": "1234567",
+                "phone": "71234567",
+                "direccion": "Centro",
+                "department_code": "12",
+                "municipality_code": "22",
+                "activity_code": "62010",
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["correo"], "facturasPDG23@gmail.com")
