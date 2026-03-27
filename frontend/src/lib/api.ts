@@ -3140,11 +3140,11 @@ export const createCustomer = async (payload: Partial<Customer> & { fullName: st
       dui: payload.dui ?? '',
       nit: payload.nit ?? '',
       nrc: payload.nrc ?? null,
-      phone: payload.phone ?? '00000000',
+      phone: payload.phone ?? '',
       email: payload.email ?? null,
-      direccion: payload.direccion ?? 'Direccion del cliente',
-      department_code: payload.departmentCode ?? '12',
-      municipality_code: payload.municipalityCode ?? '22',
+      direccion: payload.direccion ?? '',
+      department_code: payload.departmentCode ?? '',
+      municipality_code: payload.municipalityCode ?? '',
       activity_code: payload.activityCode ?? '',
       activity_description: payload.activityDescription ?? '',
       is_consumer_final: Boolean(payload.isConsumerFinal),
@@ -3187,18 +3187,31 @@ export const deleteCustomer = async (id: number): Promise<void> => {
 };
 
 export const listDepartments = async () => {
+  if ((listDepartments as any)._cache) return (listDepartments as any)._cache as Array<{ code: string; name: string }>;
   const response = await request('/clients/geo/departments/');
-  return handleJson<Array<{ code: string; name: string }>>(response);
+  const data = await handleJson<Array<{ code: string; name: string }>>(response);
+  (listDepartments as any)._cache = data;
+  return data;
 };
 
 export const listMunicipalities = async (departmentCode?: string) => {
+  const key = departmentCode || "__all__";
+  const cache = ((listMunicipalities as any)._cache ||= new Map<string, Array<{ code: string; department_code: string; name: string }>>());
+  if (cache.has(key)) return cache.get(key)!;
   const response = await request(`/clients/geo/municipalities/${departmentCode ? `?department_code=${departmentCode}` : ''}`);
-  return handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+  const data = await handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+  cache.set(key, data);
+  return data;
 };
 
 export const listActivities = async (q = '') => {
+  const key = q || "__all__";
+  const cache = ((listActivities as any)._cache ||= new Map<string, Array<{ code: string; description: string }>>());
+  if (cache.has(key)) return cache.get(key)!;
   const response = await request(`/clients/activities/${q ? `?q=${encodeURIComponent(q)}` : ''}`);
-  return handleJson<Array<{ code: string; description: string }>>(response);
+  const data = await handleJson<Array<{ code: string; description: string }>>(response);
+  cache.set(key, data);
+  return data;
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {

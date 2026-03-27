@@ -83,49 +83,132 @@ class ClientSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(source="telefono", required=False, allow_blank=True)
     email = serializers.EmailField(source="correo", required=False, allow_blank=True, allow_null=True)
 
+    def _digits(self, value: str | None) -> str:
+        return re.sub(r"[^0-9]", "", value or "")
+
+    def _format_dui(self, digits: str) -> str:
+        return f"{digits[:8]}-{digits[8]}" if len(digits) == 9 else "00000000-0"
+
+    def _format_phone(self, value: str | None) -> str:
+        digits = self._digits(value)[:8]
+        if not digits:
+            return "0000-0000"
+        if len(digits) < 8:
+            digits = digits.ljust(8, "0")
+        return f"{digits[:4]}-{digits[4:8]}"
+
+    def _resolve_geo_defaults(self) -> tuple[str, str, str]:
+        from apps.core.models import GeoDepartment, GeoMunicipality
+
+        dept = GeoDepartment.objects.filter(name__iexact="SAN MIGUEL").first() or GeoDepartment.objects.filter(code="12").first()
+        dept_code = getattr(dept, "code", "12")
+        dept_name = getattr(dept, "name", "SAN MIGUEL")
+        muni = (
+            GeoMunicipality.objects.filter(department_code=dept_code, name__iexact="SAN MIGUEL CENTRO").first()
+            or GeoMunicipality.objects.filter(department_code=dept_code).order_by("name").first()
+        )
+        muni_code = getattr(muni, "municipality_code", "22")
+        return dept_code, muni_code, dept_name
+
     def validate(self, attrs):
-        data = {**{k: getattr(self.instance, k, None) for k in ["client_type", "dui", "nit", "nrc", "full_name", "direccion", "department_code", "municipality_code", "activity_code", "activity_description", "is_consumer_final"] if self.instance}, **attrs}
+        base_keys = [
+            "client_type",
+            "dui",
+            "nit",
+            "nrc",
+            "full_name",
+            "company_name",
+            "direccion",
+            "department_code",
+            "municipality_code",
+            "activity_code",
+            "activity_description",
+            "telefono",
+            "correo",
+            "is_consumer_final",
+        ]
+        data = {**{k: getattr(self.instance, k, None) for k in base_keys if self.instance}, **attrs}
         ctype = (data.get("client_type") or "CF").upper()
+        data["client_type"] = ctype
 
-        dui = re.sub(r"[^0-9]", "", data.get("dui") or "")
-        if data.get("dui"):
-            if len(dui) != 9:
-                raise serializers.ValidationError({"dui": "DUI inválido (formato 00000000-0)."})
-            data["dui"] = f"{dui[:8]}-{dui[8]}"
+        full_name = (data.get("full_name") or "").strip()
+        if not full_name:
+            raise serializers.ValidationError({"full_name": "Este campo es requerido."})
+        data["full_name"] = full_name.upper()
 
-        nit_digits = re.sub(r"[^0-9]", "", data.get("nit") or "")
+        dept_code = (data.get("department_code") or "").strip()
+        muni_code = (data.get("municipality_code") or "").strip()
+        dept_default, muni_default, dept_name_default = self._resolve_geo_defaults()
+
+        if ctype in {"CF", "SX"}:
+            document_digits = self._digits(data.get("dui") or data.get("nit"))
+            if not document_digits:
+                data["dui"] = "00000000-0"
+                data["nit"] = ""
+            elif len(document_digits) <= 9:
+                data["dui"] = self._format_dui(document_digits if len(document_digits) == 9 else "000000000")
+                data["nit"] = ""
+            else:
+                data["nit"] = document_digits[:14]
+                data["dui"] = ""
+
+            data["telefono"] = self._format_phone(data.get("telefono"))
+            data["correo"] = (data.get("correo") or "").strip()
+            data["company_name"] = (data.get("company_name") or "").strip().upper()
+            data["nrc"] = (data.get("nrc") or "").strip()
+
+            if not dept_code and not muni_code:
+                dept_code, muni_code = dept_default, muni_default
+            elif dept_code and not muni_code:
+                from apps.core.models import GeoMunicipality
+
+                first_muni = GeoMunicipality.objects.filter(department_code=dept_code).order_by("name").first()
+                muni_code = getattr(first_muni, "municipality_code", muni_default if dept_code == dept_default else "")
+            data["department_code"] = dept_code or dept_default
+            data["municipality_code"] = muni_code or muni_default
+
+            if not (data.get("direccion") or "").strip():
+                data["direccion"] = dept_name_default if data["department_code"] == dept_default else "SAN MIGUEL"
+            else:
+                data["direccion"] = (data.get("direccion") or "").strip()
+
         if ctype == "CCF":
+            errors = {}
+            nit_digits = self._digits(data.get("nit"))
             required = {
                 "full_name": data.get("full_name"),
+                "company_name": data.get("company_name"),
                 "nit": nit_digits,
-                "nrc": re.sub(r"[^0-9]", "", data.get("nrc") or ""),
-                "department_code": data.get("department_code"),
-                "municipality_code": data.get("municipality_code"),
-                "direccion": data.get("direccion"),
+                "nrc": (data.get("nrc") or "").strip(),
+                "telefono": self._digits(data.get("telefono")),
+                "correo": (data.get("correo") or "").strip(),
+                "direccion": (data.get("direccion") or "").strip(),
+                "department_code": dept_code,
+                "municipality_code": muni_code,
             }
-            missing = {k: "Este campo es requerido para CCF." for k, v in required.items() if not v}
-            if not (data.get("activity_code") or data.get("activity_description")):
-                missing["activity_code"] = "activity_code o activity_description es requerido para CCF."
-            if missing:
-                raise serializers.ValidationError(missing)
+            for field, value in required.items():
+                if not value:
+                    errors[field] = "Este campo es requerido para CCF."
             if len(nit_digits) != 14:
-                raise serializers.ValidationError({"nit": "NIT debe tener 14 dígitos."})
+                errors["nit"] = "NIT debe tener 14 dígitos."
+            phone_digits = self._digits(data.get("telefono"))
+            if len(phone_digits) != 8:
+                errors["phone"] = "Teléfono debe tener 8 dígitos."
+            email = (data.get("correo") or "").strip()
+            if "@" not in email or "." not in email:
+                errors["email"] = "Email inválido."
+            if not ((data.get("activity_code") or "").strip() or (data.get("activity_description") or "").strip()):
+                errors["activity_code"] = "Actividad económica requerida."
+            if errors:
+                raise serializers.ValidationError(errors)
             data["nit"] = nit_digits
-            data["nrc"] = re.sub(r"[^0-9]", "", data.get("nrc") or "")
-
-        if ctype == "SX":
-            required = {
-                "dui": data.get("dui"),
-                "direccion": data.get("direccion"),
-                "department_code": data.get("department_code"),
-                "municipality_code": data.get("municipality_code"),
-            }
-            missing = {k: "Este campo es requerido para SX." for k, v in required.items() if not v}
-            if missing:
-                raise serializers.ValidationError(missing)
-
-        if ctype == "CF" and not data.get("full_name"):
-            data["full_name"] = "CONSUMIDOR FINAL"
+            data["dui"] = ""
+            data["telefono"] = self._format_phone(data.get("telefono"))
+            data["correo"] = email
+            data["company_name"] = (data.get("company_name") or "").strip().upper()
+            data["direccion"] = (data.get("direccion") or "").strip()
+            data["department_code"] = dept_code
+            data["municipality_code"] = muni_code
 
         attrs.update(data)
         return attrs
