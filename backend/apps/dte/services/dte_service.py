@@ -9,7 +9,8 @@ from typing import Any
 from django.conf import settings
 
 from apps.dte.client import DTEClient
-from apps.dte.models import CreditNote, DTEBranchConfig, DTERecord, DteInvalidationAttempt
+from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 
 
@@ -71,44 +72,7 @@ def _money(v: Decimal) -> str:
 
 
 def _resolve_branch_config(order):
-    cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
-    if cfg:
-        return {
-            "nit": cfg.emisor_nit,
-            "nrc": cfg.emisor_nrc,
-            "nombre": cfg.emisor_nombre,
-            "nombreComercial": cfg.emisor_nombre_comercial,
-            "codActividad": cfg.cod_actividad,
-            "descActividad": cfg.desc_actividad,
-            "tipoEstablecimiento": cfg.tipo_establecimiento,
-            "codEstableMH": cfg.cod_estable_mh,
-            "codEstable": cfg.cod_estable,
-            "codPuntoVentaMH": cfg.cod_punto_venta_mh,
-            "codPuntoVenta": cfg.cod_punto_venta,
-            "departamento": cfg.direccion_departamento,
-            "municipio": cfg.direccion_municipio,
-            "complemento": cfg.direccion_complemento,
-            "telefono": cfg.telefono,
-            "correo": cfg.correo,
-        }
-    return {
-        "nit": _get_env("DTE_EMISOR_DUI"),
-        "nrc": "",
-        "nombre": _get_env("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
-        "nombreComercial": _get_env("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
-        "codActividad": "",
-        "descActividad": "",
-        "tipoEstablecimiento": "",
-        "codEstableMH": "M001",
-        "codEstable": "M001",
-        "codPuntoVentaMH": "P001",
-        "codPuntoVenta": "P001",
-        "departamento": "",
-        "municipio": "",
-        "complemento": "",
-        "telefono": _get_env("DTE_EMISOR_TELEFONO"),
-        "correo": _get_env("DTE_EMISOR_CORREO"),
-    }
+    return get_emisor_config(order.branch)
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -176,6 +140,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     from django.utils import timezone
 
     emisor = _resolve_branch_config(order)
+    final_nit = get_emisor_nit(order.branch)
+    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, order.branch_id)
+    print(f"[DTE DEBUG] Emisor NIT final utilizado={final_nit}")
     required_emisor = ["nit", "nrc", "nombre", "nombreComercial", "codActividad", "descActividad"]
     missing = [k for k in required_emisor if not emisor.get(k)]
     if missing:

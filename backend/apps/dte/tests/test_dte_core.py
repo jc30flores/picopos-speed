@@ -6,9 +6,11 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
-from apps.dte.models import DTERecord
+from apps.dte.client import DTEClient
+from apps.dte.models import DTEBranchConfig, DTERecord
 from apps.dte.services.control import next_control_number
-from apps.dte.services.dte_service import interpret_dte_response
+from apps.dte.services.dte_service import build_payload_cf, interpret_dte_response
+from apps.dte.services.emisor import get_emisor_nit
 from apps.orders.models import Order
 from apps.users.models import UserProfile
 
@@ -51,6 +53,28 @@ class DTECoreTests(TestCase):
         parsed = interpret_dte_response({"http_status": 502, "raw": "<html>bad gateway</html>"})
         self.assertEqual(parsed["status"], DTERecord.STATUS_PENDING)
         self.assertIn("html", parsed["response_text"].lower())
+
+    def test_get_emisor_nit_uses_branch_config(self):
+        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="1217-140990-106-3", is_active=True)
+        self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    @patch("apps.dte.client.DTEClient._build_url")
+    @patch("apps.dte.client.requests.Session.post")
+    def test_client_blocks_send_on_emisor_nit_mismatch(self, mock_post, mock_build_url):
+        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="12171409901063", is_active=True)
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000001", "A" * 36, "00")
+        payload["dte"]["emisor"]["nit"] = "00000000000000"
+        mock_build_url.return_value = "https://example.test/api/v1/dte/factura"
+
+        result = DTEClient(base_url="https://example.test").send(
+            path="/api/v1/dte/factura",
+            payload=payload,
+            order_id=self.order.id,
+            branch_id=self.branch.id,
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "EMISOR_NIT_MISMATCH")
+        mock_post.assert_not_called()
 
 
 class DTEResendEndpointTests(TestCase):

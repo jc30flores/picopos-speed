@@ -10,7 +10,9 @@ from urllib.parse import urljoin
 import requests
 from django.conf import settings
 
+from apps.core.models import Branch
 from apps.dte.models import DTETransmissionLog
+from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 
 DTE_LOGGER = logging.getLogger("apps.dte")
@@ -185,6 +187,34 @@ class DTEClient:
             "numero_control": numero_control,
             "codigo_generacion": codigo_generacion,
         }
+        branch = Branch.objects.filter(id=branch_id).first() if branch_id else None
+        expected_nit = get_emisor_nit(branch)
+        payload_nit = payload_emisor_nit(payload)
+        DTE_LOGGER.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", expected_nit, branch_id)
+        if expected_nit and payload_nit and payload_nit != expected_nit:
+            message = f"NIT emisor inconsistente: payload={payload_nit} esperado={expected_nit}"
+            DTE_LOGGER.critical("[DTE CRITICAL] %s", message)
+            DTETransmissionLog.objects.create(
+                order_id=order_id,
+                payment_id=payment_id,
+                branch_id=branch_id,
+                request_payload=payload,
+                response_status=0,
+                response_body={"success": False, "error": {"message": message, "type": "EMISOR_NIT_MISMATCH"}},
+                success=False,
+                error_message=message,
+            )
+            return DTEClientResult(
+                0,
+                {"success": False, "error": {"message": message, "type": "EMISOR_NIT_MISMATCH"}},
+                message,
+                False,
+                "",
+                "",
+                message,
+                "EMISOR_NIT_MISMATCH",
+                0,
+            )
 
         DTE_LOGGER.info(
             "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s",
