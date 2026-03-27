@@ -138,6 +138,8 @@ class GeoDepartmentSerializer(serializers.ModelSerializer):
 
 
 class GeoMunicipalitySerializer(serializers.ModelSerializer):
+    code = serializers.CharField(source="municipality_code", read_only=True)
+
     class Meta:
         model = GeoMunicipality
         fields = ["code", "department_code", "name"]
