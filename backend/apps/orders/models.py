@@ -126,9 +126,11 @@ class Order(models.Model):
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
-    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="order_items")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="order_items", null=True, blank=True)
     product_name_snapshot = models.CharField(max_length=160)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
+    snapshot_sku_or_code = models.CharField(max_length=80, blank=True, default="")
+    is_custom = models.BooleanField(default=False)
     quantity = models.PositiveIntegerField(default=1)
     assigned_name = models.CharField(max_length=80, blank=True, default="")
     applied_special_price_rule = models.ForeignKey(ProductSpecialPriceRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
@@ -199,6 +201,7 @@ class OrderInvoice(models.Model):
     codigo_generacion = models.CharField(max_length=40, blank=True)
     hacienda_payload = models.JSONField(default=dict, blank=True)
     hacienda_response = models.JSONField(default=dict, blank=True)
+    sale_snapshot = models.JSONField(default=dict, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

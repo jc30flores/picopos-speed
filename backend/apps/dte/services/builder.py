@@ -21,6 +21,7 @@ def build_dte_payload(order: Order, numero_control: str, codigo_generacion: str,
         "cuerpoDocumento": [
             {
                 "nombre": item.product_name_snapshot,
+                "codigo": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
                 "cantidad": item.quantity,
                 "precioUnitario": _as_str(item.price_snapshot),
             }

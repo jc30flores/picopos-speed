@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, DollarSign, Delete } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -49,6 +49,7 @@ import {
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
+  changeProductPrice,
   Category,
   ModifierGroup,
   Product,
@@ -65,12 +66,15 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface CartItem {
   id: string;
-  productId: number;
+  productId: number | null;
   name: string;
   basePrice: number;
   originalBasePrice?: number;
   price: number;
   quantity: number;
+  isCustom?: boolean;
+  customCode?: string;
+  assignedName?: string;
   appliedSpecialPriceRuleName?: string | null;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
@@ -178,6 +182,17 @@ const POS = () => {
     serviceType: typeof serviceType;
     createdAt: number;
   } | null>(null);
+  const [isManualProductOpen, setIsManualProductOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualQty, setManualQty] = useState("1");
+  const [manualPrice, setManualPrice] = useState("");
+  const [manualNote, setManualNote] = useState("");
+  const [priceEditorProduct, setPriceEditorProduct] = useState<Product | null>(null);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [validatedPin, setValidatedPin] = useState("");
+  const [newPriceInput, setNewPriceInput] = useState("");
 
   const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -319,6 +334,7 @@ const POS = () => {
           originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
           price: totalPrice,
           quantity: 1,
+          isCustom: false,
           appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
           modifiers,
         },
@@ -339,6 +355,40 @@ const POS = () => {
 
   const removeItem = (itemId: string) => {
     setCart(cart.filter((item) => item.id !== itemId));
+  };
+
+  const handleAddManualProduct = () => {
+    const quantity = Math.max(1, Math.floor(Number(manualQty || 1)));
+    const price = Number(manualPrice);
+    if (!manualName.trim()) {
+      toast.error("Nombre es requerido");
+      return;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      toast.error("Precio unitario inválido");
+      return;
+    }
+    const code = `MANUAL-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    setCart((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        productId: null,
+        name: manualName.trim(),
+        basePrice: price,
+        price,
+        quantity,
+        isCustom: true,
+        customCode: code,
+        assignedName: manualNote.trim() || undefined,
+        modifiers: [],
+      },
+    ]);
+    setManualName("");
+    setManualQty("1");
+    setManualPrice("");
+    setManualNote("");
+    setIsManualProductOpen(false);
   };
 
   const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
@@ -704,6 +754,9 @@ const POS = () => {
               productName: item.name,
               price: item.basePrice,
               quantity: item.quantity,
+              isCustom: Boolean(item.isCustom),
+              customCode: item.customCode,
+              assignedName: item.assignedName,
               modifiers: item.modifiers,
             })),
           });
@@ -862,6 +915,25 @@ const POS = () => {
                     className="p-3 cursor-pointer hover-lift"
                     onClick={() => handleProductClick(product)}
                   >
+                    <div className="mb-1 flex items-start justify-between gap-1">
+                      <div />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        title="Cambiar precio"
+                        onClick={async (event) => {
+                          event.stopPropagation();
+                          setPriceEditorProduct(product);
+                          setPinInput("");
+                          setValidatedPin("");
+                          setIsPinModalOpen(true);
+                        }}
+                      >
+                        <DollarSign className="h-4 w-4" />
+                      </Button>
+                    </div>
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
                     {product.isSpecialPriceActiveNow && (
                       <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
@@ -891,6 +963,9 @@ const POS = () => {
                 <h2 className="text-xl font-bold">Pedido Actual</h2>
                 <Button variant="outline" size="sm" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
               </div>
+              <Button type="button" className="w-full" onClick={() => setIsManualProductOpen(true)}>
+                + Producto manual
+              </Button>
               
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {serviceTypes.length > 0 ? (
@@ -1419,6 +1494,108 @@ const POS = () => {
             <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
               {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isManualProductOpen} onOpenChange={setIsManualProductOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Agregar producto manual</DialogTitle>
+            <DialogDescription>Este producto solo existe en esta venta.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Nombre *</Label>
+              <Input value={manualName} onChange={(e) => setManualName(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Cantidad *</Label>
+                <Input type="number" min={1} step={1} value={manualQty} onChange={(e) => setManualQty(e.target.value)} />
+              </div>
+              <div>
+                <Label>Precio unitario *</Label>
+                <Input type="number" min={0.01} step={0.01} value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <Label>Nota</Label>
+              <Input value={manualNote} onChange={(e) => setManualNote(e.target.value)} />
+            </div>
+            <Button className="w-full" onClick={handleAddManualProduct}>Agregar al carrito</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPinModalOpen} onOpenChange={setIsPinModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Ingrese código</DialogTitle>
+            <DialogDescription>{priceEditorProduct ? `Cambiar precio de ${priceEditorProduct.name}` : ""}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 4 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
+            <div className="grid grid-cols-3 gap-2">
+              {[1,2,3,4,5,6,7,8,9].map((n) => (
+                <Button key={n} variant="outline" className="h-12" onClick={async () => {
+                  const next = `${pinInput}${n}`.slice(0, 4);
+                  setPinInput(next);
+                  if (next.length === 4 && priceEditorProduct) {
+                    try {
+                      await changeProductPrice(priceEditorProduct.id, { code: next, validateOnly: true });
+                      setValidatedPin(next);
+                      setNewPriceInput((priceEditorProduct.effectivePrice ?? priceEditorProduct.price).toFixed(2));
+                      setIsPinModalOpen(false);
+                      setIsPriceModalOpen(true);
+                    } catch {
+                      toast.error("Código incorrecto");
+                      setPinInput("");
+                    }
+                  }
+                }}>{n}</Button>
+              ))}
+              <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
+              <Button variant="outline" className="h-12" onClick={async () => {
+                const next = `${pinInput}0`.slice(0, 4);
+                setPinInput(next);
+                if (next.length === 4 && priceEditorProduct) {
+                  try {
+                    await changeProductPrice(priceEditorProduct.id, { code: next, validateOnly: true });
+                    setValidatedPin(next);
+                    setNewPriceInput((priceEditorProduct.effectivePrice ?? priceEditorProduct.price).toFixed(2));
+                    setIsPinModalOpen(false);
+                    setIsPriceModalOpen(true);
+                  } catch {
+                    toast.error("Código incorrecto");
+                    setPinInput("");
+                  }
+                }
+              }}>0</Button>
+              <Button variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPriceModalOpen} onOpenChange={setIsPriceModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Nuevo precio</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input inputMode="decimal" value={newPriceInput} onChange={(e) => setNewPriceInput(e.target.value.replace(/[^\d.]/g, ""))} />
+            <Button className="w-full" onClick={async () => {
+              if (!priceEditorProduct || !validatedPin) return;
+              try {
+                await changeProductPrice(priceEditorProduct.id, { code: validatedPin, newPrice: Number(newPriceInput) });
+                await loadMenuData(serviceTypes.find((item) => item.key === serviceType)?.id);
+                toast.success("Precio actualizado");
+                setIsPriceModalOpen(false);
+              } catch (error) {
+                toast.error("No se pudo actualizar el precio");
+              }
+            }}>Aplicar</Button>
           </div>
         </DialogContent>
       </Dialog>

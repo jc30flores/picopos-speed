@@ -201,7 +201,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         total_exenta += venta_exenta
         total_iva += iva_item
 
-        sku = getattr(item.product, "sku", "") or f"PROD-{item.product_id}"
+        sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
             "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(item.price_snapshot)),

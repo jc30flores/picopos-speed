@@ -14,7 +14,7 @@ class SalesReportListView(generics.ListAPIView):
     permission_classes = [IsAdminOrManager]
 
     def get_queryset(self):
-        queryset = Order.objects.select_related("service_type").all()
+        queryset = Order.objects.select_related("service_type", "invoice").all()
         start_at, end_at = parse_business_date_range(
             self.request.query_params.get("date_from"),
             self.request.query_params.get("date_to"),
@@ -49,6 +49,7 @@ class SalesReportListView(generics.ListAPIView):
                 "financial_status": order.financial_status,
                 "refund_total": order.refund_total,
                 "net_paid": order.net_paid,
+                "sale_snapshot": (order.invoice.sale_snapshot if hasattr(order, "invoice") else {}),
             }
             for order in queryset
         ]

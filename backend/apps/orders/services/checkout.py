@@ -24,6 +24,8 @@ def _build_dte_payload(order: Order) -> dict[str, Any]:
         "items": [
             {
                 "name": item.product_name_snapshot,
+                "code": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
+                "is_custom": item.is_custom,
                 "quantity": item.quantity,
                 "price": str(item.price_snapshot),
                 "modifiers": [

@@ -14,6 +14,7 @@ from apps.printing.services.renderers import render_customer_ticket
 from apps.printing.services.usb_printer import USBPrinterService
 from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
+from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order
 from apps.cashier.services import CashDrawerService
 
@@ -77,6 +78,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         print_result = {"printed": False, "print_error": None, "drawer_opened": False, "drawer_error": None}
 
         if remaining <= 0:
+            persist_sale_snapshot(payment.order)
             log_audit(
                 request,
                 "payment.completed",
@@ -102,6 +104,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
                     print(f"[DTE] Trigger send_dte for order={payment.order_id} payment={payment.id} branch={payment.order.branch_id}")
                     dte_record = send_dte_for_order(payment.order, payment=payment)
+                    persist_sale_snapshot(payment.order)
                     logger.info("payment.dte.done order_id=%s payment_id=%s dte_status=%s", payment.order_id, payment.id, dte_record.status)
                     log_audit(
                         request,

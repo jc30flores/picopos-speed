@@ -11,7 +11,8 @@ from apps.dte.models import DTEBranchConfig, DTERecord
 from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import build_payload_cf, interpret_dte_response
 from apps.dte.services.emisor import get_emisor_nit
-from apps.orders.models import Order
+from apps.menu.models import Category, Product
+from apps.orders.models import Order, OrderItem
 from apps.users.models import UserProfile
 
 
@@ -57,6 +58,25 @@ class DTECoreTests(TestCase):
     def test_get_emisor_nit_uses_branch_config(self):
         DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="1217-140990-106-3", is_active=True)
         self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    def test_build_payload_cf_uses_order_item_snapshots(self):
+        category = Category.objects.create(name="PRUEBA")
+        product = Product.objects.create(name="MenuItem", description="", price=Decimal("1.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Nombre histórico",
+            price_snapshot=Decimal("4.25"),
+            quantity=2,
+            snapshot_sku_or_code="MANUAL-CODE-1",
+            is_custom=True,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000001", "A" * 36, "00")
+        first = payload["dte"]["cuerpoDocumento"][0]
+        self.assertEqual(first["descripcion"], "Nombre histórico")
+        self.assertEqual(first["precioUni"], "4.25")
+        self.assertEqual(first["codigo"], "MANUAL-CODE-1")
 
     @patch("apps.dte.client.DTEClient._build_url")
     @patch("apps.dte.client.requests.Session.post")

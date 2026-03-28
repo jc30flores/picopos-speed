@@ -15,6 +15,7 @@ from apps.dte.services.dte_service import (
     interpret_dte_response,
 )
 from apps.orders.models import Order, OrderInvoice
+from apps.orders.services.snapshots import persist_sale_snapshot
 
 DTE_LOGGER = logging.getLogger("apps.dte")
 
@@ -166,6 +167,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     if record.status == DTERecord.STATUS_ACCEPTED:
         invoice.sent_at = now
     invoice.save()
+    persist_sale_snapshot(order)
     DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record

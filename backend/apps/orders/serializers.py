@@ -27,6 +27,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_id",
             "product_name_snapshot",
             "price_snapshot",
+            "snapshot_sku_or_code",
+            "is_custom",
             "quantity",
             "assigned_name",
             "applied_special_price_rule_id",
@@ -130,12 +132,34 @@ class AppliedModifierInputSerializer(serializers.Serializer):
 
 
 class OrderItemInputSerializer(serializers.Serializer):
-    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-    product_name_snapshot = serializers.CharField()
-    price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2)
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
+    product_name_snapshot = serializers.CharField(required=False, allow_blank=True)
+    price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    is_custom = serializers.BooleanField(required=False, default=False)
+    custom_name = serializers.CharField(required=False, allow_blank=False)
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    custom_code = serializers.CharField(required=False, allow_blank=True, max_length=80)
     quantity = serializers.IntegerField(min_value=1)
     assigned_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
     modifiers = AppliedModifierInputSerializer(many=True, required=False)
+
+    def validate(self, attrs):
+        is_custom = bool(attrs.get("is_custom", False))
+        product = attrs.get("product_id")
+        if is_custom:
+            if product is not None:
+                raise serializers.ValidationError({"product_id": "Los ítems manuales no deben incluir product_id."})
+            custom_name = (attrs.get("custom_name") or "").strip()
+            if not custom_name:
+                raise serializers.ValidationError({"custom_name": "custom_name es requerido para ítems manuales."})
+            unit_price = attrs.get("unit_price")
+            if unit_price is None or unit_price <= 0:
+                raise serializers.ValidationError({"unit_price": "unit_price debe ser mayor que 0."})
+            attrs["custom_name"] = custom_name
+        else:
+            if product is None:
+                raise serializers.ValidationError({"product_id": "product_id es requerido para ítems de menú."})
+        return attrs
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -248,21 +272,36 @@ class OrderCreateSerializer(serializers.Serializer):
         category_totals: dict[int, Decimal] = {}
 
         for item_data in items_data:
+            item_data = dict(item_data)
+            is_custom = bool(item_data.pop("is_custom", False))
             modifiers = item_data.pop("modifiers", [])
-            product = item_data.pop("product_id")
-            modifiers = self._resolve_modifier_payload(product, modifiers, fast_pos_mode, channel)
+            product = item_data.pop("product_id", None)
             quantity = item_data["quantity"]
-            pricing_result = resolve_effective_price(product, order_type=service_type, at=timezone.now())
-            price_snapshot = pricing_result.effective_price
-            item_data["price_snapshot"] = price_snapshot
+            pricing_result = None
+            if is_custom:
+                custom_name = item_data.pop("custom_name")
+                price_snapshot = item_data.pop("unit_price")
+                item_data["product_name_snapshot"] = custom_name
+                item_data["price_snapshot"] = price_snapshot
+                item_data["snapshot_sku_or_code"] = (item_data.pop("custom_code", "") or "").strip()
+            else:
+                modifiers = self._resolve_modifier_payload(product, modifiers, fast_pos_mode, channel)
+                pricing_result = resolve_effective_price(product, order_type=service_type, at=timezone.now())
+                price_snapshot = pricing_result.effective_price
+                item_data["price_snapshot"] = price_snapshot
+                item_data["product_name_snapshot"] = product.name
+                item_data["snapshot_sku_or_code"] = f"PROD-{product.id}"
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
             line_total = (price_snapshot + modifiers_total) * quantity
             line_key = f"line-{len(order_lines)}"
+            if is_custom and not item_data["snapshot_sku_or_code"]:
+                item_data["snapshot_sku_or_code"] = f"MANUAL-{order.id}-{len(order_lines) + 1}"
 
             order_item = OrderItem.objects.create(
                 order=order,
                 product=product,
-                applied_special_price_rule=pricing_result.applied_rule,
+                applied_special_price_rule=pricing_result.applied_rule if pricing_result else None,
+                is_custom=is_custom,
                 **item_data,
             )
             for modifier_data in modifiers:
@@ -272,7 +311,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     modifier_price_snapshot=modifier_data["price"],
                 )
 
-            if channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and service_type_key in (product.disposable_apply_to or []):
+            if product and channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and service_type_key in (product.disposable_apply_to or []):
                 fee_total = (Decimal(product.disposable_fee) * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 disposable_total += fee_total
                 OrderFee.objects.create(
@@ -290,7 +329,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     "line_key": line_key,
                     "order_item_id": order_item.id,
                     "product_id": product.id,
-                    "category_id": product.category_id,
+                    "category_id": product.category_id if product else None,
                     "quantity": quantity,
                     "price_snapshot": price_snapshot,
                     "modifier_total": modifiers_total,
@@ -298,8 +337,9 @@ class OrderCreateSerializer(serializers.Serializer):
                 }
             )
             subtotal += line_total
-            product_totals[product.id] = product_totals.get(product.id, Decimal("0")) + line_total
-            category_totals[product.category_id] = category_totals.get(product.category_id, Decimal("0")) + line_total
+            if product:
+                product_totals[product.id] = product_totals.get(product.id, Decimal("0")) + line_total
+                category_totals[product.category_id] = category_totals.get(product.category_id, Decimal("0")) + line_total
 
         eligible_discounts = []
         for discount in discounts:

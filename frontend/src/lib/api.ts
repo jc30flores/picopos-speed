@@ -180,6 +180,9 @@ export type FeatureFlag = {
 export type OrderItem = {
   id: number;
   productName: string;
+  productId?: number | null;
+  isCustom?: boolean;
+  code?: string;
   quantity: number;
   modifiers: string[];
   price: number;
@@ -875,6 +878,34 @@ export const updateProduct = async (
   };
 };
 
+export const changeProductPrice = async (productId: number, payload: { code: string; newPrice?: number; validateOnly?: boolean }): Promise<{
+  success: boolean;
+  validated?: boolean;
+  productId?: number;
+  oldPrice?: number;
+  newPrice?: number;
+  updatedAt?: string;
+}> => {
+  const response = await request(`/menu/products/${productId}/change-price/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: payload.code,
+      validate_only: Boolean(payload.validateOnly),
+      new_price: payload.newPrice,
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return {
+    success: Boolean(data.success),
+    validated: data.validated,
+    productId: data.product_id,
+    oldPrice: data.old_price != null ? Number(data.old_price) : undefined,
+    newPrice: data.new_price != null ? Number(data.new_price) : undefined,
+    updatedAt: data.updated_at,
+  };
+};
+
 export const deleteProduct = async (productId: number): Promise<{ detail?: string }> => {
   const response = await request(`/menu/products/${productId}/`, { method: "DELETE" });
   if (response.status === 204) return {};
@@ -1428,9 +1459,11 @@ const mapOrder = (order: {
   created_at: string;
   items: Array<{
     id: number;
-    product_id: number;
+    product_id: number | null;
     product_name_snapshot: string;
     price_snapshot: string;
+    snapshot_sku_or_code?: string;
+    is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
@@ -1451,6 +1484,9 @@ const mapOrder = (order: {
     items: items.map((item) => ({
       id: item.id,
       productName: item.product_name_snapshot,
+      productId: item.product_id ?? null,
+      isCustom: Boolean(item.is_custom),
+      code: item.snapshot_sku_or_code,
       quantity: item.quantity,
       modifiers: Array.isArray(item.applied_modifiers)
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
@@ -1486,10 +1522,12 @@ export const createOrder = async (payload: {
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
   items: Array<{
-    productId: number;
+    productId?: number | null;
     productName: string;
     price: number;
     quantity: number;
+    isCustom?: boolean;
+    customCode?: string;
     modifiers: Array<{ id?: number; name: string; price: number }>;
     assignedName?: string;
   }>;
@@ -1508,7 +1546,11 @@ export const createOrder = async (payload: {
       fast_pos_mode: payload.channel === "pos",
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
-        product_id: item.productId,
+        product_id: item.productId ?? null,
+        is_custom: Boolean(item.isCustom),
+        custom_name: item.isCustom ? item.productName : undefined,
+        unit_price: item.isCustom ? item.price : undefined,
+        custom_code: item.isCustom ? item.customCode : undefined,
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
@@ -1540,9 +1582,11 @@ export const createOrder = async (payload: {
     remaining: string;
     items: Array<{
       id: number;
-      product_id: number;
+      product_id: number | null;
       product_name_snapshot: string;
       price_snapshot: string;
+      snapshot_sku_or_code?: string;
+      is_custom?: boolean;
       quantity: number;
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
@@ -1575,9 +1619,11 @@ export const getActiveOrders = async (params?: { branchId?: number | string; ser
       net_paid: string;
       items: Array<{
         id: number;
-        product_id: number;
+        product_id: number | null;
         product_name_snapshot: string;
         price_snapshot: string;
+        snapshot_sku_or_code?: string;
+        is_custom?: boolean;
         quantity: number;
         applied_modifiers: Array<{ modifier_name_snapshot: string }>;
       }>;
@@ -1608,9 +1654,11 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
     net_paid: string;
     items: Array<{
       id: number;
-      product_id: number;
+      product_id: number | null;
       product_name_snapshot: string;
       price_snapshot: string;
+      snapshot_sku_or_code?: string;
+      is_custom?: boolean;
       quantity: number;
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;

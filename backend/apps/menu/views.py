@@ -1,5 +1,7 @@
 import os
 import logging
+from decimal import Decimal, InvalidOperation
+from secrets import compare_digest
 from functools import lru_cache
 from rest_framework import generics, status
 from django.db import transaction, connection
@@ -11,10 +13,11 @@ from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 from django.conf import settings
 from apps.core.audit import log_audit
-from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager
+from apps.core.permissions import IsAuthenticatedAndActive, IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.core.models import ServiceType
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount, ProductSpecialPriceRule
+from apps.menu.models import Category, Product, ModifierGroup, Modifier, Discount, ProductSpecialPriceRule, PriceChangeAudit
+from apps.core.models import Branch
 from apps.menu.serializers import (
     CategorySerializer,
     ProductSerializer,
@@ -618,3 +621,68 @@ class DiscountDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         discount = serializer.save()
         log_audit(self.request, "menu.discount.update", "Discount", discount.id, {"name": discount.name})
+
+
+class ProductChangePriceView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        configured_code = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
+        if not configured_code:
+            return Response({"detail": "Cambio de precio deshabilitado por configuración."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        code = str(request.data.get("code") or "").strip()
+        if not compare_digest(code, configured_code):
+            return Response({"detail": "Código incorrecto"}, status=status.HTTP_403_FORBIDDEN)
+
+        validate_only = bool(request.data.get("validate_only"))
+        if validate_only:
+            return Response({"success": True, "validated": True}, status=status.HTTP_200_OK)
+
+        product = Product.objects.filter(pk=pk).first()
+        if not product:
+            return Response({"detail": "Producto no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+        raw_new_price = request.data.get("new_price")
+        try:
+            new_price = Decimal(str(raw_new_price)).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({"new_price": "Precio inválido"}, status=status.HTTP_400_BAD_REQUEST)
+        if new_price <= 0:
+            return Response({"new_price": "Debe ser mayor que 0"}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_price = Decimal(product.price).quantize(Decimal("0.01"))
+        product.price = new_price
+        product.save(update_fields=["price"])
+
+        branch_id = request.query_params.get("branch_id")
+        branch = None
+        if str(branch_id).isdigit():
+            branch = Branch.objects.filter(id=int(branch_id)).first()
+        if branch is None:
+            branch = Branch.objects.filter(is_active=True).order_by("id").first()
+        ip_address = (request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0] or request.META.get("REMOTE_ADDR") or "").strip() or None
+
+        PriceChangeAudit.objects.create(
+            product=product,
+            old_price=old_price,
+            new_price=new_price,
+            branch=branch,
+            user=request.user if getattr(request.user, "is_authenticated", False) else None,
+            reason="emergency",
+            ip_address=ip_address,
+        )
+
+        from django.utils import timezone
+
+        return Response(
+            {
+                "success": True,
+                "product_id": product.id,
+                "old_price": f"{old_price:.2f}",
+                "new_price": f"{new_price:.2f}",
+                "updated_at": timezone.now().isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )

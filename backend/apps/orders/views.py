@@ -237,6 +237,8 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         response["Content-Disposition"] = f'attachment; filename="receipt_order_{order.id}.pdf"'
 
         record = DTERecord.objects.filter(order=order).order_by("-id").first()
+        snapshot = getattr(getattr(order, "invoice", None), "sale_snapshot", {}) or {}
+        snapshot_items = snapshot.get("items") if isinstance(snapshot, dict) else None
         lines = [
             "Pico de Gallo - Recibo de Venta",
             f"Orden: {order.order_number}",
@@ -245,10 +247,16 @@ class OrderReceiptPDFView(generics.GenericAPIView):
             "",
             "Items",
         ]
-        for item in order.items.all().prefetch_related("applied_modifiers"):
-            lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.price_snapshot}")
-            for mod in item.applied_modifiers.all():
-                lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
+        if isinstance(snapshot_items, list) and snapshot_items:
+            for item in snapshot_items:
+                lines.append(f"- {item.get('quantity', 0)} x {item.get('name', '')}  ${item.get('unit_price', '0.00')}")
+                for mod in item.get("modifiers", []) or []:
+                    lines.append(f"  Extra: {mod.get('name', '')}  ${mod.get('price', '0.00')}")
+        else:
+            for item in order.items.all().prefetch_related("applied_modifiers"):
+                lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.price_snapshot}")
+                for mod in item.applied_modifiers.all():
+                    lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
         lines += [
             "",
             f"Desechables: ${order.disposable_total}",
