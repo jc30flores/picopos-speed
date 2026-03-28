@@ -238,6 +238,7 @@ class DTEOutbox(models.Model):
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="dte_outbox")
     payment = models.ForeignKey("payments.Payment", on_delete=models.SET_NULL, null=True, blank=True, related_name="dte_outbox")
+    dte_record = models.ForeignKey("dte.DTERecord", on_delete=models.SET_NULL, null=True, blank=True, related_name="outbox_entries")
     numero_control = models.CharField(max_length=80, blank=True, default="")
     codigo_generacion = models.CharField(max_length=40, blank=True, default="")
     payload_json = models.JSONField(default=dict, blank=True)

@@ -171,11 +171,11 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
     inferred = parse_response_outcome(parsed)
 
     if result.status_code in {401, 403}:
-        final_status = DTEOutbox.STATUS_FAILED
+        final_status = DTEOutbox.STATUS_REJECTED
     elif 500 <= (result.status_code or 0) <= 599:
         final_status = DTEOutbox.STATUS_PENDING
     elif 400 <= (result.status_code or 0) <= 499:
-        final_status = DTEOutbox.STATUS_FAILED if inferred == DTEOutbox.STATUS_SENT else inferred
+        final_status = DTEOutbox.STATUS_REJECTED
     else:
         final_status = inferred
 
@@ -202,7 +202,28 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
         result.elapsed_ms,
         _preview(outbox.response_body),
     )
-    DTE_LOGGER.info("PERSIST order_id=%s dte_record_id=%s status=%s", outbox.order_id, None, final_status)
+    if outbox.dte_record_id:
+        record_status = {
+            DTEOutbox.STATUS_ACCEPTED: DTERecord.STATUS_ACCEPTED,
+            DTEOutbox.STATUS_REJECTED: DTERecord.STATUS_REJECTED,
+            DTEOutbox.STATUS_FAILED: DTERecord.STATUS_REJECTED,
+            DTEOutbox.STATUS_PENDING: DTERecord.STATUS_PENDING,
+            DTEOutbox.STATUS_SENDING: DTERecord.STATUS_PENDING,
+            DTEOutbox.STATUS_SENT: DTERecord.STATUS_PENDING,
+        }.get(final_status, DTERecord.STATUS_PENDING)
+        DTERecord.objects.filter(pk=outbox.dte_record_id).update(
+            status=record_status,
+            response_payload=parsed,
+            response_text=outbox.response_body or "",
+            error_message=outbox.error_message or "",
+            last_error_message=outbox.error_message or "",
+            last_error_code="HTTP_ERROR" if (result.status_code and result.status_code >= 400) else "",
+            last_sent_at=timezone.now(),
+            attempts=outbox.attempts,
+            send_attempts=outbox.attempts,
+            updated_at=timezone.now(),
+        )
+    DTE_LOGGER.info("PERSIST order_id=%s dte_record_id=%s status=%s", outbox.order_id, outbox.dte_record_id, final_status)
     _sync_invoice(outbox, parsed)
     return outbox
 
@@ -214,13 +235,14 @@ def process_pending_dtes(limit: int = 25, batch_size: int = 25, backoff_seconds:
     return process_pending_outbox(limit=limit)
 
 
-def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
+def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None) -> DTEOutbox:
     numero_control, codigo_generacion = _extract(payload)
     endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     with transaction.atomic():
         outbox = DTEOutbox.objects.create(
             order=order,
             payment=payment,
+            dte_record=dte_record,
             numero_control=numero_control,
             codigo_generacion=codigo_generacion,
             payload_json=payload,
@@ -247,7 +269,7 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
             outbox.status = DTEOutbox.STATUS_PENDING
             outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts + 1)
             outbox.save(update_fields=["status", "next_attempt_at", "last_health_status", "last_health_body", "updated_at"])
-            DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=circuit_open open_until=%s", order.id, getattr(payment, "id", None), open_until)
+            DTE_LOGGER.info("[DTE OUTBOX] queued id=%s order=%s payment=%s reason=circuit_open open_until=%s", outbox.id, order.id, getattr(payment, "id", None), open_until)
             return outbox
 
         if health.state != STATE_UP:
@@ -255,7 +277,8 @@ def send_or_queue_dte(order, payment, payload: dict) -> DTEOutbox:
             outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts + 1)
             outbox.save(update_fields=["status", "next_attempt_at", "last_health_status", "last_health_body", "updated_at"])
             DTE_LOGGER.info(
-                "[DTE] QUEUED order=%s payment=%s reason=health_%s health_code=%s factura_code=%s health_body_preview=%s factura_body_preview=%s",
+                "[DTE OUTBOX] queued id=%s order=%s payment=%s reason=health_%s health_code=%s factura_code=%s health_body_preview=%s factura_body_preview=%s",
+                outbox.id,
                 order.id,
                 getattr(payment, "id", None),
                 health.state.lower(),
@@ -305,10 +328,19 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
         outbox_id=outbox.id,
         endpoint_url=endpoint_url,
     )
+    if outbox.status != DTEOutbox.STATUS_PENDING:
+        return outbox
     outbox.status = DTEOutbox.STATUS_SENDING
     outbox.attempts += 1
     outbox.last_attempt_at = timezone.now()
     outbox.save(update_fields=["status", "attempts", "last_attempt_at", "updated_at"])
+    DTE_LOGGER.info(
+        "[DTE OUTBOX] processing id=%s order=%s attempt=%s next_attempt_at=%s",
+        outbox.id,
+        outbox.order_id,
+        outbox.attempts,
+        outbox.next_attempt_at,
+    )
 
     result = DTEClient().send(
         path=_endpoint_for_payload(payload),
@@ -318,7 +350,15 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
         branch_id=outbox.order.branch_id,
         attempt_number=outbox.attempts,
     )
-    return _apply_result(outbox, result)
+    updated = _apply_result(outbox, result)
+    DTE_LOGGER.info(
+        "[DTE OUTBOX] result id=%s status=%s http=%s reason=%s",
+        updated.id,
+        updated.status,
+        updated.response_status_code,
+        updated.error_message or "-",
+    )
+    return updated
 
 
 def process_pending_outbox(limit: int = 50) -> int:
@@ -340,14 +380,17 @@ def process_pending_outbox(limit: int = 50) -> int:
 
     max_retries = int(getattr(settings, "DTE_MAX_RETRIES", 5) or 5)
     now = timezone.now()
-    pending = (
-        DTEOutbox.objects.select_related("order", "payment")
-        .filter(status=DTEOutbox.STATUS_PENDING, attempts__lt=max_retries)
-        .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
-        .order_by("created_at")[:limit]
-    )
+    with transaction.atomic():
+        pending_ids = list(
+            DTEOutbox.objects.select_for_update(skip_locked=True)
+            .filter(status=DTEOutbox.STATUS_PENDING, attempts__lt=max_retries)
+            .filter(Q(next_attempt_at__isnull=True) | Q(next_attempt_at__lte=now))
+            .order_by("created_at")
+            .values_list("id", flat=True)[:limit]
+        )
+    pending = DTEOutbox.objects.select_related("order", "payment").filter(id__in=pending_ids).order_by("created_at")
 
-    DTE_LOGGER.info("[DTE] processing pending count=%s", pending.count())
+    DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
     processed = 0
     for outbox in pending:
         try:

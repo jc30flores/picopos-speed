@@ -1,6 +1,9 @@
+import logging
+
 from django.conf import settings
 from django.db.models import Q
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,6 +23,8 @@ from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
 from apps.dte.services.dte_security import redact_payload
+
+logger = logging.getLogger("apps.dte")
 
 
 class IsDTECashierOrAbove(BasePermission):
@@ -89,14 +94,38 @@ class DTEResendView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        logger.info(
+            "[DTE RESEND] user=%s auth=%s perms=%s is_authenticated=%s",
+            getattr(request.user, "username", "anonymous"),
+            [a.__name__ for a in self.authentication_classes],
+            [p.__name__ for p in self.permission_classes],
+            bool(getattr(request.user, "is_authenticated", False)),
+        )
         record = generics.get_object_or_404(DTERecord, pk=pk)
         if record.status not in {DTERecord.STATUS_PENDING, DTERecord.STATUS_REJECTED}:
             return Response({"detail": "Solo se puede reenviar pendiente/rechazado"}, status=status.HTTP_400_BAD_REQUEST)
         if record.status == DTERecord.STATUS_SENDING:
             return Response({"detail": "El DTE está en proceso de envío"}, status=status.HTTP_409_CONFLICT)
-        updated = resend_record(record)
+        try:
+            updated = resend_record(record)
+        except PermissionDenied as exc:
+            return Response({"success": False, "message": str(exc), "detail": "permission_denied"}, status=status.HTTP_403_FORBIDDEN)
         log_audit(request, "dte.resend", "DTERecord", updated.id, {"sale_id": updated.order_id, "status": updated.status})
-        return Response(DTERecordDetailSerializer(updated).data)
+        payload = DTERecordDetailSerializer(updated).data
+        response_payload = {
+            "success": True,
+            "issued_id": updated.id,
+            "dte_record_id": updated.id,
+            "status": updated.status,
+            "http_status": payload.get("response_payload", {}).get("http_status") or 0,
+            "message": "Reenvío procesado",
+            "body_preview": (updated.response_text or "")[:400],
+            "sello_recibido": updated.sello_recibido or updated.sello_recepcion or "",
+            "firma": updated.firma or "",
+            "recibido_at": updated.recibido_at,
+            "record": payload,
+        }
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 
 class DTESendEmailView(APIView):

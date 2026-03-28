@@ -3031,51 +3031,45 @@ export const dteIssuedList = async (filters?: {
   if (filters?.dteType) params.set("dte_type", filters.dteType);
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
-  const res = await fetch(`${API_BASE_URL}/dte/issued/?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo cargar DTE");
-  const data = await res.json();
+  const res = await request(`/dte/issued/?${params.toString()}`);
+  const data = await handleJson<any>(res);
   return Array.isArray(data.results) ? data.results : data;
 };
 
 export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/`, { credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo cargar detalle DTE");
-  return res.json();
+  const res = await request(`/dte/issued/${id}/`);
+  return handleJson<DTERecord>(res);
 };
 
 export const dteResend = async (id: number): Promise<DTERecord> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/resend/`, { method: "POST", credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo reenviar DTE");
-  return res.json();
+  const res = await request(`/dte/issued/${id}/resend/`, { method: "POST" });
+  const payload = await handleJson<any>(res);
+  return payload.record as DTERecord;
 };
 
 export const dteSendEmail = async (id: number): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-email/`, { method: "POST", credentials: "include" });
+  const res = await request(`/dte/issued/${id}/send-email/`, { method: "POST" });
   if (res.status === 501) throw new Error("Próximamente");
   if (!res.ok) throw new Error("No se pudo enviar correo");
 };
 
 export const dteSendWhatsapp = async (id: number): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-whatsapp/`, { method: "POST", credentials: "include" });
+  const res = await request(`/dte/issued/${id}/send-whatsapp/`, { method: "POST" });
   if (res.status === 501) throw new Error("Próximamente");
   if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
 };
 
 export const dteInvalidate = async (id: number, motivo: string): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/invalidate/`, {
+  const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ motivo }),
   });
   if (!res.ok) throw new Error("No se pudo invalidar DTE");
 };
 
 export const dteCreateCreditNote = async (id: number, motivo: string): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/credit-note/`, {
+  const res = await request(`/dte/issued/${id}/credit-note/`, {
     method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ motivo }),
   });
   if (!res.ok) throw new Error("No se pudo crear nota de crédito");
