@@ -1,13 +1,16 @@
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.test.utils import override_settings
-from rest_framework import serializers
+from rest_framework.test import APIClient
+from rest_framework.exceptions import PermissionDenied
 
 from apps.core.models import Branch, ServiceType
 from apps.menu.models import Category, Product
 from apps.orders.serializers import OrderCreateSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
+from apps.users.models import UserProfile
 
 
 class OrderCustomItemSnapshotTests(TestCase):
@@ -108,7 +111,7 @@ class OrderCustomItemSnapshotTests(TestCase):
             }
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        with self.assertRaisesMessage(serializers.ValidationError, "Código incorrecto"):
+        with self.assertRaisesMessage(PermissionDenied, "Código incorrecto"):
             serializer.save()
 
     @override_settings(CODE_CHANGE_PRICE="2468")
@@ -132,3 +135,21 @@ class OrderCustomItemSnapshotTests(TestCase):
         order = serializer.save()
         item = order.items.first()
         self.assertEqual(item.unit_price_override, Decimal("2.00"))
+
+
+class ValidatePricePinEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(username="cashier_pin", password="pw")
+        UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
+        self.client.force_authenticate(self.user)
+
+    @override_settings(CODE_CHANGE_PRICE="1357")
+    def test_validate_price_pin_rejects_invalid_pin(self):
+        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "0000"}, format="json")
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(CODE_CHANGE_PRICE="1357")
+    def test_validate_price_pin_accepts_valid_pin(self):
+        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "1357"}, format="json")
+        self.assertEqual(response.status_code, 204)

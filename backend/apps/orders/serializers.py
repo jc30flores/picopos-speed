@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -140,6 +141,7 @@ class OrderItemInputSerializer(serializers.Serializer):
     price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     is_custom = serializers.BooleanField(required=False, default=False)
     custom_name = serializers.CharField(required=False, allow_blank=False)
+    name = serializers.CharField(required=False, allow_blank=False)
     manual_name = serializers.CharField(required=False, allow_blank=False)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     manual_unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
@@ -156,6 +158,8 @@ class OrderItemInputSerializer(serializers.Serializer):
         attrs["type"] = item_type
         is_custom = item_type == "manual" or bool(attrs.get("is_custom", False))
         attrs["is_custom"] = is_custom
+        if attrs.get("name") and not attrs.get("custom_name"):
+            attrs["custom_name"] = attrs.get("name")
         if attrs.get("manual_name") and not attrs.get("custom_name"):
             attrs["custom_name"] = attrs.get("manual_name")
         if attrs.get("manual_unit_price") is not None and attrs.get("unit_price") is None:
@@ -299,11 +303,15 @@ class OrderCreateSerializer(serializers.Serializer):
             if not configured_pin:
                 raise serializers.ValidationError({"price_change_pin": "Configuración CODE_CHANGE_PRICE no disponible."})
             if not price_change_pin or price_change_pin != configured_pin:
-                raise serializers.ValidationError({"price_change_pin": "Código incorrecto"})
+                raise PermissionDenied("Código incorrecto")
 
         for item_data in items_data:
             item_data = dict(item_data)
             is_custom = bool(item_data.pop("is_custom", False))
+            item_data.pop("type", None)
+            item_data.pop("manual_name", None)
+            item_data.pop("manual_unit_price", None)
+            item_data.pop("name", None)
             modifiers = item_data.pop("modifiers", [])
             product = item_data.pop("product_id", None)
             quantity = item_data["quantity"]

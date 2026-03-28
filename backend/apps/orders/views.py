@@ -3,6 +3,7 @@ import logging
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import generics
+from rest_framework.views import APIView
 from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework import status
@@ -21,6 +22,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.payments.models import Payment
 from apps.dte.models import DTERecord
+from django.conf import settings
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,17 @@ class OrderCreateView(generics.CreateAPIView):
         order = serializer.save()
         output = OrderSerializer(order, context={"request": request}).data
         return Response(output, status=status.HTTP_201_CREATED)
+
+
+class ValidatePricePinView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request, *args, **kwargs):
+        configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
+        pin = str(request.data.get("pin", "") or "").strip()
+        if not configured_pin or pin != configured_pin:
+            return Response({"detail": "Código incorrecto"}, status=status.HTTP_403_FORBIDDEN)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class OrderDetailView(generics.RetrieveAPIView):

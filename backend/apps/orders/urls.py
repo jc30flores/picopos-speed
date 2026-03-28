@@ -4,6 +4,7 @@ from apps.dte import views as dte_views
 
 urlpatterns = [
     path("", views.OrderCreateView.as_view(), name="orders-create"),
+    path("validate-price-pin/", views.ValidatePricePinView.as_view(), name="orders-validate-price-pin"),
     path("active/", views.ActiveOrderListView.as_view(), name="orders-active"),
     path("kitchen/", views.KitchenOrderListView.as_view(), name="orders-kitchen"),
     path("<int:pk>/", views.OrderDetailView.as_view(), name="orders-detail"),

@@ -1611,6 +1611,16 @@ export const createOrder = async (payload: {
   return mapOrder(data);
 };
 
+export const validateOrderPricePin = async (pin: string): Promise<void> => {
+  const response = await request("/orders/validate-price-pin/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin }),
+  });
+  if (response.status === 204) return;
+  await handleJson(response);
+};
+
 export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {
   const qs = new URLSearchParams();
   if (params?.branchId) qs.set("branch_id", String(params.branchId));

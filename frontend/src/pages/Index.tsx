@@ -49,6 +49,7 @@ import {
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
+  validateOrderPricePin,
   Category,
   ModifierGroup,
   Product,
@@ -1041,7 +1042,10 @@ const POS = () => {
                     <Card key={item.id} className="p-3">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
-                          <h4 className="font-semibold text-sm">{item.name}</h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold text-sm">{item.name}</h4>
+                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase">Manual</Badge>}
+                          </div>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
                               <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
@@ -1061,9 +1065,11 @@ const POS = () => {
                           )}
                         </div>
                         <div className="flex items-center gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-8 w-8" title="Cambiar precio para esta venta">
-                            <PencilLine className="h-4 w-4" />
-                          </Button>
+                          {!item.isCustom && (
+                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-8 w-8" title="Cambiar precio para esta venta">
+                              <PencilLine className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1586,28 +1592,40 @@ const POS = () => {
             <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 4 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
             <div className="grid grid-cols-3 gap-2">
               {[1,2,3,4,5,6,7,8,9].map((n) => (
-                <Button key={n} variant="outline" className="h-12" onClick={() => {
+                <Button key={n} variant="outline" className="h-12" onClick={async () => {
                   const next = `${pinInput}${n}`.slice(0, 4);
                   setPinInput(next);
                   if (next.length === 4) {
+                    try {
+                      await validateOrderPricePin(next);
+                      setValidatedPin(next);
+                      const activeItem = cart.find((item) => item.id === priceEditorItemId);
+                      setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+                      setIsPinModalOpen(false);
+                      setIsPriceModalOpen(true);
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Código incorrecto");
+                      setPinInput("");
+                    }
+                  }
+                }}>{n}</Button>
+              ))}
+              <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
+              <Button variant="outline" className="h-12" onClick={async () => {
+                const next = `${pinInput}0`.slice(0, 4);
+                setPinInput(next);
+                if (next.length === 4) {
+                  try {
+                    await validateOrderPricePin(next);
                     setValidatedPin(next);
                     const activeItem = cart.find((item) => item.id === priceEditorItemId);
                     setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
                     setIsPinModalOpen(false);
                     setIsPriceModalOpen(true);
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Código incorrecto");
+                    setPinInput("");
                   }
-                }}>{n}</Button>
-              ))}
-              <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
-              <Button variant="outline" className="h-12" onClick={() => {
-                const next = `${pinInput}0`.slice(0, 4);
-                setPinInput(next);
-                if (next.length === 4) {
-                  setValidatedPin(next);
-                  const activeItem = cart.find((item) => item.id === priceEditorItemId);
-                  setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
-                  setIsPinModalOpen(false);
-                  setIsPriceModalOpen(true);
                 }
               }}>0</Button>
               <Button variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
