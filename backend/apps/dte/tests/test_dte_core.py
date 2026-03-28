@@ -78,6 +78,26 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["precioUni"], "4.25")
         self.assertEqual(first["codigo"], "MANUAL-CODE-1")
 
+    def test_build_payload_cf_uses_unit_price_override_when_present(self):
+        category = Category.objects.create(name="PRUEBA2")
+        product = Product.objects.create(name="MenuItem2", description="", price=Decimal("3.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Producto con ajuste",
+            price_snapshot=Decimal("3.00"),
+            unit_price_override=Decimal("2.10"),
+            quantity=1,
+            snapshot_sku_or_code="PROD-OVERRIDE",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000001", "B" * 36, "00")
+        first = payload["dte"]["cuerpoDocumento"][0]
+        self.assertEqual(first["descripcion"], "Producto con ajuste")
+        self.assertEqual(first["precioUni"], "2.10")
+        self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
     @patch("apps.dte.client.DTEClient._build_url")
     @patch("apps.dte.client.requests.Session.post")
     def test_client_blocks_send_on_emisor_nit_mismatch(self, mock_post, mock_build_url):

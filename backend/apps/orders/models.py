@@ -129,6 +129,7 @@ class OrderItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="order_items", null=True, blank=True)
     product_name_snapshot = models.CharField(max_length=160)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     snapshot_sku_or_code = models.CharField(max_length=80, blank=True, default="")
     is_custom = models.BooleanField(default=False)
     quantity = models.PositiveIntegerField(default=1)
@@ -140,6 +141,10 @@ class OrderItem(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product_name_snapshot} x{self.quantity}"
+
+    @property
+    def effective_unit_price(self):
+        return self.unit_price_override if self.unit_price_override is not None else self.price_snapshot
 
 
 class OrderItemModifier(models.Model):

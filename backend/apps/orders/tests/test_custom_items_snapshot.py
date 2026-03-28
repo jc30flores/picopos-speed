@@ -1,6 +1,8 @@
 from decimal import Decimal
 
 from django.test import TestCase
+from django.test.utils import override_settings
+from rest_framework import serializers
 
 from apps.core.models import Branch, ServiceType
 from apps.menu.models import Category, Product
@@ -72,3 +74,61 @@ class OrderCustomItemSnapshotTests(TestCase):
         snap_item = invoice.sale_snapshot["items"][0]
         self.assertEqual(snap_item["unit_price"], "1.50")
         self.assertEqual(snap_item["name"], "Soda")
+
+    def test_create_order_with_menu_item_still_works(self):
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "channel": "pos",
+                "items": [{"product_id": self.product.id, "quantity": 2}],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        item = order.items.first()
+        self.assertEqual(item.product_id, self.product.id)
+        self.assertEqual(item.price_snapshot, Decimal("1.50"))
+        self.assertEqual(item.quantity, 2)
+
+    @override_settings(CODE_CHANGE_PRICE="2468")
+    def test_order_rejects_override_without_pin(self):
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "channel": "pos",
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "quantity": 1,
+                        "unit_price_override": "2.00",
+                    }
+                ],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.assertRaisesMessage(serializers.ValidationError, "Código incorrecto"):
+            serializer.save()
+
+    @override_settings(CODE_CHANGE_PRICE="2468")
+    def test_order_accepts_override_with_pin(self):
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "channel": "pos",
+                "price_change_pin": "2468",
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "quantity": 1,
+                        "unit_price_override": "2.00",
+                    }
+                ],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        item = order.items.first()
+        self.assertEqual(item.unit_price_override, Decimal("2.00"))

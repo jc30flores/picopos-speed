@@ -27,7 +27,8 @@ def _build_dte_payload(order: Order) -> dict[str, Any]:
                 "code": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
                 "is_custom": item.is_custom,
                 "quantity": item.quantity,
-                "price": str(item.price_snapshot),
+                "price": str(item.effective_unit_price),
+                "unit_price_override": (str(item.unit_price_override) if item.unit_price_override is not None else None),
                 "modifiers": [
                     {
                         "name": mod.modifier_name_snapshot,

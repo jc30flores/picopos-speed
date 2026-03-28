@@ -182,10 +182,12 @@ export type OrderItem = {
   productName: string;
   productId?: number | null;
   isCustom?: boolean;
+  type?: "menu" | "manual";
   code?: string;
   quantity: number;
   modifiers: string[];
   price: number;
+  unitPriceOverride?: number | null;
   assignedName?: string;
 };
 
@@ -1462,6 +1464,7 @@ const mapOrder = (order: {
     product_id: number | null;
     product_name_snapshot: string;
     price_snapshot: string;
+    unit_price_override?: string | null;
     snapshot_sku_or_code?: string;
     is_custom?: boolean;
     quantity: number;
@@ -1486,12 +1489,14 @@ const mapOrder = (order: {
       productName: item.product_name_snapshot,
       productId: item.product_id ?? null,
       isCustom: Boolean(item.is_custom),
+      type: item.is_custom ? "manual" : "menu",
       code: item.snapshot_sku_or_code,
       quantity: item.quantity,
       modifiers: Array.isArray(item.applied_modifiers)
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
     })),
     total: Number(order.total),
@@ -1521,12 +1526,15 @@ export const createOrder = async (payload: {
   ivaExempt?: boolean;
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
+  priceChangePin?: string;
   items: Array<{
     productId?: number | null;
     productName: string;
     price: number;
     quantity: number;
     isCustom?: boolean;
+    type?: "menu" | "manual";
+    unitPriceOverride?: number | null;
     customCode?: string;
     modifiers: Array<{ id?: number; name: string; price: number }>;
     assignedName?: string;
@@ -1544,12 +1552,17 @@ export const createOrder = async (payload: {
       source: payload.source,
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
+      price_change_pin: payload.priceChangePin ?? "",
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
+        type: item.type ?? (item.isCustom ? "manual" : "menu"),
         product_id: item.productId ?? null,
         is_custom: Boolean(item.isCustom),
+        manual_name: item.isCustom ? item.productName : undefined,
         custom_name: item.isCustom ? item.productName : undefined,
+        manual_unit_price: item.isCustom ? item.price : undefined,
         unit_price: item.isCustom ? item.price : undefined,
+        unit_price_override: item.unitPriceOverride ?? undefined,
         custom_code: item.isCustom ? item.customCode : undefined,
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
@@ -1585,6 +1598,7 @@ export const createOrder = async (payload: {
       product_id: number | null;
       product_name_snapshot: string;
       price_snapshot: string;
+      unit_price_override?: string | null;
       snapshot_sku_or_code?: string;
       is_custom?: boolean;
       quantity: number;

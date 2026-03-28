@@ -26,14 +26,15 @@ def build_sale_snapshot(order: Order) -> dict[str, Any]:
             for mod in item.applied_modifiers.all()
         ]
         modifiers_total = sum((Decimal(mod["price"]) for mod in modifiers), Decimal("0"))
-        unit_price = Decimal(item.price_snapshot)
+        unit_price = Decimal(item.effective_unit_price)
         quantity = Decimal(item.quantity)
         subtotal = (unit_price + modifiers_total) * quantity
         items.append(
             {
                 "name": item.product_name_snapshot,
                 "quantity": int(item.quantity),
-                "unit_price": _money(item.price_snapshot),
+                "unit_price": _money(item.effective_unit_price),
+                "unit_price_override": _money(item.unit_price_override) if item.unit_price_override is not None else None,
                 "subtotal": _money(subtotal),
                 "code": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
                 "is_custom": bool(item.is_custom),

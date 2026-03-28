@@ -9,6 +9,7 @@ from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts
 from apps.menu.utils.pricing import resolve_effective_price
+from django.conf import settings
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -27,6 +28,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_id",
             "product_name_snapshot",
             "price_snapshot",
+            "unit_price_override",
             "snapshot_sku_or_code",
             "is_custom",
             "quantity",
@@ -132,19 +134,32 @@ class AppliedModifierInputSerializer(serializers.Serializer):
 
 
 class OrderItemInputSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=["menu", "manual"], required=False, allow_blank=True)
     product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
     product_name_snapshot = serializers.CharField(required=False, allow_blank=True)
     price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     is_custom = serializers.BooleanField(required=False, default=False)
     custom_name = serializers.CharField(required=False, allow_blank=False)
+    manual_name = serializers.CharField(required=False, allow_blank=False)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    manual_unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     custom_code = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    unit_price_override = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     quantity = serializers.IntegerField(min_value=1)
     assigned_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
     modifiers = AppliedModifierInputSerializer(many=True, required=False)
 
     def validate(self, attrs):
-        is_custom = bool(attrs.get("is_custom", False))
+        item_type = (attrs.get("type") or "").strip().lower()
+        if item_type not in {"menu", "manual"}:
+            item_type = "manual" if bool(attrs.get("is_custom", False)) else "menu"
+        attrs["type"] = item_type
+        is_custom = item_type == "manual" or bool(attrs.get("is_custom", False))
+        attrs["is_custom"] = is_custom
+        if attrs.get("manual_name") and not attrs.get("custom_name"):
+            attrs["custom_name"] = attrs.get("manual_name")
+        if attrs.get("manual_unit_price") is not None and attrs.get("unit_price") is None:
+            attrs["unit_price"] = attrs.get("manual_unit_price")
         product = attrs.get("product_id")
         if is_custom:
             if product is not None:
@@ -152,6 +167,8 @@ class OrderItemInputSerializer(serializers.Serializer):
             custom_name = (attrs.get("custom_name") or "").strip()
             if not custom_name:
                 raise serializers.ValidationError({"custom_name": "custom_name es requerido para ítems manuales."})
+            if len(custom_name) < 2:
+                raise serializers.ValidationError({"custom_name": "custom_name debe tener al menos 2 caracteres."})
             unit_price = attrs.get("unit_price")
             if unit_price is None or unit_price <= 0:
                 raise serializers.ValidationError({"unit_price": "unit_price debe ser mayor que 0."})
@@ -159,6 +176,9 @@ class OrderItemInputSerializer(serializers.Serializer):
         else:
             if product is None:
                 raise serializers.ValidationError({"product_id": "product_id es requerido para ítems de menú."})
+        unit_price_override = attrs.get("unit_price_override")
+        if unit_price_override is not None and unit_price_override <= 0:
+            raise serializers.ValidationError({"unit_price_override": "unit_price_override debe ser mayor que 0."})
         return attrs
 
 
@@ -174,6 +194,7 @@ class OrderCreateSerializer(serializers.Serializer):
     source = serializers.CharField(required=False, allow_blank=True)
     channel = serializers.CharField(required=False, allow_blank=True)
     fast_pos_mode = serializers.BooleanField(required=False, default=False)
+    price_change_pin = serializers.CharField(required=False, allow_blank=True, max_length=12)
     items = OrderItemInputSerializer(many=True)
 
     def _next_order_number(self, branch: Branch) -> int:
@@ -216,6 +237,7 @@ class OrderCreateSerializer(serializers.Serializer):
         source = (validated_data.pop("source", "") or "").strip().lower()
         channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
         fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
+        price_change_pin = (validated_data.pop("price_change_pin", "") or "").strip()
         customer_name = (validated_data.pop("customer_name", "") or "").strip()
         branch = validated_data.pop("branch_id", None)
         customer = validated_data.pop("customer_id", None)
@@ -271,12 +293,21 @@ class OrderCreateSerializer(serializers.Serializer):
         product_totals: dict[int, Decimal] = {}
         category_totals: dict[int, Decimal] = {}
 
+        override_requested = any(item.get("unit_price_override") is not None for item in items_data)
+        if override_requested:
+            configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
+            if not configured_pin:
+                raise serializers.ValidationError({"price_change_pin": "Configuración CODE_CHANGE_PRICE no disponible."})
+            if not price_change_pin or price_change_pin != configured_pin:
+                raise serializers.ValidationError({"price_change_pin": "Código incorrecto"})
+
         for item_data in items_data:
             item_data = dict(item_data)
             is_custom = bool(item_data.pop("is_custom", False))
             modifiers = item_data.pop("modifiers", [])
             product = item_data.pop("product_id", None)
             quantity = item_data["quantity"]
+            unit_price_override = item_data.pop("unit_price_override", None)
             pricing_result = None
             if is_custom:
                 custom_name = item_data.pop("custom_name")
@@ -291,8 +322,9 @@ class OrderCreateSerializer(serializers.Serializer):
                 item_data["price_snapshot"] = price_snapshot
                 item_data["product_name_snapshot"] = product.name
                 item_data["snapshot_sku_or_code"] = f"PROD-{product.id}"
+            effective_unit_price = unit_price_override if unit_price_override is not None else price_snapshot
             modifiers_total = sum((modifier["price"] for modifier in modifiers), Decimal("0"))
-            line_total = (price_snapshot + modifiers_total) * quantity
+            line_total = (effective_unit_price + modifiers_total) * quantity
             line_key = f"line-{len(order_lines)}"
             if is_custom and not item_data["snapshot_sku_or_code"]:
                 item_data["snapshot_sku_or_code"] = f"MANUAL-{order.id}-{len(order_lines) + 1}"
@@ -302,6 +334,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 product=product,
                 applied_special_price_rule=pricing_result.applied_rule if pricing_result else None,
                 is_custom=is_custom,
+                unit_price_override=unit_price_override,
                 **item_data,
             )
             for modifier_data in modifiers:
@@ -328,10 +361,10 @@ class OrderCreateSerializer(serializers.Serializer):
                 {
                     "line_key": line_key,
                     "order_item_id": order_item.id,
-                    "product_id": product.id,
+                    "product_id": product.id if product else None,
                     "category_id": product.category_id if product else None,
                     "quantity": quantity,
-                    "price_snapshot": price_snapshot,
+                    "price_snapshot": effective_unit_price,
                     "modifier_total": modifiers_total,
                     "line_total": line_total,
                 }

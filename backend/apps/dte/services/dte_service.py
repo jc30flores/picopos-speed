@@ -175,7 +175,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_iva = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
-        line_total = _q2(item.price_snapshot * item.quantity)
+        effective_unit_price = item.effective_unit_price
+        line_total = _q2(effective_unit_price * item.quantity)
         desc = item.product_name_snapshot
         free_mods = []
         paid_mods = []
@@ -204,7 +205,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(item.price_snapshot)),
+            "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(effective_unit_price)),
             "montoDescu": "0.00", "ventaNoSuj": "0.00", "ventaExenta": str(venta_exenta),
             "ventaGravada": str(venta_gravada), "tributos": None, "psv": "0.00", "noGravado": "0.00",
             "ivaItem": str(iva_item), "codTributo": None, "numeroDocumento": None,

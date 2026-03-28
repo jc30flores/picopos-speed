@@ -254,7 +254,7 @@ class OrderReceiptPDFView(generics.GenericAPIView):
                     lines.append(f"  Extra: {mod.get('name', '')}  ${mod.get('price', '0.00')}")
         else:
             for item in order.items.all().prefetch_related("applied_modifiers"):
-                lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.price_snapshot}")
+                lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.effective_unit_price}")
                 for mod in item.applied_modifiers.all():
                     lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
         lines += [
