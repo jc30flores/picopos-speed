@@ -13,7 +13,7 @@ def seed_branches_and_configs(apps, schema_editor):
     )
 
     emisor_defaults = {
-        "emisor_nit": "048143931",
+        "emisor_nit": "12171409901063",
         "emisor_nrc": "2564720",
         "emisor_nombre": "Pico de Gallo",
         "emisor_nombre_comercial": "Pico de Gallo",

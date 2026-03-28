@@ -1,6 +1,9 @@
+import logging
+
 from django.conf import settings
 from django.db.models import Q
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,7 +19,12 @@ from apps.dte.serializers import (
     DTERecordListSerializer,
 )
 from apps.dte.services.dte_retry import resend_record
+from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for_credit_note
+from apps.dte.services.email_dte_service import send_dte_email
+from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
 from apps.dte.services.dte_security import redact_payload
+
+logger = logging.getLogger("apps.dte")
 
 
 class IsDTECashierOrAbove(BasePermission):
@@ -86,30 +94,56 @@ class DTEResendView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        logger.info(
+            "[DTE RESEND] user=%s auth=%s perms=%s is_authenticated=%s",
+            getattr(request.user, "username", "anonymous"),
+            [a.__name__ for a in self.authentication_classes],
+            [p.__name__ for p in self.permission_classes],
+            bool(getattr(request.user, "is_authenticated", False)),
+        )
         record = generics.get_object_or_404(DTERecord, pk=pk)
         if record.status not in {DTERecord.STATUS_PENDING, DTERecord.STATUS_REJECTED}:
             return Response({"detail": "Solo se puede reenviar pendiente/rechazado"}, status=status.HTTP_400_BAD_REQUEST)
         if record.status == DTERecord.STATUS_SENDING:
             return Response({"detail": "El DTE está en proceso de envío"}, status=status.HTTP_409_CONFLICT)
-        updated = resend_record(record)
+        try:
+            updated = resend_record(record)
+        except PermissionDenied as exc:
+            return Response({"success": False, "message": str(exc), "detail": "permission_denied"}, status=status.HTTP_403_FORBIDDEN)
         log_audit(request, "dte.resend", "DTERecord", updated.id, {"sale_id": updated.order_id, "status": updated.status})
-        return Response(DTERecordDetailSerializer(updated).data)
+        payload = DTERecordDetailSerializer(updated).data
+        response_payload = {
+            "success": True,
+            "issued_id": updated.id,
+            "dte_record_id": updated.id,
+            "status": updated.status,
+            "http_status": payload.get("response_payload", {}).get("http_status") or 0,
+            "message": "Reenvío procesado",
+            "body_preview": (updated.response_text or "")[:400],
+            "sello_recibido": updated.sello_recibido or updated.sello_recepcion or "",
+            "firma": updated.firma or "",
+            "recibido_at": updated.recibido_at,
+            "record": payload,
+        }
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 
 class DTESendEmailView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
-        _record = generics.get_object_or_404(DTERecord, pk=pk)
-        return Response({"detail": "Integración de correo no implementada"}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        record = generics.get_object_or_404(DTERecord, pk=pk)
+        attempt = send_dte_email(record, to_email=request.data.get("email"))
+        return Response({"status": attempt.status, "provider_status": attempt.provider_status, "retries": attempt.retries})
 
 
 class DTESendWhatsAppView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
-        _record = generics.get_object_or_404(DTERecord, pk=pk)
-        return Response({"detail": "Integración de WhatsApp no implementada"}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        record = generics.get_object_or_404(DTERecord, pk=pk)
+        attempt = send_dte_whatsapp(record, to_phone=request.data.get("phone"))
+        return Response({"status": attempt.status, "provider_status": attempt.provider_status, "retries": attempt.retries})
 
 
 class DTEInvalidateView(APIView):
@@ -126,10 +160,19 @@ class DTEInvalidateView(APIView):
             tipo_anulacion=request.data.get("tipo_anulacion", "total"),
             status=DTERecord.STATUS_PENDING,
         )
-        record.status = DTERecord.STATUS_INVALIDATED
-        record.save(update_fields=["status", "updated_at"])
+        result = invalidate_dte_for_order(
+            record.order,
+            motivo=request.data.get("motivo", ""),
+            responsable_dui=request.data.get("responsable_dui", ""),
+            solicitante_dui=request.data.get("solicitante_dui", ""),
+        )
+        if result.get("success"):
+            record.status = DTERecord.STATUS_INVALIDATED
+            record.save(update_fields=["status", "updated_at"])
         log_audit(request, "dte.invalidate", "DTEInvalidation", invalidation.id, {"dte_record_id": record.id})
-        return Response(DTEInvalidationSerializer(invalidation).data, status=status.HTTP_201_CREATED)
+        data = DTEInvalidationSerializer(invalidation).data
+        data["attempt"] = result
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class DTECreditNoteView(APIView):
@@ -141,12 +184,15 @@ class DTECreditNoteView(APIView):
             return Response({"detail": "Solo DTE aceptado puede generar NC"}, status=status.HTTP_400_BAD_REQUEST)
         note = CreditNote.objects.create(
             order=record.order,
+            original_dte_record=record,
             motivo=request.data.get("motivo", ""),
             total=record.total_amount,
             dte_numero_control=record.control_number,
             dte_codigo_generacion=record.codigo_generacion,
+            items=request.data.get("items", []),
             status=DTERecord.STATUS_PENDING,
         )
+        send_dte_for_credit_note(note)
         log_audit(request, "dte.credit_note", "CreditNote", note.id, {"dte_record_id": record.id})
         return Response(CreditNoteSerializer(note).data, status=status.HTTP_201_CREATED)
 
@@ -171,3 +217,34 @@ class DTECreditNotePreviewView(APIView):
         if not record:
             return Response({"detail": "No existe DTE aceptado"}, status=status.HTTP_404_NOT_FOUND)
         return Response({"sale_id": record.order_id, "total": record.total_amount, "related_control_number": record.control_number})
+
+
+class OrderCreditNoteView(APIView):
+    permission_classes = [IsDTEAccountantOrAdmin]
+
+    def post(self, request, pk: int):
+        record = DTERecord.objects.filter(order_id=pk, status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+        if not record:
+            return Response({"detail": "No existe DTE aceptado"}, status=status.HTTP_404_NOT_FOUND)
+        note = CreditNote.objects.create(
+            order=record.order,
+            original_dte_record=record,
+            motivo=request.data.get("motivo", ""),
+            total=record.total_amount,
+            dte_numero_control=record.control_number,
+            dte_codigo_generacion=record.codigo_generacion,
+            items=request.data.get("items", []),
+            status=DTERecord.STATUS_PENDING,
+        )
+        send_dte_for_credit_note(note)
+        return Response(CreditNoteSerializer(note).data, status=status.HTTP_201_CREATED)
+
+
+class OrderCreditNotePreviewView(APIView):
+    permission_classes = [IsDTEAccountantOrAdmin]
+
+    def get(self, request, pk: int):
+        record = DTERecord.objects.filter(order_id=pk, status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+        if not record:
+            return Response({"detail": "No existe DTE aceptado"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"order_id": pk, "total": record.total_amount, "related_control_number": record.control_number})

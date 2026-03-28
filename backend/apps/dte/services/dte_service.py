@@ -4,11 +4,13 @@ import json
 import logging
 import os
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 from django.conf import settings
 
 from apps.dte.client import DTEClient
-from apps.dte.models import DTEBranchConfig, DTERecord
+from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 
 
@@ -70,44 +72,7 @@ def _money(v: Decimal) -> str:
 
 
 def _resolve_branch_config(order):
-    cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
-    if cfg:
-        return {
-            "nit": cfg.emisor_nit,
-            "nrc": cfg.emisor_nrc,
-            "nombre": cfg.emisor_nombre,
-            "nombreComercial": cfg.emisor_nombre_comercial,
-            "codActividad": cfg.cod_actividad,
-            "descActividad": cfg.desc_actividad,
-            "tipoEstablecimiento": cfg.tipo_establecimiento,
-            "codEstableMH": cfg.cod_estable_mh,
-            "codEstable": cfg.cod_estable,
-            "codPuntoVentaMH": cfg.cod_punto_venta_mh,
-            "codPuntoVenta": cfg.cod_punto_venta,
-            "departamento": cfg.direccion_departamento,
-            "municipio": cfg.direccion_municipio,
-            "complemento": cfg.direccion_complemento,
-            "telefono": cfg.telefono,
-            "correo": cfg.correo,
-        }
-    return {
-        "nit": _get_env("DTE_EMISOR_DUI"),
-        "nrc": "",
-        "nombre": _get_env("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
-        "nombreComercial": _get_env("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
-        "codActividad": "",
-        "descActividad": "",
-        "tipoEstablecimiento": "",
-        "codEstableMH": "M001",
-        "codEstable": "M001",
-        "codPuntoVentaMH": "P001",
-        "codPuntoVenta": "P001",
-        "departamento": "",
-        "municipio": "",
-        "complemento": "",
-        "telefono": _get_env("DTE_EMISOR_TELEFONO"),
-        "correo": _get_env("DTE_EMISOR_CORREO"),
-    }
+    return get_emisor_config(order.branch)
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -175,6 +140,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     from django.utils import timezone
 
     emisor = _resolve_branch_config(order)
+    final_nit = get_emisor_nit(order.branch)
+    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, order.branch_id)
+    print(f"[DTE DEBUG] Emisor NIT final utilizado={final_nit}")
     required_emisor = ["nit", "nrc", "nombre", "nombreComercial", "codActividad", "descActividad"]
     missing = [k for k in required_emisor if not emisor.get(k)]
     if missing:
@@ -379,6 +347,10 @@ def send_to_bridge(
 
 
 def interpret_dte_response(response: dict) -> dict:
+    if response is None:
+        response = {}
+    if not isinstance(response, dict):
+        response = {"raw": str(response), "http_status": 0}
     parsed_receipt = parse_hacienda_response(response or {})
     estado_top = str(response.get("estado") or "").upper()
     rh = response.get("respuesta_hacienda") or {}
@@ -399,6 +371,9 @@ def interpret_dte_response(response: dict) -> dict:
         status = DTERecord.STATUS_PENDING
 
     error = response.get("error") or {}
+    response_text = str(response.get("response_text") or response.get("raw") or "")
+    if not response_text and isinstance(response.get("response_body"), str):
+        response_text = response.get("response_body") or ""
     error_message = (
         error.get("message")
         or rh.get("descripcionMsg")
@@ -416,4 +391,100 @@ def interpret_dte_response(response: dict) -> dict:
         "hacienda_state": parsed_receipt.get("hacienda_state") or rh.get("estado") or "",
         "error_code": str(error.get("codigo_msg") or ""),
         "error_message": str(error_message),
+        "response_text": response_text,
     }
+
+
+def send_dte_for_order(order, payment=None, force: bool = False) -> DTERecord:
+    from apps.dte.services.orchestrator import transmit_sale_dte
+
+    return transmit_sale_dte(order.id, source="normal_send", force=force, payment_id=getattr(payment, "id", None))
+
+
+def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
+    order = credit_note.order
+    from apps.dte.services.control import build_generation_code, next_control_number
+
+    control_number = next_control_number(order, dte_type="NC_05")
+    generation_code = build_generation_code()
+    payload = {
+        "dte": {
+            "identificacion": {
+                "tipoDte": "05",
+                "numeroControl": control_number,
+                "codigoGeneracion": generation_code,
+            },
+            "resumen": {"totalPagar": str(credit_note.total)},
+            "extension": {"motivo": credit_note.motivo},
+            "cuerpoDocumento": credit_note.items or [],
+        }
+    }
+    response = send_to_bridge("NC_05", payload, branch_name=order.branch.name, order_id=order.id, branch_id=order.branch_id)
+    parsed = interpret_dte_response(response)
+    return DTERecord.objects.create(
+        order=order,
+        payment=None,
+        branch=order.branch,
+        credit_note=credit_note,
+        dte_type="NC_05",
+        status=parsed["status"],
+        control_number=control_number,
+        generation_code=generation_code,
+        codigo_generacion=generation_code,
+        request_payload=payload,
+        response_payload=response if isinstance(response, dict) else {},
+        response_text=parsed.get("response_text", ""),
+        attempts=1,
+        send_attempts=1,
+        hacienda_uuid=parsed.get("hacienda_uuid", ""),
+        sello_recibido=parsed.get("sello_recibido", ""),
+        firma=parsed.get("firma", ""),
+        hacienda_state=parsed.get("hacienda_state", ""),
+        estado_mh=parsed.get("estado_mh", ""),
+        error_code=parsed.get("error_code", ""),
+        error_message=parsed.get("error_message", ""),
+        last_error_code=parsed.get("error_code", ""),
+        last_error_message=parsed.get("error_message", ""),
+    )
+
+
+def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    payload = {
+        "dte": {
+            "identificacion": {
+                "tipoDte": "AN",
+                "numeroControl": record.control_number,
+                "codigoGeneracion": record.generation_code or record.codigo_generacion,
+            },
+            "motivo": motivo,
+            "responsable": responsable_dui,
+            "solicitante": solicitante_dui,
+            "extra": extra or {},
+        }
+    }
+    return payload
+
+
+def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitante_dui: str, **kwargs) -> dict:
+    record = order.dte_records.filter(status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+    if not record:
+        raise DTEPreflightError("No existe DTE aceptado para invalidar")
+    payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
+    response = send_to_bridge("INVALIDACION", payload, branch_name=order.branch.name, order_id=order.id, branch_id=order.branch_id)
+    parsed = interpret_dte_response(response)
+    attempt = DteInvalidationAttempt.objects.create(
+        order=order,
+        tipo_dte=record.dte_type,
+        payload_request=payload,
+        payload_response=json.dumps(response, ensure_ascii=False, default=str),
+        provider_status=int(response.get("http_status") or 0) if isinstance(response, dict) else None,
+        provider_body=response if isinstance(response, dict) else {"raw": str(response)},
+        cf_ray=str((response or {}).get("cf-ray") or (response or {}).get("cf_ray") or ""),
+        success=parsed["status"] == DTERecord.STATUS_ACCEPTED,
+        error_type=str(((response or {}).get("error") or {}).get("type") or ""),
+        error_message=parsed.get("error_message", ""),
+    )
+    if attempt.success:
+        record.status = DTERecord.STATUS_INVALIDATED
+        record.save(update_fields=["status", "updated_at"])
+    return {"attempt_id": attempt.id, "success": attempt.success, "status": parsed["status"]}

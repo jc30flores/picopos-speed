@@ -46,7 +46,7 @@ class DTEPermissionsTests(TestCase):
         res = self.client.get('/api/dte/issued/')
         self.assertEqual(res.status_code, 200)
 
-    def test_send_email_stub_returns_501(self):
+    def test_send_email_endpoint_exists(self):
         self.client.force_authenticate(self.user)
         res = self.client.post(f'/api/dte/issued/{self.record.id}/send-email/')
-        self.assertEqual(res.status_code, 501)
+        self.assertIn(res.status_code, [200, 400])

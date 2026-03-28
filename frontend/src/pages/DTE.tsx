@@ -29,6 +29,7 @@ export default function DTEPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const { toast } = useToast();
+  const [resendLocked, setResendLocked] = useState<Record<number, boolean>>({});
 
   const filters = useMemo(
     () => ({ q: query || undefined, status: status === "all" ? undefined : status, dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
@@ -40,6 +41,30 @@ export default function DTEPage() {
       setRows(await dteIssuedList(filters));
     } catch (error) {
       toast({ title: "Error cargando DTE", description: String(error), variant: "destructive" });
+    }
+  };
+
+  const onResend = async (row: DTERecord) => {
+    if (resendLocked[row.id]) return;
+    setResendLocked((prev) => ({ ...prev, [row.id]: true }));
+    toast({ title: "Reenvío en proceso…" });
+    try {
+      const updated = await dteResend(row.id);
+      const state = updated.status || "PENDIENTE";
+      if (state === "ACEPTADO") {
+        toast({ title: "DTE aceptado" });
+      } else if (state === "RECHAZADO") {
+        toast({ title: "DTE rechazado", description: updated.error_message || "Error de autorización/validación", variant: "destructive" });
+      } else {
+        toast({ title: "DTE pendiente", description: "API caída o en cola de reintento." });
+      }
+      await load();
+    } catch (error) {
+      toast({ title: "No se pudo reenviar", description: String(error), variant: "destructive" });
+    } finally {
+      window.setTimeout(() => {
+        setResendLocked((prev) => ({ ...prev, [row.id]: false }));
+      }, 2500);
     }
   };
 
@@ -98,7 +123,7 @@ export default function DTEPage() {
                   <td className="p-2">{r.last_sent_at ? formatDateTimeSV(r.last_sent_at) : "-"}</td>
                   <td className="p-2 flex gap-2">
                     <Button size="sm" variant="outline" onClick={async () => setSelected(await dteIssuedDetail(r.id))}>Ver</Button>
-                    <Button size="sm" variant="outline" disabled={!canResend(r.status)} onClick={async () => { await dteResend(r.id); await load(); }}>Reenviar</Button>
+                    <Button size="sm" variant="outline" disabled={!canResend(r.status) || resendLocked[r.id]} onClick={async () => onResend(r)}>Reenviar</Button>
                   </td>
                 </tr>
               ))}

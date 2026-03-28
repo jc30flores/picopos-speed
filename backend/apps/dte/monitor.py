@@ -143,7 +143,13 @@ class DTEHealthMonitor:
         changed = (previous.state != state) or (previous.health_status_code != health_code) or (previous.factura_code != factura_code)
         if changed or force_log:
             if state == STATE_UP:
-                DTE_LOGGER.info("[DTE MONITOR] STATE=%s health=%s factura=%s", state, health_code, factura_code)
+                DTE_LOGGER.info(
+                    "[DTE MONITOR] STATE=%s health=%s factura=%s body_preview=%s",
+                    state,
+                    health_code,
+                    factura_code,
+                    self._preview(factura_body or health_body),
+                )
             else:
                 DTE_LOGGER.info(
                     "[DTE MONITOR] STATE=%s health=%s factura=%s health_body_preview=%s factura_body_preview=%s error=%s",

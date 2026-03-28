@@ -42,9 +42,9 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
-        attrs.pop("amount_applied", None)
         order = attrs.get("order")
-        raw_amount = attrs.get("amount_applied", attrs.get("amount"))
+        raw_amount_applied = attrs.pop("amount_applied", None)
+        raw_amount = raw_amount_applied if raw_amount_applied is not None else attrs.get("amount")
         amount = self._normalize_money(raw_amount, field="amount")
         tip_amount = self._normalize_money(attrs.get("tip_amount") or Decimal("0"), field="tip_amount")
         attrs["amount"] = amount
@@ -77,6 +77,13 @@ class PaymentSerializer(serializers.ModelSerializer):
         if remaining <= 0:
             raise serializers.ValidationError("Order is already paid")
         diff = (amount - remaining).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        logger.info(
+            "payment.validation.balance_check order_id=%s remaining_balance=%s amount_request=%s diff=%s",
+            getattr(order, "id", None),
+            remaining,
+            amount,
+            diff,
+        )
         if diff > Decimal("0.01"):
             logger.warning(
                 "payment.validation.exceeds_remaining order_id=%s remaining=%s amount=%s diff=%s",

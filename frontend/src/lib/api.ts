@@ -3031,51 +3031,45 @@ export const dteIssuedList = async (filters?: {
   if (filters?.dteType) params.set("dte_type", filters.dteType);
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
-  const res = await fetch(`${API_BASE_URL}/dte/issued/?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo cargar DTE");
-  const data = await res.json();
+  const res = await request(`/dte/issued/?${params.toString()}`);
+  const data = await handleJson<any>(res);
   return Array.isArray(data.results) ? data.results : data;
 };
 
 export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/`, { credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo cargar detalle DTE");
-  return res.json();
+  const res = await request(`/dte/issued/${id}/`);
+  return handleJson<DTERecord>(res);
 };
 
 export const dteResend = async (id: number): Promise<DTERecord> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/resend/`, { method: "POST", credentials: "include" });
-  if (!res.ok) throw new Error("No se pudo reenviar DTE");
-  return res.json();
+  const res = await request(`/dte/issued/${id}/resend/`, { method: "POST" });
+  const payload = await handleJson<any>(res);
+  return payload.record as DTERecord;
 };
 
 export const dteSendEmail = async (id: number): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-email/`, { method: "POST", credentials: "include" });
+  const res = await request(`/dte/issued/${id}/send-email/`, { method: "POST" });
   if (res.status === 501) throw new Error("Próximamente");
   if (!res.ok) throw new Error("No se pudo enviar correo");
 };
 
 export const dteSendWhatsapp = async (id: number): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/send-whatsapp/`, { method: "POST", credentials: "include" });
+  const res = await request(`/dte/issued/${id}/send-whatsapp/`, { method: "POST" });
   if (res.status === 501) throw new Error("Próximamente");
   if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
 };
 
 export const dteInvalidate = async (id: number, motivo: string): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/invalidate/`, {
+  const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ motivo }),
   });
   if (!res.ok) throw new Error("No se pudo invalidar DTE");
 };
 
 export const dteCreateCreditNote = async (id: number, motivo: string): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/dte/issued/${id}/credit-note/`, {
+  const res = await request(`/dte/issued/${id}/credit-note/`, {
     method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ motivo }),
   });
   if (!res.ok) throw new Error("No se pudo crear nota de crédito");
@@ -3140,11 +3134,11 @@ export const createCustomer = async (payload: Partial<Customer> & { fullName: st
       dui: payload.dui ?? '',
       nit: payload.nit ?? '',
       nrc: payload.nrc ?? null,
-      phone: payload.phone ?? '00000000',
+      phone: payload.phone ?? '',
       email: payload.email ?? null,
-      direccion: payload.direccion ?? 'Direccion del cliente',
-      department_code: payload.departmentCode ?? '12',
-      municipality_code: payload.municipalityCode ?? '22',
+      direccion: payload.direccion ?? '',
+      department_code: payload.departmentCode ?? '',
+      municipality_code: payload.municipalityCode ?? '',
       activity_code: payload.activityCode ?? '',
       activity_description: payload.activityDescription ?? '',
       is_consumer_final: Boolean(payload.isConsumerFinal),
@@ -3187,18 +3181,31 @@ export const deleteCustomer = async (id: number): Promise<void> => {
 };
 
 export const listDepartments = async () => {
+  if ((listDepartments as any)._cache) return (listDepartments as any)._cache as Array<{ code: string; name: string }>;
   const response = await request('/clients/geo/departments/');
-  return handleJson<Array<{ code: string; name: string }>>(response);
+  const data = await handleJson<Array<{ code: string; name: string }>>(response);
+  (listDepartments as any)._cache = data;
+  return data;
 };
 
 export const listMunicipalities = async (departmentCode?: string) => {
+  const key = departmentCode || "__all__";
+  const cache = ((listMunicipalities as any)._cache ||= new Map<string, Array<{ code: string; department_code: string; name: string }>>());
+  if (cache.has(key)) return cache.get(key)!;
   const response = await request(`/clients/geo/municipalities/${departmentCode ? `?department_code=${departmentCode}` : ''}`);
-  return handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+  const data = await handleJson<Array<{ code: string; department_code: string; name: string }>>(response);
+  cache.set(key, data);
+  return data;
 };
 
 export const listActivities = async (q = '') => {
+  const key = q || "__all__";
+  const cache = ((listActivities as any)._cache ||= new Map<string, Array<{ code: string; description: string }>>());
+  if (cache.has(key)) return cache.get(key)!;
   const response = await request(`/clients/activities/${q ? `?q=${encodeURIComponent(q)}` : ''}`);
-  return handleJson<Array<{ code: string; description: string }>>(response);
+  const data = await handleJson<Array<{ code: string; description: string }>>(response);
+  cache.set(key, data);
+  return data;
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {

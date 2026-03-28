@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.orders import views
+from apps.dte import views as dte_views
 
 urlpatterns = [
     path("", views.OrderCreateView.as_view(), name="orders-create"),
@@ -9,6 +10,8 @@ urlpatterns = [
     path("<int:pk>/status/", views.OrderStatusUpdateView.as_view(), name="orders-status"),
     path("<int:pk>/void/", views.OrderVoidView.as_view(), name="orders-void"),
     path("<int:pk>/receipt.pdf", views.OrderReceiptPDFView.as_view(), name="orders-receipt-pdf"),
+    path("<int:pk>/credit-note/", dte_views.OrderCreditNoteView.as_view(), name="orders-credit-note"),
+    path("<int:pk>/credit-note/preview/", dte_views.OrderCreditNotePreviewView.as_view(), name="orders-credit-note-preview"),
     path("customer-display/", views.CustomerDisplayOrderListView.as_view(), name="orders-customer-display"),
     path("customer-board/", views.CustomerBoardListView.as_view(), name="orders-customer-board"),
 ]

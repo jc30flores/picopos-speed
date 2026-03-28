@@ -170,8 +170,9 @@ class GeoDepartment(models.Model):
 
 
 class GeoMunicipality(models.Model):
-    code = models.CharField(max_length=4, primary_key=True)
-    department_code = models.CharField(max_length=2)
+    id = models.IntegerField(primary_key=True, db_column="id")
+    department_code = models.CharField(max_length=4, db_column="dept_code")
+    municipality_code = models.CharField(max_length=4, db_column="muni_code")
     name = models.CharField(max_length=120)
 
     class Meta:
