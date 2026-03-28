@@ -3063,25 +3063,51 @@ export type DTERecord = {
   error_message?: string;
   attempts?: number;
   last_sent_at?: string;
+  issued_at?: string;
+  can_resend?: boolean;
+  can_send_email?: boolean;
+  missing_email_reason?: string;
+  can_send_whatsapp?: boolean;
+  missing_phone_reason?: string;
+  can_credit_note?: boolean;
+  credit_note_reason?: string;
+  has_credit_note?: boolean;
+  can_invalidate?: boolean;
+  invalidate_reason?: string;
+  invalidate_deadline?: string | null;
+  invalidate_remaining?: string;
+  customer_email?: string;
+  customer_phone?: string;
   created_at: string;
 };
 
 export const dteIssuedList = async (filters?: {
-  q?: string;
+  search?: string;
   status?: string;
-  dteType?: string;
+  type?: string;
   dateFrom?: string;
   dateTo?: string;
-}): Promise<DTERecord[]> => {
+  page?: number;
+  pageSize?: number;
+}): Promise<{ results: DTERecord[]; count: number; totalAmountSum: number; page: number; pageSize: number }> => {
   const params = new URLSearchParams();
-  if (filters?.q) params.set("q", filters.q);
+  if (filters?.search) params.set("search", filters.search);
   if (filters?.status) params.set("status", filters.status);
-  if (filters?.dteType) params.set("dte_type", filters.dteType);
+  if (filters?.type) params.set("type", filters.type);
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.page) params.set("page", String(filters.page));
+  if (filters?.pageSize) params.set("page_size", String(filters.pageSize));
   const res = await request(`/dte/issued/?${params.toString()}`);
   const data = await handleJson<any>(res);
-  return Array.isArray(data.results) ? data.results : data;
+  const results = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : [];
+  return {
+    results,
+    count: Number(data.count ?? results.length),
+    totalAmountSum: Number(data.total_amount_sum ?? 0),
+    page: Number(data.page ?? filters?.page ?? 1),
+    pageSize: Number(data.page_size ?? filters?.pageSize ?? 20),
+  };
 };
 
 export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
@@ -3089,38 +3115,40 @@ export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
   return handleJson<DTERecord>(res);
 };
 
-export const dteResend = async (id: number): Promise<DTERecord> => {
+export const dteResend = async (id: number): Promise<{ message: string; record: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/resend/`, { method: "POST" });
   const payload = await handleJson<any>(res);
-  return payload.record as DTERecord;
+  return { message: payload.message ?? "Reenvío procesado", record: payload.record as DTERecord };
 };
 
-export const dteSendEmail = async (id: number): Promise<void> => {
+export const dteSendEmail = async (id: number): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/send-email/`, { method: "POST" });
-  if (res.status === 501) throw new Error("Próximamente");
-  if (!res.ok) throw new Error("No se pudo enviar correo");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "Correo enviado", record: payload.record };
 };
 
-export const dteSendWhatsapp = async (id: number): Promise<void> => {
+export const dteSendWhatsapp = async (id: number): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/send-whatsapp/`, { method: "POST" });
-  if (res.status === 501) throw new Error("Próximamente");
-  if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "WhatsApp enviado", record: payload.record };
 };
 
-export const dteInvalidate = async (id: number, motivo: string): Promise<void> => {
+export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
     body: JSON.stringify({ motivo }),
   });
-  if (!res.ok) throw new Error("No se pudo invalidar DTE");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "DTE invalidado", record: payload.record };
 };
 
-export const dteCreateCreditNote = async (id: number, motivo: string): Promise<void> => {
+export const dteCreateCreditNote = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/credit-note/`, {
     method: "POST",
     body: JSON.stringify({ motivo }),
   });
-  if (!res.ok) throw new Error("No se pudo crear nota de crédito");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "Nota de crédito creada", record: payload.record };
 };
 
 
