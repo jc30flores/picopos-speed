@@ -474,6 +474,14 @@ export const login = async (payload: {
   return handleJson<AuthUser>(response);
 };
 
+export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
+  const response = await request("/auth/pin-login/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return handleJson<AuthUser>(response);
+};
+
 export const logout = async (): Promise<void> => {
   const response = await request("/auth/logout/", { method: "POST" });
   if (!response.ok && response.status !== 204) {

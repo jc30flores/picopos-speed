@@ -27,6 +27,7 @@ _OUTBOX_WORKER_STARTED = False
 _OUTBOX_WORKER_LOCK = threading.Lock()
 _LAST_DB_DOWN_LOG_TS = 0.0
 _LAST_HTTP_DOWN_LOG_TS = 0.0
+_LAST_IDLE_LOG_TS = 0.0
 
 CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
 CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
@@ -492,6 +493,7 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
 
 
 def process_pending_outbox(limit: int = 50) -> int:
+    global _LAST_IDLE_LOG_TS
     health = _health_snapshot(stale_seconds=2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10))
     circuit_open, open_until = _is_circuit_open()
 
@@ -529,7 +531,14 @@ def process_pending_outbox(limit: int = 50) -> int:
         )
     pending = DTEOutbox.objects.select_related("order", "payment").filter(id__in=pending_ids).order_by("created_at")
 
-    DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
+    if pending_ids:
+        DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
+    else:
+        idle_every = int(getattr(settings, "DTE_LOG_IDLE_EVERY_SECONDS", 300) or 300)
+        now_ts = time.time()
+        if now_ts - _LAST_IDLE_LOG_TS >= idle_every:
+            DTE_LOGGER.debug("[DTE OUTBOX] idle queue_size=0")
+            _LAST_IDLE_LOG_TS = now_ts
     processed = 0
     for outbox in pending:
         try:

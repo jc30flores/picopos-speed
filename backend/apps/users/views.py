@@ -1,6 +1,9 @@
 from django.contrib.auth import authenticate, login, logout, get_user_model
+from django.contrib.auth.hashers import check_password
 from django.middleware.csrf import get_token
+from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
+from datetime import timedelta
 import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -67,6 +70,53 @@ def login_view(request):
         )
     except Exception:  # noqa: BLE001
         logger.exception("auth.login.failed")
+        return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pin_login_view(request):
+    try:
+        pin = str(request.data.get("pin") or "").strip()
+        if not pin.isdigit() or len(pin) < 4 or len(pin) > 6:
+            return Response({"detail": "PIN inválido"}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        profiles = UserProfile.objects.select_related("user").filter(is_active=True).exclude(pin_hash="")
+        locked_profile = profiles.filter(pin_locked_until__gt=now).first()
+        if locked_profile and any(check_password(pin, p.pin_hash) for p in profiles):
+            return Response({"detail": "PIN temporalmente bloqueado. Intenta de nuevo en unos segundos."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        matched_profile = None
+        for profile in profiles:
+            if profile.pin_hash and check_password(pin, profile.pin_hash):
+                matched_profile = profile
+                break
+
+        if matched_profile is None:
+            profiles.filter(pin_locked_until__lte=now).update(pin_locked_until=None)
+            for profile in profiles:
+                profile.pin_failed_attempts = (profile.pin_failed_attempts or 0) + 1
+                if profile.pin_failed_attempts >= 5:
+                    profile.pin_locked_until = now + timedelta(seconds=30)
+                    profile.pin_failed_attempts = 0
+                profile.save(update_fields=["pin_failed_attempts", "pin_locked_until"])
+            return Response({"detail": "PIN incorrecto"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        matched_profile.pin_failed_attempts = 0
+        matched_profile.pin_locked_until = None
+        matched_profile.save(update_fields=["pin_failed_attempts", "pin_locked_until"])
+        login(request, matched_profile.user)
+        return Response(
+            {
+                "id": matched_profile.user.id,
+                "username": matched_profile.user.get_username(),
+                "email": matched_profile.user.email,
+                "role": matched_profile.role,
+            }
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("auth.pin_login.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

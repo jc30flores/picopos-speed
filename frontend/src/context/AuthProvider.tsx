@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getCSRF, login as loginRequest, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
+import { getCSRF, login as loginRequest, pinLogin, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
 import { AuthContext } from "./authContext";
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -30,6 +30,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(current);
   }, []);
 
+  const loginWithPin = useCallback(async ({ pin }: { pin: string }) => {
+    await getCSRF();
+    const current = await pinLogin({ pin });
+    setUser(current);
+  }, []);
+
   const logout = useCallback(async () => {
     await getCSRF();
     await logoutRequest();
@@ -41,9 +47,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       user,
       loading,
       login,
+      loginWithPin,
       logout,
     }),
-    [user, loading, login, logout],
+    [user, loading, login, loginWithPin, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

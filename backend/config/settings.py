@@ -243,6 +243,7 @@ DTE_LOG_PAYLOAD_TO_FILE = _env_bool("DTE_LOG_PAYLOAD_TO_FILE", default=DTE_LOG_P
 DTE_LOG_PAYLOAD_DIR = os.environ.get("DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads").strip() or "tmp/dte_payloads"
 DTE_LOG_PAYLOAD_MAX_CHARS = _env_int("DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0
 DTE_LOG_VERBOSE = _env_bool("DTE_LOG_VERBOSE", default=False)
+DTE_LOG_LEVEL = (os.environ.get("DTE_LOG_LEVEL", "INFO") or "INFO").upper()
 DTE_LOG_RESPONSE_FULL = _env_bool("DTE_LOG_RESPONSE_FULL", default=False)
 DTE_LOG_TO_FILE = _env_bool("DTE_LOG_TO_FILE", default=DTE_LOG_PAYLOAD_FULL)
 DTE_LOG_DIR = os.environ.get("DTE_LOG_DIR", DTE_LOG_PAYLOAD_DIR).strip() or DTE_LOG_PAYLOAD_DIR
@@ -268,7 +269,7 @@ LOGGING = {
     "loggers": {
         "apps.dte": {
             "handlers": ["console"],
-            "level": "INFO",
+            "level": DTE_LOG_LEVEL,
             "propagate": True,
         },
     },
