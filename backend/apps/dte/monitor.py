@@ -154,6 +154,8 @@ class DTEHealthMonitor:
         changed = (previous.state != state) or (previous.health_status_code != health_code) or (previous.factura_code != factura_code)
         if changed or force_log:
             if state == STATE_UP:
+                if factura_code == 422:
+                    DTE_LOGGER.info("[DTE MONITOR] factura_reachable=true (422 expected)")
                 DTE_LOGGER.info(
                     "[DTE MONITOR] STATE=%s health=%s factura=%s body_preview=%s",
                     state,

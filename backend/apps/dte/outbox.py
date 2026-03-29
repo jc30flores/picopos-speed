@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import threading
 import time
 from datetime import timedelta
@@ -80,7 +81,7 @@ def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_contr
 
 def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None, endpoint_url: str = "") -> None:
     payload_text = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
-    if not bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)):
+    if not bool(getattr(settings, "DTE_DEBUG_LOG_PAYLOAD", getattr(settings, "DTE_LOG_PAYLOAD_FULL", False))):
         DTE_LOGGER.info("[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s", order_id, order_id, payment_id, numero_control, codigo_generacion)
         return
     if endpoint_url:
@@ -152,8 +153,11 @@ def _health_snapshot(stale_seconds: int):
 
 
 def _compute_backoff(attempts: int) -> timedelta:
-    base = int(getattr(settings, "DTE_RETRY_BACKOFF_SECONDS", 30) or 30)
-    return timedelta(seconds=base * max(1, attempts))
+    base = int(getattr(settings, "DTE_BACKOFF_BASE_SECONDS", 10) or 10)
+    max_seconds = int(getattr(settings, "DTE_BACKOFF_MAX_SECONDS", 600) or 600)
+    exp_seconds = min(max_seconds, base * (2 ** max(0, attempts - 1)))
+    jitter = random.randint(0, 3)
+    return timedelta(seconds=exp_seconds + jitter)
 
 
 def _is_circuit_open() -> tuple[bool, float | None]:
@@ -449,7 +453,16 @@ def process_pending_outbox(limit: int = 50) -> int:
         return 0
 
     max_retries = int(getattr(settings, "DTE_MAX_RETRIES", 5) or 5)
+    stuck_timeout_seconds = int(getattr(settings, "DTE_PROCESSING_TIMEOUT_SECONDS", 120) or 120)
     now = timezone.now()
+    DTEOutbox.objects.filter(
+        status=DTEOutbox.STATUS_SENDING,
+        last_attempt_at__lt=now - timedelta(seconds=stuck_timeout_seconds),
+    ).update(
+        status=DTEOutbox.STATUS_PENDING,
+        next_attempt_at=now,
+        error_message="Recovered from stuck PROCESSING state",
+    )
     with transaction.atomic():
         pending_ids = list(
             DTEOutbox.objects.select_for_update(skip_locked=True)
@@ -489,6 +502,7 @@ def _outbox_worker_loop() -> None:
     batch_size = int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)
     db_backoff_seconds = 1.0
     while True:
+        close_old_connections()
         try:
             process_pending_outbox(limit=batch_size)
             db_backoff_seconds = 1.0
@@ -518,7 +532,7 @@ def start_outbox_worker() -> bool:
     with _OUTBOX_WORKER_LOCK:
         if _OUTBOX_WORKER_STARTED:
             return False
-        if not bool(getattr(settings, "DTE_MONITOR_ENABLED", True)):
+        if not bool(getattr(settings, "DTE_OUTBOX_WORKER_ENABLED", True)):
             return False
         interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
         DTE_LOGGER.info("[DTE OUTBOX] starting worker interval=%ss", interval)

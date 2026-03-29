@@ -132,6 +132,50 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         self.assertIsNone(outbox.next_attempt_at)
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_no_retry_on_422_validation_error(self, mock_send, _health):
+        mock_send.return_value = DTEClientResult(
+            status_code=422,
+            json_body={"error": {"message": "missing field dte"}},
+            text_body='{"error":"missing field dte"}',
+            success=False,
+            remote_uuid="",
+            sello_recibido="",
+            error_message="validation_error",
+            error_type="VALIDATION",
+            elapsed_ms=10,
+        )
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_REJECTED)
+        self.assertIsNone(outbox.next_attempt_at)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_marks_accepted_on_http_200(self, mock_send, _health):
+        mock_send.return_value = DTEClientResult(
+            status_code=200,
+            json_body={"success": True, "estado": "ACEPTADO"},
+            text_body='{"success":true,"estado":"ACEPTADO"}',
+            success=True,
+            remote_uuid="uuid-1",
+            sello_recibido="sello",
+            error_message="",
+            error_type="",
+            elapsed_ms=10,
+        )
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_ACCEPTED)
+        self.assertIsNone(outbox.next_attempt_at)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_timeout_keeps_pending(self, mock_send, _health):
+        mock_send.side_effect = Exception("Read timed out. (read timeout=30)")
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
+        self.assertIsNotNone(outbox.next_attempt_at)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox._resend_existing_outbox")
     def test_process_outbox_picks_pending_by_next_attempt_at(self, mock_resend, _health):
         due = DTEOutbox.objects.create(

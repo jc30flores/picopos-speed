@@ -67,7 +67,7 @@ class PaymentDteTriggerTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         body = response.json()
-        self.assertEqual(body.get("dte_status"), "PENDIENTE")
+        self.assertEqual(body.get("dte_status"), "QUEUED")
         self.assertEqual(body.get("dte_record_id"), 7001)
         self.assertEqual(body.get("dte_outbox_id"), 9001)
         mock_send.assert_called_once()

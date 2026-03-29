@@ -1,5 +1,6 @@
 from decimal import Decimal
 import logging
+import threading
 from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.response import Response
@@ -76,7 +77,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             },
         )
         print_result = {"printed": False, "print_error": None, "drawer_opened": False, "drawer_error": None}
-        dte_meta = {"dte_status": None, "dte_record_id": None, "dte_outbox_id": None}
+        dte_meta = {"dte_status": None, "dte_record_id": None, "dte_outbox_id": None, "dte_last_error": None}
 
         if remaining <= 0:
             persist_sale_snapshot(payment.order)
@@ -101,38 +102,37 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
             def _after_commit_dte():
+                def _enqueue_dte_async():
+                    try:
+                        logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
+                        dte_record = send_dte_for_order(payment.order, payment=payment, queue_only=True)
+                        persist_sale_snapshot(payment.order)
+                        outbox = dte_record.outbox_entries.order_by("-created_at").first()
+                        status_map = {
+                            "PENDING": "QUEUED",
+                            "ACCEPTED": "SENT",
+                            "REJECTED": "FAILED",
+                            "FAILED": "FAILED",
+                        }
+                        dte_meta["dte_status"] = status_map.get(dte_record.status, "QUEUED")
+                        dte_meta["dte_record_id"] = dte_record.id
+                        dte_meta["dte_outbox_id"] = outbox.id if outbox else None
+                        dte_meta["dte_last_error"] = (outbox.error_message if outbox else "") or (dte_record.error_message or "")
+                        logger.info(
+                            "payment.dte.queued order_id=%s payment_id=%s dte_status=%s outbox_id=%s",
+                            payment.order_id,
+                            payment.id,
+                            dte_record.status,
+                            dte_meta["dte_outbox_id"],
+                        )
+                    except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
+                        logger.exception("payment.dte.failed order_id=%s payment_id=%s", payment.order_id, payment.id)
+                        dte_meta["dte_status"] = "FAILED"
+                        dte_meta["dte_last_error"] = str(exc)
                 try:
-                    logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
-                    dte_record = send_dte_for_order(payment.order, payment=payment, queue_only=True)
-                    persist_sale_snapshot(payment.order)
-                    outbox = dte_record.outbox_entries.order_by("-created_at").first()
-                    dte_meta["dte_status"] = "PENDIENTE" if dte_record.status == "PENDING" else dte_record.status
-                    dte_meta["dte_record_id"] = dte_record.id
-                    dte_meta["dte_outbox_id"] = outbox.id if outbox else None
-                    logger.info(
-                        "payment.dte.queued order_id=%s payment_id=%s dte_status=%s outbox_id=%s",
-                        payment.order_id,
-                        payment.id,
-                        dte_record.status,
-                        dte_meta["dte_outbox_id"],
-                    )
-                    log_audit(
-                        request,
-                        "invoice.queued",
-                        "DTERecord",
-                        dte_record.id,
-                        {"order_id": payment.order_id, "status": dte_record.status, "outbox_id": dte_meta["dte_outbox_id"]},
-                    )
-                except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
-                    logger.exception("payment.dte.failed order_id=%s payment_id=%s", payment.order_id, payment.id)
-                    dte_meta["dte_status"] = "ERROR_COLA"
-                    log_audit(
-                        request,
-                        "invoice.failed_non_blocking",
-                        "Order",
-                        payment.order_id,
-                        {"order_id": payment.order_id, "error": str(exc)},
-                    )
+                    threading.Thread(target=_enqueue_dte_async, daemon=True, name=f"dte-enqueue-{payment.id}").start()
+                except Exception:
+                    _enqueue_dte_async()
             transaction.on_commit(_after_commit_dte)
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
@@ -180,9 +180,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         if remaining <= 0 and hasattr(payment.order, "invoice"):
             data["invoice_status"] = payment.order.invoice.status
             data["invoice_id"] = payment.order.invoice.id
-            data["dte_status"] = dte_meta["dte_status"] or "PENDIENTE"
+            data["dte_status"] = dte_meta["dte_status"] or "QUEUED"
             data["dte_record_id"] = dte_meta["dte_record_id"]
             data["dte_outbox_id"] = dte_meta["dte_outbox_id"]
+            data["dte_last_error"] = dte_meta["dte_last_error"]
         return Response(data, status=status.HTTP_201_CREATED)
 
 
