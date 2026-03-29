@@ -1,14 +1,8 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Moon, Sun, ChevronDown } from "lucide-react";
+import { LogOut, Moon, Sun } from "lucide-react";
 import galloLogo from "@/assets/gallo-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/useAuth";
@@ -31,16 +25,16 @@ export const Navigation = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [branches, setBranches] = useState<BranchOption[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState<string>("Sucursal Principal");
 
   useEffect(() => {
     branchOptions().then((list) => {
-      setBranches(list);
       const savedId = localStorage.getItem("selected_branch_id");
-      const selected = list.find((b) => String(b.id) === savedId) || list.find((b) => b.code === "PRINCIPAL") || list[0];
+      const selected =
+        list.find((b) => String(b.id) === savedId) ||
+        list.find((b) => b.is_default || b.is_primary || b.is_default_branch) ||
+        list.find((b) => b.code === "PRINCIPAL") ||
+        list[0];
       if (selected) {
-        setSelectedBranch(selected.name);
         localStorage.setItem("selected_branch_id", String(selected.id));
       }
     }).catch(() => undefined);
@@ -67,6 +61,12 @@ export const Navigation = () => {
     }
   };
 
+  const isNavItemActive = (path: string) => {
+    if (path === "/") return location.pathname === "/";
+    if (path.startsWith("/registros")) return location.pathname.startsWith("/registros");
+    return location.pathname === path || location.pathname.startsWith(`${path}/`);
+  };
+
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-card border-b border-border shadow-sm">
       <div className="container mx-auto px-4">
@@ -89,10 +89,11 @@ export const Navigation = () => {
                 <Link
                   key={item.path}
                   to={item.path}
+                  aria-current={isNavItemActive(item.path) ? "page" : undefined}
                   className={cn(
                     "px-3 lg:px-4 py-2 rounded-lg text-xs lg:text-sm font-medium transition-all duration-200 whitespace-nowrap",
-                    location.pathname === item.path
-                      ? "bg-primary text-primary-foreground shadow-md"
+                    isNavItemActive(item.path)
+                      ? "bg-primary/90 text-primary-foreground ring-1 ring-primary/60 shadow-[0_0_12px_rgba(34,197,94,0.35)]"
                       : "text-muted-foreground hover:text-foreground hover:bg-muted"
                   )}
                 >
@@ -117,23 +118,6 @@ export const Navigation = () => {
                 <Sun className="h-4 w-4 lg:h-5 lg:w-5" />
               )}
             </Button>
-
-            {/* Branch Selector - Hidden on small screens */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="hidden md:flex gap-2 rounded-lg border border-border">
-                  {selectedBranch}
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                {branches.map((branch) => (
-                  <DropdownMenuItem key={branch.id} onClick={() => { setSelectedBranch(branch.name); localStorage.setItem("selected_branch_id", String(branch.id)); }}>
-                    {branch.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
 
             <TooltipProvider delayDuration={150}>
               <Tooltip>

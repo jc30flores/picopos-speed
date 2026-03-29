@@ -984,9 +984,9 @@ const POS = () => {
           {/* Cart Section */}
           <Card className="flex flex-col overflow-hidden">
             <div className="p-4 border-b">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-xl font-bold">Pedido Actual</h2>
-                <div className="flex items-center gap-2">
+              <div className="mb-3 space-y-2">
+                <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
+                <div className="flex flex-wrap items-center justify-center gap-2">
                   <TooltipProvider delayDuration={120}>
                     <Tooltip>
                       <TooltipTrigger asChild>

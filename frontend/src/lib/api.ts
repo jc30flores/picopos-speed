@@ -228,6 +228,9 @@ export type BranchOption = {
   name: string;
   code: string;
   is_active: boolean;
+  is_default?: boolean;
+  is_primary?: boolean;
+  is_default_branch?: boolean;
 };
 
 export type Customer = {
