@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 import requests
+from requests.exceptions import RequestException
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -45,8 +46,10 @@ class DTEHealthMonitor:
         endpoint = (getattr(settings, "DTE_HEALTH_ENDPOINT", "/health") or "/health").strip()
         self.health_endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
         self.health_url = f"{self.base_url}{self.health_endpoint}" if self.base_url else ""
+        self.factura_url = f"{self.base_url}/api/v1/dte/factura" if self.base_url else ""
         self.interval = int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
         self.timeout = int(getattr(settings, "DTE_HEALTH_TIMEOUT_SECONDS", 5) or 5)
+        self.max_backoff = int(getattr(settings, "DTE_MONITOR_MAX_BACKOFF_SECONDS", 30) or 30)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
 
     @staticmethod
@@ -88,12 +91,17 @@ class DTEHealthMonitor:
         cache.set(CACHE_LAST_CHECKED, timezone.now().timestamp(), timeout=None)
 
     def _determine_state(self, health_code: int | None, factura_code: int | None, error_text: str = "") -> str:
-        _ = factura_code
         if error_text:
             return STATE_DOWN
         if health_code != 200:
             return STATE_DOWN
-        return STATE_UP
+        if factura_code is None:
+            return STATE_UP
+        if factura_code in {200, 401, 403, 404, 422}:
+            return STATE_UP
+        if factura_code in {500, 502, 503, 504}:
+            return STATE_DEGRADED
+        return STATE_DEGRADED
 
     def check_once(self, force_log: bool = False) -> HealthSnapshot:
         previous = self.get_cached_snapshot()
@@ -110,12 +118,29 @@ class DTEHealthMonitor:
             DTE_LOGGER.info("[DTE MONITOR] STATE=%s health=%s factura=%s error=%s", state, None, None, error_text)
             return self.get_cached_snapshot()
 
+        reason = ""
         try:
             health_resp = requests.get(self.health_url, timeout=self.timeout, headers=self._headers())
             health_code = int(health_resp.status_code)
             health_body = health_resp.text or ""
-        except Exception as exc:  # noqa: BLE001
+        except RequestException as exc:
             error_text = f"health_error={exc}"
+            if "name resolution" in str(exc).lower() or "nodename nor servname provided" in str(exc).lower():
+                reason = "dns"
+            elif "timed out" in str(exc).lower():
+                reason = "timeout"
+            else:
+                reason = "network"
+
+        if not error_text:
+            try:
+                factura_resp = requests.post(self.factura_url, timeout=self.timeout, headers=self._headers(), json={"test": "ping"})
+                factura_code = int(factura_resp.status_code)
+                factura_body = factura_resp.text or ""
+            except RequestException as exc:
+                if not error_text:
+                    error_text = f"factura_error={exc}"
+                reason = reason or ("dns" if "name resolution" in str(exc).lower() else "network")
 
         state = self._determine_state(health_code, factura_code, error_text)
         self._save_snapshot(
@@ -138,8 +163,9 @@ class DTEHealthMonitor:
                 )
             else:
                 DTE_LOGGER.info(
-                    "[DTE MONITOR] STATE=%s health=%s factura=%s health_body_preview=%s factura_body_preview=%s error=%s",
+                    "[DTE MONITOR] STATE=%s reason=%s health=%s factura=%s health_body_preview=%s factura_body_preview=%s error=%s",
                     state,
+                    reason or "unknown",
                     health_code,
                     factura_code,
                     self._preview(health_body if not error_text else error_text),
@@ -152,16 +178,26 @@ class DTEHealthMonitor:
     def loop(self) -> None:
         first = True
         previous_state = self.get_cached_snapshot().state
+        retry_backoff = 1
         while True:
-            snapshot = self.check_once(force_log=first)
-            first = False
+            try:
+                snapshot = self.check_once(force_log=first)
+                first = False
+                if snapshot.state == STATE_DOWN:
+                    DTE_LOGGER.info("[DTE MONITOR] STATE=DOWN next_retry_in=%ss", retry_backoff)
+                retry_backoff = 1 if snapshot.state == STATE_UP else min(retry_backoff * 2, self.max_backoff)
+            except Exception as exc:  # noqa: BLE001
+                DTE_LOGGER.warning("[DTE MONITOR] STATE=DOWN reason=loop err=%s next_retry_in=%ss", self._preview(str(exc), 180), retry_backoff)
+                time.sleep(retry_backoff)
+                retry_backoff = min(retry_backoff * 2, self.max_backoff)
+                continue
 
             if snapshot.state == STATE_UP and previous_state != STATE_UP:
                 from apps.dte.outbox import process_pending_outbox
 
                 threading.Thread(target=process_pending_outbox, kwargs={"limit": int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)}, daemon=True, name="dte-pending-processor").start()
             previous_state = snapshot.state
-            time.sleep(self.interval)
+            time.sleep(self.interval if snapshot.state == STATE_UP else retry_backoff)
 
     def start(self) -> bool:
         enabled = bool(getattr(settings, "DTE_MONITOR_ENABLED", True))

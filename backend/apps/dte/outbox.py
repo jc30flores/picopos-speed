@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import OperationalError as DjangoOperationalError, connection, close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -21,6 +21,8 @@ from apps.orders.models import OrderInvoice
 DTE_LOGGER = logging.getLogger("apps.dte")
 _OUTBOX_WORKER_STARTED = False
 _OUTBOX_WORKER_LOCK = threading.Lock()
+_LAST_DB_DOWN_LOG_TS = 0.0
+_LAST_HTTP_DOWN_LOG_TS = 0.0
 
 CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
 CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
@@ -28,6 +30,26 @@ CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
 
 def _preview(text: str, max_len: int = 500) -> str:
     return (text or "").replace("\n", " ").strip()[:max_len]
+
+
+def _log_throttled(level: str, key: str, message: str, *args) -> None:
+    global _LAST_DB_DOWN_LOG_TS, _LAST_HTTP_DOWN_LOG_TS
+    now = time.time()
+    cooldown = float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30)
+    if key == "db":
+        if now - _LAST_DB_DOWN_LOG_TS < cooldown:
+            return
+        _LAST_DB_DOWN_LOG_TS = now
+    elif key == "http":
+        if now - _LAST_HTTP_DOWN_LOG_TS < cooldown:
+            return
+        _LAST_HTTP_DOWN_LOG_TS = now
+    getattr(DTE_LOGGER, level, DTE_LOGGER.warning)(message, *args)
+
+
+def _looks_like_network_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ("timed out", "name resolution", "connection aborted", "connection refused", "failed to establish a new connection"))
 
 
 def _extract(payload: dict) -> tuple[str, str]:
@@ -370,15 +392,35 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
         outbox.next_attempt_at,
     )
 
-    result = DTEClient().send(
-        path=_endpoint_for_payload(payload),
-        payload=payload,
-        order_id=outbox.order_id,
-        payment_id=outbox.payment_id,
-        branch_id=outbox.order.branch_id,
-        attempt_number=outbox.attempts,
-    )
-    updated = _apply_result(outbox, result)
+    try:
+        result = DTEClient().send(
+            path=_endpoint_for_payload(payload),
+            payload=payload,
+            order_id=outbox.order_id,
+            payment_id=outbox.payment_id,
+            branch_id=outbox.order.branch_id,
+            attempt_number=outbox.attempts,
+        )
+        updated = _apply_result(outbox, result)
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_like_network_error(exc):
+            raise
+        backoff = _compute_backoff(outbox.attempts)
+        outbox.status = DTEOutbox.STATUS_PENDING
+        outbox.error_message = f"HTTP_ERROR:{exc.__class__.__name__}"
+        outbox.next_attempt_at = timezone.now() + backoff
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        _register_send_failure()
+        _sync_invoice(outbox, {})
+        _log_throttled(
+            "warning",
+            "http",
+            "[DTE OUTBOX] HTTP_TIMEOUT retry_in=%ss outbox_id=%s err=%s",
+            int(backoff.total_seconds()),
+            outbox.id,
+            _preview(str(exc), 180),
+        )
+        return outbox
     DTE_LOGGER.info(
         "[DTE OUTBOX] result id=%s status=%s http=%s reason=%s",
         updated.id,
@@ -424,8 +466,15 @@ def process_pending_outbox(limit: int = 50) -> int:
         try:
             _resend_existing_outbox(outbox)
             processed += 1
+        except DjangoOperationalError as exc:
+            try:
+                close_old_connections()
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _log_throttled("error", "db", "[DTE OUTBOX] DB_DOWN retry_in=%ss err=%s", 1, _preview(str(exc), 180))
         except Exception:  # noqa: BLE001
-            DTE_LOGGER.exception("[DTE] process_pending_outbox exception outbox_id=%s", outbox.id)
+            _log_throttled("warning", "db", "[DTE OUTBOX] process exception outbox_id=%s", outbox.id)
 
     DTEOutbox.objects.filter(status=DTEOutbox.STATUS_PENDING, attempts__gte=max_retries).update(
         status=DTEOutbox.STATUS_FAILED,
@@ -438,11 +487,29 @@ def process_pending_outbox(limit: int = 50) -> int:
 def _outbox_worker_loop() -> None:
     interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
     batch_size = int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)
+    db_backoff_seconds = 1.0
     while True:
         try:
             process_pending_outbox(limit=batch_size)
+            db_backoff_seconds = 1.0
+        except DjangoOperationalError as exc:
+            try:
+                close_old_connections()
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _log_throttled(
+                "error",
+                "db",
+                "[DTE OUTBOX] DB_DOWN retry_in=%ss err=%s",
+                int(db_backoff_seconds),
+                _preview(str(exc), 180),
+            )
+            time.sleep(db_backoff_seconds)
+            db_backoff_seconds = min(db_backoff_seconds * 2, 30.0)
+            continue
         except Exception:  # noqa: BLE001
-            DTE_LOGGER.exception("[DTE OUTBOX] worker loop error")
+            _log_throttled("warning", "db", "[DTE OUTBOX] worker loop error (summarized)")
         time.sleep(interval)
 
 
