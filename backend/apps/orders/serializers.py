@@ -312,7 +312,8 @@ class OrderCreateSerializer(serializers.Serializer):
         for item_data in items_data:
             item_data = dict(item_data)
             raw_type = str(item_data.pop("type", "") or "").strip().lower()
-            is_custom = raw_type == "manual" or bool(item_data.pop("is_custom", False))
+            incoming_is_custom = bool(item_data.pop("is_custom", False))
+            is_custom = raw_type == "manual" or incoming_is_custom
             item_data.pop("manual_name", None)
             item_data.pop("manual_unit_price", None)
             item_data.pop("name", None)
@@ -341,6 +342,7 @@ class OrderCreateSerializer(serializers.Serializer):
             if is_custom and not item_data["snapshot_sku_or_code"]:
                 item_data["snapshot_sku_or_code"] = f"MANUAL-{order.id}-{len(order_lines) + 1}"
 
+            item_data.pop("is_custom", None)
             order_item = OrderItem.objects.create(
                 order=order,
                 product=product,

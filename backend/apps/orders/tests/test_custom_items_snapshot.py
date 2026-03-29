@@ -53,6 +53,31 @@ class OrderCustomItemSnapshotTests(TestCase):
         self.assertEqual(snap_item["unit_price"], "2.25")
         self.assertTrue(snap_item["is_custom"])
 
+    def test_create_order_with_manual_item_accepts_is_custom_in_payload(self):
+        serializer = OrderCreateSerializer(
+            data={
+                "branch_id": self.branch.id,
+                "service_type_key": self.service_type.key,
+                "channel": "pos",
+                "items": [
+                    {
+                        "is_custom": True,
+                        "manual_name": "Recargo caja",
+                        "manual_unit_price": "1.00",
+                        "quantity": 1,
+                    }
+                ],
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+
+        item = order.items.first()
+        self.assertTrue(item.is_custom)
+        self.assertIsNone(item.product_id)
+        self.assertEqual(item.product_name_snapshot, "Recargo caja")
+        self.assertEqual(item.price_snapshot, Decimal("1.00"))
+
     def test_menu_item_snapshot_keeps_original_price_after_menu_change(self):
         serializer = OrderCreateSerializer(
             data={
