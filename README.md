@@ -75,6 +75,12 @@ Configura estas variables en tu entorno para el envío DTE:
 - `IVA_INCLUDED_DEFAULT`
 - `DTE_EMISOR_DUI`, `DTE_NOMBRE_COMERCIAL`, `DTE_EMISOR_TELEFONO`, `DTE_EMISOR_CORREO`
 
+Valores recomendados para evitar cortes prematuros en worker outbox:
+
+- `DTE_CONNECT_TIMEOUT=5`
+- `DTE_READ_TIMEOUT=120` (o `180` en integraciones lentas)
+- `DTE_LOG_IDLE_EVERY_SECONDS=300`
+
 Comando de reintento automático:
 
 ```sh

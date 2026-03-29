@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
+import requests
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -138,7 +139,7 @@ class DTEResendEndpointAndOutboxTests(TestCase):
             elapsed_ms=10,
         )
         outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
-        self.assertEqual(outbox.status, DTEOutbox.STATUS_REJECTED)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_FAILED)
         self.assertIsNone(outbox.next_attempt_at)
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
@@ -156,7 +157,7 @@ class DTEResendEndpointAndOutboxTests(TestCase):
             elapsed_ms=10,
         )
         outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
-        self.assertEqual(outbox.status, DTEOutbox.STATUS_REJECTED)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_FAILED)
         self.assertIsNone(outbox.next_attempt_at)
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
@@ -180,10 +181,31 @@ class DTEResendEndpointAndOutboxTests(TestCase):
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
     def test_outbox_timeout_keeps_pending(self, mock_send, _health):
-        mock_send.side_effect = Exception("Read timed out. (read timeout=30)")
+        mock_send.return_value = DTEClientResult(
+            status_code=0,
+            json_body={"success": False, "offline": True, "error": {"type": "TIMEOUT", "message": "Read timed out"}},
+            text_body='{"success":false,"offline":true,"error":{"type":"TIMEOUT"}}',
+            success=False,
+            remote_uuid="",
+            sello_recibido="",
+            error_message="Read timed out",
+            error_type="TIMEOUT",
+            elapsed_ms=30001,
+        )
         outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
         self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
         self.assertIsNotNone(outbox.next_attempt_at)
+        self.assertNotEqual(outbox.status, DTEOutbox.STATUS_SENT)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.client.DTEClient._build_url", return_value="https://api.example.com/api/v1/dte/factura")
+    @patch("apps.dte.client.requests.Session.post")
+    def test_outbox_timeout_from_requests_post_keeps_pending(self, mock_post, _build_url, _health):
+        mock_post.side_effect = requests.ReadTimeout("Read timed out. (read timeout=120)")
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
+        self.assertIsNotNone(outbox.next_attempt_at)
+        self.assertNotEqual(outbox.status, DTEOutbox.STATUS_SENT)
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
