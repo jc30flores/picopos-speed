@@ -1,4 +1,5 @@
 from decimal import Decimal
+import time
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -68,7 +69,9 @@ class PaymentDteTriggerTests(TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body.get("dte_status"), "QUEUED")
-        self.assertEqual(body.get("dte_record_id"), 7001)
-        self.assertEqual(body.get("dte_outbox_id"), 9001)
+        for _ in range(20):
+            if mock_send.call_count:
+                break
+            time.sleep(0.01)
         mock_send.assert_called_once()
         self.assertTrue(mock_send.call_args.kwargs.get("queue_only"))

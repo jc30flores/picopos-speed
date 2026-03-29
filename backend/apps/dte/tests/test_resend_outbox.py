@@ -13,7 +13,7 @@ from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
 from apps.dte.client import DTEClientResult
-from apps.dte.models import DTEOutbox, DTERecord
+from apps.dte.models import DTEBranchConfig, DTEOutbox, DTERecord
 from apps.dte.outbox import process_pending_outbox, send_or_queue_dte
 from apps.orders.models import Order
 from apps.users.models import UserProfile
@@ -65,6 +65,16 @@ class DTEResendEndpointAndOutboxTests(TestCase):
                 "emisor": {"nit": "12171409901063"},
             }
         }
+        DTEBranchConfig.objects.create(
+            branch=self.branch,
+            emisor_nit="12171409901063",
+            emisor_nrc="123",
+            emisor_nombre="Empresa",
+            emisor_nombre_comercial="Empresa",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            is_active=True,
+        )
 
     def test_resend_requires_auth_or_valid_csrf(self):
         csrf_client = APIClient(enforce_csrf_checks=True)
@@ -174,6 +184,36 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
         self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
         self.assertIsNotNone(outbox.next_attempt_at)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_repairs_invalid_payload_nit_before_send(self, mock_send, _health):
+        bad_payload = json.loads(json.dumps(self.payload))
+        bad_payload["dte"]["emisor"]["nit"] = "048143931"
+        mock_send.return_value = DTEClientResult(
+            status_code=200,
+            json_body={"success": True, "estado": "ACEPTADO"},
+            text_body='{"success":true,"estado":"ACEPTADO"}',
+            success=True,
+            remote_uuid="uuid-2",
+            sello_recibido="ok",
+            error_message="",
+            error_type="",
+            elapsed_ms=10,
+        )
+        outbox = send_or_queue_dte(self.order, None, bad_payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_ACCEPTED)
+        sent_payload = mock_send.call_args.kwargs["payload"]
+        self.assertEqual(sent_payload["dte"]["emisor"]["nit"], "12171409901063")
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_marks_failed_when_nit_payload_cannot_be_repaired(self, mock_send, _health):
+        bad_payload = {"dte": {"identificacion": {}, "emisor": {"nit": "048143931"}}}
+        outbox = send_or_queue_dte(self.order, None, bad_payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_FAILED)
+        self.assertIn("INVALID_EMISOR_NIT_PAYLOAD", outbox.error_message)
+        mock_send.assert_not_called()
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox._resend_existing_outbox")

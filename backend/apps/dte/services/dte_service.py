@@ -236,7 +236,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     total_pagar = _q2(total_exenta if order.iva_exempt else total_gravada)
     emisor_payload = {
-        "nit": emisor.get("nit") or "000000000",
+        "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
         "nombre": emisor.get("nombre") or "Pico de Gallo",
         "nombreComercial": emisor.get("nombreComercial") or "Pico de Gallo",

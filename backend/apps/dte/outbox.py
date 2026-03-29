@@ -13,10 +13,13 @@ from django.core.cache import cache
 from django.db import OperationalError as DjangoOperationalError, connection, close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEOutbox, DTERecord
 from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
+from apps.dte.services.dte_service import build_payload_cf
+from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.orders.models import OrderInvoice
 
 DTE_LOGGER = logging.getLogger("apps.dte")
@@ -196,6 +199,54 @@ def _endpoint_for_payload(payload: dict) -> str:
     }.get(tipo, "/api/v1/dte/factura")
 
 
+def _repair_payload_nit_if_needed(outbox: DTEOutbox, payload: dict) -> tuple[dict, bool]:
+    expected_nit = get_emisor_nit(outbox.order.branch if outbox.order_id else None)
+    payload_nit = payload_emisor_nit(payload)
+    if payload_nit == expected_nit:
+        return payload, False
+
+    ident = (payload or {}).get("dte", {}).get("identificacion", {})
+    control_number = str(ident.get("numeroControl") or outbox.numero_control or getattr(outbox.dte_record, "control_number", "") or "")
+    generation_code = str(ident.get("codigoGeneracion") or outbox.codigo_generacion or getattr(outbox.dte_record, "generation_code", "") or "")
+    ambiente = str(ident.get("ambiente") or getattr(outbox.dte_record, "ambiente", "00") or "00")
+    if not control_number or not generation_code:
+        outbox.status = DTEOutbox.STATUS_FAILED
+        outbox.error_message = "INVALID_EMISOR_NIT_PAYLOAD:missing_identificacion"
+        outbox.next_attempt_at = None
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        return payload, False
+    try:
+        rebuilt = build_payload_cf(outbox.order, control_number=control_number, generation_code=generation_code, ambiente=ambiente)
+        rebuilt_nit = payload_emisor_nit(rebuilt)
+        if rebuilt_nit != expected_nit:
+            raise ValidationError("Rebuilt payload NIT does not match expected NIT.")
+        outbox.payload = rebuilt
+        outbox.payload_json = rebuilt
+        outbox.next_attempt_at = timezone.now()
+        outbox.error_message = f"Repaired outbox payload emisor.nit mismatch old={payload_nit or '-'} new={rebuilt_nit}"
+        outbox.save(update_fields=["payload", "payload_json", "next_attempt_at", "error_message", "updated_at"])
+        DTE_LOGGER.warning(
+            "[DTE OUTBOX] Repaired outbox payload emisor.nit mismatch outbox_id=%s order_id=%s old_nit=%s new_nit=%s",
+            outbox.id,
+            outbox.order_id,
+            payload_nit or "-",
+            rebuilt_nit,
+        )
+        return rebuilt, True
+    except Exception as exc:  # noqa: BLE001
+        outbox.status = DTEOutbox.STATUS_FAILED
+        outbox.error_message = f"INVALID_EMISOR_NIT_PAYLOAD:{_preview(str(exc), 180)}"
+        outbox.next_attempt_at = None
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        DTE_LOGGER.error(
+            "[DTE OUTBOX] Could not repair payload NIT outbox_id=%s order_id=%s err=%s",
+            outbox.id,
+            outbox.order_id,
+            _preview(str(exc), 180),
+        )
+        return payload, False
+
+
 def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
     parsed = result.json_body if isinstance(result.json_body, dict) else {}
     inferred = parse_response_outcome(parsed)
@@ -371,6 +422,11 @@ def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | Non
 
 def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
     payload = outbox.payload or outbox.payload_json or {}
+    payload, _ = _repair_payload_nit_if_needed(outbox, payload)
+    outbox.refresh_from_db(fields=["status"])
+    if outbox.status == DTEOutbox.STATUS_FAILED:
+        _sync_invoice(outbox, {})
+        return outbox
     numero_control, codigo_generacion = _extract(payload)
     endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     _log_full_payload(

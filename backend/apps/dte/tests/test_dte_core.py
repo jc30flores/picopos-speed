@@ -60,6 +60,16 @@ class DTECoreTests(TestCase):
         self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
 
     def test_build_payload_cf_uses_order_item_snapshots(self):
+        DTEBranchConfig.objects.create(
+            branch=self.branch,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa",
+            emisor_nombre_comercial="Empresa",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            is_active=True,
+        )
         category = Category.objects.create(name="PRUEBA")
         product = Product.objects.create(name="MenuItem", description="", price=Decimal("1.00"), category=category, available=True)
         OrderItem.objects.create(
@@ -77,6 +87,7 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["descripcion"], "Nombre histórico")
         self.assertEqual(first["precioUni"], "4.25")
         self.assertEqual(first["codigo"], "MANUAL-CODE-1")
+        self.assertEqual(payload["dte"]["emisor"]["nit"], "12171409901063")
 
     def test_build_payload_cf_uses_unit_price_override_when_present(self):
         category = Category.objects.create(name="PRUEBA2")
