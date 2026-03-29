@@ -106,6 +106,13 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
         self.assertIsNotNone(outbox.next_attempt_at)
 
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_async_only_does_not_send_in_request_thread(self, mock_send):
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record, attempt_immediate=False)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_PENDING)
+        self.assertIsNotNone(outbox.next_attempt_at)
+        mock_send.assert_not_called()
+
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
     def test_outbox_no_retry_on_4xx_authorization_error(self, mock_send, _health):

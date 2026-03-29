@@ -47,11 +47,16 @@ class DTEConfig(AppConfig):
             return
 
         from apps.dte.monitor import start_monitor
+        from apps.dte.outbox import start_outbox_worker
 
         try:
             start_monitor()
         except Exception:  # noqa: BLE001
             logger.exception("[DTE MONITOR] failed to start")
+        try:
+            start_outbox_worker()
+        except Exception:  # noqa: BLE001
+            logger.exception("[DTE OUTBOX] failed to start")
         token = _env("DTE_API_TOKEN", "")
         token_display = token if _log_secrets_enabled() else _mask_token(token)
         interval = _env("DTE_MONITOR_INTERVAL_SECONDS", "10")

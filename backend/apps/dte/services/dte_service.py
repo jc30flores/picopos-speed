@@ -396,10 +396,16 @@ def interpret_dte_response(response: dict) -> dict:
     }
 
 
-def send_dte_for_order(order, payment=None, force: bool = False) -> DTERecord:
+def send_dte_for_order(order, payment=None, force: bool = False, queue_only: bool = False) -> DTERecord:
     from apps.dte.services.orchestrator import transmit_sale_dte
 
-    return transmit_sale_dte(order.id, source="normal_send", force=force, payment_id=getattr(payment, "id", None))
+    return transmit_sale_dte(
+        order.id,
+        source="normal_send",
+        force=force,
+        payment_id=getattr(payment, "id", None),
+        queue_only=queue_only,
+    )
 
 
 def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:

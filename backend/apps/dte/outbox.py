@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
 from datetime import timedelta
 
 from django.conf import settings
@@ -17,6 +19,8 @@ from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
 from apps.orders.models import OrderInvoice
 
 DTE_LOGGER = logging.getLogger("apps.dte")
+_OUTBOX_WORKER_STARTED = False
+_OUTBOX_WORKER_LOCK = threading.Lock()
 
 CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
 CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
@@ -235,29 +239,53 @@ def process_pending_dtes(limit: int = 25, batch_size: int = 25, backoff_seconds:
     return process_pending_outbox(limit=limit)
 
 
-def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None) -> DTEOutbox:
+def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTERecord | None = None) -> DTEOutbox:
     numero_control, codigo_generacion = _extract(payload)
-    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
-    with transaction.atomic():
-        outbox = DTEOutbox.objects.create(
+    existing = (
+        DTEOutbox.objects.filter(
             order=order,
             payment=payment,
             dte_record=dte_record,
-            numero_control=numero_control,
-            codigo_generacion=codigo_generacion,
-            payload_json=payload,
-            payload=payload,
-            status=DTEOutbox.STATUS_PENDING,
+            status__in=[DTEOutbox.STATUS_PENDING, DTEOutbox.STATUS_SENDING],
         )
-        _log_full_payload(
-            payload=payload,
-            order_id=order.id,
-            payment_id=getattr(payment, "id", None),
-            numero_control=numero_control,
-            codigo_generacion=codigo_generacion,
-            outbox_id=outbox.id,
-            endpoint_url=endpoint_url,
-        )
+        .order_by("-created_at")
+        .first()
+    )
+    if existing:
+        return existing
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
+    outbox = DTEOutbox.objects.create(
+        order=order,
+        payment=payment,
+        dte_record=dte_record,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        payload_json=payload,
+        payload=payload,
+        status=DTEOutbox.STATUS_PENDING,
+    )
+    _log_full_payload(
+        payload=payload,
+        order_id=order.id,
+        payment_id=getattr(payment, "id", None),
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        outbox_id=outbox.id,
+        endpoint_url=endpoint_url,
+    )
+    return outbox
+
+
+def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
+    with transaction.atomic():
+        outbox = _get_or_create_pending_outbox(order, payment, payload, dte_record=dte_record)
+        if not attempt_immediate:
+            outbox.status = DTEOutbox.STATUS_PENDING
+            outbox.next_attempt_at = outbox.next_attempt_at or timezone.now()
+            outbox.save(update_fields=["status", "next_attempt_at", "updated_at"])
+            DTE_LOGGER.info("[DTE OUTBOX] queued id=%s order=%s payment=%s mode=async_only", outbox.id, order.id, getattr(payment, "id", None))
+            _sync_invoice(outbox, {})
+            return outbox
 
         stale_seconds = 2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
         health = _health_snapshot(stale_seconds=stale_seconds)
@@ -405,3 +433,29 @@ def process_pending_outbox(limit: int = 50) -> int:
         next_attempt_at=None,
     )
     return processed
+
+
+def _outbox_worker_loop() -> None:
+    interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
+    batch_size = int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)
+    while True:
+        try:
+            process_pending_outbox(limit=batch_size)
+        except Exception:  # noqa: BLE001
+            DTE_LOGGER.exception("[DTE OUTBOX] worker loop error")
+        time.sleep(interval)
+
+
+def start_outbox_worker() -> bool:
+    global _OUTBOX_WORKER_STARTED
+    with _OUTBOX_WORKER_LOCK:
+        if _OUTBOX_WORKER_STARTED:
+            return False
+        if not bool(getattr(settings, "DTE_MONITOR_ENABLED", True)):
+            return False
+        interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
+        DTE_LOGGER.info("[DTE OUTBOX] starting worker interval=%ss", interval)
+        thread = threading.Thread(target=_outbox_worker_loop, daemon=True, name="dte-outbox-worker")
+        thread.start()
+        _OUTBOX_WORKER_STARTED = True
+        return True

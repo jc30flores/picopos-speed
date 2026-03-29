@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
@@ -16,6 +17,18 @@ from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 
 DTE_LOGGER = logging.getLogger("apps.dte")
+_SESSION_LOCK = threading.Lock()
+_SESSION: requests.Session | None = None
+
+
+def _shared_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is not None:
+        return _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is None:
+            _SESSION = requests.Session()
+    return _SESSION
 
 
 @dataclass
@@ -129,9 +142,10 @@ class DTEClient:
         self.auth_header = getattr(settings, "DTE_API_AUTH_HEADER", "Authorization")
         self.auth_prefix = getattr(settings, "DTE_API_AUTH_PREFIX", "Bearer")
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
-        self.timeout = int(getattr(settings, "DTE_TIMEOUT_SECONDS", 30) or 30)
+        self.connect_timeout = float(getattr(settings, "DTE_CONNECT_TIMEOUT", 3) or 3)
+        self.read_timeout = float(getattr(settings, "DTE_READ_TIMEOUT", 15) or 15)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
-        self.session = requests.Session()
+        self.session = _shared_session()
 
     def _build_url(self, path: str) -> str:
         base_url = (self.base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip()
@@ -235,7 +249,12 @@ class DTEClient:
         error_type = ""
 
         try:
-            response = self.session.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
+            response = self.session.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=(self.connect_timeout, self.read_timeout),
+            )
             status_code = int(response.status_code)
             text_body = response.text or ""
             try:

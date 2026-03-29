@@ -45,7 +45,6 @@ class DTEHealthMonitor:
         endpoint = (getattr(settings, "DTE_HEALTH_ENDPOINT", "/health") or "/health").strip()
         self.health_endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
         self.health_url = f"{self.base_url}{self.health_endpoint}" if self.base_url else ""
-        self.factura_url = f"{self.base_url}/api/v1/dte/factura" if self.base_url else ""
         self.interval = int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
         self.timeout = int(getattr(settings, "DTE_HEALTH_TIMEOUT_SECONDS", 5) or 5)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
@@ -89,17 +88,12 @@ class DTEHealthMonitor:
         cache.set(CACHE_LAST_CHECKED, timezone.now().timestamp(), timeout=None)
 
     def _determine_state(self, health_code: int | None, factura_code: int | None, error_text: str = "") -> str:
+        _ = factura_code
         if error_text:
             return STATE_DOWN
         if health_code != 200:
             return STATE_DOWN
-        if factura_code in {200, 201, 400, 404, 422}:
-            return STATE_UP
-        if factura_code in {401, 403}:
-            return STATE_DOWN
-        if factura_code in {500, 502, 503, 504}:
-            return STATE_DEGRADED
-        return STATE_DEGRADED
+        return STATE_UP
 
     def check_once(self, force_log: bool = False) -> HealthSnapshot:
         previous = self.get_cached_snapshot()
@@ -122,14 +116,6 @@ class DTEHealthMonitor:
             health_body = health_resp.text or ""
         except Exception as exc:  # noqa: BLE001
             error_text = f"health_error={exc}"
-
-        try:
-            factura_resp = requests.post(self.factura_url, timeout=self.timeout, headers=self._headers(), json={"test": "ping"})
-            factura_code = int(factura_resp.status_code)
-            factura_body = factura_resp.text or ""
-        except Exception as exc:  # noqa: BLE001
-            if not error_text:
-                error_text = f"factura_error={exc}"
 
         state = self._determine_state(health_code, factura_code, error_text)
         self._save_snapshot(
