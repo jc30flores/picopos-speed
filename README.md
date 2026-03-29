@@ -90,9 +90,10 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 
 ### Login por PIN (táctil)
 
-- Endpoint: `POST /api/auth/pin-login/` body `{ "pin": "1234" }`
-- Recomendado: guardar `pin_hash` en `UserProfile` usando hash Django (`make_password`) y nunca guardar PIN en texto plano.
-- Lockout básico: 5 intentos fallidos -> bloqueo 30 segundos.
+- Endpoint: `POST /api/auth/pin-login/` body `{ "pin": "123456" }`.
+- El PIN de acceso es la contraseña del usuario (Django password). Debe ser exactamente 6 dígitos numéricos (`^\d{6}$`).
+- En creación/edición de empleados y login admin, la contraseña también debe cumplir la regla de PIN de 6 dígitos.
+- Se bloquea el acceso por 30 segundos después de 5 intentos fallidos por IP.
 
 ### Payments endpoints
 

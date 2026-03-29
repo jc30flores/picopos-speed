@@ -136,22 +136,22 @@ export const EmployeesTab = () => {
     }
   };
 
-  const handleResetPassword = async (employee: Employee, password: string) => {
+  const handleResetPassword = async (employee: Employee, pin: string) => {
     try {
       await updateEmployee(employee.id, {
         createUser: true,
         user: {
           username: employee.userUsername ?? employee.email,
           email: employee.userEmail ?? employee.email,
-          password,
+          password: pin,
           role: employee.userRole ?? employee.role,
         },
       });
-      toast.success("Contraseña actualizada");
+      toast.success("PIN actualizado");
       await loadEmployees();
     } catch (error) {
-      console.error("Failed to reset password", error);
-      toast.error("No se pudo resetear la contraseña");
+      console.error("Failed to reset PIN", error);
+      toast.error("No se pudo resetear el PIN");
     }
   };
 

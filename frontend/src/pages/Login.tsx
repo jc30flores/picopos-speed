@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,9 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/useAuth";
 import { toast } from "sonner";
+import { PinKeypad } from "@/components/auth/PinKeypad";
 
-const PIN_MIN = 4;
-const PIN_MAX = 6;
+const PIN_LENGTH = 6;
 
 const Login = () => {
   const navigate = useNavigate();
@@ -19,12 +19,14 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [usePassword, setUsePassword] = useState(false);
 
-  const pinDots = useMemo(() => Array.from({ length: PIN_MAX }), []);
+  const pinDots = useMemo(() => Array.from({ length: PIN_LENGTH }), []);
+
+  const sanitizePin = (value: string) => value.replace(/\D/g, "").slice(0, PIN_LENGTH);
 
   const submitPin = async (forcedPin?: string) => {
-    const value = (forcedPin ?? pin).trim();
-    if (value.length < PIN_MIN || value.length > PIN_MAX) {
-      toast.error("PIN inválido (4-6 dígitos)");
+    const value = sanitizePin((forcedPin ?? pin).trim());
+    if (!/^\d{6}$/.test(value)) {
+      toast.error("PIN inválido (exactamente 6 dígitos)");
       return;
     }
     setLoading(true);
@@ -32,32 +34,42 @@ const Login = () => {
       await loginWithPin({ pin: value });
       toast.success("Sesión iniciada");
       navigate("/");
-    } catch {
-      toast.error("PIN incorrecto");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("duplicado")) {
+        toast.error("PIN duplicado, contacte al administrador");
+      } else if (message.includes("servidor") || message.includes("Internal")) {
+        toast.error("Error del servidor");
+      } else {
+        toast.error("PIN incorrecto");
+      }
       setPin("");
     } finally {
       setLoading(false);
     }
   };
 
-  const onPressDigit = (digit: string) => {
-    if (loading || pin.length >= PIN_MAX) return;
-    const next = `${pin}${digit}`;
-    setPin(next);
-    if (next.length === PIN_MAX) {
-      void submitPin(next);
+  useEffect(() => {
+    if (!usePassword && pin.length === PIN_LENGTH && !loading) {
+      void submitPin(pin);
     }
-  };
+  }, [pin, loading, usePassword]);
 
   const handlePasswordSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!identifier || !password) {
-      toast.error("Completa usuario/correo y contraseña");
+      toast.error("Completa usuario/correo y PIN");
       return;
     }
+    const numericPassword = sanitizePin(password);
+    if (!/^\d{6}$/.test(numericPassword)) {
+      toast.error("El PIN debe tener exactamente 6 dígitos");
+      return;
+    }
+
     setLoading(true);
     try {
-      await login({ identifier, password });
+      await login({ identifier, password: numericPassword });
       toast.success("Sesión iniciada");
       navigate("/");
     } catch {
@@ -81,8 +93,17 @@ const Login = () => {
                 <Input id="identifier" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Contraseña</Label>
-                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Label htmlFor="password">PIN (6 dígitos)</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  inputMode="numeric"
+                  pattern="\\d{6}"
+                  maxLength={PIN_LENGTH}
+                  onChange={(e) => setPassword(sanitizePin(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">Si tu contraseña anterior no era numérica, actualízala a un PIN de 6 dígitos.</p>
               </div>
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? "Ingresando..." : "Ingresar"}
@@ -95,25 +116,8 @@ const Login = () => {
                   <span key={idx} className={`h-4 w-4 rounded-full border ${idx < pin.length ? "bg-primary border-primary" : "border-muted-foreground"}`} />
                 ))}
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"].map((key) => (
-                  <Button
-                    key={key}
-                    type="button"
-                    variant={key === "C" ? "secondary" : "outline"}
-                    className="h-14 text-xl"
-                    onClick={() => {
-                      if (key === "C") setPin("");
-                      else if (key === "⌫") setPin((prev) => prev.slice(0, -1));
-                      else onPressDigit(key);
-                    }}
-                    disabled={loading}
-                  >
-                    {key}
-                  </Button>
-                ))}
-              </div>
-              <Button className="w-full h-12" onClick={() => void submitPin()} disabled={loading || pin.length < PIN_MIN}>
+              <PinKeypad value={pin} onChange={(next) => setPin(sanitizePin(next))} disabled={loading} maxLength={PIN_LENGTH} />
+              <Button className="w-full h-12" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
                 {loading ? "Validando..." : "Ingresar"}
               </Button>
             </div>

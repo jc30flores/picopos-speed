@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
+import { PinKeypad } from "@/components/auth/PinKeypad";
 
 const ROLE_OPTIONS = [
   { value: "cashier", label: "Cajero" },
@@ -30,6 +31,11 @@ const ROLE_KEY_BY_LABEL = ROLE_OPTIONS.reduce((acc, option) => {
   acc[option.label.toLowerCase()] = option.value;
   return acc;
 }, {} as Record<string, string>);
+
+const PIN_LENGTH = 6;
+
+const sanitizePin = (value: string) => value.replace(/\D/g, "").slice(0, PIN_LENGTH);
+const isValidPin = (value: string) => /^\d{6}$/.test(value);
 
 export interface EmployeeFormData extends Partial<Employee> {
   createUser?: boolean;
@@ -54,6 +60,8 @@ export const EmployeeFormDialog = ({
   onSave,
   branches = ["Sucursal Centro", "Sucursal Norte"],
 }: EmployeeFormDialogProps) => {
+  const [showPinKeypad, setShowPinKeypad] = useState(false);
+  const [pinTarget, setPinTarget] = useState<"pin" | "confirm">("pin");
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -98,7 +106,19 @@ export const EmployeeFormDialog = ({
         userRole: "",
       });
     }
+    setShowPinKeypad(false);
+    setPinTarget("pin");
   }, [employee, open]);
+
+  const pinError =
+    formData.userPassword.length > 0 && !isValidPin(formData.userPassword)
+      ? "El PIN debe tener exactamente 6 dígitos numéricos"
+      : "";
+
+  const confirmPinError =
+    formData.userPasswordConfirm.length > 0 && !isValidPin(formData.userPasswordConfirm)
+      ? "Confirmación inválida: deben ser 6 dígitos"
+      : "";
 
   const handleSubmit = () => {
     if (!formData.name || !formData.email || !formData.role || !formData.branch) {
@@ -120,17 +140,17 @@ export const EmployeeFormDialog = ({
       }
       if (!employee?.hasUser) {
         if (!formData.userPassword || !formData.userPasswordConfirm) {
-          toast.error("Completa la contraseña para crear el usuario");
+          toast.error("Completa el PIN para crear el usuario");
           return;
         }
       }
       if (formData.userPassword || formData.userPasswordConfirm) {
-        if (formData.userPassword.length < 6) {
-          toast.error("La contraseña debe tener al menos 6 caracteres");
+        if (!isValidPin(formData.userPassword) || !isValidPin(formData.userPasswordConfirm)) {
+          toast.error("El PIN debe contener exactamente 6 dígitos");
           return;
         }
         if (formData.userPassword !== formData.userPasswordConfirm) {
-          toast.error("Las contraseñas no coinciden");
+          toast.error("Los PIN no coinciden");
           return;
         }
       }
@@ -277,30 +297,66 @@ export const EmployeeFormDialog = ({
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="userPassword">
-                        {employee?.hasUser ? "Contraseña (opcional)" : "Contraseña *"}
+                        {employee?.hasUser ? "PIN (6 dígitos) (opcional)" : "PIN (6 dígitos) *"}
                       </Label>
                       <Input
                         id="userPassword"
                         type="password"
+                        inputMode="numeric"
+                        pattern="\\d{6}"
+                        maxLength={PIN_LENGTH}
                         value={formData.userPassword}
                         onChange={(e) =>
-                          setFormData({ ...formData, userPassword: e.target.value })
+                          setFormData({ ...formData, userPassword: sanitizePin(e.target.value) })
                         }
                       />
+                      {pinError ? <p className="text-xs text-destructive">{pinError}</p> : null}
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="userPasswordConfirm">
-                        {employee?.hasUser ? "Confirmar contraseña" : "Confirmar contraseña *"}
+                        {employee?.hasUser ? "Confirmar PIN (opcional)" : "Confirmar PIN *"}
                       </Label>
                       <Input
                         id="userPasswordConfirm"
                         type="password"
+                        inputMode="numeric"
+                        pattern="\\d{6}"
+                        maxLength={PIN_LENGTH}
                         value={formData.userPasswordConfirm}
                         onChange={(e) =>
-                          setFormData({ ...formData, userPasswordConfirm: e.target.value })
+                          setFormData({ ...formData, userPasswordConfirm: sanitizePin(e.target.value) })
                         }
                       />
+                      {confirmPinError ? <p className="text-xs text-destructive">{confirmPinError}</p> : null}
                     </div>
+                    <div className="md:col-span-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowPinKeypad((prev) => !prev)}
+                      >
+                        {showPinKeypad ? "Ocultar teclado táctil" : "Abrir teclado táctil"}
+                      </Button>
+                    </div>
+                    {showPinKeypad ? (
+                      <div className="grid gap-2 md:col-span-2 rounded-md border p-3">
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" variant={pinTarget === "pin" ? "default" : "outline"} onClick={() => setPinTarget("pin")}>PIN</Button>
+                          <Button type="button" size="sm" variant={pinTarget === "confirm" ? "default" : "outline"} onClick={() => setPinTarget("confirm")}>Confirmar PIN</Button>
+                        </div>
+                        <PinKeypad
+                          value={pinTarget === "pin" ? formData.userPassword : formData.userPasswordConfirm}
+                          onChange={(next) =>
+                            setFormData((prev) =>
+                              pinTarget === "pin"
+                                ? { ...prev, userPassword: sanitizePin(next) }
+                                : { ...prev, userPasswordConfirm: sanitizePin(next) }
+                            )
+                          }
+                          maxLength={PIN_LENGTH}
+                        />
+                      </div>
+                    ) : null}
                     <div className="grid gap-2 md:col-span-2">
                       <Label htmlFor="userRole">Rol del sistema *</Label>
                       <Select

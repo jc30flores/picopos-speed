@@ -17,7 +17,7 @@ interface EmployeesTableProps {
   isLoading?: boolean;
   onEdit: (employee: Employee) => void;
   onToggleStatus: (employee: Employee) => void;
-  onResetPassword: (employee: Employee, password: string) => void;
+  onResetPassword: (employee: Employee, pin: string) => void;
   onViewProfile: (employee: Employee) => void;
 }
 
@@ -38,9 +38,13 @@ export const EmployeesTable = ({
   };
 
   const handleResetPassword = (employee: Employee) => {
-    const password = prompt(`Nueva contraseña para ${employee.name}`);
-    if (!password) return;
-    onResetPassword(employee, password);
+    const pin = (prompt(`Nuevo PIN de 6 dígitos para ${employee.name}`) || "").trim();
+    if (!pin) return;
+    if (!/^\d{6}$/.test(pin)) {
+      toast.error("El PIN debe ser numérico y de 6 dígitos");
+      return;
+    }
+    onResetPassword(employee, pin);
   };
 
   return (
@@ -100,7 +104,7 @@ export const EmployeesTable = ({
                         variant="ghost"
                         size="icon"
                         onClick={() => handleResetPassword(employee)}
-                        title="Resetear contraseña"
+                        title="Resetear PIN"
                       >
                         <KeyRound className="h-4 w-4" />
                       </Button>
