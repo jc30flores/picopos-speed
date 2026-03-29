@@ -68,8 +68,10 @@ Configura estas variables en tu entorno para el envío DTE:
 - `MH_AMBIENTE`, `DTE_AMBIENTE`, `HACIENDA_AMBIENTE`
 - `DTE_BASE_URL` (alias opcionales: `DTE_ENDPOINT`, `DTE_API_URL`)
 - `DTE_API_AUTH_HEADER`, `DTE_API_AUTH_PREFIX`, `DTE_API_TOKEN`
-- `DTE_TIMEOUT_SECONDS`
-- `DTE_AUTORETRY_BACKOFF_SECONDS`, `DTE_AUTORETRY_BATCH_SIZE`, `DTE_MAX_RETRIES`
+- `DTE_CONNECT_TIMEOUT`, `DTE_READ_TIMEOUT`, `DTE_TIMEOUT_SECONDS`
+- `DTE_MAX_RETRIES`, `DTE_BACKOFF_BASE_SECONDS`, `DTE_BACKOFF_MAX_SECONDS`
+- `DTE_OUTBOX_INTERVAL`, `DTE_OUTBOX_WORKER_ENABLED`
+- `DTE_LOG_LEVEL`, `DTE_LOG_IDLE_EVERY_SECONDS`, `DTE_DEBUG_LOG_PAYLOAD`
 - `IVA_INCLUDED_DEFAULT`
 - `DTE_EMISOR_DUI`, `DTE_NOMBRE_COMERCIAL`, `DTE_EMISOR_TELEFONO`, `DTE_EMISOR_CORREO`
 
@@ -78,6 +80,19 @@ Comando de reintento automático:
 ```sh
 python backend/manage.py dte_autoresend --limit 25
 ```
+
+Auditar/reparar NIT emisor en outbox legado:
+
+```sh
+python backend/manage.py repair_dte_outbox_emisor_nit
+python backend/manage.py repair_dte_outbox_emisor_nit --fix
+```
+
+### Login por PIN (táctil)
+
+- Endpoint: `POST /api/auth/pin-login/` body `{ "pin": "1234" }`
+- Recomendado: guardar `pin_hash` en `UserProfile` usando hash Django (`make_password`) y nunca guardar PIN en texto plano.
+- Lockout básico: 5 intentos fallidos -> bloqueo 30 segundos.
 
 ### Payments endpoints
 

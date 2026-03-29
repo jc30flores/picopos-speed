@@ -1,4 +1,5 @@
 from decimal import Decimal
+import time
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -8,6 +9,17 @@ from rest_framework.test import APIClient
 from apps.core.models import Branch, ServiceType
 from apps.orders.models import Order
 from apps.users.models import UserProfile
+
+
+class _OutboxQuerySetStub:
+    def __init__(self, item):
+        self._item = item
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self._item
 
 
 class PaymentDteTriggerTests(TestCase):
@@ -36,3 +48,30 @@ class PaymentDteTriggerTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         mock_send.assert_not_called()
+
+    @patch("apps.payments.views.send_dte_for_order")
+    def test_full_payment_queues_dte_and_returns_pending_status(self, mock_send):
+        class _Outbox:
+            id = 9001
+
+        class _Record:
+            id = 7001
+            status = "PENDING"
+            outbox_entries = _OutboxQuerySetStub(_Outbox())
+
+        mock_send.return_value = _Record()
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            "/api/payments/",
+            {"order": self.order.id, "method": "cash", "amount": "10.00", "tip_amount": "0.00", "cash_received": "10.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body.get("dte_status"), "QUEUED")
+        for _ in range(20):
+            if mock_send.call_count:
+                break
+            time.sleep(0.01)
+        mock_send.assert_called_once()
+        self.assertTrue(mock_send.call_args.kwargs.get("queue_only"))

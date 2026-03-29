@@ -14,9 +14,10 @@ def build_payload(order: Order, control_number: str, codigo_generacion: str, dte
     for item in order.items.prefetch_related("applied_modifiers").all():
         items.append(
             {
-                "nombre": item.product_name_snapshot,
+                "nombre": item.name or "ITEM",
+                "codigo": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
                 "cantidad": item.quantity,
-                "precio_unitario": _as_str(item.price_snapshot),
+                "precio_unitario": _as_str(item.unit_price),
                 "modificadores": [
                     {"nombre": mod.modifier_name_snapshot, "precio": _as_str(mod.modifier_price_snapshot)}
                     for mod in item.applied_modifiers.all()

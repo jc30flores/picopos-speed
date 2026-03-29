@@ -175,8 +175,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_iva = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
-        line_total = _q2(item.price_snapshot * item.quantity)
-        desc = item.product_name_snapshot
+        effective_unit_price = item.unit_price
+        line_total = _q2(effective_unit_price * item.quantity)
+        desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
         for mod in item.applied_modifiers.all():
@@ -201,10 +202,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         total_exenta += venta_exenta
         total_iva += iva_item
 
-        sku = getattr(item.product, "sku", "") or f"PROD-{item.product_id}"
+        sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(item.price_snapshot)),
+            "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(effective_unit_price)),
             "montoDescu": "0.00", "ventaNoSuj": "0.00", "ventaExenta": str(venta_exenta),
             "ventaGravada": str(venta_gravada), "tributos": None, "psv": "0.00", "noGravado": "0.00",
             "ivaItem": str(iva_item), "codTributo": None, "numeroDocumento": None,
@@ -235,7 +236,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     total_pagar = _q2(total_exenta if order.iva_exempt else total_gravada)
     emisor_payload = {
-        "nit": emisor.get("nit") or "000000000",
+        "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
         "nombre": emisor.get("nombre") or "Pico de Gallo",
         "nombreComercial": emisor.get("nombreComercial") or "Pico de Gallo",
@@ -395,10 +396,16 @@ def interpret_dte_response(response: dict) -> dict:
     }
 
 
-def send_dte_for_order(order, payment=None, force: bool = False) -> DTERecord:
+def send_dte_for_order(order, payment=None, force: bool = False, queue_only: bool = False) -> DTERecord:
     from apps.dte.services.orchestrator import transmit_sale_dte
 
-    return transmit_sale_dte(order.id, source="normal_send", force=force, payment_id=getattr(payment, "id", None))
+    return transmit_sale_dte(
+        order.id,
+        source="normal_send",
+        force=force,
+        payment_id=getattr(payment, "id", None),
+        queue_only=queue_only,
+    )
 
 
 def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:

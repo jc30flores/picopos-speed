@@ -3,6 +3,7 @@ import logging
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import generics
+from rest_framework.views import APIView
 from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework import status
@@ -21,6 +22,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.payments.models import Payment
 from apps.dte.models import DTERecord
+from django.conf import settings
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,17 @@ class OrderCreateView(generics.CreateAPIView):
         order = serializer.save()
         output = OrderSerializer(order, context={"request": request}).data
         return Response(output, status=status.HTTP_201_CREATED)
+
+
+class ValidatePricePinView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request, *args, **kwargs):
+        configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
+        pin = str(request.data.get("pin", "") or "").strip()
+        if not configured_pin or pin != configured_pin:
+            return Response({"detail": "Código incorrecto"}, status=status.HTTP_403_FORBIDDEN)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class OrderDetailView(generics.RetrieveAPIView):
@@ -237,6 +250,8 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         response["Content-Disposition"] = f'attachment; filename="receipt_order_{order.id}.pdf"'
 
         record = DTERecord.objects.filter(order=order).order_by("-id").first()
+        snapshot = getattr(getattr(order, "invoice", None), "sale_snapshot", {}) or {}
+        snapshot_items = snapshot.get("items") if isinstance(snapshot, dict) else None
         lines = [
             "Pico de Gallo - Recibo de Venta",
             f"Orden: {order.order_number}",
@@ -245,10 +260,16 @@ class OrderReceiptPDFView(generics.GenericAPIView):
             "",
             "Items",
         ]
-        for item in order.items.all().prefetch_related("applied_modifiers"):
-            lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.price_snapshot}")
-            for mod in item.applied_modifiers.all():
-                lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
+        if isinstance(snapshot_items, list) and snapshot_items:
+            for item in snapshot_items:
+                lines.append(f"- {item.get('quantity', 0)} x {item.get('name', '')}  ${item.get('unit_price', '0.00')}")
+                for mod in item.get("modifiers", []) or []:
+                    lines.append(f"  Extra: {mod.get('name', '')}  ${mod.get('price', '0.00')}")
+        else:
+            for item in order.items.all().prefetch_related("applied_modifiers"):
+                lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.effective_unit_price}")
+                for mod in item.applied_modifiers.all():
+                    lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
         lines += [
             "",
             f"Desechables: ${order.disposable_total}",

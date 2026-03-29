@@ -218,28 +218,39 @@ DTE_API_TOKEN = os.environ.get("DTE_API_TOKEN", "").strip()
 DTE_API_AUTH_HEADER = os.environ.get("DTE_API_AUTH_HEADER", "Authorization").strip() or "Authorization"
 DTE_API_AUTH_PREFIX = os.environ.get("DTE_API_AUTH_PREFIX", "Bearer").strip() or "Bearer"
 DTE_TIMEOUT_SECONDS = _env_int("DTE_TIMEOUT_SECONDS", 30) or 30
+DTE_CONNECT_TIMEOUT = float(os.environ.get("DTE_CONNECT_TIMEOUT", "3") or 3)
+DTE_READ_TIMEOUT = float(os.environ.get("DTE_READ_TIMEOUT", "15") or 15)
 DTE_DEBUG = _env_bool("DTE_DEBUG", default=False)
 DTE_USER_AGENT = os.environ.get("DTE_USER_AGENT", "PicoPOS-DTE/1.0").strip() or "PicoPOS-DTE/1.0"
 DTE_HEALTH_ENDPOINT = os.environ.get("DTE_HEALTH_ENDPOINT", "/health").strip() or "/health"
 DTE_HEALTH_TIMEOUT_SECONDS = _env_int("DTE_HEALTH_TIMEOUT_SECONDS", 5) or 5
 DTE_MONITOR_INTERVAL_SECONDS = _env_int("DTE_MONITOR_INTERVAL_SECONDS", 10) or 10
+DTE_MONITOR_MAX_BACKOFF_SECONDS = _env_int("DTE_MONITOR_MAX_BACKOFF_SECONDS", 30) or 30
 DTE_MONITOR_ENABLED = _env_bool("DTE_MONITOR_ENABLED", default=True)
+DTE_OUTBOX_WORKER_ENABLED = _env_bool("DTE_OUTBOX_WORKER_ENABLED", default=True)
 DTE_MAX_RETRIES = _env_int("DTE_MAX_RETRIES", 5) or 5
 DTE_RETRY_BACKOFF_SECONDS = _env_int("DTE_RETRY_BACKOFF_SECONDS", 30) or 30
+DTE_BACKOFF_BASE_SECONDS = _env_int("DTE_BACKOFF_BASE_SECONDS", 10) or 10
+DTE_BACKOFF_MAX_SECONDS = _env_int("DTE_BACKOFF_MAX_SECONDS", 600) or 600
 DTE_PENDING_BATCH_SIZE = _env_int("DTE_PENDING_BATCH_SIZE", 50) or 50
+DTE_OUTBOX_INTERVAL = float(os.environ.get("DTE_OUTBOX_INTERVAL", "2") or 2)
 DTE_CIRCUIT_FAIL_THRESHOLD = _env_int("DTE_CIRCUIT_FAIL_THRESHOLD", 3) or 3
 DTE_CIRCUIT_OPEN_SECONDS = _env_int("DTE_CIRCUIT_OPEN_SECONDS", 60) or 60
+DTE_ERROR_LOG_COOLDOWN_SECONDS = _env_int("DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30
 DTE_LOG_PAYLOAD_FULL = _env_bool("DTE_LOG_PAYLOAD_FULL", default=False)
+DTE_DEBUG_LOG_PAYLOAD = _env_bool("DTE_DEBUG_LOG_PAYLOAD", default=DTE_LOG_PAYLOAD_FULL)
 DTE_LOG_PAYLOAD_TO_FILE = _env_bool("DTE_LOG_PAYLOAD_TO_FILE", default=DTE_LOG_PAYLOAD_FULL)
 DTE_LOG_PAYLOAD_DIR = os.environ.get("DTE_LOG_PAYLOAD_DIR", "tmp/dte_payloads").strip() or "tmp/dte_payloads"
 DTE_LOG_PAYLOAD_MAX_CHARS = _env_int("DTE_LOG_PAYLOAD_MAX_CHARS", 0) or 0
 DTE_LOG_VERBOSE = _env_bool("DTE_LOG_VERBOSE", default=False)
+DTE_LOG_LEVEL = (os.environ.get("DTE_LOG_LEVEL", "INFO") or "INFO").upper()
 DTE_LOG_RESPONSE_FULL = _env_bool("DTE_LOG_RESPONSE_FULL", default=False)
 DTE_LOG_TO_FILE = _env_bool("DTE_LOG_TO_FILE", default=DTE_LOG_PAYLOAD_FULL)
 DTE_LOG_DIR = os.environ.get("DTE_LOG_DIR", DTE_LOG_PAYLOAD_DIR).strip() or DTE_LOG_PAYLOAD_DIR
 DTE_LOG_TRUNCATE_CHARS = _env_int("DTE_LOG_TRUNCATE_CHARS", 0) or 0
 DTE_LOG_INCLUDE_SIGNED_DOCUMENT = _env_bool("DTE_LOG_INCLUDE_SIGNED_DOCUMENT", default=False)
 DTE_EMISOR_NIT = os.environ.get("DTE_EMISOR_NIT", "").strip()
+CODE_CHANGE_PRICE = os.environ.get("CODE_CHANGE_PRICE", "").strip()
 
 logging.getLogger(__name__).info(
     "[DTE CONFIG] base_url=%r mh_ambiente=%r",
@@ -258,7 +269,7 @@ LOGGING = {
     "loggers": {
         "apps.dte": {
             "handlers": ["console"],
-            "level": "INFO",
+            "level": DTE_LOG_LEVEL,
             "propagate": True,
         },
     },

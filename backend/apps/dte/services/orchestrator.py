@@ -15,6 +15,7 @@ from apps.dte.services.dte_service import (
     interpret_dte_response,
 )
 from apps.orders.models import Order, OrderInvoice
+from apps.orders.services.snapshots import persist_sale_snapshot
 
 DTE_LOGGER = logging.getLogger("apps.dte")
 
@@ -33,7 +34,13 @@ def _ambiente() -> str:
     return _normalize_ambiente(raw)
 
 
-def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = False, payment_id: int | None = None) -> DTERecord:
+def transmit_sale_dte(
+    sale_id: int,
+    source: str = "normal_send",
+    force: bool = False,
+    payment_id: int | None = None,
+    queue_only: bool = False,
+) -> DTERecord:
     DTE_LOGGER.info("[DTE] send_dte.start order=%s payment=%s source=%s", sale_id, payment_id, source)
     order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
     if order.dte_document_type != "CF":
@@ -101,7 +108,13 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
-        outbox = send_or_queue_dte(order=order, payment=payment, payload=payload, dte_record=prebuilt_record)
+        outbox = send_or_queue_dte(
+            order=order,
+            payment=payment,
+            payload=payload,
+            dte_record=prebuilt_record,
+            attempt_immediate=not queue_only,
+        )
         response = {}
         if outbox.response_body:
             try:
@@ -115,7 +128,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
             parsed["status"] = DTERecord.STATUS_REJECTED
         elif outbox.status == "FAILED":
             parsed["status"] = DTERecord.STATUS_REJECTED
-        elif outbox.status in {"PENDING", "SENT"}:
+        elif outbox.status in {"PENDING", "SENT", "SENDING"}:
             parsed["status"] = DTERecord.STATUS_PENDING
         DTE_LOGGER.info(
             "[CF01] RECEIPT order=%s payment=%s estado=%s sello=%s firma=%s recibido_at=%s",
@@ -166,6 +179,7 @@ def transmit_sale_dte(sale_id: int, source: str = "normal_send", force: bool = F
     if record.status == DTERecord.STATUS_ACCEPTED:
         invoice.sent_at = now
     invoice.save()
+    persist_sale_snapshot(order)
     DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record

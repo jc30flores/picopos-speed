@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -49,6 +49,7 @@ import {
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
+  validateOrderPricePin,
   Category,
   ModifierGroup,
   Product,
@@ -65,15 +66,23 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 interface CartItem {
   id: string;
-  productId: number;
+  productId: number | null;
   name: string;
   basePrice: number;
   originalBasePrice?: number;
   price: number;
   quantity: number;
+  isCustom?: boolean;
+  customCode?: string;
+  assignedName?: string;
+  unitPriceOverride?: number | null;
   appliedSpecialPriceRuleName?: string | null;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
+
+const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
+const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
+const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
 
 const getPaidExtrasLines = (item: CartItem) =>
   (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
@@ -178,6 +187,17 @@ const POS = () => {
     serviceType: typeof serviceType;
     createdAt: number;
   } | null>(null);
+  const [isManualProductOpen, setIsManualProductOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualQty, setManualQty] = useState("1");
+  const [manualPrice, setManualPrice] = useState("");
+  const [manualNote, setManualNote] = useState("");
+  const [priceEditorItemId, setPriceEditorItemId] = useState<string | null>(null);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [validatedPin, setValidatedPin] = useState<string>("");
+  const [newPriceInput, setNewPriceInput] = useState("");
 
   const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -269,7 +289,10 @@ const POS = () => {
 
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
-    const draftItemsGross = calculateCartTotals(items, taxRate).total;
+    const draftItemsGross = calculateCartTotals(
+      items.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
+      taxRate
+    ).total;
     const draftDisposable = getOrderDisposableTotal(items, products, serviceType);
     const draftTotal = draftItemsGross + draftDisposable;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
@@ -319,6 +342,7 @@ const POS = () => {
           originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
           price: totalPrice,
           quantity: 1,
+          isCustom: false,
           appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
           modifiers,
         },
@@ -341,9 +365,73 @@ const POS = () => {
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
+  const openItemPriceEditor = (itemId: string) => {
+    setPriceEditorItemId(itemId);
+    setPinInput("");
+    setValidatedPin("");
+    setIsPinModalOpen(true);
+  };
+
+  const applyPriceOverride = () => {
+    const parsed = Number(newPriceInput);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast.error("Precio inválido");
+      return;
+    }
+    if (!priceEditorItemId) return;
+    setCart((prev) =>
+      prev.map((item) =>
+        item.id === priceEditorItemId
+          ? {
+              ...item,
+              unitPriceOverride: parsed,
+              price: parsed + getItemModifierTotal(item),
+            }
+          : item
+      )
+    );
+    setIsPriceModalOpen(false);
+    toast.success("Precio ajustado para esta venta");
+  };
+
+  const handleAddManualProduct = () => {
+    const quantity = Math.max(1, Math.floor(Number(manualQty || 1)));
+    const price = Number(manualPrice);
+    if (!manualName.trim()) {
+      toast.error("Nombre es requerido");
+      return;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      toast.error("Precio unitario inválido");
+      return;
+    }
+    const code = `MANUAL-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    setCart((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        productId: null,
+        name: manualName.trim(),
+        basePrice: price,
+        price,
+        quantity,
+        isCustom: true,
+        customCode: code,
+        assignedName: manualNote.trim() || undefined,
+        unitPriceOverride: null,
+        modifiers: [],
+      },
+    ]);
+    setManualName("");
+    setManualQty("1");
+    setManualPrice("");
+    setManualNote("");
+    setIsManualProductOpen(false);
+  };
+
   const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
   const itemsGross = calculateCartTotals(
-    cart.map((item) => ({ ...item, price: item.price })),
+    cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
     taxRate
   ).total;
   const total = itemsGross + cartDisposableTotal;
@@ -373,7 +461,10 @@ const POS = () => {
   const proceedToCheckout = () => {
     if (cart.length === 0) return;
 
-    const draftItemsGross = calculateCartTotals(cart, taxRate).total;
+    const draftItemsGross = calculateCartTotals(
+      cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
+      taxRate
+    ).total;
     const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
     const draftTotal = draftItemsGross + draftDisposableTotal;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
@@ -696,14 +787,20 @@ const POS = () => {
             serviceType: checkoutDraft.serviceType,
             source: "pos",
             channel: "pos",
+            priceChangePin: checkoutDraft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
             customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
             dteDocumentType,
             ivaExempt,
             items: checkoutDraft.items.map((item) => ({
+              type: item.isCustom ? "manual" : "menu",
               productId: item.productId,
               productName: item.name,
               price: item.basePrice,
+              unitPriceOverride: item.unitPriceOverride ?? null,
               quantity: item.quantity,
+              isCustom: Boolean(item.isCustom),
+              customCode: item.customCode,
+              assignedName: item.assignedName,
               modifiers: item.modifiers,
             })),
           });
@@ -777,7 +874,7 @@ const POS = () => {
       }
     } catch (error) {
       console.error("Failed to create payment", error);
-      toast.error("No se pudo registrar el pago");
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
     } finally {
       setIsProcessingPayment(false);
     }
@@ -855,7 +952,7 @@ const POS = () => {
 
             {/* Products Grid */}
             <div className="lg:flex-1 lg:overflow-y-auto pb-4 lg:pb-0">
-              <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
+                <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
                   {filteredProducts.map((product) => (
                     <Card
                       key={product.id}
@@ -887,11 +984,30 @@ const POS = () => {
           {/* Cart Section */}
           <Card className="flex flex-col overflow-hidden">
             <div className="p-4 border-b">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-xl font-bold">Pedido Actual</h2>
-                <Button variant="outline" size="sm" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
+              <div className="mb-3 space-y-2">
+                <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <TooltipProvider delayDuration={120}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-11 rounded-full border-emerald-500/60 px-3"
+                          onClick={() => setIsManualProductOpen(true)}
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Producto manual
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Agregar ítem manual para esta venta</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <Button variant="outline" size="sm" className="h-11" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
+                </div>
               </div>
-              
+
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {serviceTypes.length > 0 ? (
                   serviceTypes.map((type) => (
@@ -926,7 +1042,10 @@ const POS = () => {
                     <Card key={item.id} className="p-3">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
-                          <h4 className="font-semibold text-sm">{item.name}</h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold text-sm">{item.name}</h4>
+                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase">Manual</Badge>}
+                          </div>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
                               <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
@@ -936,20 +1055,30 @@ const POS = () => {
                           {item.appliedSpecialPriceRuleName && (
                             <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
                           )}
+                          {item.unitPriceOverride != null && (
+                            <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
+                          )}
                           {item.modifiers.length > 0 && (
                             <div className="text-xs text-muted-foreground mt-1">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
                             </div>
                           )}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeItem(item.id)}
-                          className="h-7 w-7 text-danger"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          {!item.isCustom && (
+                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-8 w-8" title="Cambiar precio para esta venta">
+                              <PencilLine className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeItem(item.id)}
+                            className="h-7 w-7 text-danger"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
                       
                       <div className="flex items-center justify-between">
@@ -972,7 +1101,7 @@ const POS = () => {
                             <Plus className="h-3 w-3" />
                           </Button>
                         </div>
-                        <span className="font-bold">${(item.price * item.quantity).toFixed(2)}</span>
+                        <span className="font-bold">${(getItemUnitTotal(item) * item.quantity).toFixed(2)}</span>
                       </div>
                     </Card>
                   ))}
@@ -1181,14 +1310,14 @@ const POS = () => {
                                 {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                                   <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
                                 )}
-                                {formatMoney(toNumber(item.price))} c/u
+                                {formatMoney(toNumber(getItemUnitTotal(item)))} c/u
                               </div>
                               {item.appliedSpecialPriceRuleName && (
                                 <div className="text-[11px] text-emerald-600">Oferta aplicada</div>
                               )}
                             </div>
                             <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
-                            <div className="text-right font-semibold">{formatMoney(toNumber(item.price) * toNumber(item.quantity))}</div>
+                            <div className="text-right font-semibold">{formatMoney(toNumber(getItemUnitTotal(item)) * toNumber(item.quantity))}</div>
                           </div>
                         ))}
                       </div>
@@ -1419,6 +1548,100 @@ const POS = () => {
             <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
               {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isManualProductOpen} onOpenChange={setIsManualProductOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Agregar producto manual</DialogTitle>
+            <DialogDescription>Este producto solo existe en esta venta.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Nombre *</Label>
+              <Input value={manualName} onChange={(e) => setManualName(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Cantidad *</Label>
+                <Input type="number" min={1} step={1} value={manualQty} onChange={(e) => setManualQty(e.target.value)} />
+              </div>
+              <div>
+                <Label>Precio unitario *</Label>
+                <Input type="number" min={0.01} step={0.01} value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <Label>Nota</Label>
+              <Input value={manualNote} onChange={(e) => setManualNote(e.target.value)} />
+            </div>
+            <Button className="w-full" onClick={handleAddManualProduct}>Agregar al carrito</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPinModalOpen} onOpenChange={setIsPinModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Código de acceso</DialogTitle>
+            <DialogDescription>Ingresa el PIN de 4 dígitos para autorizar cambio de precio.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 4 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
+            <div className="grid grid-cols-3 gap-2">
+              {[1,2,3,4,5,6,7,8,9].map((n) => (
+                <Button key={n} variant="outline" className="h-12" onClick={async () => {
+                  const next = `${pinInput}${n}`.slice(0, 4);
+                  setPinInput(next);
+                  if (next.length === 4) {
+                    try {
+                      await validateOrderPricePin(next);
+                      setValidatedPin(next);
+                      const activeItem = cart.find((item) => item.id === priceEditorItemId);
+                      setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+                      setIsPinModalOpen(false);
+                      setIsPriceModalOpen(true);
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Código incorrecto");
+                      setPinInput("");
+                    }
+                  }
+                }}>{n}</Button>
+              ))}
+              <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
+              <Button variant="outline" className="h-12" onClick={async () => {
+                const next = `${pinInput}0`.slice(0, 4);
+                setPinInput(next);
+                if (next.length === 4) {
+                  try {
+                    await validateOrderPricePin(next);
+                    setValidatedPin(next);
+                    const activeItem = cart.find((item) => item.id === priceEditorItemId);
+                    setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+                    setIsPinModalOpen(false);
+                    setIsPriceModalOpen(true);
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Código incorrecto");
+                    setPinInput("");
+                  }
+                }
+              }}>0</Button>
+              <Button variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPriceModalOpen} onOpenChange={setIsPriceModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Nuevo precio (solo esta venta)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input inputMode="decimal" value={newPriceInput} onChange={(e) => setNewPriceInput(e.target.value.replace(/[^\d.]/g, ""))} />
+            <Button className="w-full" onClick={applyPriceOverride} disabled={!validatedPin}>Aplicar</Button>
           </div>
         </DialogContent>
       </Dialog>

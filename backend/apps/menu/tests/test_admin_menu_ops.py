@@ -2,11 +2,12 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.test.utils import override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
-from apps.menu.models import Category, Modifier, ModifierGroup, Product
+from apps.menu.models import Category, Modifier, ModifierGroup, Product, PriceChangeAudit
 from apps.menu.serializers import CategorySerializer
 from apps.orders.models import Order, OrderItem
 
@@ -343,3 +344,30 @@ class AdminMenuOpsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Incluye el campo 'id'", str(response.data))
+
+    @override_settings(CODE_CHANGE_PRICE="1234")
+    def test_change_price_with_wrong_code_returns_403(self):
+        product = Product.objects.create(name="ITEM", description="", price=Decimal("2.00"), category=self.category, available=True)
+        response = self.client.post(
+            f"/api/menu/products/{product.id}/change-price/",
+            {"code": "0000", "new_price": "3.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(CODE_CHANGE_PRICE="1234")
+    def test_change_price_with_correct_code_updates_and_creates_audit(self):
+        branch = Branch.objects.create(name="Test Branch", code="TB")
+        product = Product.objects.create(name="ITEM2", description="", price=Decimal("2.00"), category=self.category, available=True)
+        response = self.client.post(
+            f"/api/menu/products/{product.id}/change-price/?branch_id={branch.id}",
+            {"code": "1234", "new_price": "3.25"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        product.refresh_from_db()
+        self.assertEqual(product.price, Decimal("3.25"))
+        audit = PriceChangeAudit.objects.filter(product=product).latest("id")
+        self.assertEqual(audit.old_price, Decimal("2.00"))
+        self.assertEqual(audit.new_price, Decimal("3.25"))
+        self.assertEqual(audit.reason, "emergency")

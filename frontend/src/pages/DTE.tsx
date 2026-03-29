@@ -14,161 +14,327 @@ import {
   dteResend,
   dteSendEmail,
   dteSendWhatsapp,
-  downloadOrderReceiptPdf,
   type DTERecord,
 } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
+import { Copy } from "lucide-react";
+import { DteRowActions } from "@/components/dte/DteRowActions";
 
-const canResend = (s: string) => ["PENDIENTE", "RECHAZADO"].includes(s);
+type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
+
+const statusLabel = (status: string) => {
+  const normalized = (status || "").toUpperCase();
+  if (normalized === "ACEPTADO") return "Aceptado";
+  if (normalized === "PENDIENTE" || normalized === "ENVIANDO") return "Pendiente";
+  if (normalized === "RECHAZADO") return "Rechazado";
+  if (normalized === "INVALIDADO") return "Invalidado";
+  return normalized;
+};
+
+const statusBadgeClass = (status: string) => {
+  const normalized = (status || "").toUpperCase();
+  if (normalized === "ACEPTADO") return "bg-emerald-600 text-white";
+  if (normalized === "PENDIENTE" || normalized === "ENVIANDO") return "bg-amber-500 text-black";
+  if (normalized === "RECHAZADO") return "bg-red-600 text-white";
+  if (normalized === "INVALIDADO") return "bg-zinc-600 text-white";
+  return "bg-muted text-foreground";
+};
+
+const typeToChip = (dteType: string) => {
+  if (dteType.startsWith("CF")) return "CF";
+  if (dteType.startsWith("CCF")) return "CCF";
+  if (dteType.startsWith("SE")) return "SX";
+  return dteType;
+};
+
+const formatMoney = (amount: number) => `$${Number(amount || 0).toFixed(2)}`;
+
+const truncate = (value?: string, size = 14) => {
+  if (!value) return "-";
+  if (value.length <= size) return value;
+  return `${value.slice(0, size)}…`;
+};
+
+const JsonBlock = ({ title, payload }: { title: string; payload: unknown }) => {
+  const text = JSON.stringify(payload ?? {}, null, 2);
+  return (
+    <details className="rounded-md border bg-muted/20">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-medium">{title}</summary>
+      <div className="space-y-2 p-3">
+        <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(text)}>Copiar JSON</Button>
+        <pre className="max-h-[300px] overflow-auto rounded bg-black/30 p-3 text-xs">{text}</pre>
+      </div>
+    </details>
+  );
+};
 
 export default function DTEPage() {
+  const { toast } = useToast();
   const [rows, setRows] = useState<DTERecord[]>([]);
   const [selected, setSelected] = useState<DTERecord | null>(null);
-  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [actionsLoading, setActionsLoading] = useState<Record<number, ActionType | null>>({});
+
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [type, setType] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const { toast } = useToast();
-  const [resendLocked, setResendLocked] = useState<Record<number, boolean>>({});
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [count, setCount] = useState(0);
+  const [totalAmountSum, setTotalAmountSum] = useState(0);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 400);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
 
   const filters = useMemo(
-    () => ({ q: query || undefined, status: status === "all" ? undefined : status, dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
-    [query, status, dateFrom, dateTo],
+    () => ({
+      search: search || undefined,
+      status: status === "all" ? undefined : status,
+      type: type === "all" ? undefined : type,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+      page,
+      pageSize,
+    }),
+    [search, status, type, dateFrom, dateTo, page, pageSize],
   );
 
   const load = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      setRows(await dteIssuedList(filters));
-    } catch (error) {
-      toast({ title: "Error cargando DTE", description: String(error), variant: "destructive" });
-    }
-  };
-
-  const onResend = async (row: DTERecord) => {
-    if (resendLocked[row.id]) return;
-    setResendLocked((prev) => ({ ...prev, [row.id]: true }));
-    toast({ title: "Reenvío en proceso…" });
-    try {
-      const updated = await dteResend(row.id);
-      const state = updated.status || "PENDIENTE";
-      if (state === "ACEPTADO") {
-        toast({ title: "DTE aceptado" });
-      } else if (state === "RECHAZADO") {
-        toast({ title: "DTE rechazado", description: updated.error_message || "Error de autorización/validación", variant: "destructive" });
-      } else {
-        toast({ title: "DTE pendiente", description: "API caída o en cola de reintento." });
-      }
-      await load();
-    } catch (error) {
-      toast({ title: "No se pudo reenviar", description: String(error), variant: "destructive" });
+      const data = await dteIssuedList(filters);
+      setRows(data.results);
+      setCount(data.count);
+      setTotalAmountSum(data.totalAmountSum);
+    } catch (err) {
+      const message = String(err);
+      setError(message);
+      toast({ title: "Error cargando DTE", description: message, variant: "destructive" });
     } finally {
-      window.setTimeout(() => {
-        setResendLocked((prev) => ({ ...prev, [row.id]: false }));
-      }, 2500);
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
-  }, []);
+  }, [filters]);
 
-  const copy = async (value?: string) => {
+  const copy = async (value?: string, title = "Copiado") => {
     if (!value) return;
     await navigator.clipboard.writeText(value);
-    toast({ title: "Copiado" });
+    toast({ title });
   };
+
+  const patchRow = (updated?: DTERecord | null) => {
+    if (!updated) return;
+    setRows((prev) => prev.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
+    setSelected((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+  };
+
+  const onRowAction = async (action: ActionType, row: DTERecord) => {
+    if (action === "view") {
+      try {
+        const detail = await dteIssuedDetail(row.id);
+        setSelected(detail);
+      } catch (err) {
+        toast({ title: "No se pudo cargar detalle", description: String(err), variant: "destructive" });
+      }
+      return;
+    }
+
+    setActionsLoading((prev) => ({ ...prev, [row.id]: action }));
+    try {
+      if (action === "resend") {
+        const result = await dteResend(row.id);
+        patchRow(result.record);
+        toast({ title: "Hacienda", description: result.message });
+      }
+      if (action === "email") {
+        const result = await dteSendEmail(row.id);
+        patchRow(result.record);
+        toast({ title: "Correo", description: result.message });
+      }
+      if (action === "whatsapp") {
+        const result = await dteSendWhatsapp(row.id);
+        patchRow(result.record);
+        toast({ title: "WhatsApp", description: result.message });
+      }
+      if (action === "credit_note") {
+        if (!window.confirm("¿Crear nota de crédito para este DTE?")) return;
+        const result = await dteCreateCreditNote(row.id, "Nota de crédito desde panel DTE");
+        patchRow(result.record);
+        toast({ title: "Nota de crédito", description: result.message });
+      }
+      if (action === "invalidate") {
+        if (!window.confirm("¿Invalidar este DTE? Esta acción no se puede deshacer.")) return;
+        const result = await dteInvalidate(row.id, "Invalidación desde panel DTE");
+        patchRow(result.record);
+        toast({ title: "Invalidación", description: result.message });
+      }
+      await load();
+    } catch (err) {
+      toast({ title: "Acción fallida", description: String(err), variant: "destructive" });
+    } finally {
+      setActionsLoading((prev) => ({ ...prev, [row.id]: null }));
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
-      <div className="container mx-auto pt-24 px-4 pb-6 space-y-4">
-        <h1 className="text-2xl font-semibold">DTE</h1>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-          <Input placeholder="Buscar (cliente/control/código/uuid)" value={query} onChange={(e) => setQuery(e.target.value)} />
-          <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger><SelectValue placeholder="Estado" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos</SelectItem>
-              <SelectItem value="PENDIENTE">Pendiente</SelectItem>
-              <SelectItem value="ENVIANDO">Enviando</SelectItem>
-              <SelectItem value="ACEPTADO">Aceptado</SelectItem>
-              <SelectItem value="RECHAZADO">Rechazado</SelectItem>
-              <SelectItem value="INVALIDADO">Invalidado</SelectItem>
-            </SelectContent>
-          </Select>
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-          <Button onClick={load}>Aplicar filtros</Button>
+      <div className="container mx-auto space-y-4 px-4 pb-6 pt-24">
+        <div className="space-y-3 rounded-xl border bg-card/40 p-4">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-12">
+            <Input
+              className="lg:col-span-5"
+              placeholder="Buscar por cliente, No. control, código generación…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+            <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
+              <SelectTrigger className="lg:col-span-2"><SelectValue placeholder="Estado" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="PENDIENTE">Pendiente</SelectItem>
+                <SelectItem value="ACEPTADO">Aceptado</SelectItem>
+                <SelectItem value="RECHAZADO">Rechazado</SelectItem>
+                <SelectItem value="INVALIDADO">Invalidado</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={type} onValueChange={(value) => { setType(value); setPage(1); }}>
+              <SelectTrigger className="lg:col-span-2"><SelectValue placeholder="Tipo" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="CF">CF</SelectItem>
+                <SelectItem value="CCF">CCF</SelectItem>
+                <SelectItem value="SX">SX</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input className="lg:col-span-1" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
+            <Input className="lg:col-span-1" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+            <div className="flex gap-2 lg:col-span-1">
+              <Button variant="outline" className="w-full" onClick={load}>Aplicar</Button>
+              <Button
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setSearchInput("");
+                  setSearch("");
+                  setStatus("all");
+                  setType("all");
+                  setDateFrom("");
+                  setDateTo("");
+                  setPage(1);
+                }}
+              >
+                Limpiar
+              </Button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3 text-sm text-muted-foreground">
+            <span># docs: <strong className="text-foreground">{count}</strong></span>
+            <span>Total según filtros: <strong className="text-foreground">{formatMoney(totalAmountSum)}</strong></span>
+          </div>
         </div>
 
-        <div className="border rounded-lg overflow-auto">
-          <table className="w-full text-sm min-w-[1100px]">
-            <thead className="bg-muted/40">
-              <tr>
-                <th className="text-left p-2">Fecha</th><th className="text-left p-2">Estado</th><th className="text-left p-2">Tipo</th><th className="text-left p-2">No. Control</th><th className="text-left p-2">Código generación</th><th className="text-left p-2">Sello</th><th className="text-left p-2">Cliente</th><th className="text-left p-2">Total</th><th className="text-left p-2">Intentos</th><th className="text-left p-2">Último envío</th><th className="text-left p-2">Acciones</th>
+        <div className="overflow-auto rounded-xl border">
+          <table className="min-w-[980px] w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
+              <tr className="border-b text-muted-foreground">
+                <th className="p-3 text-left">No. Control</th>
+                <th className="p-3 text-left">Fecha/Hora</th>
+                <th className="p-3 text-left">Cliente</th>
+                <th className="p-3 text-left">Tipo</th>
+                <th className="p-3 text-left">Estado</th>
+                <th className="p-3 text-right">Total</th>
+                <th className="p-3 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <td className="p-2">{formatDateTimeSV(r.created_at)}</td>
-                  <td className="p-2"><Badge>{r.status}</Badge></td>
-                  <td className="p-2">{r.dte_type}</td>
-                  <td className="p-2">{r.control_number}</td>
-                  <td className="p-2">{r.codigo_generacion}</td>
-                  <td className="p-2">{r.sello_recibido || r.sello_recepcion || "-"}</td>
-                  <td className="p-2">{r.receiver_name}</td>
-                  <td className="p-2">${Number(r.total_amount).toFixed(2)}</td>
-                  <td className="p-2">{r.attempts ?? "-"}</td>
-                  <td className="p-2">{r.last_sent_at ? formatDateTimeSV(r.last_sent_at) : "-"}</td>
-                  <td className="p-2 flex gap-2">
-                    <Button size="sm" variant="outline" onClick={async () => setSelected(await dteIssuedDetail(r.id))}>Ver</Button>
-                    <Button size="sm" variant="outline" disabled={!canResend(r.status) || resendLocked[r.id]} onClick={async () => onResend(r)}>Reenviar</Button>
+              {!loading && rows.length === 0 && (
+                <tr>
+                  <td className="p-8 text-center text-muted-foreground" colSpan={7}>Sin documentos para los filtros seleccionados.</td>
+                </tr>
+              )}
+              {rows.map((row) => (
+                <tr key={row.id} className="border-b transition-colors hover:bg-muted/20">
+                  <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      <span title={row.control_number}>{truncate(row.control_number, 18)}</span>
+                      <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => copy(row.control_number, "No. control copiado")}>
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </td>
+                  <td className="p-3">{formatDateTimeSV(row.issued_at || row.created_at)}</td>
+                  <td className="p-3" title={row.receiver_name}>{truncate(row.receiver_name, 28)}</td>
+                  <td className="p-3"><Badge variant="outline">{typeToChip(row.dte_type)}</Badge></td>
+                  <td className="p-3"><Badge className={statusBadgeClass(row.status)}>{statusLabel(row.status)}</Badge></td>
+                  <td className="p-3 text-right font-semibold">{formatMoney(Number(row.total_amount || 0))}</td>
+                  <td className="p-3 text-right">
+                    <DteRowActions row={row} loadingAction={actionsLoading[row.id]} onAction={onRowAction} />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Página {page} de {totalPages}</span>
+            <Select value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); setPage(1); }}>
+              <SelectTrigger className="h-8 w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="20">20</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(prev - 1, 1))}>Anterior</Button>
+            <Button variant="outline" disabled={page >= totalPages} onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}>Siguiente</Button>
+          </div>
+        </div>
+
+        {error && <div className="rounded border border-red-600/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>}
       </div>
 
-      <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Detalle DTE</DialogTitle></DialogHeader>
+      <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
+        <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Detalle DTE</DialogTitle>
+          </DialogHeader>
           {selected && (
-            <div className="space-y-3 text-sm">
-              <p><strong>No. Control:</strong> {selected.control_number}</p>
-              <p><strong>Código generación:</strong> {selected.codigo_generacion}</p>
-              <p><strong>Sello recepción:</strong> {selected.sello_recepcion || "-"}</p>
-              <p><strong>Firma:</strong> {selected.firma || "-"}</p>
-              <p><strong>Recibido MH:</strong> {selected.recibido_at ? formatDateTimeSV(selected.recibido_at) : "-"}</p>
-              <p><strong>Estado MH:</strong> {selected.estado_mh || selected.hacienda_state || "-"}</p>
-              <p><strong>Estado Hacienda:</strong> {selected.hacienda_state || "-"}</p>
-              <p><strong>Error:</strong> {selected.error_message || "-"}</p>
-              <div className="flex gap-2 flex-wrap">
-                <Button size="sm" variant="outline" onClick={() => copy(selected.control_number)}>Copiar control</Button>
-                <Button size="sm" variant="outline" onClick={() => copy(selected.codigo_generacion)}>Copiar código</Button>
-                <Button size="sm" variant="outline" onClick={() => copy(selected.sello_recepcion)}>Copiar sello</Button>
-                <Button size="sm" onClick={async () => { try { await dteSendWhatsapp(selected.id); } catch { toast({ title: "Próximamente" }); } }}>WhatsApp</Button>
-                <Button size="sm" variant="outline" onClick={async () => { try { await dteSendEmail(selected.id); } catch { toast({ title: "Próximamente" }); } }}>Correo</Button>
-                <Button size="sm" variant="outline" onClick={async () => {
-                  const blob = await downloadOrderReceiptPdf(selected.sale_id);
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `receipt_order_${selected.sale_id}.pdf`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}>Descargar PDF</Button>
-                <Button size="sm" variant="destructive" onClick={async () => { await dteInvalidate(selected.id, "Anulación desde panel"); toast({ title: "Invalidación creada" }); setSelected(null); await load(); }}>Invalidar</Button>
-                <Button size="sm" variant="secondary" onClick={async () => { await dteCreateCreditNote(selected.id, "Nota de crédito desde panel"); toast({ title: "Nota de crédito creada" }); }}>Nota de crédito</Button>
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-1 gap-3 rounded-lg border p-3 md:grid-cols-2">
+                <div><strong>Estado:</strong> {statusLabel(selected.status)}</div>
+                <div><strong>Tipo:</strong> {typeToChip(selected.dte_type)}</div>
+                <div className="flex items-center gap-2"><strong>No. Control:</strong> {selected.control_number} <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => copy(selected.control_number)}><Copy className="h-3.5 w-3.5" /></Button></div>
+                <div className="flex items-center gap-2"><strong>Código generación:</strong> {selected.codigo_generacion} <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => copy(selected.codigo_generacion)}><Copy className="h-3.5 w-3.5" /></Button></div>
+                <div><strong>Sello recibido:</strong> {selected.sello_recibido || selected.sello_recepcion || "-"}</div>
+                <div><strong>Firma:</strong> {selected.firma || "-"}</div>
+                <div><strong>Recibido:</strong> {selected.recibido_at ? formatDateTimeSV(selected.recibido_at) : "-"}</div>
+                <div><strong>Último envío:</strong> {selected.last_sent_at ? formatDateTimeSV(selected.last_sent_at) : "-"} ({selected.attempts ?? 0} intentos)</div>
+                <div className="md:col-span-2"><strong>Último error:</strong> {selected.error_message || "-"}</div>
               </div>
-              {selected.request_payload && <pre className="bg-muted p-3 rounded text-xs overflow-auto">{JSON.stringify(selected.request_payload, null, 2)}</pre>}
-              {(selected.mh_response_json || selected.response_payload) && (
-                <pre className="bg-muted p-3 rounded text-xs overflow-auto">
-                  {JSON.stringify(selected.mh_response_json || selected.response_payload, null, 2)}
-                </pre>
-              )}
+
+              <JsonBlock title="Ver JSON enviado" payload={selected.request_payload || {}} />
+              <JsonBlock title="Ver respuesta Hacienda" payload={selected.response_payload || selected.mh_response_json || {}} />
             </div>
           )}
         </DialogContent>

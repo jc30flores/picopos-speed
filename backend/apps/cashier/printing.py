@@ -339,18 +339,23 @@ def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     text = build_end_of_day_ticket(session_id)
     try:
         from io import BytesIO
-        from reportlab.lib.pagesizes import LETTER
+        from reportlab.lib.units import mm
         from reportlab.pdfgen import canvas
 
+        lines = text.split("\n")
+        page_width = 80 * mm
+        left_margin = 4 * mm
+        top_margin = 4 * mm
+        line_height = 4.2 * mm
+        page_height = max((len(lines) * line_height) + (top_margin * 2), 40 * mm)
+
         buf = BytesIO()
-        c = canvas.Canvas(buf, pagesize=LETTER)
-        y = 760
-        for line in text.split("\n"):
-            c.drawString(40, y, line)
-            y -= 14
-            if y < 50:
-                c.showPage()
-                y = 760
+        c = canvas.Canvas(buf, pagesize=(page_width, page_height))
+        c.setFont("Courier", 8.5)
+        y = page_height - top_margin
+        for line in lines:
+            c.drawString(left_margin, y, line)
+            y -= line_height
         c.save()
         return buf.getvalue()
     except Exception:

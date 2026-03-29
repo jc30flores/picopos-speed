@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from django.conf import settings
+from rest_framework.exceptions import ValidationError
 
 from apps.dte.models import DTEBranchConfig
 
@@ -17,12 +18,19 @@ def _setting(name: str, default: str = "") -> str:
     return str(getattr(settings, name, os.environ.get(name, default)) or "").strip()
 
 
+def normalize_nit(value: str | None) -> str:
+    digits = _digits(value)
+    if len(digits) != 14:
+        raise ValidationError(f"NIT emisor inválido: se esperaban 14 dígitos y se recibió '{value or ''}'.")
+    return digits
+
+
 def get_emisor_nit(branch) -> str:
     cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first() if branch else None
     cfg_nit = _digits(getattr(cfg, "emisor_nit", ""))
     if cfg_nit:
-        return cfg_nit
-    return _digits(_setting("DTE_EMISOR_NIT"))
+        return normalize_nit(cfg_nit)
+    return normalize_nit(_setting("DTE_EMISOR_NIT"))
 
 
 def get_emisor_config(branch) -> dict[str, Any]:
@@ -67,4 +75,5 @@ def get_emisor_config(branch) -> dict[str, Any]:
 
 
 def payload_emisor_nit(payload: dict) -> str:
-    return _digits(((payload or {}).get("dte") or {}).get("emisor", {}).get("nit"))
+    raw = _digits(((payload or {}).get("dte") or {}).get("emisor", {}).get("nit"))
+    return raw if len(raw) == 14 else ""

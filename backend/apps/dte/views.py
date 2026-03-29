@@ -1,4 +1,5 @@
 import logging
+from django.db.models import Sum
 
 from django.conf import settings
 from django.db.models import Q
@@ -23,6 +24,7 @@ from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
 from apps.dte.services.dte_security import redact_payload
+from apps.dte.services.availability import evaluate_record_actions
 
 logger = logging.getLogger("apps.dte")
 
@@ -42,21 +44,27 @@ class IsDTEAccountantOrAdmin(BasePermission):
 class DTEIssuedListView(generics.ListAPIView):
     serializer_class = DTERecordListSerializer
     permission_classes = [IsDTECashierOrAbove]
+    pagination_class = None
 
     def get_queryset(self):
-        qs = DTERecord.objects.select_related("order", "branch")
+        qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
         status_filter = self.request.query_params.get("status")
-        dte_type = self.request.query_params.get("dte_type")
+        dte_type = self.request.query_params.get("dte_type") or self.request.query_params.get("type")
         start_at, end_at = parse_business_date_range(
             self.request.query_params.get("date_from"),
             self.request.query_params.get("date_to"),
         )
-        query = self.request.query_params.get("q")
+        query = self.request.query_params.get("q") or self.request.query_params.get("search")
 
         if status_filter:
             qs = qs.filter(status=status_filter.upper())
         if dte_type:
-            qs = qs.filter(dte_type=dte_type.upper())
+            normalized = dte_type.upper()
+            if normalized in {"CF", "CCF", "SX", "SE"}:
+                prefix = {"CF": "CF", "CCF": "CCF", "SX": "SE", "SE": "SE"}[normalized]
+                qs = qs.filter(dte_type__startswith=prefix)
+            else:
+                qs = qs.filter(dte_type=normalized)
         if start_at:
             qs = qs.filter(created_at__gte=start_at)
         if end_at:
@@ -68,23 +76,44 @@ class DTEIssuedListView(generics.ListAPIView):
                 | Q(codigo_generacion__icontains=query)
                 | Q(hacienda_uuid__icontains=query)
             )
-        return qs
+        return qs.order_by("-created_at")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        count = queryset.count()
+        total_amount_sum = queryset.aggregate(total=Sum("total_amount")).get("total") or 0
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(100, int(request.query_params.get("page_size", 20))))
+        except (TypeError, ValueError):
+            page_size = 20
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_qs = queryset[start:end]
+        serializer = self.get_serializer(page_qs, many=True)
+        return Response(
+            {
+                "count": count,
+                "page": page,
+                "page_size": page_size,
+                "results": serializer.data,
+                "total_amount_sum": str(total_amount_sum),
+            }
+        )
 
 
 class DTEIssuedDetailView(generics.RetrieveAPIView):
-    queryset = DTERecord.objects.select_related("order", "branch")
+    queryset = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
     serializer_class = DTERecordDetailSerializer
     permission_classes = [IsDTECashierOrAbove]
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         data = self.get_serializer(instance).data
-        profile = _get_profile(request.user)
-        can_view_json = bool(profile and profile.role in {"manager", "admin", "accountant"})
-        if not can_view_json:
-            data.pop("request_payload", None)
-            data.pop("response_payload", None)
-        elif not settings.DEBUG:
+        if not settings.DEBUG:
             data["request_payload"] = redact_payload(data.get("request_payload") or {})
             data["response_payload"] = redact_payload(data.get("response_payload") or {})
         return Response(data)
@@ -102,8 +131,8 @@ class DTEResendView(APIView):
             bool(getattr(request.user, "is_authenticated", False)),
         )
         record = generics.get_object_or_404(DTERecord, pk=pk)
-        if record.status not in {DTERecord.STATUS_PENDING, DTERecord.STATUS_REJECTED}:
-            return Response({"detail": "Solo se puede reenviar pendiente/rechazado"}, status=status.HTTP_400_BAD_REQUEST)
+        if record.status != DTERecord.STATUS_PENDING:
+            return Response({"detail": "Solo se puede reenviar pendiente"}, status=status.HTTP_400_BAD_REQUEST)
         if record.status == DTERecord.STATUS_SENDING:
             return Response({"detail": "El DTE está en proceso de envío"}, status=status.HTTP_409_CONFLICT)
         try:
@@ -132,27 +161,60 @@ class DTESendEmailView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
-        record = generics.get_object_or_404(DTERecord, pk=pk)
-        attempt = send_dte_email(record, to_email=request.data.get("email"))
-        return Response({"status": attempt.status, "provider_status": attempt.provider_status, "retries": attempt.retries})
+        record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
+        flags = evaluate_record_actions(record)
+        if not flags["can_send_email"]:
+            return Response({"success": False, "message": flags["missing_email_reason"], "detail": "missing_email"}, status=status.HTTP_400_BAD_REQUEST)
+        to_email = request.data.get("email") or flags["customer_email"]
+        attempt = send_dte_email(record, to_email=to_email)
+        log_audit(request, "dte.send_email", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
+        logger.info("[DTE EMAIL] dte_id=%s status=%s provider_status=%s", record.id, attempt.status, attempt.provider_status)
+        return Response(
+            {
+                "success": attempt.status == "SENT",
+                "message": "Correo enviado" if attempt.status == "SENT" else "No se pudo enviar correo",
+                "status": attempt.status,
+                "provider_status": attempt.provider_status,
+                "retries": attempt.retries,
+                "body_preview": str(attempt.provider_body)[:400],
+                "record": DTERecordDetailSerializer(record).data,
+            }
+        )
 
 
 class DTESendWhatsAppView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
-        record = generics.get_object_or_404(DTERecord, pk=pk)
-        attempt = send_dte_whatsapp(record, to_phone=request.data.get("phone"))
-        return Response({"status": attempt.status, "provider_status": attempt.provider_status, "retries": attempt.retries})
+        record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
+        flags = evaluate_record_actions(record)
+        if not flags["can_send_whatsapp"]:
+            return Response({"success": False, "message": flags["missing_phone_reason"], "detail": "missing_phone"}, status=status.HTTP_400_BAD_REQUEST)
+        to_phone = request.data.get("phone") or flags["customer_phone"]
+        attempt = send_dte_whatsapp(record, to_phone=to_phone)
+        log_audit(request, "dte.send_whatsapp", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
+        logger.info("[DTE WA] dte_id=%s status=%s provider_status=%s", record.id, attempt.status, attempt.provider_status)
+        return Response(
+            {
+                "success": attempt.status == "SENT",
+                "message": "WhatsApp enviado" if attempt.status == "SENT" else "No se pudo enviar WhatsApp",
+                "status": attempt.status,
+                "provider_status": attempt.provider_status,
+                "retries": attempt.retries,
+                "body_preview": str(attempt.provider_body)[:400],
+                "record": DTERecordDetailSerializer(record).data,
+            }
+        )
 
 
 class DTEInvalidateView(APIView):
-    permission_classes = [IsDTEAccountantOrAdmin]
+    permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
         record = generics.get_object_or_404(DTERecord, pk=pk)
-        if record.status != DTERecord.STATUS_ACCEPTED:
-            return Response({"detail": "Solo DTE aceptado puede invalidarse"}, status=status.HTTP_400_BAD_REQUEST)
+        flags = evaluate_record_actions(record)
+        if not flags["can_invalidate"]:
+            return Response({"detail": flags["invalidate_reason"] or "No se puede invalidar"}, status=status.HTTP_400_BAD_REQUEST)
         invalidation = DTEInvalidation.objects.create(
             order=record.order,
             dte_record=record,
@@ -172,16 +234,20 @@ class DTEInvalidateView(APIView):
         log_audit(request, "dte.invalidate", "DTEInvalidation", invalidation.id, {"dte_record_id": record.id})
         data = DTEInvalidationSerializer(invalidation).data
         data["attempt"] = result
+        data["success"] = bool(result.get("success"))
+        data["message"] = "DTE invalidado" if result.get("success") else (result.get("error") or "No se pudo invalidar")
+        data["record"] = DTERecordDetailSerializer(record).data
         return Response(data, status=status.HTTP_201_CREATED)
 
 
 class DTECreditNoteView(APIView):
-    permission_classes = [IsDTEAccountantOrAdmin]
+    permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
-        record = generics.get_object_or_404(DTERecord, pk=pk)
-        if record.status != DTERecord.STATUS_ACCEPTED:
-            return Response({"detail": "Solo DTE aceptado puede generar NC"}, status=status.HTTP_400_BAD_REQUEST)
+        record = generics.get_object_or_404(DTERecord.objects.prefetch_related("credit_notes"), pk=pk)
+        flags = evaluate_record_actions(record)
+        if not flags["can_credit_note"]:
+            return Response({"detail": flags["credit_note_reason"] or "No se puede emitir NC"}, status=status.HTTP_400_BAD_REQUEST)
         note = CreditNote.objects.create(
             order=record.order,
             original_dte_record=record,
@@ -194,7 +260,11 @@ class DTECreditNoteView(APIView):
         )
         send_dte_for_credit_note(note)
         log_audit(request, "dte.credit_note", "CreditNote", note.id, {"dte_record_id": record.id})
-        return Response(CreditNoteSerializer(note).data, status=status.HTTP_201_CREATED)
+        payload = CreditNoteSerializer(note).data
+        payload["success"] = True
+        payload["message"] = "Nota de crédito creada"
+        payload["record"] = DTERecordDetailSerializer(record).data
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 class DTEInvalidatePreviewView(APIView):

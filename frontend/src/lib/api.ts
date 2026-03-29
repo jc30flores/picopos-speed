@@ -180,9 +180,14 @@ export type FeatureFlag = {
 export type OrderItem = {
   id: number;
   productName: string;
+  productId?: number | null;
+  isCustom?: boolean;
+  type?: "menu" | "manual";
+  code?: string;
   quantity: number;
   modifiers: string[];
   price: number;
+  unitPriceOverride?: number | null;
   assignedName?: string;
 };
 
@@ -223,6 +228,9 @@ export type BranchOption = {
   name: string;
   code: string;
   is_active: boolean;
+  is_default?: boolean;
+  is_primary?: boolean;
+  is_default_branch?: boolean;
 };
 
 export type Customer = {
@@ -460,6 +468,14 @@ export const login = async (payload: {
   password: string;
 }): Promise<AuthUser> => {
   const response = await request("/auth/login/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return handleJson<AuthUser>(response);
+};
+
+export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
+  const response = await request("/auth/pin-login/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -872,6 +888,34 @@ export const updateProduct = async (
       groupId: link.group_id,
       showInPos: Boolean(link.show_in_pos),
     })),
+  };
+};
+
+export const changeProductPrice = async (productId: number, payload: { code: string; newPrice?: number; validateOnly?: boolean }): Promise<{
+  success: boolean;
+  validated?: boolean;
+  productId?: number;
+  oldPrice?: number;
+  newPrice?: number;
+  updatedAt?: string;
+}> => {
+  const response = await request(`/menu/products/${productId}/change-price/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: payload.code,
+      validate_only: Boolean(payload.validateOnly),
+      new_price: payload.newPrice,
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return {
+    success: Boolean(data.success),
+    validated: data.validated,
+    productId: data.product_id,
+    oldPrice: data.old_price != null ? Number(data.old_price) : undefined,
+    newPrice: data.new_price != null ? Number(data.new_price) : undefined,
+    updatedAt: data.updated_at,
   };
 };
 
@@ -1428,9 +1472,12 @@ const mapOrder = (order: {
   created_at: string;
   items: Array<{
     id: number;
-    product_id: number;
+    product_id: number | null;
     product_name_snapshot: string;
     price_snapshot: string;
+    unit_price_override?: string | null;
+    snapshot_sku_or_code?: string;
+    is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
@@ -1451,11 +1498,16 @@ const mapOrder = (order: {
     items: items.map((item) => ({
       id: item.id,
       productName: item.product_name_snapshot,
+      productId: item.product_id ?? null,
+      isCustom: Boolean(item.is_custom),
+      type: item.is_custom ? "manual" : "menu",
+      code: item.snapshot_sku_or_code,
       quantity: item.quantity,
       modifiers: Array.isArray(item.applied_modifiers)
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
     })),
     total: Number(order.total),
@@ -1485,11 +1537,16 @@ export const createOrder = async (payload: {
   ivaExempt?: boolean;
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
+  priceChangePin?: string;
   items: Array<{
-    productId: number;
+    productId?: number | null;
     productName: string;
     price: number;
     quantity: number;
+    isCustom?: boolean;
+    type?: "menu" | "manual";
+    unitPriceOverride?: number | null;
+    customCode?: string;
     modifiers: Array<{ id?: number; name: string; price: number }>;
     assignedName?: string;
   }>;
@@ -1506,9 +1563,18 @@ export const createOrder = async (payload: {
       source: payload.source,
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
+      price_change_pin: payload.priceChangePin ?? "",
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
-        product_id: item.productId,
+        type: item.isCustom ? "MANUAL" : "MENU",
+        product_id: item.isCustom ? undefined : (item.productId ?? null),
+        is_custom: Boolean(item.isCustom),
+        manual_name: item.isCustom ? item.productName : undefined,
+        custom_name: item.isCustom ? item.productName : undefined,
+        manual_unit_price: item.isCustom ? item.price : undefined,
+        unit_price: item.isCustom ? item.price : undefined,
+        unit_price_override: item.unitPriceOverride ?? undefined,
+        custom_code: item.isCustom ? item.customCode : undefined,
         product_name_snapshot: item.productName,
         price_snapshot: item.price,
         quantity: item.quantity,
@@ -1540,9 +1606,12 @@ export const createOrder = async (payload: {
     remaining: string;
     items: Array<{
       id: number;
-      product_id: number;
+      product_id: number | null;
       product_name_snapshot: string;
       price_snapshot: string;
+      unit_price_override?: string | null;
+      snapshot_sku_or_code?: string;
+      is_custom?: boolean;
       quantity: number;
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
@@ -1551,6 +1620,16 @@ export const createOrder = async (payload: {
     console.debug("[API] createOrder raw response", data);
   }
   return mapOrder(data);
+};
+
+export const validateOrderPricePin = async (pin: string): Promise<void> => {
+  const response = await request("/orders/validate-price-pin/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin }),
+  });
+  if (response.status === 204) return;
+  await handleJson(response);
 };
 
 export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {
@@ -1575,9 +1654,11 @@ export const getActiveOrders = async (params?: { branchId?: number | string; ser
       net_paid: string;
       items: Array<{
         id: number;
-        product_id: number;
+        product_id: number | null;
         product_name_snapshot: string;
         price_snapshot: string;
+        snapshot_sku_or_code?: string;
+        is_custom?: boolean;
         quantity: number;
         applied_modifiers: Array<{ modifier_name_snapshot: string }>;
       }>;
@@ -1608,9 +1689,11 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
     net_paid: string;
     items: Array<{
       id: number;
-      product_id: number;
+      product_id: number | null;
       product_name_snapshot: string;
       price_snapshot: string;
+      snapshot_sku_or_code?: string;
+      is_custom?: boolean;
       quantity: number;
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
@@ -3015,25 +3098,51 @@ export type DTERecord = {
   error_message?: string;
   attempts?: number;
   last_sent_at?: string;
+  issued_at?: string;
+  can_resend?: boolean;
+  can_send_email?: boolean;
+  missing_email_reason?: string;
+  can_send_whatsapp?: boolean;
+  missing_phone_reason?: string;
+  can_credit_note?: boolean;
+  credit_note_reason?: string;
+  has_credit_note?: boolean;
+  can_invalidate?: boolean;
+  invalidate_reason?: string;
+  invalidate_deadline?: string | null;
+  invalidate_remaining?: string;
+  customer_email?: string;
+  customer_phone?: string;
   created_at: string;
 };
 
 export const dteIssuedList = async (filters?: {
-  q?: string;
+  search?: string;
   status?: string;
-  dteType?: string;
+  type?: string;
   dateFrom?: string;
   dateTo?: string;
-}): Promise<DTERecord[]> => {
+  page?: number;
+  pageSize?: number;
+}): Promise<{ results: DTERecord[]; count: number; totalAmountSum: number; page: number; pageSize: number }> => {
   const params = new URLSearchParams();
-  if (filters?.q) params.set("q", filters.q);
+  if (filters?.search) params.set("search", filters.search);
   if (filters?.status) params.set("status", filters.status);
-  if (filters?.dteType) params.set("dte_type", filters.dteType);
+  if (filters?.type) params.set("type", filters.type);
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.page) params.set("page", String(filters.page));
+  if (filters?.pageSize) params.set("page_size", String(filters.pageSize));
   const res = await request(`/dte/issued/?${params.toString()}`);
   const data = await handleJson<any>(res);
-  return Array.isArray(data.results) ? data.results : data;
+  const results = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : [];
+  return {
+    results,
+    count: Number(data.count ?? results.length),
+    totalAmountSum: Number(data.total_amount_sum ?? 0),
+    page: Number(data.page ?? filters?.page ?? 1),
+    pageSize: Number(data.page_size ?? filters?.pageSize ?? 20),
+  };
 };
 
 export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
@@ -3041,38 +3150,40 @@ export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
   return handleJson<DTERecord>(res);
 };
 
-export const dteResend = async (id: number): Promise<DTERecord> => {
+export const dteResend = async (id: number): Promise<{ message: string; record: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/resend/`, { method: "POST" });
   const payload = await handleJson<any>(res);
-  return payload.record as DTERecord;
+  return { message: payload.message ?? "Reenvío procesado", record: payload.record as DTERecord };
 };
 
-export const dteSendEmail = async (id: number): Promise<void> => {
+export const dteSendEmail = async (id: number): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/send-email/`, { method: "POST" });
-  if (res.status === 501) throw new Error("Próximamente");
-  if (!res.ok) throw new Error("No se pudo enviar correo");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "Correo enviado", record: payload.record };
 };
 
-export const dteSendWhatsapp = async (id: number): Promise<void> => {
+export const dteSendWhatsapp = async (id: number): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/send-whatsapp/`, { method: "POST" });
-  if (res.status === 501) throw new Error("Próximamente");
-  if (!res.ok) throw new Error("No se pudo enviar WhatsApp");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "WhatsApp enviado", record: payload.record };
 };
 
-export const dteInvalidate = async (id: number, motivo: string): Promise<void> => {
+export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
     body: JSON.stringify({ motivo }),
   });
-  if (!res.ok) throw new Error("No se pudo invalidar DTE");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "DTE invalidado", record: payload.record };
 };
 
-export const dteCreateCreditNote = async (id: number, motivo: string): Promise<void> => {
+export const dteCreateCreditNote = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/credit-note/`, {
     method: "POST",
     body: JSON.stringify({ motivo }),
   });
-  if (!res.ok) throw new Error("No se pudo crear nota de crédito");
+  const payload = await handleJson<any>(res);
+  return { message: payload.message ?? "Nota de crédito creada", record: payload.record };
 };
 
 

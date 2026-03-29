@@ -3,20 +3,31 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import threading
+import time
 from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import OperationalError as DjangoOperationalError, connection, close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEOutbox, DTERecord
 from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
+from apps.dte.services.dte_service import build_payload_cf
+from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.orders.models import OrderInvoice
 
 DTE_LOGGER = logging.getLogger("apps.dte")
+_OUTBOX_WORKER_STARTED = False
+_OUTBOX_WORKER_LOCK = threading.Lock()
+_LAST_DB_DOWN_LOG_TS = 0.0
+_LAST_HTTP_DOWN_LOG_TS = 0.0
+_LAST_IDLE_LOG_TS = 0.0
 
 CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
 CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
@@ -24,6 +35,26 @@ CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
 
 def _preview(text: str, max_len: int = 500) -> str:
     return (text or "").replace("\n", " ").strip()[:max_len]
+
+
+def _log_throttled(level: str, key: str, message: str, *args) -> None:
+    global _LAST_DB_DOWN_LOG_TS, _LAST_HTTP_DOWN_LOG_TS
+    now = time.time()
+    cooldown = float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30)
+    if key == "db":
+        if now - _LAST_DB_DOWN_LOG_TS < cooldown:
+            return
+        _LAST_DB_DOWN_LOG_TS = now
+    elif key == "http":
+        if now - _LAST_HTTP_DOWN_LOG_TS < cooldown:
+            return
+        _LAST_HTTP_DOWN_LOG_TS = now
+    getattr(DTE_LOGGER, level, DTE_LOGGER.warning)(message, *args)
+
+
+def _looks_like_network_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ("timed out", "name resolution", "connection aborted", "connection refused", "failed to establish a new connection"))
 
 
 def _extract(payload: dict) -> tuple[str, str]:
@@ -54,7 +85,7 @@ def _save_payload_file(*, outbox_id: int | None, payload_text: str, numero_contr
 
 def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | None, numero_control: str, codigo_generacion: str, outbox_id: int | None = None, endpoint_url: str = "") -> None:
     payload_text = json.dumps(payload or {}, ensure_ascii=False, indent=2, default=str)
-    if not bool(getattr(settings, "DTE_LOG_PAYLOAD_FULL", False)):
+    if not bool(getattr(settings, "DTE_DEBUG_LOG_PAYLOAD", getattr(settings, "DTE_LOG_PAYLOAD_FULL", False))):
         DTE_LOGGER.info("[CF01] REQUEST BEGIN invoice=%s order=%s payment=%s numeroControl=%s codigoGeneracion=%s", order_id, order_id, payment_id, numero_control, codigo_generacion)
         return
     if endpoint_url:
@@ -126,8 +157,11 @@ def _health_snapshot(stale_seconds: int):
 
 
 def _compute_backoff(attempts: int) -> timedelta:
-    base = int(getattr(settings, "DTE_RETRY_BACKOFF_SECONDS", 30) or 30)
-    return timedelta(seconds=base * max(1, attempts))
+    base = int(getattr(settings, "DTE_BACKOFF_BASE_SECONDS", 10) or 10)
+    max_seconds = int(getattr(settings, "DTE_BACKOFF_MAX_SECONDS", 600) or 600)
+    exp_seconds = min(max_seconds, base * (2 ** max(0, attempts - 1)))
+    jitter = random.randint(0, 3)
+    return timedelta(seconds=exp_seconds + jitter)
 
 
 def _is_circuit_open() -> tuple[bool, float | None]:
@@ -164,6 +198,54 @@ def _endpoint_for_payload(payload: dict) -> str:
         "14": "/api/v1/dte/sujeto-excluido",
         "05": "/api/v1/dte/nota-credito",
     }.get(tipo, "/api/v1/dte/factura")
+
+
+def _repair_payload_nit_if_needed(outbox: DTEOutbox, payload: dict) -> tuple[dict, bool]:
+    expected_nit = get_emisor_nit(outbox.order.branch if outbox.order_id else None)
+    payload_nit = payload_emisor_nit(payload)
+    if payload_nit == expected_nit:
+        return payload, False
+
+    ident = (payload or {}).get("dte", {}).get("identificacion", {})
+    control_number = str(ident.get("numeroControl") or outbox.numero_control or getattr(outbox.dte_record, "control_number", "") or "")
+    generation_code = str(ident.get("codigoGeneracion") or outbox.codigo_generacion or getattr(outbox.dte_record, "generation_code", "") or "")
+    ambiente = str(ident.get("ambiente") or getattr(outbox.dte_record, "ambiente", "00") or "00")
+    if not control_number or not generation_code:
+        outbox.status = DTEOutbox.STATUS_FAILED
+        outbox.error_message = "INVALID_EMISOR_NIT_PAYLOAD:missing_identificacion"
+        outbox.next_attempt_at = None
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        return payload, False
+    try:
+        rebuilt = build_payload_cf(outbox.order, control_number=control_number, generation_code=generation_code, ambiente=ambiente)
+        rebuilt_nit = payload_emisor_nit(rebuilt)
+        if rebuilt_nit != expected_nit:
+            raise ValidationError("Rebuilt payload NIT does not match expected NIT.")
+        outbox.payload = rebuilt
+        outbox.payload_json = rebuilt
+        outbox.next_attempt_at = timezone.now()
+        outbox.error_message = f"Repaired outbox payload emisor.nit mismatch old={payload_nit or '-'} new={rebuilt_nit}"
+        outbox.save(update_fields=["payload", "payload_json", "next_attempt_at", "error_message", "updated_at"])
+        DTE_LOGGER.warning(
+            "[DTE OUTBOX] Repaired outbox payload emisor.nit mismatch outbox_id=%s order_id=%s old_nit=%s new_nit=%s",
+            outbox.id,
+            outbox.order_id,
+            payload_nit or "-",
+            rebuilt_nit,
+        )
+        return rebuilt, True
+    except Exception as exc:  # noqa: BLE001
+        outbox.status = DTEOutbox.STATUS_FAILED
+        outbox.error_message = f"INVALID_EMISOR_NIT_PAYLOAD:{_preview(str(exc), 180)}"
+        outbox.next_attempt_at = None
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        DTE_LOGGER.error(
+            "[DTE OUTBOX] Could not repair payload NIT outbox_id=%s order_id=%s err=%s",
+            outbox.id,
+            outbox.order_id,
+            _preview(str(exc), 180),
+        )
+        return payload, False
 
 
 def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
@@ -235,29 +317,53 @@ def process_pending_dtes(limit: int = 25, batch_size: int = 25, backoff_seconds:
     return process_pending_outbox(limit=limit)
 
 
-def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None) -> DTEOutbox:
+def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTERecord | None = None) -> DTEOutbox:
     numero_control, codigo_generacion = _extract(payload)
-    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
-    with transaction.atomic():
-        outbox = DTEOutbox.objects.create(
+    existing = (
+        DTEOutbox.objects.filter(
             order=order,
             payment=payment,
             dte_record=dte_record,
-            numero_control=numero_control,
-            codigo_generacion=codigo_generacion,
-            payload_json=payload,
-            payload=payload,
-            status=DTEOutbox.STATUS_PENDING,
+            status__in=[DTEOutbox.STATUS_PENDING, DTEOutbox.STATUS_SENDING],
         )
-        _log_full_payload(
-            payload=payload,
-            order_id=order.id,
-            payment_id=getattr(payment, "id", None),
-            numero_control=numero_control,
-            codigo_generacion=codigo_generacion,
-            outbox_id=outbox.id,
-            endpoint_url=endpoint_url,
-        )
+        .order_by("-created_at")
+        .first()
+    )
+    if existing:
+        return existing
+    endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
+    outbox = DTEOutbox.objects.create(
+        order=order,
+        payment=payment,
+        dte_record=dte_record,
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        payload_json=payload,
+        payload=payload,
+        status=DTEOutbox.STATUS_PENDING,
+    )
+    _log_full_payload(
+        payload=payload,
+        order_id=order.id,
+        payment_id=getattr(payment, "id", None),
+        numero_control=numero_control,
+        codigo_generacion=codigo_generacion,
+        outbox_id=outbox.id,
+        endpoint_url=endpoint_url,
+    )
+    return outbox
+
+
+def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
+    with transaction.atomic():
+        outbox = _get_or_create_pending_outbox(order, payment, payload, dte_record=dte_record)
+        if not attempt_immediate:
+            outbox.status = DTEOutbox.STATUS_PENDING
+            outbox.next_attempt_at = outbox.next_attempt_at or timezone.now()
+            outbox.save(update_fields=["status", "next_attempt_at", "updated_at"])
+            DTE_LOGGER.info("[DTE OUTBOX] queued id=%s order=%s payment=%s mode=async_only", outbox.id, order.id, getattr(payment, "id", None))
+            _sync_invoice(outbox, {})
+            return outbox
 
         stale_seconds = 2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10)
         health = _health_snapshot(stale_seconds=stale_seconds)
@@ -317,6 +423,11 @@ def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | Non
 
 def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
     payload = outbox.payload or outbox.payload_json or {}
+    payload, _ = _repair_payload_nit_if_needed(outbox, payload)
+    outbox.refresh_from_db(fields=["status"])
+    if outbox.status == DTEOutbox.STATUS_FAILED:
+        _sync_invoice(outbox, {})
+        return outbox
     numero_control, codigo_generacion = _extract(payload)
     endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     _log_full_payload(
@@ -342,15 +453,35 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
         outbox.next_attempt_at,
     )
 
-    result = DTEClient().send(
-        path=_endpoint_for_payload(payload),
-        payload=payload,
-        order_id=outbox.order_id,
-        payment_id=outbox.payment_id,
-        branch_id=outbox.order.branch_id,
-        attempt_number=outbox.attempts,
-    )
-    updated = _apply_result(outbox, result)
+    try:
+        result = DTEClient().send(
+            path=_endpoint_for_payload(payload),
+            payload=payload,
+            order_id=outbox.order_id,
+            payment_id=outbox.payment_id,
+            branch_id=outbox.order.branch_id,
+            attempt_number=outbox.attempts,
+        )
+        updated = _apply_result(outbox, result)
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_like_network_error(exc):
+            raise
+        backoff = _compute_backoff(outbox.attempts)
+        outbox.status = DTEOutbox.STATUS_PENDING
+        outbox.error_message = f"HTTP_ERROR:{exc.__class__.__name__}"
+        outbox.next_attempt_at = timezone.now() + backoff
+        outbox.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+        _register_send_failure()
+        _sync_invoice(outbox, {})
+        _log_throttled(
+            "warning",
+            "http",
+            "[DTE OUTBOX] HTTP_TIMEOUT retry_in=%ss outbox_id=%s err=%s",
+            int(backoff.total_seconds()),
+            outbox.id,
+            _preview(str(exc), 180),
+        )
+        return outbox
     DTE_LOGGER.info(
         "[DTE OUTBOX] result id=%s status=%s http=%s reason=%s",
         updated.id,
@@ -362,6 +493,7 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
 
 
 def process_pending_outbox(limit: int = 50) -> int:
+    global _LAST_IDLE_LOG_TS
     health = _health_snapshot(stale_seconds=2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10))
     circuit_open, open_until = _is_circuit_open()
 
@@ -379,7 +511,16 @@ def process_pending_outbox(limit: int = 50) -> int:
         return 0
 
     max_retries = int(getattr(settings, "DTE_MAX_RETRIES", 5) or 5)
+    stuck_timeout_seconds = int(getattr(settings, "DTE_PROCESSING_TIMEOUT_SECONDS", 120) or 120)
     now = timezone.now()
+    DTEOutbox.objects.filter(
+        status=DTEOutbox.STATUS_SENDING,
+        last_attempt_at__lt=now - timedelta(seconds=stuck_timeout_seconds),
+    ).update(
+        status=DTEOutbox.STATUS_PENDING,
+        next_attempt_at=now,
+        error_message="Recovered from stuck PROCESSING state",
+    )
     with transaction.atomic():
         pending_ids = list(
             DTEOutbox.objects.select_for_update(skip_locked=True)
@@ -390,14 +531,28 @@ def process_pending_outbox(limit: int = 50) -> int:
         )
     pending = DTEOutbox.objects.select_related("order", "payment").filter(id__in=pending_ids).order_by("created_at")
 
-    DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
+    if pending_ids:
+        DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
+    else:
+        idle_every = int(getattr(settings, "DTE_LOG_IDLE_EVERY_SECONDS", 300) or 300)
+        now_ts = time.time()
+        if now_ts - _LAST_IDLE_LOG_TS >= idle_every:
+            DTE_LOGGER.debug("[DTE OUTBOX] idle queue_size=0")
+            _LAST_IDLE_LOG_TS = now_ts
     processed = 0
     for outbox in pending:
         try:
             _resend_existing_outbox(outbox)
             processed += 1
+        except DjangoOperationalError as exc:
+            try:
+                close_old_connections()
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _log_throttled("error", "db", "[DTE OUTBOX] DB_DOWN retry_in=%ss err=%s", 1, _preview(str(exc), 180))
         except Exception:  # noqa: BLE001
-            DTE_LOGGER.exception("[DTE] process_pending_outbox exception outbox_id=%s", outbox.id)
+            _log_throttled("warning", "db", "[DTE OUTBOX] process exception outbox_id=%s", outbox.id)
 
     DTEOutbox.objects.filter(status=DTEOutbox.STATUS_PENDING, attempts__gte=max_retries).update(
         status=DTEOutbox.STATUS_FAILED,
@@ -405,3 +560,48 @@ def process_pending_outbox(limit: int = 50) -> int:
         next_attempt_at=None,
     )
     return processed
+
+
+def _outbox_worker_loop() -> None:
+    interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
+    batch_size = int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)
+    db_backoff_seconds = 1.0
+    while True:
+        close_old_connections()
+        try:
+            process_pending_outbox(limit=batch_size)
+            db_backoff_seconds = 1.0
+        except DjangoOperationalError as exc:
+            try:
+                close_old_connections()
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _log_throttled(
+                "error",
+                "db",
+                "[DTE OUTBOX] DB_DOWN retry_in=%ss err=%s",
+                int(db_backoff_seconds),
+                _preview(str(exc), 180),
+            )
+            time.sleep(db_backoff_seconds)
+            db_backoff_seconds = min(db_backoff_seconds * 2, 30.0)
+            continue
+        except Exception:  # noqa: BLE001
+            _log_throttled("warning", "db", "[DTE OUTBOX] worker loop error (summarized)")
+        time.sleep(interval)
+
+
+def start_outbox_worker() -> bool:
+    global _OUTBOX_WORKER_STARTED
+    with _OUTBOX_WORKER_LOCK:
+        if _OUTBOX_WORKER_STARTED:
+            return False
+        if not bool(getattr(settings, "DTE_OUTBOX_WORKER_ENABLED", True)):
+            return False
+        interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
+        DTE_LOGGER.info("[DTE OUTBOX] starting worker interval=%ss", interval)
+        thread = threading.Thread(target=_outbox_worker_loop, daemon=True, name="dte-outbox-worker")
+        thread.start()
+        _OUTBOX_WORKER_STARTED = True
+        return True
