@@ -175,9 +175,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_iva = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
-        effective_unit_price = item.effective_unit_price
+        effective_unit_price = item.unit_price
         line_total = _q2(effective_unit_price * item.quantity)
-        desc = item.product_name_snapshot or (item.product.name if item.product_id and item.product else "ITEM")
+        desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
         for mod in item.applied_modifiers.all():

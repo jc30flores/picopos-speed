@@ -143,6 +143,18 @@ class OrderItem(models.Model):
         return f"{self.product_name_snapshot} x{self.quantity}"
 
     @property
+    def name(self):
+        return self.product_name_snapshot or (self.product.name if self.product_id and self.product else "")
+
+    @property
+    def unit_price(self):
+        return self.effective_unit_price
+
+    @property
+    def is_manual(self):
+        return bool(self.is_custom)
+
+    @property
     def effective_unit_price(self):
         return self.unit_price_override if self.unit_price_override is not None else self.price_snapshot
 

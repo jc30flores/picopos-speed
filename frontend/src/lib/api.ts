@@ -1558,8 +1558,8 @@ export const createOrder = async (payload: {
       price_change_pin: payload.priceChangePin ?? "",
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
-        type: item.type ?? (item.isCustom ? "manual" : "menu"),
-        product_id: item.productId ?? null,
+        type: item.isCustom ? "MANUAL" : "MENU",
+        product_id: item.isCustom ? undefined : (item.productId ?? null),
         is_custom: Boolean(item.isCustom),
         manual_name: item.isCustom ? item.productName : undefined,
         custom_name: item.isCustom ? item.productName : undefined,

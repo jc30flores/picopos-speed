@@ -28,9 +28,9 @@ class OrderCustomItemSnapshotTests(TestCase):
                 "channel": "pos",
                 "items": [
                     {
-                        "is_custom": True,
-                        "custom_name": "Propina solidaria",
-                        "unit_price": "2.25",
+                        "type": "MANUAL",
+                        "manual_name": "Propina solidaria",
+                        "manual_unit_price": "2.25",
                         "custom_code": "MANUAL-XYZ",
                         "quantity": 2,
                     }

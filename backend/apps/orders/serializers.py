@@ -135,7 +135,7 @@ class AppliedModifierInputSerializer(serializers.Serializer):
 
 
 class OrderItemInputSerializer(serializers.Serializer):
-    type = serializers.ChoiceField(choices=["menu", "manual"], required=False, allow_blank=True)
+    type = serializers.CharField(required=False, allow_blank=True)
     product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
     product_name_snapshot = serializers.CharField(required=False, allow_blank=True)
     price_snapshot = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
@@ -153,7 +153,11 @@ class OrderItemInputSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         item_type = (attrs.get("type") or "").strip().lower()
-        if item_type not in {"menu", "manual"}:
+        if item_type in {"manual", "man", "custom"}:
+            item_type = "manual"
+        elif item_type in {"menu", "product", "catalog"}:
+            item_type = "menu"
+        else:
             item_type = "manual" if bool(attrs.get("is_custom", False)) else "menu"
         attrs["type"] = item_type
         is_custom = item_type == "manual" or bool(attrs.get("is_custom", False))
@@ -307,8 +311,8 @@ class OrderCreateSerializer(serializers.Serializer):
 
         for item_data in items_data:
             item_data = dict(item_data)
-            is_custom = bool(item_data.pop("is_custom", False))
-            item_data.pop("type", None)
+            raw_type = str(item_data.pop("type", "") or "").strip().lower()
+            is_custom = raw_type == "manual" or bool(item_data.pop("is_custom", False))
             item_data.pop("manual_name", None)
             item_data.pop("manual_unit_price", None)
             item_data.pop("name", None)
