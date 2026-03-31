@@ -50,7 +50,9 @@ import {
   createCashPayout,
   openCashDrawer,
   validateOrderPricePin,
+  getActiveDiscounts,
   Category,
+  Discount,
   ModifierGroup,
   Product,
   PaymentMethod,
@@ -103,6 +105,29 @@ const getOrderDisposableTotal = (
     if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
     return sum + fee * item.quantity;
   }, 0);
+
+const getEligibleLineTotalForDiscount = (item: CartItem, discount: Discount, products: Product[]): number => {
+  if (discount.appliesTo === "order") return getItemUnitTotal(item) * item.quantity;
+  if (!item.productId) return 0;
+  const product = products.find((candidate) => candidate.id === item.productId);
+  if (!product) return 0;
+  if (discount.appliesTo === "products") {
+    return (discount.targetProductIds ?? []).includes(product.id) ? getItemUnitTotal(item) * item.quantity : 0;
+  }
+  if (discount.appliesTo === "categories") {
+    return (discount.targetCategoryIds ?? []).includes(product.categoryId) ? getItemUnitTotal(item) * item.quantity : 0;
+  }
+  return 0;
+};
+
+const calculateManualDiscountAmount = (cart: CartItem[], discount: Discount | null, products: Product[]): number => {
+  if (!discount) return 0;
+  const eligible = cart.reduce((sum, item) => sum + getEligibleLineTotalForDiscount(item, discount, products), 0);
+  if (eligible <= 0) return 0;
+  if (discount.type === "percent") return Math.min(eligible, (eligible * discount.value) / 100);
+  if (discount.type === "fixed") return Math.min(eligible, discount.value);
+  return 0;
+};
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -188,6 +213,11 @@ const POS = () => {
     createdAt: number;
   } | null>(null);
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
+  const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
+  const [discountSearch, setDiscountSearch] = useState("");
+  const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
+  const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
+  const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("1");
   const [manualPrice, setManualPrice] = useState("");
@@ -236,6 +266,25 @@ const POS = () => {
         console.error("Failed to refresh products for service type", error);
       });
   }, [serviceType, serviceTypes]);
+
+  const loadActiveDiscounts = async () => {
+    try {
+      setIsLoadingDiscounts(true);
+      const discounts = await getActiveDiscounts({ serviceType, subtotal: itemsGross });
+      setAvailableDiscounts(discounts);
+    } catch (error) {
+      console.error("Failed to load active discounts", error);
+      toast.error("No se pudieron cargar los descuentos");
+    } finally {
+      setIsLoadingDiscounts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isDiscountDialogOpen) {
+      void loadActiveDiscounts();
+    }
+  }, [isDiscountDialogOpen, serviceType, itemsGross]);
 
   useEffect(() => {
     if (paymentMethod !== "cash") {
@@ -434,7 +483,8 @@ const POS = () => {
     cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
     taxRate
   ).total;
-  const total = itemsGross + cartDisposableTotal;
+  const discountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
+  const total = Math.max(itemsGross - discountAmount, 0) + cartDisposableTotal;
   const subtotal = itemsGross;
   const paymentTotal =
     (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
@@ -457,6 +507,9 @@ const POS = () => {
   const checkoutDisposableTotal = checkoutDraft
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
+  const filteredDiscounts = availableDiscounts.filter((discount) =>
+    discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
+  );
 
   const proceedToCheckout = () => {
     if (cart.length === 0) return;
@@ -466,7 +519,8 @@ const POS = () => {
       taxRate
     ).total;
     const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-    const draftTotal = draftItemsGross + draftDisposableTotal;
+    const draftDiscount = calculateManualDiscountAmount(cart, selectedDiscount, products);
+    const draftTotal = Math.max(draftItemsGross - draftDiscount, 0) + draftDisposableTotal;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...cart],
@@ -791,6 +845,8 @@ const POS = () => {
             customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
             dteDocumentType,
             ivaExempt,
+            discountId: selectedDiscount?.id,
+            discountMode: selectedDiscount ? "manual" : undefined,
             items: checkoutDraft.items.map((item) => ({
               type: item.isCustom ? "manual" : "menu",
               productId: item.productId,
@@ -863,6 +919,7 @@ const POS = () => {
         toast.success(refreshed.requiresKitchen ? "Pago y factura registrados. Enviado a cocina." : "Pago y factura registrados. Orden entregada.");
         setIsPaymentOpen(false);
         setCart([]);
+        setSelectedDiscount(null);
         setCheckoutDraft(null);
         setCreatedOrderId(null);
         setCreatedOrderNumber(null);
@@ -1005,6 +1062,9 @@ const POS = () => {
                     </Tooltip>
                   </TooltipProvider>
                   <Button variant="outline" size="sm" className="h-11" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
+                  <Button variant="outline" size="sm" className="h-11" onClick={() => setIsDiscountDialogOpen(true)}>
+                    Descuentos
+                  </Button>
                 </div>
               </div>
 
@@ -1121,6 +1181,12 @@ const POS = () => {
                     <span>{formatMoney(cartDisposableTotal)}</span>
                   </div>
                 )}
+                {selectedDiscount && discountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-600">
+                    <span>Descuento ({selectedDiscount.name})</span>
+                    <span>-{formatMoney(discountAmount)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
                   <span className="text-secondary">{formatMoney(total)}</span>
@@ -1140,7 +1206,10 @@ const POS = () => {
                 <Button
                   variant="outline"
                   className="w-full"
-                  onClick={() => setCart([])}
+                  onClick={() => {
+                    setCart([]);
+                    setSelectedDiscount(null);
+                  }}
                 >
                   Cancelar
                 </Button>
@@ -1150,6 +1219,80 @@ const POS = () => {
         </div>
       </div>
 
+
+      <Dialog open={isDiscountDialogOpen} onOpenChange={setIsDiscountDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Seleccionar descuento</DialogTitle>
+            <DialogDescription>Aplica un descuento manual al pedido actual (solo 1 por pedido).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Buscar descuento..."
+              value={discountSearch}
+              onChange={(event) => setDiscountSearch(event.target.value)}
+            />
+            {selectedDiscount ? (
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <p className="font-semibold">{selectedDiscount.name}</p>
+                  <p className="text-xs text-muted-foreground">Aplicado manualmente</p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedDiscount(null);
+                    toast.success("Descuento removido");
+                  }}
+                >
+                  Quitar descuento
+                </Button>
+              </div>
+            ) : null}
+            <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+              {isLoadingDiscounts ? (
+                <p className="text-sm text-muted-foreground">Cargando descuentos…</p>
+              ) : filteredDiscounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No hay descuentos activos.</p>
+              ) : (
+                filteredDiscounts.map((discount) => (
+                  <div key={discount.id} className="rounded-md border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-semibold">{discount.name}</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <Badge variant="secondary">{discount.type === "percent" ? `% ${discount.value}` : `$ ${discount.value}`}</Badge>
+                          <Badge variant="outline">{discount.appliesTo === "order" ? "Ticket" : discount.appliesTo === "categories" ? "Categorías" : "Productos"}</Badge>
+                          <Badge variant={discount.availableNow ? "default" : "secondary"}>
+                            {discount.availableNow ? "Disponible ahora" : "Fuera de condiciones"}
+                          </Badge>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          if (!discount.availableNow) {
+                            const confirmOut = window.confirm("Este descuento está fuera de condiciones. ¿Aplicar de todos modos?");
+                            if (!confirmOut) return;
+                          }
+                          if (selectedDiscount && selectedDiscount.id !== discount.id) {
+                            const confirmReplace = window.confirm("Ya hay un descuento aplicado. ¿Reemplazarlo?");
+                            if (!confirmReplace) return;
+                          }
+                          setSelectedDiscount(discount);
+                          setIsDiscountDialogOpen(false);
+                          toast.success(`Descuento "${discount.name}" aplicado`);
+                        }}
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
         <DialogContent className="max-w-2xl">

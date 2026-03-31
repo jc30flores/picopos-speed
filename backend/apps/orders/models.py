@@ -44,6 +44,7 @@ class Order(models.Model):
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_snapshot = models.JSONField(default=dict, blank=True)
     disposable_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unpaid")
     financial_status = models.CharField(
@@ -133,6 +134,7 @@ class OrderItem(models.Model):
     snapshot_sku_or_code = models.CharField(max_length=80, blank=True, default="")
     is_custom = models.BooleanField(default=False)
     quantity = models.PositiveIntegerField(default=1)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     assigned_name = models.CharField(max_length=80, blank=True, default="")
     applied_special_price_rule = models.ForeignKey(ProductSpecialPriceRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
 

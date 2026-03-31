@@ -135,6 +135,9 @@ export type Discount = {
   priority?: number;
   stackable?: boolean;
   bxgyConfig?: Record<string, unknown>;
+  availableNow?: boolean;
+  hasConditions?: boolean;
+  scope?: "order" | "categories" | "products";
 };
 
 export type ServiceType = {
@@ -211,6 +214,7 @@ export type Order = {
   remaining: number;
   refundTotal: number;
   netPaid: number;
+  discountSnapshot?: Record<string, unknown> | null;
 };
 
 export type EmployeeStats = {
@@ -1289,6 +1293,44 @@ export const getDiscounts = async (): Promise<Discount[]> => {
   }));
 };
 
+export const getActiveDiscounts = async (params?: {
+  serviceType?: string | null;
+  subtotal?: number;
+}): Promise<Discount[]> => {
+  const query = new URLSearchParams();
+  if (params?.serviceType) query.set("service_type", params.serviceType);
+  if (typeof params?.subtotal === "number") query.set("subtotal", String(params.subtotal));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await request(`/menu/discounts/active/${suffix}`);
+  const data = await handleJson<Array<{
+    id: number;
+    name: string;
+    type: Discount["type"];
+    value: string;
+    scope: Discount["appliesTo"];
+    target_category_ids: number[];
+    target_product_ids: number[];
+    auto_apply: boolean;
+    is_active: boolean;
+    has_conditions: boolean;
+    available_now: boolean;
+  }>>(response);
+  return data.map((item) => ({
+    id: item.id,
+    name: item.name,
+    type: item.type,
+    value: Number(item.value ?? 0),
+    appliesTo: item.scope,
+    scope: item.scope,
+    targetCategoryIds: item.target_category_ids ?? [],
+    targetProductIds: item.target_product_ids ?? [],
+    autoApply: Boolean(item.auto_apply),
+    isActive: Boolean(item.is_active),
+    hasConditions: Boolean(item.has_conditions),
+    availableNow: Boolean(item.available_now),
+  }));
+};
+
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
   const response = await request("/core/service-types/");
   const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
@@ -1488,6 +1530,7 @@ const mapOrder = (order: {
   remaining: string;
   refund_total: string;
   net_paid: string;
+  discount_snapshot?: Record<string, unknown> | null;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1526,6 +1569,7 @@ const mapOrder = (order: {
     remaining: Number(order.remaining ?? 0),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
+    discountSnapshot: order.discount_snapshot ?? null,
   };
 };
 
@@ -1538,6 +1582,8 @@ export const createOrder = async (payload: {
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
   priceChangePin?: string;
+  discountId?: number;
+  discountMode?: "manual" | "auto";
   items: Array<{
     productId?: number | null;
     productName: string;
@@ -1564,6 +1610,8 @@ export const createOrder = async (payload: {
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
       price_change_pin: payload.priceChangePin ?? "",
+      discount_id: payload.discountId ?? undefined,
+      discount_mode: payload.discountMode ?? undefined,
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
         type: item.isCustom ? "MANUAL" : "MENU",

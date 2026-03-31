@@ -21,5 +21,6 @@ urlpatterns = [
     path("modifiers/<int:pk>/image/", views.ModifierImageUploadView.as_view(), name="menu-modifiers-image"),
     path("modifier-groups/<int:group_id>/options/reorder/", views.ModifierGroupOptionsReorderView.as_view(), name="menu-modifier-group-options-reorder"),
     path("discounts/", views.DiscountListCreateView.as_view(), name="menu-discounts"),
+    path("discounts/active/", views.ActiveDiscountListView.as_view(), name="menu-discounts-active"),
     path("discounts/<int:pk>/", views.DiscountDetailView.as_view(), name="menu-discounts-detail"),
 ]

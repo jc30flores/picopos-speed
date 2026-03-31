@@ -39,7 +39,17 @@ class Unit:
         return self.base_price + (self.modifier_total if include_paid_modifiers else Decimal("0"))
 
 
-def discount_is_eligible(discount: Discount, *, service_type_key: str, now=None, subtotal_before_discounts: Decimal = Decimal("0")) -> bool:
+def discount_has_conditions(discount: Discount) -> bool:
+    return bool(
+        (discount.service_types or [])
+        or (discount.days_of_week or [])
+        or discount.start_time
+        or discount.end_time
+        or discount.min_amount
+    )
+
+
+def discount_conditions_met(discount: Discount, *, service_type_key: str, now=None, subtotal_before_discounts: Decimal = Decimal("0")) -> bool:
     now = now or timezone.localtime(timezone.now())
     day = now.weekday()
     t = now.time()
@@ -54,6 +64,15 @@ def discount_is_eligible(discount: Discount, *, service_type_key: str, now=None,
     return True
 
 
+def discount_is_eligible(discount: Discount, *, service_type_key: str, now=None, subtotal_before_discounts: Decimal = Decimal("0")) -> bool:
+    return discount_conditions_met(
+        discount,
+        service_type_key=service_type_key,
+        now=now,
+        subtotal_before_discounts=subtotal_before_discounts,
+    )
+
+
 def _selector_match(unit: Unit, selector: dict[str, Any]) -> bool:
     mode = selector.get("mode")
     if mode == "products":
@@ -63,13 +82,38 @@ def _selector_match(unit: Unit, selector: dict[str, Any]) -> bool:
     return False
 
 
-def apply_discounts(lines: list[dict[str, Any]], discounts: list[Discount], *, service_type_key: str, disposable_total: Decimal = Decimal("0")) -> dict[str, Any]:
+def apply_discounts(
+    lines: list[dict[str, Any]],
+    discounts: list[Discount],
+    *,
+    service_type_key: str,
+    disposable_total: Decimal = Decimal("0"),
+    selected_discount: Discount | None = None,
+    force_apply: bool = False,
+) -> dict[str, Any]:
     subtotal_before_discounts = sum((line["line_total"] for line in lines), Decimal("0"))
-    eligible = [
-        d for d in discounts
-        if discount_is_eligible(d, service_type_key=service_type_key, subtotal_before_discounts=subtotal_before_discounts)
-    ]
+    if selected_discount is not None:
+        eligible = [selected_discount]
+        if not force_apply:
+            eligible = [
+                selected_discount
+                for _ in [0]
+                if discount_conditions_met(
+                    selected_discount,
+                    service_type_key=service_type_key,
+                    subtotal_before_discounts=subtotal_before_discounts,
+                )
+            ]
+    else:
+        eligible = [
+            d for d in discounts
+            if d.auto_apply
+            and discount_has_conditions(d)
+            and discount_is_eligible(d, service_type_key=service_type_key, subtotal_before_discounts=subtotal_before_discounts)
+        ]
     eligible.sort(key=lambda d: (d.priority, d.id))
+    if eligible:
+        eligible = [eligible[0]]
 
     applied_breakdown: list[dict[str, Any]] = []
     line_discounts: dict[str, Decimal] = {line["line_key"]: Decimal("0") for line in lines}

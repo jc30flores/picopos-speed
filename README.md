@@ -106,6 +106,13 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 - `GET /api/payments/?order_id=`
 - `POST /api/payments/`
 
+### Manual discounts in POS
+
+- List active discounts for POS/manual picker: `GET /api/menu/discounts/active/?service_type=POS&subtotal=123.45`
+- Create order with manual discount: `POST /api/orders/` including:
+  - `discount_id` (optional)
+  - `discount_mode` = `"manual"` (optional but recommended when discount is user-selected)
+
 ### Refunds & voids endpoints
 
 - `POST /api/refunds/`

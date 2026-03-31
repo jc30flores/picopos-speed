@@ -38,6 +38,80 @@ class DiscountApplicationTests(TestCase):
             available=True,
         )
 
+    def _build_order_serializer(self, *, discount_id: int | None = None):
+        payload = {
+            "branch_id": self.branch.id,
+            "service_type_key": self.service_type.key,
+            "items": [
+                {
+                    "product_id": self.product_a.id,
+                    "product_name_snapshot": self.product_a.name,
+                    "price_snapshot": "10.00",
+                    "quantity": 1,
+                    "modifiers": [],
+                },
+                {
+                    "product_id": self.product_b.id,
+                    "product_name_snapshot": self.product_b.name,
+                    "price_snapshot": "10.00",
+                    "quantity": 1,
+                    "modifiers": [],
+                },
+            ],
+        }
+        if discount_id is not None:
+            payload["discount_id"] = discount_id
+            payload["discount_mode"] = "manual"
+        return OrderCreateSerializer(data=payload)
+
+    def test_discount_without_conditions_does_not_auto_apply_but_manual_applies(self):
+        discount = Discount.objects.create(
+            name="Manual 10%",
+            type="percent",
+            value="10.00",
+            applies_to="order",
+            is_active=True,
+            auto_apply=True,
+            service_types=[],
+            days_of_week=[],
+            start_time=None,
+            end_time=None,
+            min_amount=None,
+        )
+        auto_serializer = self._build_order_serializer()
+        self.assertTrue(auto_serializer.is_valid(), auto_serializer.errors)
+        auto_order = auto_serializer.save()
+        self.assertEqual(auto_order.discount_total, Decimal("0.00"))
+
+        manual_serializer = self._build_order_serializer(discount_id=discount.id)
+        self.assertTrue(manual_serializer.is_valid(), manual_serializer.errors)
+        manual_order = manual_serializer.save()
+        self.assertEqual(manual_order.discount_total, Decimal("2.00"))
+        self.assertEqual(manual_order.discount_snapshot.get("discount_id"), discount.id)
+        self.assertEqual(manual_order.items.filter(discount_amount__gt=0).count(), 2)
+
+    def test_manual_discount_applies_even_outside_conditions(self):
+        discount = Discount.objects.create(
+            name="Solo lunes",
+            type="percent",
+            value="10.00",
+            applies_to="order",
+            is_active=True,
+            auto_apply=True,
+            service_types=[],
+            days_of_week=[0],
+            start_time=None,
+            end_time=None,
+            min_amount=None,
+        )
+        fake_now = timezone.make_aware(datetime(2026, 3, 31, 12, 0, 0))  # Tuesday
+        with patch("apps.orders.discount_engine.timezone.now", return_value=fake_now):
+            serializer = self._build_order_serializer(discount_id=discount.id)
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            order = serializer.save()
+        self.assertEqual(order.discount_total, Decimal("2.00"))
+        self.assertFalse(order.discount_snapshot.get("conditions_met"))
+
     def test_discount_applies_only_to_selected_products(self) -> None:
         discount = Discount.objects.create(
             name="Promo productos",
@@ -46,7 +120,7 @@ class DiscountApplicationTests(TestCase):
             value="10.00",
             applies_to="products",
             is_active=True,
-            min_amount=None,
+            min_amount=Decimal("1.00"),
             auto_apply=True,
             service_types=[],
             days_of_week=[],
@@ -84,6 +158,22 @@ class DiscountApplicationTests(TestCase):
         self.assertEqual(order.discount_total, Decimal("1.00"))
         self.assertEqual(order.applied_discounts.count(), 1)
         self.assertEqual(order.applied_discounts.first().amount_discounted, Decimal("1.00"))
+
+    def test_auto_discount_with_conditions_applies_without_manual_selection(self):
+        discount = Discount.objects.create(
+            name="Auto con condición",
+            type="fixed",
+            value="3.00",
+            applies_to="order",
+            is_active=True,
+            min_amount=Decimal("10.00"),
+            auto_apply=True,
+        )
+        serializer = self._build_order_serializer()
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        self.assertEqual(order.discount_total, Decimal("3.00"))
+        self.assertEqual(order.discount_snapshot.get("discount_id"), discount.id)
 
     def test_bxgy_same_product_deterministic(self) -> None:
         discount = Discount.objects.create(
@@ -392,4 +482,3 @@ class DiscountApplicationTests(TestCase):
 
         self.assertEqual(order_a.discount_total, Decimal("5.00"))
         self.assertEqual(order_b.discount_total, Decimal("5.00"))
-

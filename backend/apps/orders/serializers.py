@@ -8,9 +8,10 @@ from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDisco
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.payments.models import Payment
-from apps.orders.discount_engine import apply_discounts
+from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
 from apps.menu.utils.pricing import resolve_effective_price
 from django.conf import settings
+from apps.core.audit import log_audit
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -30,6 +31,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_name_snapshot",
             "price_snapshot",
             "unit_price_override",
+            "discount_amount",
             "snapshot_sku_or_code",
             "is_custom",
             "quantity",
@@ -65,6 +67,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "tax",
             "total",
             "discount_total",
+            "discount_snapshot",
             "disposable_total",
             "payment_status",
             "financial_status",
@@ -203,6 +206,8 @@ class OrderCreateSerializer(serializers.Serializer):
     channel = serializers.CharField(required=False, allow_blank=True)
     fast_pos_mode = serializers.BooleanField(required=False, default=False)
     price_change_pin = serializers.CharField(required=False, allow_blank=True, max_length=12)
+    discount_id = serializers.IntegerField(required=False, allow_null=True)
+    discount_mode = serializers.ChoiceField(choices=["manual", "auto"], required=False, allow_null=True)
     items = OrderItemInputSerializer(many=True)
 
     def _next_order_number(self, branch: Branch) -> int:
@@ -246,6 +251,8 @@ class OrderCreateSerializer(serializers.Serializer):
         channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
         fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
         price_change_pin = (validated_data.pop("price_change_pin", "") or "").strip()
+        manual_discount_id = validated_data.pop("discount_id", None)
+        discount_mode = (validated_data.pop("discount_mode", "") or "").strip().lower()
         customer_name = (validated_data.pop("customer_name", "") or "").strip()
         branch = validated_data.pop("branch_id", None)
         customer = validated_data.pop("customer_id", None)
@@ -293,7 +300,7 @@ class OrderCreateSerializer(serializers.Serializer):
             **validated_data,
         )
 
-        discounts = list(Discount.objects.filter(is_active=True, auto_apply=True).prefetch_related("targets").order_by("priority", "id"))
+        discounts = list(Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id"))
 
         order_lines = []
         subtotal = Decimal("0")
@@ -388,17 +395,30 @@ class OrderCreateSerializer(serializers.Serializer):
                 product_totals[product.id] = product_totals.get(product.id, Decimal("0")) + line_total
                 category_totals[product.category_id] = category_totals.get(product.category_id, Decimal("0")) + line_total
 
-        eligible_discounts = []
+        discount_by_id = {}
         for discount in discounts:
             discount.target_product_ids = set(discount.targets.filter(product__isnull=False).values_list("product_id", flat=True))
             discount.target_category_ids = set(discount.targets.filter(category__isnull=False).values_list("category_id", flat=True))
-            eligible_discounts.append(discount)
+            discount_by_id[discount.id] = discount
+
+        selected_discount = None
+        force_apply_discount = False
+        if manual_discount_id:
+            selected_discount = discount_by_id.get(int(manual_discount_id))
+            if selected_discount is None:
+                raise serializers.ValidationError({"discount_id": "Descuento no encontrado o inactivo."})
+            force_apply_discount = True
+            discount_mode = "manual"
+        elif discount_mode == "manual":
+            raise serializers.ValidationError({"discount_id": "discount_id es requerido para modo manual."})
 
         discount_result = apply_discounts(
             order_lines,
-            eligible_discounts,
+            discounts,
             service_type_key=service_type_key,
             disposable_total=disposable_total,
+            selected_discount=selected_discount,
+            force_apply=force_apply_discount,
         )
 
         discount_totals = discount_result["discount_totals"]
@@ -415,6 +435,7 @@ class OrderCreateSerializer(serializers.Serializer):
         order.tax = tax_included
         order.total = total
         order.discount_total = discount_total
+        order.discount_snapshot = {}
         order.disposable_total = disposable_total
         if order.iva_exempt:
             exempt_discount = (total - (total / Decimal("1.13"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -431,23 +452,58 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "disposable_total", "iva_exempt_discount", "requires_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "updated_at"])
 
         breakdown_by_discount = {}
         for entry in discount_result["applied_breakdown"]:
             did = entry.get("discount_id")
             breakdown_by_discount.setdefault(did, []).append(entry)
 
-        for discount in eligible_discounts:
+        order_discount_snapshot = {}
+        line_discount_map = discount_result["line_discounts"]
+        for line in order_lines:
+            OrderItem.objects.filter(id=line["order_item_id"]).update(
+                discount_amount=(line_discount_map.get(line["line_key"]) or Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            )
+
+        for discount in discounts:
             amount = discount_totals.get(discount.id)
             if amount and amount > 0:
-                AppliedDiscount.objects.create(
+                applied = AppliedDiscount.objects.create(
                     order=order,
                     discount_name_snapshot=discount.name,
                     discount_type_snapshot=discount.type,
                     discount_value_snapshot=discount.value,
                     amount_discounted=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                     breakdown={"entries": breakdown_by_discount.get(discount.id, [])},
+                )
+                order_discount_snapshot = {
+                    "discount_id": discount.id,
+                    "name": discount.name,
+                    "type": discount.type,
+                    "value": str(discount.value),
+                    "amount": str(applied.amount_discounted),
+                    "mode": discount_mode or ("manual" if force_apply_discount else "auto"),
+                    "conditions_met": discount_conditions_met(
+                        discount,
+                        service_type_key=service_type_key,
+                        subtotal_before_discounts=subtotal,
+                    ),
+                    "has_conditions": discount_has_conditions(discount),
+                    "applies_to": discount.applies_to,
+                    "line_breakdown": breakdown_by_discount.get(discount.id, []),
+                }
+
+        if order_discount_snapshot:
+            order.discount_snapshot = order_discount_snapshot
+            order.save(update_fields=["discount_snapshot", "updated_at"])
+            if force_apply_discount:
+                log_audit(
+                    self.context.get("request"),
+                    "orders.discount.manual_apply",
+                    "Order",
+                    order.id,
+                    {"discount_id": order_discount_snapshot.get("discount_id"), "name": order_discount_snapshot.get("name")},
                 )
 
         return order
