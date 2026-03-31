@@ -207,7 +207,9 @@ class OrderCreateSerializer(serializers.Serializer):
     fast_pos_mode = serializers.BooleanField(required=False, default=False)
     price_change_pin = serializers.CharField(required=False, allow_blank=True, max_length=12)
     discount_id = serializers.IntegerField(required=False, allow_null=True)
+    manual_discount_id = serializers.IntegerField(required=False, allow_null=True)
     discount_mode = serializers.ChoiceField(choices=["manual", "auto"], required=False, allow_null=True)
+    manual_discount_snapshot = serializers.JSONField(required=False)
     items = OrderItemInputSerializer(many=True)
 
     def _next_order_number(self, branch: Branch) -> int:
@@ -251,8 +253,13 @@ class OrderCreateSerializer(serializers.Serializer):
         channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
         fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
         price_change_pin = (validated_data.pop("price_change_pin", "") or "").strip()
-        manual_discount_id = validated_data.pop("discount_id", None)
+        manual_discount_id = validated_data.pop("manual_discount_id", None)
+        if manual_discount_id is None:
+            manual_discount_id = validated_data.pop("discount_id", None)
+        else:
+            validated_data.pop("discount_id", None)
         discount_mode = (validated_data.pop("discount_mode", "") or "").strip().lower()
+        manual_discount_snapshot = validated_data.pop("manual_discount_snapshot", None)
         customer_name = (validated_data.pop("customer_name", "") or "").strip()
         branch = validated_data.pop("branch_id", None)
         customer = validated_data.pop("customer_id", None)
@@ -406,11 +413,11 @@ class OrderCreateSerializer(serializers.Serializer):
         if manual_discount_id:
             selected_discount = discount_by_id.get(int(manual_discount_id))
             if selected_discount is None:
-                raise serializers.ValidationError({"discount_id": "Descuento no encontrado o inactivo."})
+                raise serializers.ValidationError({"manual_discount_id": "Descuento no encontrado o inactivo."})
             force_apply_discount = True
             discount_mode = "manual"
         elif discount_mode == "manual":
-            raise serializers.ValidationError({"discount_id": "discount_id es requerido para modo manual."})
+            raise serializers.ValidationError({"manual_discount_id": "manual_discount_id es requerido para modo manual."})
 
         discount_result = apply_discounts(
             order_lines,
@@ -493,6 +500,8 @@ class OrderCreateSerializer(serializers.Serializer):
                     "applies_to": discount.applies_to,
                     "line_breakdown": breakdown_by_discount.get(discount.id, []),
                 }
+                if isinstance(manual_discount_snapshot, dict) and discount_mode == "manual":
+                    order_discount_snapshot["manual_input"] = manual_discount_snapshot
 
         if order_discount_snapshot:
             order.discount_snapshot = order_discount_snapshot

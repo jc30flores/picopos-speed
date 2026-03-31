@@ -1610,6 +1610,7 @@ export const createOrder = async (payload: {
       channel: payload.channel,
       fast_pos_mode: payload.channel === "pos",
       price_change_pin: payload.priceChangePin ?? "",
+      manual_discount_id: payload.discountId ?? undefined,
       discount_id: payload.discountId ?? undefined,
       discount_mode: payload.discountMode ?? undefined,
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),

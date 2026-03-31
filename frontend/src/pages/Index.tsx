@@ -229,6 +229,28 @@ const POS = () => {
   const [validatedPin, setValidatedPin] = useState<string>("");
   const [newPriceInput, setNewPriceInput] = useState("");
 
+  const {
+    itemsGross,
+    subtotal,
+    discountAmount,
+    cartDisposableTotal,
+    total,
+  } = useMemo(() => {
+    const computedItemsGross = calculateCartTotals(
+      cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
+      taxRate
+    ).total;
+    const computedDiscountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
+    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    return {
+      itemsGross: computedItemsGross,
+      subtotal: computedItemsGross,
+      discountAmount: computedDiscountAmount,
+      cartDisposableTotal: computedDisposableTotal,
+      total: Math.max(computedItemsGross - computedDiscountAmount, 0) + computedDisposableTotal,
+    };
+  }, [cart, products, selectedDiscount, serviceType, taxRate]);
+
   const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
@@ -478,14 +500,6 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-  const itemsGross = calculateCartTotals(
-    cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
-    taxRate
-  ).total;
-  const discountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
-  const total = Math.max(itemsGross - discountAmount, 0) + cartDisposableTotal;
-  const subtotal = itemsGross;
   const paymentTotal =
     (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";

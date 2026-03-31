@@ -38,7 +38,7 @@ class DiscountApplicationTests(TestCase):
             available=True,
         )
 
-    def _build_order_serializer(self, *, discount_id: int | None = None):
+    def _build_order_serializer(self, *, discount_id: int | None = None, manual_discount_snapshot: dict | None = None):
         payload = {
             "branch_id": self.branch.id,
             "service_type_key": self.service_type.key,
@@ -60,11 +60,13 @@ class DiscountApplicationTests(TestCase):
             ],
         }
         if discount_id is not None:
-            payload["discount_id"] = discount_id
+            payload["manual_discount_id"] = discount_id
             payload["discount_mode"] = "manual"
+        if manual_discount_snapshot is not None:
+            payload["manual_discount_snapshot"] = manual_discount_snapshot
         return OrderCreateSerializer(data=payload)
 
-    def test_discount_without_conditions_does_not_auto_apply_but_manual_applies(self):
+    def test_order_manual_discount_no_conditions_applies(self):
         discount = Discount.objects.create(
             name="Manual 10%",
             type="percent",
@@ -90,7 +92,7 @@ class DiscountApplicationTests(TestCase):
         self.assertEqual(manual_order.discount_snapshot.get("discount_id"), discount.id)
         self.assertEqual(manual_order.items.filter(discount_amount__gt=0).count(), 2)
 
-    def test_manual_discount_applies_even_outside_conditions(self):
+    def test_order_manual_discount_ignores_conditions(self):
         discount = Discount.objects.create(
             name="Solo lunes",
             type="percent",
@@ -111,6 +113,27 @@ class DiscountApplicationTests(TestCase):
             order = serializer.save()
         self.assertEqual(order.discount_total, Decimal("2.00"))
         self.assertFalse(order.discount_snapshot.get("conditions_met"))
+
+    def test_order_discount_snapshot_saved(self):
+        discount = Discount.objects.create(
+            name="Manual fijo",
+            type="fixed",
+            value="2.50",
+            applies_to="order",
+            is_active=True,
+            auto_apply=False,
+        )
+        serializer = self._build_order_serializer(
+            discount_id=discount.id,
+            manual_discount_snapshot={"name": "override", "amount_applied": "999.00"},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+
+        self.assertEqual(order.discount_total, Decimal("2.50"))
+        self.assertEqual(order.discount_snapshot.get("name"), "Manual fijo")
+        self.assertEqual(order.discount_snapshot.get("amount"), "2.50")
+        self.assertEqual(order.discount_snapshot.get("manual_input", {}).get("name"), "override")
 
     def test_discount_applies_only_to_selected_products(self) -> None:
         discount = Discount.objects.create(
