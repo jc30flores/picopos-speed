@@ -46,6 +46,9 @@ import {
   getDefaultConsumerCustomer,
   listCustomers,
   createCustomer,
+  listDepartments,
+  listMunicipalities,
+  listActivities,
   openCashSession,
   closeCashSession,
   getCashTransactions,
@@ -83,6 +86,15 @@ interface CartItem {
   appliedSpecialPriceRuleName?: string | null;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
+
+const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
+const digitsOnly = (value: string) => value.replace(/\D+/g, "");
+const formatPhone = (raw: string) => {
+  const digits = digitsOnly(raw).slice(0, 8);
+  if (!digits) return "";
+  if (digits.length <= 4) return digits;
+  return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+};
 
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
@@ -187,12 +199,18 @@ const POS = () => {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
   const [isCustomerPickerOpen, setIsCustomerPickerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [isCustomerCreateOpen, setIsCustomerCreateOpen] = useState(false);
   const [isSavingCustomer, setIsSavingCustomer] = useState(false);
   const [customerFormErrors, setCustomerFormErrors] = useState<Record<string, string>>({});
+  const [customerServerErrors, setCustomerServerErrors] = useState<Record<string, string>>({});
+  const [departments, setDepartments] = useState<Array<{ code: string; name: string }>>([]);
+  const [municipalities, setMunicipalities] = useState<Array<{ code: string; department_code: string; name: string }>>([]);
+  const [activities, setActivities] = useState<Array<{ code: string; description: string }>>([]);
+  const [activitySearch, setActivitySearch] = useState("");
   const [customerForm, setCustomerForm] = useState({
     fullName: "",
     clientType: "CF" as "CF" | "CCF" | "SX",
@@ -203,6 +221,10 @@ const POS = () => {
     phone: "",
     email: "",
     direccion: "",
+    departmentCode: "",
+    municipalityCode: "",
+    activityCode: "",
+    activityDescription: "",
   });
   const [dteDocumentType, setDteDocumentType] = useState<"CF" | "CCF" | "SX">("CF");
   const [ivaExempt, setIvaExempt] = useState(false);
@@ -693,11 +715,29 @@ const POS = () => {
 
   useEffect(() => {
     refreshCustomers().catch(() => undefined);
-    getDefaultConsumerCustomer().then((c) => {
-      setSelectedCustomerId(String(c.id));
-      setDteDocumentType(c.clientType ?? "CF");
-    }).catch(() => undefined);
+    Promise.all([listDepartments(), listActivities(""), getDefaultConsumerCustomer()])
+      .then(([deptRows, activityRows, consumerFinal]) => {
+        setDepartments(deptRows);
+        setActivities(activityRows);
+        setDefaultConsumerCustomer(consumerFinal);
+        setSelectedCustomerId(String(consumerFinal.id));
+        setDteDocumentType("CF");
+      })
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const departmentCode = customerForm.departmentCode;
+    if (!departmentCode) return;
+    listMunicipalities(departmentCode)
+      .then((rows) => {
+        setMunicipalities(rows);
+        if (!rows.some((row) => row.code === customerForm.municipalityCode)) {
+          setCustomerForm((prev) => ({ ...prev, municipalityCode: rows[0]?.code ?? "" }));
+        }
+      })
+      .catch(() => undefined);
+  }, [customerForm.departmentCode, customerForm.municipalityCode]);
 
   useEffect(() => {
     const selected = customers.find((c) => String(c.id) === selectedCustomerId);
@@ -705,6 +745,17 @@ const POS = () => {
       setDteDocumentType(selected.clientType);
     }
   }, [selectedCustomerId, customers]);
+
+  useEffect(() => {
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected && selected.clientType !== dteDocumentType) {
+      setSelectedCustomerId("");
+      toast.warning("Selecciona un cliente compatible con el tipo DTE");
+    }
+    if (dteDocumentType === "CF" && !selectedCustomerId && defaultConsumerCustomer) {
+      setSelectedCustomerId(String(defaultConsumerCustomer.id));
+    }
+  }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
   useEffect(() => {
     if (isPaymentOpen) {
@@ -1022,9 +1073,10 @@ const POS = () => {
 
   const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
   const normalizedCustomerSearch = customerSearch.trim().toLowerCase();
+  const customersByDte = customers.filter((customer) => customer.clientType === dteDocumentType);
   const filteredCustomers = useMemo(() => {
-    if (!normalizedCustomerSearch) return customers;
-    return customers.filter((customer) => {
+    if (!normalizedCustomerSearch) return customersByDte;
+    return customersByDte.filter((customer) => {
       const haystack = [
         customer.fullName,
         customer.email ?? "",
@@ -1037,13 +1089,22 @@ const POS = () => {
         .toLowerCase();
       return haystack.includes(normalizedCustomerSearch);
     });
-  }, [customers, normalizedCustomerSearch]);
+  }, [customersByDte, normalizedCustomerSearch]);
   const visibleCustomers = filteredCustomers.slice(0, 4);
+  const filteredActivities = useMemo(() => {
+    const term = activitySearch.trim().toLowerCase();
+    if (!term) return activities.slice(0, 30);
+    return activities
+      .filter((activity) => `${activity.code} ${activity.description}`.toLowerCase().includes(term))
+      .slice(0, 30);
+  }, [activities, activitySearch]);
 
   const validateCustomerForm = () => {
     const errors: Record<string, string> = {};
     const fullName = customerForm.fullName.trim();
     if (!fullName) errors.fullName = "Nombre requerido";
+    if (!customerForm.departmentCode) errors.departmentCode = "Departamento requerido";
+    if (!customerForm.municipalityCode) errors.municipalityCode = "Municipio requerido";
     if (customerForm.clientType === "CCF") {
       if (!customerForm.companyName.trim()) errors.companyName = "Empresa requerida";
       if (customerForm.nit.replace(/\D/g, "").length !== 14) errors.nit = "NIT de 14 dígitos";
@@ -1052,9 +1113,48 @@ const POS = () => {
       const email = customerForm.email.trim();
       if (!email || !email.includes("@") || !email.includes(".")) errors.email = "Email válido requerido";
       if (!customerForm.direccion.trim()) errors.direccion = "Dirección requerida";
+      if (!customerForm.activityCode.trim() && !customerForm.activityDescription.trim()) errors.activityCode = "Actividad económica requerida";
+    }
+    if (customerForm.clientType === "SX") {
+      if (!customerForm.dui.trim() && !customerForm.nit.trim()) errors.dui = "Documento requerido";
+      if (!customerForm.direccion.trim()) errors.direccion = "Dirección requerida";
     }
     setCustomerFormErrors(errors);
     return Object.keys(errors).length === 0;
+  };
+
+  const preloadCustomerFormFromDTE = async (targetType: "CF" | "CCF" | "SX") => {
+    if (targetType === "CF") {
+      const base = defaultConsumerCustomer ?? (await getDefaultConsumerCustomer());
+      if (!defaultConsumerCustomer) setDefaultConsumerCustomer(base);
+      const deptCode = base.departmentCode || "12";
+      const muniRows = await listMunicipalities(deptCode);
+      setMunicipalities(muniRows);
+      setCustomerForm((prev) => ({
+        ...prev,
+        clientType: "CF",
+        companyName: "",
+        nit: "",
+        nrc: "",
+        activityCode: "",
+        activityDescription: "",
+        phone: base.phone || "0000-0000",
+        email: base.email || DEFAULT_CUSTOMER_EMAIL,
+        direccion: base.direccion || "SAN MIGUEL",
+        departmentCode: deptCode,
+        municipalityCode: base.municipalityCode || muniRows[0]?.code || "",
+      }));
+      return;
+    }
+    const deptCode = departments[0]?.code || "12";
+    const muniRows = await listMunicipalities(deptCode);
+    setMunicipalities(muniRows);
+    setCustomerForm((prev) => ({
+      ...prev,
+      clientType: targetType,
+      departmentCode: prev.departmentCode || deptCode,
+      municipalityCode: prev.municipalityCode || muniRows[0]?.code || "",
+    }));
   };
 
   const handleCreateCustomerFromPOS = async () => {
@@ -1064,6 +1164,7 @@ const POS = () => {
     }
     try {
       setIsSavingCustomer(true);
+      setCustomerServerErrors({});
       const created = await createCustomer({
         fullName: customerForm.fullName.trim(),
         clientType: customerForm.clientType,
@@ -1071,9 +1172,13 @@ const POS = () => {
         dui: customerForm.dui.trim(),
         nit: customerForm.nit.trim(),
         nrc: customerForm.nrc.trim(),
-        phone: customerForm.phone.trim(),
-        email: customerForm.email.trim(),
+        phone: formatPhone(customerForm.phone.trim()),
+        email: customerForm.email.trim() || undefined,
         direccion: customerForm.direccion.trim(),
+        departmentCode: customerForm.departmentCode,
+        municipalityCode: customerForm.municipalityCode,
+        activityCode: customerForm.activityCode.trim(),
+        activityDescription: customerForm.activityDescription.trim(),
       });
       await refreshCustomers();
       setSelectedCustomerId(String(created.id));
@@ -1091,10 +1196,27 @@ const POS = () => {
         phone: "",
         email: "",
         direccion: "",
+        departmentCode: "",
+        municipalityCode: "",
+        activityCode: "",
+        activityDescription: "",
       });
       toast.success("Cliente creado");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el cliente");
+      if (error instanceof Error) {
+        try {
+          const parsed = JSON.parse(error.message) as Record<string, string[] | string>;
+          const mapped: Record<string, string> = {};
+          Object.entries(parsed).forEach(([key, value]) => {
+            mapped[key] = Array.isArray(value) ? String(value[0]) : String(value);
+          });
+          setCustomerServerErrors(mapped);
+        } catch {
+          toast.error(error.message || "No se pudo crear el cliente");
+        }
+      } else {
+        toast.error("No se pudo crear el cliente");
+      }
     } finally {
       setIsSavingCustomer(false);
     }
@@ -1675,6 +1797,14 @@ const POS = () => {
                   </div>
 
                   <div className="space-y-2">
+                    <Label>Tipo DTE</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
                     <Label>Cliente</Label>
                     <div className="flex gap-2">
                       <Button
@@ -1692,19 +1822,16 @@ const POS = () => {
                         type="button"
                         variant="outline"
                         className="h-12"
-                        onClick={() => setIsCustomerCreateOpen(true)}
+                        onClick={() => {
+                          setCustomerFormErrors({});
+                          setCustomerServerErrors({});
+                          setActivitySearch("");
+                          setIsCustomerCreateOpen(true);
+                          void preloadCustomerFormFromDTE(dteDocumentType);
+                        }}
                       >
                         Administrar clientes
                       </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Tipo DTE</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
                     </div>
                   </div>
                   {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
@@ -1828,8 +1955,8 @@ const POS = () => {
               Refina tu búsqueda (mostrando 4 de {filteredCustomers.length})
             </p>
           )}
-          {!normalizedCustomerSearch && customers.length > visibleCustomers.length && (
-            <p className="text-xs text-muted-foreground">Mostrando 4 de {customers.length}</p>
+          {!normalizedCustomerSearch && customersByDte.length > visibleCustomers.length && (
+            <p className="text-xs text-muted-foreground">Mostrando 4 de {customersByDte.length}</p>
           )}
         </DialogContent>
       </Dialog>
@@ -1842,6 +1969,14 @@ const POS = () => {
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
+              <Label>Tipo DTE</Label>
+              <div className="flex gap-2">
+                <Button type="button" variant={customerForm.clientType === "CF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CF")}>CF</Button>
+                <Button type="button" variant={customerForm.clientType === "CCF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CCF")}>CCF</Button>
+                <Button type="button" variant={customerForm.clientType === "SX" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("SX")}>SX</Button>
+              </div>
+            </div>
+            <div className="space-y-1 sm:col-span-2">
               <Label>Nombre completo</Label>
               <Input
                 autoFocus
@@ -1850,52 +1985,125 @@ const POS = () => {
                 className="h-12"
               />
               {customerFormErrors.fullName && <p className="text-xs text-destructive">{customerFormErrors.fullName}</p>}
-            </div>
-            <div className="space-y-1">
-              <Label>Tipo cliente</Label>
-              <Select value={customerForm.clientType} onValueChange={(value: "CF" | "CCF" | "SX") => setCustomerForm((prev) => ({ ...prev, clientType: value }))}>
-                <SelectTrigger className="h-12"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="CF">CF</SelectItem>
-                  <SelectItem value="CCF">CCF</SelectItem>
-                  <SelectItem value="SX">SX</SelectItem>
-                </SelectContent>
-              </Select>
+              {customerServerErrors.full_name && <p className="text-xs text-destructive">{customerServerErrors.full_name}</p>}
             </div>
             <div className="space-y-1">
               <Label>Teléfono</Label>
               <Input value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} className="h-12" />
               {customerFormErrors.phone && <p className="text-xs text-destructive">{customerFormErrors.phone}</p>}
+              {customerServerErrors.phone && <p className="text-xs text-destructive">{customerServerErrors.phone}</p>}
             </div>
             <div className="space-y-1">
               <Label>Email</Label>
               <Input value={customerForm.email} onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))} className="h-12" />
               {customerFormErrors.email && <p className="text-xs text-destructive">{customerFormErrors.email}</p>}
+              {customerServerErrors.email && <p className="text-xs text-destructive">{customerServerErrors.email}</p>}
             </div>
             <div className="space-y-1">
-              <Label>DUI</Label>
+              <Label>{customerForm.clientType === "SX" ? "Documento" : "DUI"}</Label>
               <Input value={customerForm.dui} onChange={(event) => setCustomerForm((prev) => ({ ...prev, dui: event.target.value }))} className="h-12" />
+              {customerFormErrors.dui && <p className="text-xs text-destructive">{customerFormErrors.dui}</p>}
+              {customerServerErrors.dui && <p className="text-xs text-destructive">{customerServerErrors.dui}</p>}
             </div>
-            <div className="space-y-1">
-              <Label>NIT</Label>
-              <Input value={customerForm.nit} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nit: event.target.value }))} className="h-12" />
-              {customerFormErrors.nit && <p className="text-xs text-destructive">{customerFormErrors.nit}</p>}
-            </div>
-            <div className="space-y-1">
-              <Label>NRC</Label>
-              <Input value={customerForm.nrc} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nrc: event.target.value }))} className="h-12" />
-              {customerFormErrors.nrc && <p className="text-xs text-destructive">{customerFormErrors.nrc}</p>}
-            </div>
-            <div className="space-y-1">
-              <Label>Empresa</Label>
-              <Input value={customerForm.companyName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, companyName: event.target.value }))} className="h-12" />
-              {customerFormErrors.companyName && <p className="text-xs text-destructive">{customerFormErrors.companyName}</p>}
-            </div>
+            {customerForm.clientType === "CCF" && (
+              <>
+                <div className="space-y-1">
+                  <Label>NIT</Label>
+                  <Input value={customerForm.nit} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nit: event.target.value }))} className="h-12" />
+                  {customerFormErrors.nit && <p className="text-xs text-destructive">{customerFormErrors.nit}</p>}
+                  {customerServerErrors.nit && <p className="text-xs text-destructive">{customerServerErrors.nit}</p>}
+                </div>
+                <div className="space-y-1">
+                  <Label>NRC</Label>
+                  <Input value={customerForm.nrc} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nrc: event.target.value }))} className="h-12" />
+                  {customerFormErrors.nrc && <p className="text-xs text-destructive">{customerFormErrors.nrc}</p>}
+                  {customerServerErrors.nrc && <p className="text-xs text-destructive">{customerServerErrors.nrc}</p>}
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Empresa</Label>
+                  <Input value={customerForm.companyName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, companyName: event.target.value }))} className="h-12" />
+                  {customerFormErrors.companyName && <p className="text-xs text-destructive">{customerFormErrors.companyName}</p>}
+                </div>
+              </>
+            )}
             <div className="space-y-1 sm:col-span-2">
               <Label>Dirección</Label>
               <Input value={customerForm.direccion} onChange={(event) => setCustomerForm((prev) => ({ ...prev, direccion: event.target.value }))} className="h-12" />
               {customerFormErrors.direccion && <p className="text-xs text-destructive">{customerFormErrors.direccion}</p>}
+              {customerServerErrors.direccion && <p className="text-xs text-destructive">{customerServerErrors.direccion}</p>}
             </div>
+            <div className="space-y-1">
+              <Label>Departamento</Label>
+              <Select
+                value={customerForm.departmentCode || "__empty"}
+                onValueChange={(value) =>
+                  setCustomerForm((prev) => ({
+                    ...prev,
+                    departmentCode: value === "__empty" ? "" : value,
+                    municipalityCode: "",
+                  }))
+                }
+              >
+                <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona departamento" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__empty">Selecciona</SelectItem>
+                  {departments.map((department) => (
+                    <SelectItem key={department.code} value={department.code}>{department.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {customerFormErrors.departmentCode && <p className="text-xs text-destructive">{customerFormErrors.departmentCode}</p>}
+              {customerServerErrors.department_code && <p className="text-xs text-destructive">{customerServerErrors.department_code}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Municipio</Label>
+              <Select
+                value={customerForm.municipalityCode || "__empty"}
+                onValueChange={(value) => setCustomerForm((prev) => ({ ...prev, municipalityCode: value === "__empty" ? "" : value }))}
+              >
+                <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona municipio" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__empty">Selecciona</SelectItem>
+                  {municipalities.map((municipality) => (
+                    <SelectItem key={municipality.code} value={municipality.code}>{municipality.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {customerFormErrors.municipalityCode && <p className="text-xs text-destructive">{customerFormErrors.municipalityCode}</p>}
+              {customerServerErrors.municipality_code && <p className="text-xs text-destructive">{customerServerErrors.municipality_code}</p>}
+            </div>
+            {customerForm.clientType === "CCF" && (
+              <div className="space-y-1 sm:col-span-2">
+                <Label>Actividad económica</Label>
+                <Input
+                  placeholder="Buscar actividad…"
+                  value={activitySearch}
+                  onChange={(event) => setActivitySearch(event.target.value)}
+                  className="h-12"
+                />
+                <Select
+                  value={customerForm.activityCode || "__empty"}
+                  onValueChange={(value) => {
+                    const selected = activities.find((activity) => activity.code === value);
+                    setCustomerForm((prev) => ({
+                      ...prev,
+                      activityCode: value === "__empty" ? "" : value,
+                      activityDescription: value === "__empty" ? "" : selected?.description ?? prev.activityDescription,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona actividad" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__empty">Selecciona</SelectItem>
+                    {filteredActivities.map((activity) => (
+                      <SelectItem key={activity.code} value={activity.code}>{activity.code} - {activity.description}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {customerFormErrors.activityCode && <p className="text-xs text-destructive">{customerFormErrors.activityCode}</p>}
+                {customerServerErrors.activity_code && <p className="text-xs text-destructive">{customerServerErrors.activity_code}</p>}
+              </div>
+            )}
           </div>
           <div className="mt-4 flex gap-2">
             <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setIsCustomerCreateOpen(false)} disabled={isSavingCustomer}>
