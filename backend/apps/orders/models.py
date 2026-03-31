@@ -40,6 +40,7 @@ class Order(models.Model):
     iva_exempt_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default="pos")
     requires_kitchen = models.BooleanField(default=False)
+    send_to_kitchen = models.BooleanField(default=False)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)

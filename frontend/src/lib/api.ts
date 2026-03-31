@@ -215,6 +215,8 @@ export type Order = {
   refundTotal: number;
   netPaid: number;
   discountSnapshot?: Record<string, unknown> | null;
+  requiresKitchen?: boolean;
+  sendToKitchen?: boolean;
 };
 
 export type EmployeeStats = {
@@ -1531,6 +1533,8 @@ const mapOrder = (order: {
   refund_total: string;
   net_paid: string;
   discount_snapshot?: Record<string, unknown> | null;
+  requires_kitchen?: boolean;
+  send_to_kitchen?: boolean;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1570,6 +1574,8 @@ const mapOrder = (order: {
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
+    requiresKitchen: Boolean(order.requires_kitchen),
+    sendToKitchen: Boolean(order.send_to_kitchen),
   };
 };
 
@@ -1584,6 +1590,7 @@ export const createOrder = async (payload: {
   priceChangePin?: string;
   discountId?: number;
   discountMode?: "manual" | "auto";
+  sendToKitchen?: boolean;
   items: Array<{
     productId?: number | null;
     productName: string;
@@ -1613,6 +1620,7 @@ export const createOrder = async (payload: {
       manual_discount_id: payload.discountId ?? undefined,
       discount_id: payload.discountId ?? undefined,
       discount_mode: payload.discountMode ?? undefined,
+      send_to_kitchen: Boolean(payload.sendToKitchen),
       ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
       items: payload.items.map((item) => ({
         type: item.isCustom ? "MANUAL" : "MENU",
@@ -1747,6 +1755,16 @@ export const updateOrderStatus = async (orderId: number, statusValue: Order["sta
       applied_modifiers: Array<{ modifier_name_snapshot: string }>;
     }>;
   }>(response);
+  return mapOrder(data);
+};
+
+export const setOrderSendToKitchen = async (orderId: number, sendToKitchen: boolean): Promise<Order> => {
+  const response = await request(`/orders/${orderId}/send-to-kitchen/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ send_to_kitchen: sendToKitchen }),
+  });
+  const data = await handleJson(response);
   return mapOrder(data);
 };
 

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -33,6 +33,7 @@ import {
   createOrder,
   Customer,
   createPayment,
+  setOrderSendToKitchen,
   getPaymentMethods,
   getOrderById,
   createPrintJob,
@@ -196,6 +197,9 @@ const POS = () => {
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
+  const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
+  const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -809,6 +813,48 @@ const POS = () => {
     setShouldResetTenderOnFirstTap(false);
   };
 
+  const finalizePaidSale = () => {
+    setIsPaymentOpen(false);
+    setCart([]);
+    setSelectedDiscount(null);
+    setCheckoutDraft(null);
+    setCreatedOrderId(null);
+    setCreatedOrderNumber(null);
+    setSplitEnabled(false);
+    setParts([]);
+    setActivePartId(null);
+    setKitchenPromptOrderId(null);
+  };
+
+  const handleKitchenChoice = async (shouldSend: boolean) => {
+    if (!kitchenPromptOrderId || isSubmittingKitchenChoice) return;
+    try {
+      setIsSubmittingKitchenChoice(true);
+      if (shouldSend) {
+        try {
+          await setOrderSendToKitchen(kitchenPromptOrderId, true);
+        } catch (error) {
+          await setOrderSendToKitchen(kitchenPromptOrderId, true);
+          if (import.meta.env.DEV) {
+            console.debug("Kitchen send retry succeeded", error);
+          }
+        }
+        toast.success("Venta enviada a cocina");
+      } else {
+        toast.success("Venta completada sin envío a cocina");
+      }
+      setIsKitchenPromptOpen(false);
+      finalizePaidSale();
+    } catch (error) {
+      console.error("Failed to update send_to_kitchen", error);
+      toast.error("No se pudo enviar a cocina. La venta se guardó. Puedes reenviar luego.");
+      setIsKitchenPromptOpen(false);
+      finalizePaidSale();
+    } finally {
+      setIsSubmittingKitchenChoice(false);
+    }
+  };
+
   const handleSubmitPayment = async () => {
     if (isProcessingPayment) return;
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
@@ -855,6 +901,7 @@ const POS = () => {
             serviceType: checkoutDraft.serviceType,
             source: "pos",
             channel: "pos",
+            sendToKitchen: checkoutDraft.serviceType === "KIOSK",
             priceChangePin: checkoutDraft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
             customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
             dteDocumentType,
@@ -930,16 +977,15 @@ const POS = () => {
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success(refreshed.requiresKitchen ? "Pago y factura registrados. Enviado a cocina." : "Pago y factura registrados. Orden entregada.");
-        setIsPaymentOpen(false);
-        setCart([]);
-        setSelectedDiscount(null);
-        setCheckoutDraft(null);
-        setCreatedOrderId(null);
-        setCreatedOrderNumber(null);
-        setSplitEnabled(false);
-        setParts([]);
-        setActivePartId(null);
+        const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
+        if (isKiosk) {
+          toast.success("Pago y factura registrados. Enviado a cocina.");
+          finalizePaidSale();
+        } else {
+          toast.success("Pago y factura registrados.");
+          setKitchenPromptOrderId(orderId);
+          setIsKitchenPromptOpen(true);
+        }
       } else {
         toast.success("Pago registrado");
       }
@@ -1056,29 +1102,66 @@ const POS = () => {
           <Card className="flex flex-col overflow-hidden">
             <div className="p-4 border-b">
               <div className="mb-3 space-y-2">
-                <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <TooltipProvider delayDuration={120}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-11 rounded-full border-emerald-500/60 px-3"
-                          onClick={() => setIsManualProductOpen(true)}
-                        >
-                          <Plus className="h-4 w-4 mr-1" />
-                          Producto manual
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Agregar ítem manual para esta venta</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  <Button variant="outline" size="sm" className="h-11" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
-                  <Button variant="outline" size="sm" className="h-11" onClick={() => setIsDiscountDialogOpen(true)}>
-                    Descuentos
-                  </Button>
+                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                  <div />
+                  <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
+                  <div className="flex items-center justify-end gap-2">
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            title="Producto manual"
+                            aria-label="Producto manual"
+                            className="h-11 w-11 rounded-xl border-emerald-500/60"
+                            onClick={() => setIsManualProductOpen(true)}
+                          >
+                            <Plus className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Producto manual</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Descuentos"
+                            aria-label="Descuentos"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => setIsDiscountDialogOpen(true)}
+                          >
+                            <BadgePercent className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Descuentos</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Transacciones de caja"
+                            aria-label="Transacciones de caja"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => {
+                              setIsCashDialogOpen(true);
+                              loadCashData().catch(() => undefined);
+                            }}
+                          >
+                            <Wallet className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Transacciones de caja</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 </div>
               </div>
 
@@ -1587,6 +1670,36 @@ const POS = () => {
             ) : (
               <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
+        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">¿Enviar a cocina?</DialogTitle>
+            <DialogDescription className="text-base">
+              La venta ya se guardó. Elige si deseas enviarla ahora a la pantalla de cocina.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Button
+              type="button"
+              className="h-14 text-lg"
+              disabled={isSubmittingKitchenChoice}
+              onClick={() => void handleKitchenChoice(true)}
+            >
+              {isSubmittingKitchenChoice ? "Enviando..." : "Sí, enviar"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-14 text-lg"
+              disabled={isSubmittingKitchenChoice}
+              onClick={() => void handleKitchenChoice(false)}
+            >
+              No
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

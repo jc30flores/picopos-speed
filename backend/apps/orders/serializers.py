@@ -69,6 +69,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "discount_total",
             "discount_snapshot",
             "disposable_total",
+            "send_to_kitchen",
             "payment_status",
             "financial_status",
             "total_paid",
@@ -206,6 +207,7 @@ class OrderCreateSerializer(serializers.Serializer):
     channel = serializers.CharField(required=False, allow_blank=True)
     fast_pos_mode = serializers.BooleanField(required=False, default=False)
     price_change_pin = serializers.CharField(required=False, allow_blank=True, max_length=12)
+    send_to_kitchen = serializers.BooleanField(required=False, default=False)
     discount_id = serializers.IntegerField(required=False, allow_null=True)
     manual_discount_id = serializers.IntegerField(required=False, allow_null=True)
     discount_mode = serializers.ChoiceField(choices=["manual", "auto"], required=False, allow_null=True)
@@ -253,6 +255,7 @@ class OrderCreateSerializer(serializers.Serializer):
         channel = ((validated_data.pop("channel", "") or source or "pos").strip().lower())
         fast_pos_mode = bool(validated_data.pop("fast_pos_mode", False))
         price_change_pin = (validated_data.pop("price_change_pin", "") or "").strip()
+        requested_send_to_kitchen = bool(validated_data.pop("send_to_kitchen", False))
         manual_discount_id = validated_data.pop("manual_discount_id", None)
         if manual_discount_id is None:
             manual_discount_id = validated_data.pop("discount_id", None)
@@ -291,6 +294,7 @@ class OrderCreateSerializer(serializers.Serializer):
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
         service_type_key = service_type.key
+        is_kiosk_service = service_type_key.strip().upper() == "KIOSK" or source == "kiosk" or channel == "kiosk"
 
         order_number = self._next_order_number(branch)
         status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
@@ -453,13 +457,14 @@ class OrderCreateSerializer(serializers.Serializer):
         else:
             order.iva_exempt_discount = Decimal("0.00")
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
-        if order.requires_kitchen and order.status == "preparing":
+        order.send_to_kitchen = order.requires_kitchen and (is_kiosk_service or requested_send_to_kitchen)
+        if order.send_to_kitchen and order.status == "preparing":
             from apps.kitchen.models import KitchenOrderView
             KitchenOrderView.objects.get_or_create(
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
 
         breakdown_by_discount = {}
         for entry in discount_result["applied_breakdown"]:
