@@ -14,7 +14,7 @@ class SalesReportListView(generics.ListAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
-        queryset = Order.objects.select_related("service_type", "invoice").all()
+        queryset = Order.objects.select_related("service_type", "invoice").prefetch_related("payments").all()
         search = (self.request.query_params.get("search") or "").strip()
         only_today = str(self.request.query_params.get("today") or "").strip() == "1"
         start_at = end_at = None
@@ -42,6 +42,7 @@ class SalesReportListView(generics.ListAPIView):
                 Q(order_number__icontains=search)
                 | Q(customer_name__icontains=search)
                 | Q(status__icontains=search)
+                | Q(invoice__numero_control__icontains=search)
             )
 
         return queryset.order_by("-created_at")
@@ -62,6 +63,17 @@ class SalesReportListView(generics.ListAPIView):
                 "financial_status": order.financial_status,
                 "refund_total": order.refund_total,
                 "net_paid": order.net_paid,
+                "customer_name": order.customer_name,
+                "control_number": (order.invoice.numero_control if hasattr(order, "invoice") else ""),
+                "payment_method": ", ".join(
+                    sorted(
+                        {
+                            payment.get_method_display()
+                            for payment in order.payments.all()
+                            if payment.method
+                        }
+                    )
+                ),
                 "sale_snapshot": (order.invoice.sale_snapshot if hasattr(order, "invoice") else {}),
             }
             for order in queryset

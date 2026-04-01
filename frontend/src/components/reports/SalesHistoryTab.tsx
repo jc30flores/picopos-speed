@@ -53,12 +53,14 @@ import { useAuth } from "@/context/useAuth";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
-type PaymentMethodFilter = "all" | "efectivo" | "tarjeta" | "transferencia";
+type PaymentMethodFilter = "all" | "cash" | "card" | "transfer";
 
 interface Sale {
   id: string;
   date: Date;
   orderNumber: string;
+  controlNumber: string;
+  customerName: string;
   serviceType: string;
   channel: string;
   paymentMethod: string;
@@ -140,16 +142,18 @@ export const SalesHistoryTab = () => {
       dateTo: restrictedRole ? undefined : dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
       today: restrictedRole && !searchQuery.trim() ? true : undefined,
-      search: restrictedRole ? searchQuery.trim() || undefined : undefined,
+      search: searchQuery.trim() || undefined,
     })
       .then((report) => {
         const mapped = report.rows.map((row) => ({
           id: String(row.orderId),
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
+          controlNumber: row.controlNumber || "-",
+          customerName: row.customerName || "-",
           serviceType: serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
-          paymentMethod: "N/A",
+          paymentMethod: row.paymentMethod || "N/A",
           items: 0,
           subtotal: row.subtotal,
           tax: row.tax,
@@ -176,13 +180,15 @@ export const SalesHistoryTab = () => {
     : sales.filter((sale) => {
     const matchesSearch =
       sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      sale.controlNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      sale.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesService =
       serviceType === "all" ||
       sale.serviceType.toLowerCase().replace(" ", "-") === serviceType;
     const matchesPayment =
       paymentMethod === "all" ||
-      sale.paymentMethod.toLowerCase() === paymentMethod;
+      sale.paymentMethod.toLowerCase().includes(paymentMethod);
     return matchesSearch && matchesService && matchesPayment;
   });
 
@@ -452,9 +458,9 @@ export const SalesHistoryTab = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="efectivo">Efectivo</SelectItem>
-                  <SelectItem value="tarjeta">Tarjeta</SelectItem>
-                  <SelectItem value="transferencia">Transferencia</SelectItem>
+                  <SelectItem value="cash">Efectivo</SelectItem>
+                  <SelectItem value="card">Tarjeta</SelectItem>
+                  <SelectItem value="transfer">Transferencia</SelectItem>
                 </SelectContent>
               </Select>
             </div> : null}
@@ -467,7 +473,7 @@ export const SalesHistoryTab = () => {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Nº pedido o cajero..."
+                  placeholder="Nº pedido, No. control o cliente..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-9"
@@ -499,6 +505,8 @@ export const SalesHistoryTab = () => {
                 <TableRow>
                   <TableHead>Fecha y hora</TableHead>
                   <TableHead>Nº de pedido</TableHead>
+                  <TableHead>No. de control</TableHead>
+                  <TableHead>Cliente</TableHead>
                   <TableHead>Tipo de servicio</TableHead>
                   <TableHead>Canal</TableHead>
                   <TableHead>Método de pago</TableHead>
@@ -515,7 +523,7 @@ export const SalesHistoryTab = () => {
                 {filteredSales.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={12}
+                      colSpan={14}
                       className="text-center text-muted-foreground py-8"
                     >
                       No se encontraron ventas
@@ -530,6 +538,10 @@ export const SalesHistoryTab = () => {
                       <TableCell className="font-mono text-xs">
                         {sale.orderNumber}
                       </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {sale.controlNumber}
+                      </TableCell>
+                      <TableCell>{sale.customerName}</TableCell>
                       <TableCell>{sale.serviceType}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{sale.channel}</Badge>

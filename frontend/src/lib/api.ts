@@ -351,6 +351,9 @@ export type SalesReportRow = {
   financialStatus: Order["financialStatus"];
   refundTotal: number;
   netPaid: number;
+  customerName: string;
+  controlNumber: string;
+  paymentMethod: string;
 };
 
 export type SalesReportAggregates = {
@@ -1899,6 +1902,9 @@ export const getSalesReport = async (filters?: {
       financial_status: Order["financialStatus"];
       refund_total: string;
       net_paid: string;
+      customer_name?: string;
+      control_number?: string;
+      payment_method?: string;
     }>;
     aggregates: {
       count_orders: number;
@@ -1942,6 +1948,9 @@ export const getSalesReport = async (filters?: {
       financialStatus: row.financial_status,
       refundTotal: Number(row.refund_total ?? 0),
       netPaid: Number(row.net_paid ?? 0),
+      customerName: String(row.customer_name ?? ""),
+      controlNumber: String(row.control_number ?? ""),
+      paymentMethod: String(row.payment_method ?? ""),
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,

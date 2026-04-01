@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 import json
+from concurrent.futures import ThreadPoolExecutor
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch
@@ -19,6 +20,32 @@ class CashierFlowTests(TestCase):
     def test_open_session_ok(self):
         res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         self.assertEqual(res.status_code, 201)
+
+    def test_open_session_is_idempotent_for_same_user(self):
+        first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        second = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '50.00'}, format='json')
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.data['id'], second.data['id'])
+        self.assertEqual(CashSession.objects.filter(opened_by_id=first.data['opened_by'], status='open').count(), 1)
+
+    def test_open_session_concurrent_requests_create_only_one_open_session(self):
+        self.client.force_authenticate(None)
+        user = get_user_model().objects.create_user(username='cash_concurrent', password='pw')
+        UserProfile.objects.create(user=user, role='cashier', is_active=True)
+
+        def open_once(_):
+            api_client = APIClient()
+            api_client.force_authenticate(user)
+            return api_client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json').status_code
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            statuses = list(pool.map(open_once, range(8)))
+
+        self.assertEqual(statuses.count(201), 1)
+        self.assertEqual(statuses.count(200), 7)
+        self.assertEqual(CashSession.objects.filter(opened_by=user, status='open').count(), 1)
 
     def test_create_expense_ok(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

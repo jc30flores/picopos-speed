@@ -80,9 +80,6 @@ class CashSessionOpenView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        if _get_open_session_for_user(request.user):
-            return Response({"detail": "Ya hay una caja abierta."}, status=status.HTTP_409_CONFLICT)
-
         try:
             opening_cash = _parse_decimal(
                 request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0",
@@ -98,7 +95,17 @@ class CashSessionOpenView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        if CashSession.objects.filter(register=register, status="open").exists():
+        register = Register.objects.select_for_update().get(pk=register.pk)
+        existing_session = (
+            CashSession.objects.select_for_update()
+            .select_related("register", "register__branch")
+            .filter(opened_by=request.user, status="open")
+            .first()
+        )
+        if existing_session:
+            return Response(CashSessionSerializer(existing_session).data, status=status.HTTP_200_OK)
+
+        if CashSession.objects.select_for_update().filter(register=register, status="open").exists():
             return Response({"detail": "La caja seleccionada ya está abierta."}, status=status.HTTP_409_CONFLICT)
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
