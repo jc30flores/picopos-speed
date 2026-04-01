@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -68,16 +69,88 @@ def build_headers() -> dict[str, str]:
     return {"Content-Type": "application/json", header: f"{prefix} {token}".strip()}
 
 
-def _money(v: Decimal) -> str:
-    return f"{v:.2f}"
-
-
 def _resolve_branch_config(order):
     return get_emisor_config(order.branch)
 
 
 def _q2(value: Decimal) -> Decimal:
     return Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def to_decimal(value: str | int | float | Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        return Decimal(stripped)
+    raise DTEPreflightError(f"Valor numérico inválido para Decimal: {type(value).__name__}")
+
+
+def money(value: str | int | float | Decimal | None) -> Decimal:
+    dec = to_decimal(value)
+    return (dec if dec is not None else Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def json_number(value: str | int | float | Decimal | None) -> int | float:
+    dec = to_decimal(value)
+    if dec is None:
+        return 0
+    if dec == dec.to_integral_value():
+        return int(dec)
+    return float(dec)
+
+
+_NUMERIC_STRING_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+_STRING_NUMERIC_EXEMPT_FIELDS = {
+    "ambiente",
+    "tipoDte",
+    "numeroControl",
+    "codigoGeneracion",
+    "tipoMoneda",
+    "totalLetras",
+    "codigo",
+    "codTributo",
+    "correo",
+    "telefono",
+    "nit",
+    "nrc",
+    "codActividad",
+    "descActividad",
+    "nombre",
+    "nombreComercial",
+    "tipoDocumento",
+    "numDocumento",
+    "departamento",
+    "municipio",
+    "complemento",
+    "descripcion",
+    "referencia",
+    "plazo",
+    "periodo",
+    "codigo",
+}
+
+
+def assert_no_string_numbers(payload: Any, path: str = "") -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            if isinstance(value, str) and key not in _STRING_NUMERIC_EXEMPT_FIELDS and _NUMERIC_STRING_RE.match(value.strip()):
+                raise DTEPreflightError(f"Campo numérico serializado como string en '{next_path}': {value!r}")
+            assert_no_string_numbers(value, next_path)
+        return
+    if isinstance(payload, list):
+        for idx, value in enumerate(payload):
+            next_path = f"{path}[{idx}]"
+            assert_no_string_numbers(value, next_path)
 
 
 def _number_to_words_es_usd(amount: Decimal) -> str:
@@ -182,9 +255,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_descuento = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
-        effective_unit_price = item.unit_price
-        line_total = _q2(effective_unit_price * item.quantity)
-        line_discount = _q2(min(line_total, Decimal(item.discount_amount or 0)))
+        effective_unit_price = money(item.unit_price)
+        line_total = money(effective_unit_price * to_decimal(item.quantity or 0))
+        line_discount = money(min(line_total, money(item.discount_amount)))
         net_line_total = _q2(line_total - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
@@ -198,14 +271,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             desc = f"{desc} ({', '.join(free_mods)})"
 
         if order.iva_exempt:
-            venta_exenta = _q2(net_line_total / Decimal("1.13"))
+            venta_exenta = money(net_line_total / Decimal("1.13"))
             venta_gravada = Decimal("0.00")
             iva_item = Decimal("0.00")
         else:
             venta_exenta = Decimal("0.00")
             venta_gravada = net_line_total
-            base = _q2(net_line_total / Decimal("1.13"))
-            iva_item = _q2(net_line_total - base)
+            base = money(net_line_total / Decimal("1.13"))
+            iva_item = money(net_line_total - base)
 
         total_gravada += venta_gravada
         total_exenta += venta_exenta
@@ -215,32 +288,32 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(effective_unit_price)),
-            "montoDescu": str(line_discount), "ventaNoSuj": "0.00", "ventaExenta": str(venta_exenta),
-            "ventaGravada": str(venta_gravada), "tributos": None, "psv": "0.00", "noGravado": "0.00",
-            "ivaItem": str(iva_item), "codTributo": None, "numeroDocumento": None,
+            "cantidad": json_number(money(item.quantity)), "uniMedida": 59, "precioUni": json_number(money(effective_unit_price)),
+            "montoDescu": json_number(money(line_discount)), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(venta_exenta)),
+            "ventaGravada": json_number(money(venta_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+            "ivaItem": json_number(money(iva_item)), "codTributo": None, "numeroDocumento": None,
         })
         num_item += 1
 
         for mod in paid_mods:
-            mod_total = _q2(Decimal(mod.modifier_price_snapshot))
+            mod_total = money(mod.modifier_price_snapshot)
             if order.iva_exempt:
-                mod_exenta = _q2(mod_total / Decimal("1.13"))
+                mod_exenta = money(mod_total / Decimal("1.13"))
                 mod_gravada = Decimal("0.00")
                 mod_iva = Decimal("0.00")
             else:
                 mod_exenta = Decimal("0.00")
                 mod_gravada = mod_total
-                mod_iva = _q2(mod_total - _q2(mod_total / Decimal("1.13")))
+                mod_iva = money(mod_total - money(mod_total / Decimal("1.13")))
             total_gravada += mod_gravada
             total_exenta += mod_exenta
             total_iva += mod_iva
             cuerpo.append({
                 "numItem": num_item, "tipoItem": 1, "codigo": f"MOD-{item.id}-{num_item}", "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
-                "cantidad": 1, "uniMedida": 59, "precioUni": str(mod_total),
-                "montoDescu": "0.00", "ventaNoSuj": "0.00", "ventaExenta": str(mod_exenta),
-                "ventaGravada": str(mod_gravada), "tributos": None, "psv": "0.00", "noGravado": "0.00",
-                "ivaItem": str(mod_iva), "codTributo": None, "numeroDocumento": None,
+                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(money(mod_total)),
+                "montoDescu": json_number(Decimal("0.00")), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(mod_exenta)),
+                "ventaGravada": json_number(money(mod_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(money(mod_iva)), "codTributo": None, "numeroDocumento": None,
             })
             num_item += 1
 
@@ -268,17 +341,17 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     payment_code, payment_reference = get_mh_payment_info(order)
     resumen = {
-        "totalNoSuj": "0.00", "totalExenta": str(_q2(total_exenta)), "totalGravada": str(_q2(total_gravada)),
-        "subTotalVentas": str(total_pagar), "descuNoSuj": "0.00", "descuExenta": str(_q2(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": str(_q2(total_descuento if not order.iva_exempt else Decimal("0.00"))),
-        "porcentajeDescuento": "0.00", "totalDescu": str(_q2(total_descuento)), "tributos": None, "subTotal": str(total_pagar),
-        "ivaRete1": "0.00", "reteRenta": "0.00", "montoTotalOperacion": str(total_pagar), "totalNoGravado": "0.00",
-        "totalPagar": str(total_pagar), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": str(_q2(total_iva if not order.iva_exempt else Decimal("0.00"))),
-        "saldoFavor": "0.00", "condicionOperacion": 1,
-        "pagos": [{"codigo": payment_code, "montoPago": str(total_pagar), "referencia": payment_reference, "plazo": None, "periodo": None}],
+        "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
+        "subTotalVentas": json_number(money(total_pagar)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
+        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(total_pagar)),
+        "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
+        "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
+        "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
+        "pagos": [{"codigo": payment_code, "montoPago": json_number(money(total_pagar)), "referencia": payment_reference, "plazo": None, "periodo": None}],
         "numPagoElectronico": None,
     }
 
-    return {"dte": {
+    payload = {"dte": {
         "identificacion": {
             "version": 1, "ambiente": ambiente, "tipoDte": "01", "numeroControl": control_number, "codigoGeneracion": generation_code,
             "fecEmi": now.strftime("%Y-%m-%d"), "horEmi": now.strftime("%H:%M:%S"), "tipoOperacion": 1, "tipoModelo": 1,
@@ -294,6 +367,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
+    assert_no_string_numbers(payload)
+    return payload
 
 
 def send_to_bridge(
@@ -305,6 +380,7 @@ def send_to_bridge(
     payment_id: int | None = None,
     branch_id: int | None = None,
 ) -> dict:
+    assert_no_string_numbers(payload)
     ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 

@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -9,7 +10,16 @@ from apps.core.models import Branch, ServiceType
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTERecord
 from apps.dte.services.control import next_control_number
-from apps.dte.services.dte_service import build_payload_cf, interpret_dte_response, get_mh_payment_info
+from apps.dte.services.dte_service import (
+    DTEPreflightError,
+    assert_no_string_numbers,
+    build_payload_cf,
+    get_mh_payment_info,
+    interpret_dte_response,
+    json_number,
+    money,
+    to_decimal,
+)
 from apps.dte.services.emisor import get_emisor_nit
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
@@ -86,7 +96,7 @@ class DTECoreTests(TestCase):
         payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000001", "A" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Nombre histórico")
-        self.assertEqual(first["precioUni"], "4.25")
+        self.assertEqual(first["precioUni"], 4.25)
         self.assertEqual(first["codigo"], "MANUAL-CODE-1")
         self.assertEqual(payload["dte"]["emisor"]["nit"], "12171409901063")
 
@@ -107,8 +117,43 @@ class DTECoreTests(TestCase):
         payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000001", "B" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Producto con ajuste")
-        self.assertEqual(first["precioUni"], "2.10")
+        self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_numeric_fields_are_serialized_as_json_numbers(self):
+        category = Category.objects.create(name="JSON")
+        product = Product.objects.create(name="ItemJSON", description="", price=Decimal("1.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="JSON Item",
+            price_snapshot=Decimal("4.25"),
+            quantity=2,
+            snapshot_sku_or_code="JSON-1",
+            is_custom=True,
+        )
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000099", "C" * 36, "00")
+        serialized = json.dumps(payload, ensure_ascii=False)
+
+        first = payload["dte"]["cuerpoDocumento"][0]
+        self.assertIsInstance(first["precioUni"], float)
+        self.assertIsInstance(first["montoDescu"], int)
+        self.assertIsInstance(payload["dte"]["resumen"]["totalPagar"], float)
+        self.assertIsInstance(payload["dte"]["resumen"]["pagos"][0]["montoPago"], float)
+        self.assertIn('"precioUni": 4.25', serialized)
+        self.assertIn('"totalPagar": 8.5', serialized)
+
+    def test_assert_no_string_numbers_reports_exact_path(self):
+        payload = {"dte": {"resumen": {"totalPagar": "17.71"}}}
+        with self.assertRaises(DTEPreflightError) as ctx:
+            assert_no_string_numbers(payload)
+        self.assertIn("dte.resumen.totalPagar", str(ctx.exception))
+
+    def test_decimal_helpers(self):
+        self.assertEqual(to_decimal("17.71"), Decimal("17.71"))
+        self.assertEqual(money("17.715"), Decimal("17.72"))
+        self.assertEqual(json_number(Decimal("10.00")), 10)
+        self.assertEqual(json_number(Decimal("10.25")), 10.25)
 
     def test_get_mh_payment_info_cash(self):
         Payment.objects.create(order=self.order, method="cash", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))

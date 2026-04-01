@@ -18,7 +18,7 @@ from rest_framework.exceptions import ValidationError
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEOutbox, DTERecord
 from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
-from apps.dte.services.dte_service import build_payload_cf
+from apps.dte.services.dte_service import DTEPreflightError, assert_no_string_numbers, build_payload_cf
 from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.orders.models import OrderInvoice
 
@@ -381,6 +381,12 @@ def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTE
 
 
 def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
+    try:
+        assert_no_string_numbers(payload)
+    except DTEPreflightError as exc:
+        DTE_LOGGER.error("[DTE OUTBOX] payload validation failed order=%s payment=%s error=%s", order.id, getattr(payment, "id", None), exc)
+        raise
+
     with transaction.atomic():
         outbox = _get_or_create_pending_outbox(order, payment, payload, dte_record=dte_record)
         if not attempt_immediate:
@@ -449,6 +455,7 @@ def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | Non
 
 def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
     payload = outbox.payload or outbox.payload_json or {}
+    assert_no_string_numbers(payload)
     payload, _ = _repair_payload_nit_if_needed(outbox, payload)
     outbox.refresh_from_db(fields=["status"])
     if outbox.status == DTEOutbox.STATUS_FAILED:
