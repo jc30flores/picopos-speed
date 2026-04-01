@@ -125,15 +125,28 @@ def _number_to_words_es_usd(amount: Decimal) -> str:
     return f"{txt} DOLARES CON {centavos:02d} CENTAVOS"
 
 
-def _payment_code(order) -> str:
+def get_mh_payment_info(order) -> tuple[str, str | None]:
     payment = order.payments.select_related("payment_method").order_by("-id").first()
-    code = (payment.payment_method.code if payment and payment.payment_method_id else payment.method.upper() if payment else "")
-    return {
-        "CASH": "01", "cash": "01", "EFECTIVO": "01",
-        "CARD": "02", "card": "02",
-        "TRANSFER": "03", "transfer": "03",
-        "PEDIDOS_YA": "99", "PAYPAL": "99",
-    }.get(code, "99")
+    if not payment:
+        return "01", None
+
+    method_code = (payment.payment_method.code if payment.payment_method_id else payment.method or "").strip().upper()
+    normalized_method = (payment.method or "").strip().lower()
+    reference = (payment.reference or "").strip() or None
+
+    if normalized_method == "cash" or method_code in {"CASH", "EFECTIVO"}:
+        return "01", reference
+
+    if normalized_method == "card" or method_code.startswith("CARD") or method_code == "TARJETA":
+        card_type = (getattr(payment, "card_type", "") or "").strip().lower()
+        return ("03" if card_type == "credit" else "02"), reference
+
+    if normalized_method == "transfer" or method_code in {"TRANSFER", "PEDIDOS_YA", "PAYPAL"}:
+        return "05", reference
+
+    fallback_reference = reference or f"OTRO: {method_code or normalized_method or 'METODO_DESCONOCIDO'}"
+    logger.warning("dte.payment_method_unknown method=%s method_code=%s payment_id=%s", normalized_method, method_code, getattr(payment, "id", None))
+    return "99", fallback_reference
 
 
 def build_payload_cf(order, control_number: str, generation_code: str, ambiente: str) -> dict:
@@ -260,6 +273,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
     }
 
+    payment_code, payment_reference = get_mh_payment_info(order)
     resumen = {
         "totalNoSuj": "0.00", "totalExenta": str(_q2(total_exenta)), "totalGravada": str(_q2(total_gravada)),
         "subTotalVentas": str(total_pagar), "descuNoSuj": "0.00", "descuExenta": str(_q2(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": str(_q2(total_descuento if not order.iva_exempt else Decimal("0.00"))),
@@ -267,7 +281,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "ivaRete1": "0.00", "reteRenta": "0.00", "montoTotalOperacion": str(total_pagar), "totalNoGravado": "0.00",
         "totalPagar": str(total_pagar), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": str(_q2(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": "0.00", "condicionOperacion": 1,
-        "pagos": [{"codigo": _payment_code(order), "montoPago": str(total_pagar), "referencia": None, "plazo": None, "periodo": None}],
+        "pagos": [{"codigo": payment_code, "montoPago": str(total_pagar), "referencia": payment_reference, "plazo": None, "periodo": None}],
         "numPagoElectronico": None,
     }
 

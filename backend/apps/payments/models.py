@@ -28,6 +28,7 @@ class Payment(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="payments")
     payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, null=True, blank=True, related_name="payments")
     method = models.CharField(max_length=20, choices=METHOD_CHOICES)
+    card_type = models.CharField(max_length=10, blank=True, default="")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     cash_received = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     tip_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

@@ -199,6 +199,7 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [cardType, setCardType] = useState<"debit" | "credit">("debit");
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -708,7 +709,8 @@ const POS = () => {
       const first = methods[0];
       if (first) {
         setSelectedPaymentMethodCode(first.code);
-        const fallback = first.isCash ? "cash" : first.code === "CARD" ? "card" : "transfer";
+        const code = (first.code || "").toUpperCase();
+        const fallback = first.isCash ? "cash" : code === "CARD" ? "card" : "transfer";
         setPaymentMethod(fallback as PaymentMethod);
       }
     }).catch(() => undefined);
@@ -1057,6 +1059,7 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
+        cardType: paymentMethod === "card" ? cardType : undefined,
         amount: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
@@ -1888,17 +1891,53 @@ const POS = () => {
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Método</Label>
-                      <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>{paymentMethods.map((m) => <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>)}</SelectContent>
-                      </Select>
+                  <div className="space-y-3">
+                    <Label>Método</Label>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {[
+                        { code: "CASH", label: "Efectivo", method: "cash" as PaymentMethod },
+                        { code: "CARD", label: "Tarjeta", method: "card" as PaymentMethod },
+                        { code: "TRANSFER", label: "Transferencia", method: "transfer" as PaymentMethod },
+                        { code: "PEDIDOS_YA", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
+                        { code: "PAYPAL", label: "PayPal", method: "transfer" as PaymentMethod },
+                      ].map((option) => (
+                        <Button
+                          key={option.code}
+                          type="button"
+                          variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
+                          className="h-12"
+                          onClick={() => {
+                            setSelectedPaymentMethodCode(option.code);
+                            setPaymentMethod(option.method);
+                          }}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
                     </div>
-                    {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                    {paymentMethod === "card" && (
                       <div className="space-y-2">
-                        <Label>Referencia</Label>
+                        <Label>Tipo de tarjeta</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button type="button" variant={cardType === "debit" ? "default" : "outline"} onClick={() => setCardType("debit")}>Débito</Button>
+                          <Button type="button" variant={cardType === "credit" ? "default" : "outline"} onClick={() => setCardType("credit")}>Crédito</Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Se enviará a Hacienda como Tarjeta {cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.
+                        </p>
+                      </div>
+                    )}
+                    {(paymentMethod === "card" || selectedPaymentMethodCode === "TRANSFER" || selectedPaymentMethodCode === "PEDIDOS_YA" || selectedPaymentMethodCode === "PAYPAL") && (
+                      <div className="space-y-2">
+                        <Label>
+                          {selectedPaymentMethodCode === "PEDIDOS_YA"
+                            ? "Código de pedido / referencia (opcional)"
+                            : selectedPaymentMethodCode === "PAYPAL"
+                              ? "ID de transacción (opcional)"
+                              : paymentMethod === "card"
+                                ? "Voucher / Autorización (opcional)"
+                                : "Referencia (opcional)"}
+                        </Label>
                         <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
                       </div>
                     )}

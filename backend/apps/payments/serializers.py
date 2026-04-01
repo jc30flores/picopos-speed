@@ -22,6 +22,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     received_by = serializers.CharField(source="received_by.username", read_only=True)
     payment_method_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
+    card_type = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Payment
@@ -36,6 +37,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "amount_applied",
             "cash_received",
             "tip_amount",
+            "card_type",
             "reference",
             "received_by",
             "created_at",
@@ -62,6 +64,15 @@ class PaymentSerializer(serializers.ModelSerializer):
 
         if payment_method and not attrs.get("method"):
             attrs["method"] = payment_method.code.lower().replace("pedidos_ya", "transfer").replace("paypal", "transfer")
+
+        method_value = (attrs.get("method") or "").strip().lower()
+        card_type = (attrs.get("card_type") or "").strip().lower()
+        if method_value == "card":
+            if card_type not in {"debit", "credit"}:
+                raise serializers.ValidationError({"card_type": "Debe seleccionar tipo de tarjeta: débito o crédito."})
+            attrs["card_type"] = card_type
+        else:
+            attrs["card_type"] = ""
 
         if amount <= 0:
             raise serializers.ValidationError("Amount must be greater than 0")

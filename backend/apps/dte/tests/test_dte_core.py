@@ -9,10 +9,11 @@ from apps.core.models import Branch, ServiceType
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTERecord
 from apps.dte.services.control import next_control_number
-from apps.dte.services.dte_service import build_payload_cf, interpret_dte_response
+from apps.dte.services.dte_service import build_payload_cf, interpret_dte_response, get_mh_payment_info
 from apps.dte.services.emisor import get_emisor_nit
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
+from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
 
@@ -108,6 +109,44 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], "2.10")
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_get_mh_payment_info_cash(self):
+        Payment.objects.create(order=self.order, method="cash", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, reference = get_mh_payment_info(self.order)
+        self.assertEqual(code, "01")
+        self.assertIsNone(reference)
+
+    def test_get_mh_payment_info_card_debit_and_credit(self):
+        Payment.objects.create(order=self.order, method="card", card_type="debit", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, _ = get_mh_payment_info(self.order)
+        self.assertEqual(code, "02")
+        self.order.payments.all().delete()
+        Payment.objects.create(order=self.order, method="card", card_type="credit", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, _ = get_mh_payment_info(self.order)
+        self.assertEqual(code, "03")
+
+    def test_get_mh_payment_info_transfer_aliases(self):
+        transfer_method = PaymentMethod.objects.create(code="TRANSFER", name="Transferencia")
+        py_method = PaymentMethod.objects.create(code="PEDIDOS_YA", name="Pedidos Ya")
+        pp_method = PaymentMethod.objects.create(code="PAYPAL", name="PayPal")
+        Payment.objects.create(order=self.order, method="transfer", payment_method=transfer_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, _ = get_mh_payment_info(self.order)
+        self.assertEqual(code, "05")
+        self.order.payments.all().delete()
+        Payment.objects.create(order=self.order, method="transfer", payment_method=py_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, _ = get_mh_payment_info(self.order)
+        self.assertEqual(code, "05")
+        self.order.payments.all().delete()
+        Payment.objects.create(order=self.order, method="transfer", payment_method=pp_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, _ = get_mh_payment_info(self.order)
+        self.assertEqual(code, "05")
+
+    def test_get_mh_payment_info_unknown_uses_99_and_reference(self):
+        unknown_method = PaymentMethod.objects.create(code="CRYPTO", name="Crypto")
+        Payment.objects.create(order=self.order, method="transfer", payment_method=unknown_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
+        code, reference = get_mh_payment_info(self.order)
+        self.assertEqual(code, "99")
+        self.assertTrue(reference)
 
     @patch("apps.dte.client.DTEClient._build_url")
     @patch("apps.dte.client.requests.Session.post")

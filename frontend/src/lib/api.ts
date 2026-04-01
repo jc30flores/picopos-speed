@@ -315,6 +315,7 @@ export type Payment = {
   id: number;
   orderId: number;
   method: PaymentMethod;
+  cardType?: "debit" | "credit";
   amount: number;
   cashReceived?: number;
   tipAmount: number;
@@ -2576,6 +2577,7 @@ export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
   paymentMethodCode?: string;
+  cardType?: "debit" | "credit";
   amount: number;
   cashReceived?: number;
   tipAmount?: number;
@@ -2597,6 +2599,7 @@ export const createPayment = async (payload: {
       amount_applied: amountStr,
       cash_received: cashReceivedStr,
       tip_amount: tipAmountStr,
+      card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
     }),
   });
@@ -2606,6 +2609,7 @@ export const createPayment = async (payload: {
     method: PaymentMethod;
     amount: string;
     tip_amount: string;
+    card_type?: "debit" | "credit" | "";
     reference: string;
     received_by: string | null;
     created_at: string;
@@ -2621,6 +2625,7 @@ export const createPayment = async (payload: {
     amount: Number(data.amount),
     cashReceived: payload.cashReceived,
     tipAmount: Number(data.tip_amount),
+    cardType: (data.card_type as "debit" | "credit" | "") || undefined,
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,
     createdAt: new Date(data.created_at),
