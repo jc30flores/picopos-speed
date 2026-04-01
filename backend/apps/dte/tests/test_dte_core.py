@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
 from apps.dte.client import DTEClient
-from apps.dte.models import DTEBranchConfig, DTERecord
+from apps.dte.models import DTEBranchConfig, DTEControlCounter, DTERecord
 from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import (
     DTEPreflightError,
@@ -20,6 +20,7 @@ from apps.dte.services.dte_service import (
     money,
     to_decimal,
 )
+from apps.dte.services.orchestrator import transmit_sale_dte
 from apps.dte.services.emisor import get_emisor_nit
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
@@ -148,6 +149,31 @@ class DTECoreTests(TestCase):
         with self.assertRaises(DTEPreflightError) as ctx:
             assert_no_string_numbers(payload)
         self.assertIn("dte.resumen.totalPagar", str(ctx.exception))
+
+    def test_assert_no_string_numbers_allows_code_strings(self):
+        payload = {
+            "dte": {
+                "identificacion": {"ambiente": "01"},
+                "emisor": {"tipoEstablecimiento": "02"},
+            }
+        }
+        assert_no_string_numbers(payload)
+
+    def test_assert_no_string_numbers_rejects_pago_monto_string(self):
+        payload = {"dte": {"resumen": {"pagos": [{"montoPago": "113.00"}]}}}
+        with self.assertRaises(DTEPreflightError) as ctx:
+            assert_no_string_numbers(payload)
+        self.assertIn("dte.resumen.pagos[0].montoPago", str(ctx.exception))
+
+    @patch("apps.dte.services.orchestrator.build_payload_cf")
+    def test_preflight_failure_does_not_increment_control_counter(self, mock_build_payload):
+        mock_build_payload.side_effect = DTEPreflightError("payload_preflight_error")
+        self.order.dte_document_type = "CF"
+        self.order.save(update_fields=["dte_document_type"])
+
+        record = transmit_sale_dte(self.order.id)
+        self.assertEqual(record.status, DTERecord.STATUS_REJECTED)
+        self.assertFalse(DTEControlCounter.objects.filter(branch=self.branch).exists())
 
     def test_decimal_helpers(self):
         self.assertEqual(to_decimal("17.71"), Decimal("17.71"))

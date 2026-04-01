@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -108,34 +107,34 @@ def json_number(value: str | int | float | Decimal | None) -> int | float:
     return float(dec)
 
 
-_NUMERIC_STRING_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
-_STRING_NUMERIC_EXEMPT_FIELDS = {
-    "ambiente",
-    "tipoDte",
-    "numeroControl",
-    "codigoGeneracion",
-    "tipoMoneda",
-    "totalLetras",
-    "codigo",
-    "codTributo",
-    "correo",
-    "telefono",
-    "nit",
-    "nrc",
-    "codActividad",
-    "descActividad",
-    "nombre",
-    "nombreComercial",
-    "tipoDocumento",
-    "numDocumento",
-    "departamento",
-    "municipio",
-    "complemento",
-    "descripcion",
-    "referencia",
-    "plazo",
-    "periodo",
-    "codigo",
+_NUMERIC_KEYS = {
+    "cantidad",
+    "precioUni",
+    "montoDescu",
+    "ventaNoSuj",
+    "ventaExenta",
+    "ventaGravada",
+    "psv",
+    "noGravado",
+    "ivaItem",
+    "totalNoSuj",
+    "totalExenta",
+    "totalGravada",
+    "subTotalVentas",
+    "descuNoSuj",
+    "descuExenta",
+    "descuGravada",
+    "porcentajeDescuento",
+    "totalDescu",
+    "subTotal",
+    "ivaRete1",
+    "reteRenta",
+    "montoTotalOperacion",
+    "totalNoGravado",
+    "totalPagar",
+    "totalIva",
+    "saldoFavor",
+    "montoPago",
 }
 
 
@@ -143,7 +142,7 @@ def assert_no_string_numbers(payload: Any, path: str = "") -> None:
     if isinstance(payload, dict):
         for key, value in payload.items():
             next_path = f"{path}.{key}" if path else str(key)
-            if isinstance(value, str) and key not in _STRING_NUMERIC_EXEMPT_FIELDS and _NUMERIC_STRING_RE.match(value.strip()):
+            if key in _NUMERIC_KEYS and isinstance(value, str):
                 raise DTEPreflightError(f"Campo numérico serializado como string en '{next_path}': {value!r}")
             assert_no_string_numbers(value, next_path)
         return
