@@ -186,6 +186,7 @@ const POS = () => {
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
+  const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
   const postOpenSessionActionRef = useRef<(() => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
@@ -855,15 +856,33 @@ const POS = () => {
   };
 
   const handleOpenDrawer = async () => {
+    const now = Date.now();
+    if (now - lastDrawerOpenAtRef.current < 500) return;
+    lastDrawerOpenAtRef.current = now;
     setIsOpeningDrawer(true);
     try {
-      await openCashDrawer();
-      toast.success("ABRIENDO CAJON DE DINERO.");
+      await triggerDrawerOpen({ showSuccessToast: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
     } finally {
       setIsOpeningDrawer(false);
     }
+  };
+
+  const isCashPaymentSelected = (method: PaymentMethod, methodCode?: string): boolean => {
+    if (method === "cash") return true;
+    const normalizedCode = String(methodCode || "").trim().toLowerCase();
+    return ["cash", "efectivo"].some((token) => normalizedCode.includes(token));
+  };
+
+  const triggerDrawerOpen = async ({ showSuccessToast }: { showSuccessToast: boolean }): Promise<boolean> => {
+    const result = await openCashDrawer();
+    if (result.ok) {
+      if (showSuccessToast) toast.success("Pulso enviado a la gaveta");
+      return true;
+    }
+    toast.error(`No se pudo abrir la gaveta: ${result.message}`);
+    return false;
   };
 
   const closeExtrasDialog = (open: boolean) => {
@@ -1079,6 +1098,13 @@ const POS = () => {
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
+      const shouldOpenDrawer = isCashPaymentSelected(paymentMethod, selectedPaymentMethodCode);
+      console.debug("payment success -> opening drawer", { shouldOpenDrawer, paymentMethod, selectedPaymentMethodCode });
+      if (shouldOpenDrawer) {
+        void triggerDrawerOpen({ showSuccessToast: false }).catch(() => {
+          toast.error("No se pudo abrir la gaveta");
+        });
+      }
       if (refreshed.paymentStatus === "paid") {
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {

@@ -3075,17 +3075,13 @@ export const createCashPayout = async (amount: number, description: string): Pro
   }));
 };
 
-export const openCashDrawer = async (): Promise<{ ok: boolean; message: string }> => {
+export const openCashDrawer = async (): Promise<{ ok: boolean; message: string; error?: string | null }> => {
   const response = await request('/cashier/drawer/open/', { method: 'POST' });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok) {
-    const reason = String(payload.reason || payload.error || payload.detail || `Error del servidor (${response.status})`);
-    const hint = payload.hint ? ` ${String(payload.hint)}` : "";
-    throw new Error(`${reason}${hint}`.trim());
-  }
   return {
-    ok: Boolean(payload.ok ?? true),
-    message: String(payload.message ?? "ABRIENDO CAJON DE DINERO."),
+    ok: Boolean(payload.success ?? payload.ok ?? response.ok),
+    message: String(payload.message ?? payload.reason ?? "No se pudo abrir la gaveta"),
+    error: payload.error ? String(payload.error) : null,
   };
 };
 

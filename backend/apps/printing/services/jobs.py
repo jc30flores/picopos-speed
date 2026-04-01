@@ -1,3 +1,6 @@
+import json
+
+from django.core.serializers.json import DjangoJSONEncoder
 from django.conf import settings
 from apps.orders.models import Order
 from apps.printing.models import PrintJob
@@ -7,6 +10,10 @@ from apps.printing.services.renderers import (
     render_refund_ticket,
     render_void_ticket,
 )
+
+
+def json_safe(value):
+    return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
 
 
 def create_print_job(order: Order, job_type: str, requested_by=None, event: str | None = None) -> PrintJob:
@@ -22,7 +29,7 @@ def create_print_job(order: Order, job_type: str, requested_by=None, event: str 
         status="rendered",
         content_text=payload["text"],
         content_html=payload.get("html", ""),
-        meta=meta,
+        meta=json_safe(meta),
         requested_by=requested_by,
     )
     return job
@@ -40,7 +47,7 @@ def create_refund_print_job(refund, requested_by=None) -> PrintJob:
         status="rendered",
         content_text=payload["text"],
         content_html=payload.get("html", ""),
-        meta=payload.get("meta", {}),
+        meta=json_safe(payload.get("meta", {})),
         requested_by=requested_by,
     )
 
@@ -53,6 +60,6 @@ def create_void_print_job(order: Order, reason: str, requested_by=None) -> Print
         status="rendered",
         content_text=payload["text"],
         content_html=payload.get("html", ""),
-        meta=payload.get("meta", {}),
+        meta=json_safe(payload.get("meta", {})),
         requested_by=requested_by,
     )

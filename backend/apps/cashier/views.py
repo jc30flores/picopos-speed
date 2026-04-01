@@ -23,7 +23,7 @@ from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
-from apps.cashier.services import CashDrawerError, CashDrawerRuntimeError, CashDrawerService
+from apps.cashier.services import CashDrawerService
 
 logger = logging.getLogger(__name__)
 
@@ -363,53 +363,65 @@ class CashDrawerOpenView(APIView):
             "branch": branch_name or "N/A",
             "session_id": getattr(session, "id", None),
         }
-        try:
-            result = CashDrawerService().open_drawer()
-        except CashDrawerRuntimeError as exc:
-            message = str(exc)
-            logger.exception("cash_drawer.open.failed", extra={**log_extra, "error": message})
+        result = CashDrawerService().open_drawer()
+        if not result.success:
+            logger.warning("cash_drawer.open.failed", extra={**log_extra, "error": result.message, "error_code": result.error})
             return Response(
                 {
                     "ok": False,
                     "success": False,
-                    "error": message,
-                    "reason": message,
-                    "hint": "Revisa permisos USB/udev y si el dispositivo está ocupado.",
-                    "detail": message,
+                    "variant": result.variant,
+                    "on": result.on,
+                    "off": result.off,
+                    "error": result.error,
+                    "message": result.message,
                 },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status=status.HTTP_200_OK,
             )
-        except CashDrawerError as exc:
-            message = str(exc)
-            logger.warning("cash_drawer.open.failed", extra={**log_extra, "error": message})
-            return Response(
-                {
-                    "ok": False,
-                    "success": False,
-                    "error": message,
-                    "reason": message,
-                    "hint": "Configura CASH_DRAWER_USB_* y habilita CASH_DRAWER_ENABLED=1.",
-                    "detail": message,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except Exception:
-            logger.exception("cash_drawer.open.failed", extra={**log_extra, "error": "unexpected_error"})
-            return Response({"ok": False, "success": False, "error": "Failed to open drawer", "reason": "Failed to open drawer"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        logger.info(
-            "cash_drawer.open.success",
-            extra={
-                **log_extra,
-                "vendor_id": hex(result.vendor_id),
-                "product_id": hex(result.product_id),
-                "interface": result.interface,
-                "out_endpoint": hex(result.out_endpoint),
-                "in_endpoint": (hex(result.in_endpoint) if result.in_endpoint is not None else None),
-            },
-        )
+        logger.info("cash_drawer.open.success", extra={**log_extra, "vendor_id": result.vendor_id, "product_id": result.product_id, "interface": result.interface, "out_endpoint": result.out_endpoint})
         log_audit(request, "cash_drawer.open", "CashSession", getattr(session, "id", None), {"branch": branch_name or ""})
-        return Response({"ok": True, "success": True, "message": "Cash drawer opened successfully"})
+        return Response(
+            {
+                "ok": True,
+                "success": True,
+                "variant": result.variant,
+                "on": result.on,
+                "off": result.off,
+                "error": None,
+                "message": result.message or "Pulso enviado a la gaveta",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CashDrawerTestView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        variant = request.data.get("variant")
+        on = request.data.get("on")
+        off = request.data.get("off")
+        try:
+            parsed_variant = None if variant is None else int(variant)
+            parsed_on = None if on is None else int(on)
+            parsed_off = None if off is None else int(off)
+        except (TypeError, ValueError):
+            return Response({"success": False, "error": "PARAMS", "message": "Parámetros inválidos"}, status=status.HTTP_200_OK)
+
+        result = CashDrawerService().open_drawer(variant=parsed_variant, on=parsed_on, off=parsed_off)
+        return Response(
+            {
+                "success": bool(result.success),
+                "variant": result.variant,
+                "on": result.on,
+                "off": result.off,
+                "command_hex": result.command_hex,
+                "error": result.error or None,
+                "message": result.message,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class CashDrawerStatusView(APIView):

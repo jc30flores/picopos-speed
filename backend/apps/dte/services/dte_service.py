@@ -12,6 +12,7 @@ from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
+from apps.dte.services.payment_methods import get_cat017_code_and_label
 
 
 logger = logging.getLogger(__name__)
@@ -130,23 +131,15 @@ def get_mh_payment_info(order) -> tuple[str, str | None]:
     if not payment:
         return "01", None
 
-    method_code = (payment.payment_method.code if payment.payment_method_id else payment.method or "").strip().upper()
-    normalized_method = (payment.method or "").strip().lower()
+    method_code = str(payment.payment_method.code if payment.payment_method_id else payment.method or "").strip()
     reference = (payment.reference or "").strip() or None
+    code, label_es = get_cat017_code_and_label(payment)
 
-    if normalized_method == "cash" or method_code in {"CASH", "EFECTIVO"}:
-        return "01", reference
-
-    if normalized_method == "card" or method_code.startswith("CARD") or method_code == "TARJETA":
-        card_type = (getattr(payment, "card_type", "") or "").strip().lower()
-        return ("03" if card_type == "credit" else "02"), reference
-
-    if normalized_method == "transfer" or method_code in {"TRANSFER", "PEDIDOS_YA", "PAYPAL"}:
-        return "05", reference
-
-    fallback_reference = reference or f"OTRO: {method_code or normalized_method or 'METODO_DESCONOCIDO'}"
-    logger.warning("dte.payment_method_unknown method=%s method_code=%s payment_id=%s", normalized_method, method_code, getattr(payment, "id", None))
-    return "99", fallback_reference
+    if code == "99":
+        fallback_reference = reference or label_es
+        logger.warning("dte.payment_method_unknown method=%s payment_id=%s", method_code, getattr(payment, "id", None))
+        return code, fallback_reference
+    return code, reference
 
 
 def build_payload_cf(order, control_number: str, generation_code: str, ambiente: str) -> dict:
