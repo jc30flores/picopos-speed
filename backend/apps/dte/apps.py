@@ -62,7 +62,7 @@ class DTEConfig(AppConfig):
         interval = _env("DTE_MONITOR_INTERVAL_SECONDS", "10")
         config_msg = (
             "[DTE] Config loaded "
-            f"MH_AMBIENTE={_env('MH_AMBIENTE', _env('DTE_AMBIENTE', '00'))} "
+            f"MH_AMBIENTE={_env('MH_AMBIENTE', _env('DTE_AMBIENTE', '01'))} "
             f"DTE_BASE_URL={_env('DTE_BASE_URL', '')} "
             f"AUTH_HEADER={_env('DTE_API_AUTH_HEADER', 'Authorization')} "
             f"AUTH_PREFIX={_env('DTE_API_AUTH_PREFIX', 'Bearer')} "

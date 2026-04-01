@@ -316,7 +316,7 @@ def send_to_bridge(
         msg = f"[DTE] endpoint error: {exc}"
         logger.error(msg)
         print(msg)
-        print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
+        print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '01'))} DTE_BASE_URL={base_url}")
         print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
         print(payload_pretty)
         return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
