@@ -7,6 +7,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
+from apps.core.models import Customer
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTEControlCounter, DTERecord
 from apps.dte.services.control import next_control_number
@@ -120,6 +121,69 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
+        self.order.customer = Customer.objects.create(
+            name="CONSUMIDOR FINAL",
+            full_name="CONSUMIDOR FINAL",
+            client_type="CF",
+            dui="00000000-0",
+            tipo_documento="13",
+            num_documento="00000000-0",
+            correo="",
+            is_consumer_final=True,
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000010", "D" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+        self.assertIsNone(receptor["tipoDocumento"])
+        self.assertIsNone(receptor["numDocumento"])
+        self.assertIsNone(receptor["nrc"])
+        self.assertTrue(receptor["correo"])
+        self.assertNotEqual(receptor["correo"], "")
+
+    def test_receptor_with_real_dui_uses_tipo_documento_13_and_dui(self):
+        self.order.customer = Customer.objects.create(
+            name="Cliente DUI",
+            full_name="Cliente DUI",
+            client_type="CF",
+            dui="01234567-8",
+            tipo_documento="13",
+            num_documento="01234567-8",
+            correo="cliente@correo.com",
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000011", "E" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+        self.assertEqual(receptor["tipoDocumento"], "13")
+        self.assertEqual(receptor["numDocumento"], "01234567-8")
+
+    def test_receptor_optional_fields_never_send_empty_string(self):
+        self.order.customer = Customer.objects.create(
+            name="Cliente sin opcionales",
+            full_name="Cliente sin opcionales",
+            client_type="CCF",
+            tipo_documento="36",
+            num_documento="0614-010101-101-1",
+            nrc="",
+            correo="",
+            telefono="",
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000012", "F" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+
+        def _assert_no_empty_strings(value):
+            if isinstance(value, dict):
+                for nested in value.values():
+                    _assert_no_empty_strings(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    _assert_no_empty_strings(nested)
+            elif isinstance(value, str):
+                self.assertNotEqual(value, "")
+
+        _assert_no_empty_strings(receptor)
 
     def test_numeric_fields_are_serialized_as_json_numbers(self):
         category = Category.objects.create(name="JSON")

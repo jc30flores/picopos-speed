@@ -152,6 +152,30 @@ def assert_no_string_numbers(payload: Any, path: str = "") -> None:
             assert_no_string_numbers(value, next_path)
 
 
+def _none_if_blank(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return value
+
+
+def _has_real_dui(value: str | None) -> bool:
+    if not value:
+        return False
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return len(digits) == 9 and digits != "000000000"
+
+
+def validate_receptor_payload(receptor: dict[str, Any]) -> None:
+    tipo_documento = receptor.get("tipoDocumento")
+    num_documento = receptor.get("numDocumento")
+    if tipo_documento is None and num_documento is not None:
+        raise DTEPreflightError("Si receptor.tipoDocumento es null, receptor.numDocumento también debe ser null")
+    for key, value in receptor.items():
+        if isinstance(value, str) and not value.strip():
+            raise DTEPreflightError(f"receptor.{key} no puede ser string vacío")
+
+
 def _number_to_words_es_usd(amount: Decimal) -> str:
     units = ["CERO", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"]
     teens = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"]
@@ -230,21 +254,6 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     now = timezone.localtime()
     customer = getattr(order, "customer", None)
-    receptor = {
-        "tipoDocumento": (customer.tipo_documento if customer else "13"),
-        "numDocumento": ((customer.num_documento if customer else "00000000-0") if not (customer and getattr(customer, 'client_type', '') == 'SX' and customer.dui) else customer.dui.replace('-', '')),
-        "nombre": ((customer.full_name or customer.name) if customer else order.customer_name or "CONSUMIDOR FINAL"),
-        "nrc": ((customer.nrc or customer.nrc) if customer else None),
-        "codActividad": ((customer.activity_code or customer.cod_actividad) if customer else None),
-        "descActividad": ((customer.activity_description or customer.desc_actividad) if customer else None),
-        "direccion": {
-            "departamento": ((customer.department_code or customer.direccion_departamento) if customer else "12"),
-            "municipio": ((customer.municipality_code or customer.direccion_municipio) if customer else "22"),
-            "complemento": ((customer.direccion or customer.direccion_complemento) if customer else "Direccion del cliente"),
-        },
-        "telefono": (customer.telefono if customer else "00000000"),
-        "correo": (customer.correo if customer else None),
-    }
 
     cuerpo = []
     num_item = 1
@@ -337,6 +346,38 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "complemento": emisor.get("complemento") or "Direccion emisor pendiente",
         },
     }
+
+    is_consumer_final = bool(
+        not customer
+        or getattr(customer, "is_consumer_final", False)
+        or str(getattr(customer, "client_type", "CF") or "CF").upper() == "CF"
+    )
+    has_real_dui = _has_real_dui(getattr(customer, "dui", None)) or _has_real_dui(getattr(customer, "num_documento", None))
+    receptor_tipo_documento = None
+    receptor_num_documento = None
+    if has_real_dui:
+        receptor_tipo_documento = "13"
+        receptor_num_documento = _none_if_blank(getattr(customer, "dui", None) or getattr(customer, "num_documento", None))
+    elif not is_consumer_final:
+        receptor_tipo_documento = _none_if_blank(getattr(customer, "tipo_documento", None))
+        receptor_num_documento = _none_if_blank(getattr(customer, "num_documento", None))
+
+    receptor = {
+        "tipoDocumento": receptor_tipo_documento,
+        "numDocumento": receptor_num_documento,
+        "nombre": _none_if_blank((customer.full_name or customer.name) if customer else order.customer_name or "CONSUMIDOR FINAL"),
+        "nrc": None if is_consumer_final else _none_if_blank(getattr(customer, "nrc", None)),
+        "codActividad": _none_if_blank((customer.activity_code or customer.cod_actividad) if customer else None),
+        "descActividad": _none_if_blank((customer.activity_description or customer.desc_actividad) if customer else None),
+        "direccion": {
+            "departamento": _none_if_blank((customer.department_code or customer.direccion_departamento) if customer else "12"),
+            "municipio": _none_if_blank((customer.municipality_code or customer.direccion_municipio) if customer else "22"),
+            "complemento": _none_if_blank((customer.direccion or customer.direccion_complemento) if customer else "Direccion del cliente"),
+        },
+        "telefono": _none_if_blank(customer.telefono if customer else "00000000"),
+        "correo": _none_if_blank((customer.correo if customer else None)) or _none_if_blank(emisor_payload.get("correo")),
+    }
+    validate_receptor_payload(receptor)
 
     payment_code, payment_reference = get_mh_payment_info(order)
     resumen = {
