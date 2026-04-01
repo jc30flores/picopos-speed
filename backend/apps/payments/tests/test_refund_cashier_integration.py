@@ -76,7 +76,7 @@ class RefundCashierIntegrationTests(TestCase):
         self.assertEqual(current.status_code, 200)
         self.assertEqual(Decimal(str(current.data["summary"]["expected_cash_in_drawer"])), Decimal("108.00"))
 
-    def test_card_refund_does_not_create_cash_transaction(self):
+    def test_card_refund_creates_non_cash_info_transaction(self):
         self._open_session("100.00")
         order, payment = self._create_order_and_payment(method="card", payment_method=self.card_method, amount="10.00")
 
@@ -95,7 +95,9 @@ class RefundCashierIntegrationTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertFalse(CashTransaction.objects.filter(refund_id=response.data["refund"]["id"]).exists())
+        tx = CashTransaction.objects.filter(refund_id=response.data["refund"]["id"]).first()
+        self.assertIsNotNone(tx)
+        self.assertEqual(tx.type, "card")
 
     def test_same_refund_cash_out_creation_is_idempotent(self):
         self._open_session("100.00")

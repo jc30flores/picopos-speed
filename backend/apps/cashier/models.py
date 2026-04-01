@@ -77,6 +77,10 @@ class CashTransaction(models.Model):
         ("cash_in", "Cash In"),
         ("expense", "Expense"),
         ("payout", "Payout"),
+        ("card", "Card"),
+        ("transfer", "Transfer"),
+        ("pedidosya", "PedidosYa"),
+        ("paypal", "PayPal"),
     ]
 
     session = models.ForeignKey(CashSession, on_delete=models.CASCADE, related_name="transactions")
@@ -85,6 +89,13 @@ class CashTransaction(models.Model):
     description = models.TextField()
     refund = models.OneToOneField(
         "payments.Refund",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cash_transaction",
+    )
+    payment = models.OneToOneField(
+        "payments.Payment",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
