@@ -878,7 +878,7 @@ const POS = () => {
   const triggerDrawerOpen = async ({ showSuccessToast }: { showSuccessToast: boolean }): Promise<boolean> => {
     const result = await openCashDrawer();
     if (result.ok) {
-      if (showSuccessToast) toast.success("Pulso enviado a la gaveta");
+      if (showSuccessToast) toast.success("Gaveta abierta");
       return true;
     }
     toast.error(`No se pudo abrir la gaveta: ${result.message}`);

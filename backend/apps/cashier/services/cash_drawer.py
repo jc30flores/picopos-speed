@@ -33,6 +33,12 @@ class CashDrawerOpenResult:
 
 
 class CashDrawerService:
+    # Legacy hardware note: this printer/drawer combo opened reliably only when
+    # a tiny payload was written immediately before the ESC/POS kick command.
+    # Keep this priming write in the same USB flow that historically worked,
+    # but avoid printing any visible text on paper.
+    LEGACY_DRAWER_PRIME_BYTES = b"\n"
+
     def _parse_hex_bytes(self, value: str) -> bytes:
         chunks = [chunk for chunk in value.replace(",", " ").split() if chunk]
         if not chunks:
@@ -117,6 +123,7 @@ class CashDrawerService:
             while attempts < 2:
                 attempts += 1
                 try:
+                    device.write(out_endpoint_address, self.LEGACY_DRAWER_PRIME_BYTES)
                     device.write(out_endpoint_address, pulse_command)
                     break
                 except usb.core.USBError as exc:
@@ -129,7 +136,7 @@ class CashDrawerService:
 
             return CashDrawerOpenResult(
                 success=True,
-                message="Pulso enviado a la gaveta",
+                message="Gaveta abierta",
                 vendor_id=vendor_id,
                 product_id=product_id,
                 interface=interface_number,
@@ -166,7 +173,7 @@ class CashDrawerService:
             pulse, final_variant, final_on, final_off = self._build_pulse_command(variant=variant, on=on, off=off)
             return CashDrawerOpenResult(
                 success=True,
-                message="Pulso enviado a la gaveta",
+                message="Gaveta abierta",
                 vendor_id=0,
                 product_id=0,
                 interface=0,
@@ -188,7 +195,7 @@ class CashDrawerService:
             return CashDrawerOpenResult(success=False, error="CONFIG", message=str(exc), variant=int(variant or 0), on=int(on or 25), off=int(off or 250))
         except Exception as exc:  # noqa: BLE001
             logger.warning("cash_drawer.open.error error=%s", exc)
-            return CashDrawerOpenResult(success=False, error="UNKNOWN", message="No se pudo enviar pulso a la gaveta", variant=int(variant or 0), on=int(on or 25), off=int(off or 250))
+            return CashDrawerOpenResult(success=False, error="UNKNOWN", message="No se pudo abrir la gaveta", variant=int(variant or 0), on=int(on or 25), off=int(off or 250))
 
     def status(self) -> dict[str, object]:
         missing = self._missing_configuration()

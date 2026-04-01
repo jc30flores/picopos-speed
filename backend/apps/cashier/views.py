@@ -389,7 +389,7 @@ class CashDrawerOpenView(APIView):
                 "on": result.on,
                 "off": result.off,
                 "error": None,
-                "message": result.message or "Pulso enviado a la gaveta",
+                "message": result.message or "Gaveta abierta",
             },
             status=status.HTTP_200_OK,
         )
