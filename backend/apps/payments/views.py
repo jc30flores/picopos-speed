@@ -138,8 +138,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             transaction.on_commit(_after_commit_dte)
             if payment.method == "cash":
                 try:
-                    CashDrawerService().open_drawer()
-                    print_result["drawer_opened"] = True
+                    drawer_result = CashDrawerService().open_drawer()
+                    print_result["drawer_opened"] = bool(drawer_result.success)
+                    if not drawer_result.success:
+                        print_result["drawer_error"] = drawer_result.message or drawer_result.error
                 except Exception as drawer_exc:  # noqa: BLE001
                     print_result["drawer_error"] = str(drawer_exc)
         else:

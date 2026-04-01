@@ -18,11 +18,13 @@ class CashDrawerRuntimeError(CashDrawerError):
 
 @dataclass
 class CashDrawerOpenResult:
-    vendor_id: int
-    product_id: int
-    interface: int
-    out_endpoint: int
-    in_endpoint: int | None
+    success: bool
+    message: str = ""
+    error: str = ""
+    vendor_id: int | None = None
+    product_id: int | None = None
+    interface: int | None = None
+    out_endpoint: int | None = None
 
 
 class CashDrawerService:
@@ -32,23 +34,25 @@ class CashDrawerService:
             raise ValueError("empty pulse command")
         return bytes(int(chunk, 16) for chunk in chunks)
 
-    def _default_pulse_command(self, pin: int | None) -> bytes:
-        drawer_selector = 0 if pin in (None, 2) else 1
-        return bytes((0x1B, 0x70, drawer_selector, 0x19, 0xFA))
+    def _default_pulse_command(self) -> bytes:
+        pin = int(getattr(settings, "CASH_DRAWER_KICK_PIN", 0) or 0)
+        on = int(getattr(settings, "CASH_DRAWER_KICK_ON", 25) or 25)
+        off = int(getattr(settings, "CASH_DRAWER_KICK_OFF", 250) or 250)
+        return bytes((0x1B, 0x70, pin, on, off))
 
     def _build_pulse_command(self) -> bytes:
-        if settings.CASH_DRAWER_PULSE_COMMAND:
+        if getattr(settings, "CASH_DRAWER_PULSE_COMMAND", ""):
             try:
                 return self._parse_hex_bytes(settings.CASH_DRAWER_PULSE_COMMAND)
             except Exception as exc:
                 raise CashDrawerError("Invalid CASH_DRAWER_PULSE_COMMAND format") from exc
-        return self._default_pulse_command(settings.CASH_DRAWER_PIN)
+        return self._default_pulse_command()
 
     def _missing_configuration(self) -> list[str]:
         required = {
-            "CASH_DRAWER_USB_VENDOR_ID": settings.CASH_DRAWER_USB_VENDOR_ID,
-            "CASH_DRAWER_USB_PRODUCT_ID": settings.CASH_DRAWER_USB_PRODUCT_ID,
-            "CASH_DRAWER_USB_INTERFACE": settings.CASH_DRAWER_USB_INTERFACE,
+            "USB_VENDOR_ID": getattr(settings, "CASH_DRAWER_USB_VENDOR_ID", None) or getattr(settings, "RECEIPT_PRINTER_USB_VENDOR_ID", None) or getattr(settings, "PRINTER_USB_VENDOR_ID", None),
+            "USB_PRODUCT_ID": getattr(settings, "CASH_DRAWER_USB_PRODUCT_ID", None) or getattr(settings, "RECEIPT_PRINTER_USB_PRODUCT_ID", None) or getattr(settings, "PRINTER_USB_PRODUCT_ID", None),
+            "USB_INTERFACE": getattr(settings, "CASH_DRAWER_USB_INTERFACE", None) or getattr(settings, "RECEIPT_PRINTER_USB_INTERFACE", None) or getattr(settings, "PRINTER_USB_INTERFACE", None),
         }
         return [name for name, value in required.items() if value is None]
 
@@ -63,10 +67,10 @@ class CashDrawerService:
         if missing:
             raise CashDrawerError(f"Printer not configured. Missing: {', '.join(missing)}")
 
-        vendor_id = int(settings.CASH_DRAWER_USB_VENDOR_ID)
-        product_id = int(settings.CASH_DRAWER_USB_PRODUCT_ID)
-        interface_number = int(settings.CASH_DRAWER_USB_INTERFACE)
-        configured_out_ep = settings.CASH_DRAWER_USB_OUT_ENDPOINT
+        vendor_id = int(getattr(settings, "CASH_DRAWER_USB_VENDOR_ID", None) or getattr(settings, "RECEIPT_PRINTER_USB_VENDOR_ID", None) or getattr(settings, "PRINTER_USB_VENDOR_ID", 0))
+        product_id = int(getattr(settings, "CASH_DRAWER_USB_PRODUCT_ID", None) or getattr(settings, "RECEIPT_PRINTER_USB_PRODUCT_ID", None) or getattr(settings, "PRINTER_USB_PRODUCT_ID", 0))
+        interface_number = int(getattr(settings, "CASH_DRAWER_USB_INTERFACE", None) or getattr(settings, "RECEIPT_PRINTER_USB_INTERFACE", None) or getattr(settings, "PRINTER_USB_INTERFACE", 0))
+        configured_out_ep = getattr(settings, "CASH_DRAWER_USB_OUT_ENDPOINT", None) or getattr(settings, "RECEIPT_PRINTER_USB_OUT_ENDPOINT", None) or getattr(settings, "PRINTER_USB_OUT_ENDPOINT", None)
         configured_in_ep = settings.CASH_DRAWER_USB_IN_ENDPOINT
         pulse_command = self._build_pulse_command()
 
@@ -104,22 +108,15 @@ class CashDrawerService:
                     raise CashDrawerError("No BULK OUT endpoint found on configured interface")
                 out_endpoint_address = int(bulk_out.bEndpointAddress)
 
-            if in_endpoint_address is None:
-                bulk_in = usb.util.find_descriptor(
-                    interface,
-                    custom_match=lambda endpoint: usb.util.endpoint_direction(endpoint.bEndpointAddress) == usb.util.ENDPOINT_IN
-                    and usb.util.endpoint_type(endpoint.bmAttributes) == usb.util.ENDPOINT_TYPE_BULK,
-                )
-                in_endpoint_address = int(bulk_in.bEndpointAddress) if bulk_in is not None else None
-
             device.write(out_endpoint_address, pulse_command)
 
             return CashDrawerOpenResult(
+                success=True,
+                message="Cash drawer opened successfully",
                 vendor_id=vendor_id,
                 product_id=product_id,
                 interface=interface_number,
                 out_endpoint=out_endpoint_address,
-                in_endpoint=in_endpoint_address,
             )
         except CashDrawerError:
             raise
@@ -140,15 +137,25 @@ class CashDrawerService:
 
     def open_drawer(self) -> CashDrawerOpenResult:
         if not settings.CASH_DRAWER_ENABLED:
-            raise CashDrawerError("Cash drawer integration is disabled")
+            return CashDrawerOpenResult(success=False, error="DISABLED", message="Cash drawer integration is disabled")
 
         mode = (settings.CASH_DRAWER_MODE or "mock").lower()
         if mode == "mock":
             logger.info("cash_drawer.open.mock_pulse")
-            return CashDrawerOpenResult(vendor_id=0, product_id=0, interface=0, out_endpoint=0, in_endpoint=None)
+            return CashDrawerOpenResult(success=True, message="Cash drawer opened successfully", vendor_id=0, product_id=0, interface=0, out_endpoint=0)
         if mode != "usb":
-            raise CashDrawerError(f"Unsupported CASH_DRAWER_MODE: {mode}")
-        return self._open_drawer_usb()
+            return CashDrawerOpenResult(success=False, error="MODE", message=f"Unsupported CASH_DRAWER_MODE: {mode}")
+        try:
+            return self._open_drawer_usb()
+        except CashDrawerRuntimeError as exc:
+            logger.warning("cash_drawer.open.runtime_error error=%s", exc)
+            return CashDrawerOpenResult(success=False, error="RUNTIME", message=str(exc))
+        except CashDrawerError as exc:
+            logger.warning("cash_drawer.open.config_error error=%s", exc)
+            return CashDrawerOpenResult(success=False, error="CONFIG", message=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cash_drawer.open.error error=%s", exc)
+            return CashDrawerOpenResult(success=False, error="UNKNOWN", message="Failed to open drawer")
 
     def status(self) -> dict[str, object]:
         missing = self._missing_configuration()

@@ -186,6 +186,7 @@ const POS = () => {
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
+  const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
   const postOpenSessionActionRef = useRef<(() => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
@@ -855,10 +856,17 @@ const POS = () => {
   };
 
   const handleOpenDrawer = async () => {
+    const now = Date.now();
+    if (now - lastDrawerOpenAtRef.current < 500) return;
+    lastDrawerOpenAtRef.current = now;
     setIsOpeningDrawer(true);
     try {
-      await openCashDrawer();
-      toast.success("ABRIENDO CAJON DE DINERO.");
+      const result = await openCashDrawer();
+      if (result.ok) {
+        toast.success("Gaveta abierta");
+      } else {
+        toast.error(`No se pudo abrir la gaveta: ${result.message}`);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
     } finally {
@@ -1079,6 +1087,15 @@ const POS = () => {
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
+      if (paymentMethod === "cash") {
+        void openCashDrawer().then((drawer) => {
+          if (!drawer.ok) {
+            toast.error(`No se pudo abrir la gaveta: ${drawer.message}`);
+          }
+        }).catch(() => {
+          toast.error("No se pudo abrir la gaveta");
+        });
+      }
       if (refreshed.paymentStatus === "paid") {
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {
