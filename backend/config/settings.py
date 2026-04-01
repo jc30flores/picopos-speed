@@ -44,7 +44,7 @@ def _env_int(name: str, default: int | None = None) -> int | None:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "pico-de-gallo-pos.cuskatech.com"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "monaco-pdg.cuskatech.com"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -161,7 +161,7 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
-    "https://pico-de-gallo-pos.cuskatech.com",
+    "https://monaco-pdg.cuskatech.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -170,7 +170,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
     "http://localhost:9102",
-    "https://pico-de-gallo-pos.cuskatech.com",
+    "https://monaco-pdg.cuskatech.com",
 ]
 
 USE_X_FORWARDED_HOST = True

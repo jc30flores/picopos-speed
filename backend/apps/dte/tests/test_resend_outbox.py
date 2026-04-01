@@ -49,7 +49,7 @@ class DTEResendEndpointAndOutboxTests(TestCase):
             branch=self.branch,
             dte_type="CF_01",
             status=DTERecord.STATUS_PENDING,
-            control_number="DTE-01-M001P001-000000000000101",
+            control_number="DTE-01-S001P001-000000000000101",
             generation_code="B" * 36,
             codigo_generacion="B" * 36,
             request_payload={"dte": {"identificacion": {"tipoDte": "01"}}},
@@ -60,7 +60,7 @@ class DTEResendEndpointAndOutboxTests(TestCase):
             "dte": {
                 "identificacion": {
                     "tipoDte": "01",
-                    "numeroControl": "DTE-01-M001P001-000000000000101",
+                    "numeroControl": "DTE-01-S001P001-000000000000101",
                     "codigoGeneracion": "B" * 36,
                 },
                 "emisor": {"nit": "12171409901063"},

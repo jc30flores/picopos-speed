@@ -21,10 +21,10 @@ def build_generation_code(current: str | None = None) -> str:
     return (current or str(uuid.uuid4())).upper()
 
 
-def reserve_next_control(*, branch, document_type: str, series: str = "M001P001", ambiente: str = "00", year: int | None = None) -> str:
+def reserve_next_control(*, branch, document_type: str, series: str = "S001P001", ambiente: str = "00", year: int | None = None) -> str:
     now = timezone.localtime()
     year_value = int(year or now.year)
-    normalized_series = (series or "M001P001").upper()
+    normalized_series = (series or "S001P001").upper()
     establishment_code = normalized_series[:4]
     pos_code = normalized_series[4:8]
 
@@ -48,7 +48,7 @@ def reserve_next_control(*, branch, document_type: str, series: str = "M001P001"
 
 def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "00") -> str:
     cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
-    est_code = (cfg.cod_estable if cfg and cfg.cod_estable else "M001")
+    est_code = (cfg.cod_estable if cfg and cfg.cod_estable else "S001")
     pv_code = (cfg.cod_punto_venta if cfg and cfg.cod_punto_venta else "P001")
     return reserve_next_control(
         branch=order.branch,

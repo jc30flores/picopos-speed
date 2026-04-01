@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="dtecontrolcounter",
             name="establishment_code",
-            field=models.CharField(default="M001", max_length=4),
+            field=models.CharField(default="S001", max_length=4),
         ),
         migrations.AlterField(
             model_name="dtecontrolcounter",

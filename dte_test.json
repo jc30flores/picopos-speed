@@ -4,7 +4,7 @@
       "version": 1,
       "ambiente": "00",
       "tipoDte": "01",
-      "numeroControl": "DTE-01-M001P001-000000000000011",
+      "numeroControl": "DTE-01-S001P001-000000000000011",
       "codigoGeneracion": "758FFF1B-8A01-4FF7-ABF0-BE0A13325CC6",
       "fecEmi": "2026-03-25",
       "horEmi": "15:28:39",
@@ -22,8 +22,8 @@
       "codActividad": "56101",
       "descActividad": "Restaurantes y puestos de comidas",
       "tipoEstablecimiento": "02",
-      "codEstableMH": "M001",
-      "codEstable": "M001",
+      "codEstableMH": "S001",
+      "codEstable": "S001",
       "codPuntoVentaMH": "P001",
       "codPuntoVenta": "P001",
       "telefono": "60038807",
@@ -31,7 +31,7 @@
       "direccion": {
         "departamento": "12",
         "municipio": "22",
-        "complemento": "9AV NORTE BO SAN FRANCISCO,#507, FRENTE COSTADO SUR DEL PENAL,SAN MIGUEL SAN MIGUEL"
+        "complemento": "CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6 SAN MIGUEL."
       }
     },
     "receptor": {
