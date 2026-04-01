@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download } from "lucide-react";
+import { CalendarIcon, Search, Download, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   createRefund,
@@ -84,6 +84,15 @@ const mapStatus = (
     return "reembolsado";
   }
   return "completado";
+};
+
+const mapPaymentMethodLabel = (value: string): string => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) return "N/A";
+  if (normalized.includes("cash") || normalized.includes("efectivo")) return "Efectivo";
+  if (normalized.includes("card") || normalized.includes("tarjeta")) return "Tarjeta";
+  if (normalized.includes("transfer")) return "Transferencia";
+  return value;
 };
 
 export const SalesHistoryTab = () => {
@@ -171,7 +180,7 @@ export const SalesHistoryTab = () => {
           customerName: row.customerName || "-",
           serviceType: serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
-          paymentMethod: row.paymentMethod || "N/A",
+          paymentMethod: mapPaymentMethodLabel(row.paymentMethod || ""),
           items: 0,
           subtotal: row.subtotal,
           tax: row.tax,
@@ -491,11 +500,21 @@ export const SalesHistoryTab = () => {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Nº pedido, No. control o cliente..."
+                  placeholder="Buscar por Nº pedido, No. control o cliente…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9"
+                  className="h-12 pl-10 pr-10 text-base"
                 />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    aria-label="Limpiar búsqueda"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -519,22 +538,17 @@ export const SalesHistoryTab = () => {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-auto max-h-[70vh]">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
                   <TableHead>Fecha y hora</TableHead>
                   <TableHead>Nº de pedido</TableHead>
                   <TableHead>No. de control</TableHead>
                   <TableHead>Cliente</TableHead>
                   <TableHead>Tipo de servicio</TableHead>
-                  <TableHead>Canal</TableHead>
                   <TableHead>Método de pago</TableHead>
-                  <TableHead>Items</TableHead>
-                  <TableHead className="text-right">Subtotal</TableHead>
-                  <TableHead className="text-right">Impuesto</TableHead>
                   <TableHead className="text-right">Total</TableHead>
-                  <TableHead>Cajero</TableHead>
                   <TableHead>Estado</TableHead>
                   <TableHead>Acciones</TableHead>
                 </TableRow>
@@ -543,7 +557,7 @@ export const SalesHistoryTab = () => {
                 {filteredSales.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={14}
+                      colSpan={9}
                       className="text-center text-muted-foreground py-8"
                     >
                       No se encontraron ventas
@@ -551,7 +565,7 @@ export const SalesHistoryTab = () => {
                   </TableRow>
                 ) : (
                   filteredSales.map((sale) => (
-                    <TableRow key={sale.id}>
+                    <TableRow key={sale.id} className="h-14 hover:bg-muted/40">
                       <TableCell className="font-medium">
                         {formatDateTimeSV(sale.date)}
                       </TableCell>
@@ -563,22 +577,9 @@ export const SalesHistoryTab = () => {
                       </TableCell>
                       <TableCell>{sale.customerName}</TableCell>
                       <TableCell>{sale.serviceType}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{sale.channel}</Badge>
-                      </TableCell>
                       <TableCell>{sale.paymentMethod}</TableCell>
-                      <TableCell>{sale.items}</TableCell>
-                      <TableCell className="text-right">
-                        ${sale.subtotal.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        ${sale.tax.toFixed(2)}
-                      </TableCell>
                       <TableCell className="text-right font-semibold">
                         ${sale.total.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {sale.cashier}
                       </TableCell>
                       <TableCell>{getStatusBadge(sale.status)}</TableCell>
                       <TableCell>

@@ -47,6 +47,33 @@ class CashierFlowTests(TestCase):
         self.assertEqual(statuses.count(200), 7)
         self.assertEqual(CashSession.objects.filter(opened_by=user, status='open').count(), 1)
 
+    def test_current_session_returns_open_even_when_opened_by_another_user(self):
+        user_model = get_user_model()
+        opener = user_model.objects.create_user(username='cash_other', password='pw')
+        UserProfile.objects.create(user=opener, role='cashier', is_active=True)
+        opener_client = APIClient()
+        opener_client.force_authenticate(opener)
+        open_response = opener_client.post('/api/cashier/session/open/', {'opening_cash_amount': '50.00'}, format='json')
+        self.assertIn(open_response.status_code, {200, 201})
+
+        current = self.client.get('/api/cashier/session/current/')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('open'), True)
+
+    def test_open_session_returns_200_if_register_already_open(self):
+        first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(first.status_code, 201)
+
+        user_model = get_user_model()
+        user2 = user_model.objects.create_user(username='cash_second', password='pw')
+        UserProfile.objects.create(user=user2, role='cashier', is_active=True)
+        second_client = APIClient()
+        second_client.force_authenticate(user2)
+        second = second_client.post('/api/cashier/session/open/', {'opening_cash_amount': '10.00'}, format='json')
+
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data.get('already_open'), True)
+
     def test_create_expense_ok(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         res = self.client.post('/api/cashier/transactions/', {'type': 'cash_out', 'amount': '5.00', 'description': 'Proveedor'}, format='json')

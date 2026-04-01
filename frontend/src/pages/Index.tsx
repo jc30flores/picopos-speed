@@ -795,7 +795,24 @@ const POS = () => {
       postOpenSessionActionRef.current = null;
       action?.();
     } catch (error) {
-      toast.error(`No se pudo aperturar la caja: ${error instanceof Error ? error.message : "Error desconocido"}`);
+      const message = error instanceof Error ? error.message : "Error desconocido";
+      if (message.includes("409") || message.toLowerCase().includes("abierta")) {
+        try {
+          const current = await getCurrentCashSession();
+          setCashSnapshot(current);
+          if (current.open) {
+            setIsOpenSessionModalOpen(false);
+            const action = postOpenSessionActionRef.current;
+            postOpenSessionActionRef.current = null;
+            action?.();
+            toast.success("Caja ya estaba aperturada");
+            return;
+          }
+        } catch {
+          // fallback to generic error below
+        }
+      }
+      toast.error(`No se pudo aperturar la caja: ${message}`);
     } finally {
       setIsSavingCashAction(false);
     }

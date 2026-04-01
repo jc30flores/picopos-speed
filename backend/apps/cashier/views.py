@@ -28,8 +28,18 @@ from apps.cashier.services import CashDrawerError, CashDrawerRuntimeError, CashD
 logger = logging.getLogger(__name__)
 
 
-def _get_open_session_for_user(user):
-    return CashSession.objects.filter(opened_by=user, status="open").select_related("register", "register__branch").first()
+def _get_open_session_for_register(register):
+    return (
+        CashSession.objects.filter(register=register, status="open", closed_at__isnull=True)
+        .select_related("register", "register__branch")
+        .first()
+    )
+
+
+def _get_open_session_for_request(request, register_id=None):
+    register = _ensure_register(register_id or request.query_params.get("register_id") or request.data.get("register_id"))
+    session = _get_open_session_for_register(register)
+    return register, session
 
 
 def _ensure_register(register_id=None):
@@ -68,7 +78,7 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        session = _get_open_session_for_user(request.user)
+        _, session = _get_open_session_for_request(request)
         if not session:
             return Response({"open": False}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session)
@@ -99,14 +109,13 @@ class CashSessionOpenView(APIView):
         existing_session = (
             CashSession.objects.select_for_update()
             .select_related("register", "register__branch")
-            .filter(opened_by=request.user, status="open")
+            .filter(register=register, status="open", closed_at__isnull=True)
             .first()
         )
         if existing_session:
-            return Response(CashSessionSerializer(existing_session).data, status=status.HTTP_200_OK)
-
-        if CashSession.objects.select_for_update().filter(register=register, status="open").exists():
-            return Response({"detail": "La caja seleccionada ya está abierta."}, status=status.HTTP_409_CONFLICT)
+            payload = CashSessionSerializer(existing_session).data
+            payload["already_open"] = True
+            return Response(payload, status=status.HTTP_200_OK)
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
@@ -118,7 +127,7 @@ class CashSessionCloseView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        session = _get_open_session_for_user(request.user)
+        _, session = _get_open_session_for_request(request)
         if not session:
             return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -200,7 +209,7 @@ class CashTransactionListCreateView(APIView):
         if session_id:
             session = CashSession.objects.filter(pk=session_id).first()
         else:
-            session = _get_open_session_for_user(request.user)
+            _, session = _get_open_session_for_request(request)
         if not session:
             return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(session=session).order_by("-created_at")
@@ -212,7 +221,7 @@ class CashTransactionListCreateView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        session = _get_open_session_for_user(request.user)
+        _, session = _get_open_session_for_request(request)
         if not session:
             return Response({"detail": "No hay caja abierta"}, status=status.HTTP_409_CONFLICT)
 
@@ -330,7 +339,7 @@ class CashDrawerOpenView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def post(self, request):
-        session = _get_open_session_for_user(request.user)
+        _, session = _get_open_session_for_request(request)
         branch_name = getattr(getattr(session, "register", None), "branch", None)
         branch_name = getattr(branch_name, "name", None)
         log_extra = {
