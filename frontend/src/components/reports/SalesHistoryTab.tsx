@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download } from "lucide-react";
+import { CalendarIcon, Search, Download, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   createRefund,
@@ -49,15 +49,18 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
+import { useAuth } from "@/context/useAuth";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
-type PaymentMethodFilter = "all" | "efectivo" | "tarjeta" | "transferencia";
+type PaymentMethodFilter = "all" | "cash" | "card" | "transfer";
 
 interface Sale {
   id: string;
   date: Date;
   orderNumber: string;
+  controlNumber: string;
+  customerName: string;
   serviceType: string;
   channel: string;
   paymentMethod: string;
@@ -83,7 +86,18 @@ const mapStatus = (
   return "completado";
 };
 
+const mapPaymentMethodLabel = (value: string): string => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) return "N/A";
+  if (normalized.includes("cash") || normalized.includes("efectivo")) return "Efectivo";
+  if (normalized.includes("card") || normalized.includes("tarjeta")) return "Tarjeta";
+  if (normalized.includes("transfer")) return "Transferencia";
+  return value;
+};
+
 export const SalesHistoryTab = () => {
+  const { user } = useAuth();
+  const restrictedRole = user?.role === "cashier" || user?.role === "manager";
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
@@ -92,7 +106,9 @@ export const SalesHistoryTab = () => {
   const serviceTypeLabelByKey = useMemo(() => new Map(serviceTypes.map((item) => [item.key, item.label])), [serviceTypes]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [sales, setSales] = useState<Sale[]>([]);
+  const requestSequence = useRef(0);
   const [isRefundOpen, setIsRefundOpen] = useState(false);
   const [isVoidOpen, setIsVoidOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
@@ -130,21 +146,41 @@ export const SalesHistoryTab = () => {
     }
   }, [timeRange]);
 
-  const loadSales = () => {
+  useEffect(() => {
+    const normalized = searchQuery.trim();
+    if (!normalized) {
+      setDebouncedSearchQuery("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(normalized);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const loadSales = (currentSearch: string) => {
+    const currentRequest = ++requestSequence.current;
     const serviceTypeFilter = serviceType === "all" ? undefined : serviceType;
+    const todayLocal = getLocalDateSV(new Date());
+    const useGlobalSearch = currentSearch.length > 0;
     return getSalesReport({
-      dateFrom,
-      dateTo,
+      dateFrom: restrictedRole && !useGlobalSearch ? todayLocal : dateFrom,
+      dateTo: restrictedRole && !useGlobalSearch ? todayLocal : dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
+      today: undefined,
+      search: useGlobalSearch ? currentSearch : undefined,
     })
       .then((report) => {
+        if (currentRequest !== requestSequence.current) return;
         const mapped = report.rows.map((row) => ({
           id: String(row.orderId),
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
+          controlNumber: row.controlNumber || "-",
+          customerName: row.customerName || "-",
           serviceType: serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
-          paymentMethod: "N/A",
+          paymentMethod: mapPaymentMethodLabel(row.paymentMethod || ""),
           items: 0,
           subtotal: row.subtotal,
           tax: row.tax,
@@ -163,19 +199,23 @@ export const SalesHistoryTab = () => {
   };
 
   useEffect(() => {
-    loadSales();
-  }, [dateFrom, dateTo, serviceType]);
+    void loadSales(debouncedSearchQuery);
+  }, [dateFrom, dateTo, serviceType, debouncedSearchQuery, restrictedRole]);
 
-  const filteredSales = sales.filter((sale) => {
+  const filteredSales = restrictedRole
+    ? sales
+    : sales.filter((sale) => {
     const matchesSearch =
       sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      sale.controlNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      sale.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesService =
       serviceType === "all" ||
       sale.serviceType.toLowerCase().replace(" ", "-") === serviceType;
     const matchesPayment =
       paymentMethod === "all" ||
-      sale.paymentMethod.toLowerCase() === paymentMethod;
+      sale.paymentMethod.toLowerCase().includes(paymentMethod);
     return matchesSearch && matchesService && matchesPayment;
   });
 
@@ -316,34 +356,36 @@ export const SalesHistoryTab = () => {
       {/* Filters Section */}
       <Card>
         <CardContent className="pt-6 space-y-4">
-          {/* Time Range Filters */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              Período de tiempo
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { value: "daily", label: "Diario" },
-                { value: "weekly", label: "Semanal" },
-                { value: "monthly", label: "Mensual" },
-                { value: "all", label: "Todos" },
-              ].map((range) => (
-                <Button
-                  key={range.value}
-                  variant={timeRange === range.value ? "default" : "outline"}
-                  onClick={() => setTimeRange(range.value as TimeRange)}
-                  className="rounded-full"
-                >
-                  {range.label}
-                </Button>
-              ))}
+          {!restrictedRole ? (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                Período de tiempo
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "daily", label: "Diario" },
+                  { value: "weekly", label: "Semanal" },
+                  { value: "monthly", label: "Mensual" },
+                  { value: "all", label: "Todos" },
+                ].map((range) => (
+                  <Button
+                    key={range.value}
+                    variant={timeRange === range.value ? "default" : "outline"}
+                    onClick={() => setTimeRange(range.value as TimeRange)}
+                    className="rounded-full"
+                  >
+                    {range.label}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Filtro activo: <strong>Hoy</strong>.</p>
+          )}
 
           {/* Date Range Pickers */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            {/* Start Date */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Desde
               </label>
@@ -372,10 +414,10 @@ export const SalesHistoryTab = () => {
                   />
                 </PopoverContent>
               </Popover>
-            </div>
+            </div> : null}
 
             {/* End Date */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Hasta
               </label>
@@ -404,10 +446,10 @@ export const SalesHistoryTab = () => {
                   />
                 </PopoverContent>
               </Popover>
-            </div>
+            </div> : null}
 
             {/* Service Type Filter */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Tipo de servicio
               </label>
@@ -425,10 +467,10 @@ export const SalesHistoryTab = () => {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </div> : null}
 
             {/* Payment Method Filter */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Método de pago
               </label>
@@ -443,12 +485,12 @@ export const SalesHistoryTab = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="efectivo">Efectivo</SelectItem>
-                  <SelectItem value="tarjeta">Tarjeta</SelectItem>
-                  <SelectItem value="transferencia">Transferencia</SelectItem>
+                  <SelectItem value="cash">Efectivo</SelectItem>
+                  <SelectItem value="card">Tarjeta</SelectItem>
+                  <SelectItem value="transfer">Transferencia</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </div> : null}
 
             {/* Search */}
             <div className="space-y-2">
@@ -458,11 +500,21 @@ export const SalesHistoryTab = () => {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Nº pedido o cajero..."
+                  placeholder="Buscar por Nº pedido, No. control o cliente…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9"
+                  className="h-12 pl-10 pr-10 text-base"
                 />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    aria-label="Limpiar búsqueda"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -474,9 +526,11 @@ export const SalesHistoryTab = () => {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>Transacciones</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              Total de ventas: <span className="font-semibold text-foreground">${totalSales.toFixed(2)}</span> · {filteredSales.length} transacciones
-            </p>
+            {!restrictedRole ? (
+              <p className="text-sm text-muted-foreground mt-1">
+                Total de ventas: <span className="font-semibold text-foreground">${totalSales.toFixed(2)}</span> · {filteredSales.length} transacciones
+              </p>
+            ) : null}
           </div>
           <Button variant="outline" size="sm">
             <Download className="h-4 w-4 mr-2" />
@@ -484,20 +538,17 @@ export const SalesHistoryTab = () => {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-auto max-h-[70vh]">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
                   <TableHead>Fecha y hora</TableHead>
                   <TableHead>Nº de pedido</TableHead>
+                  <TableHead>No. de control</TableHead>
+                  <TableHead>Cliente</TableHead>
                   <TableHead>Tipo de servicio</TableHead>
-                  <TableHead>Canal</TableHead>
                   <TableHead>Método de pago</TableHead>
-                  <TableHead>Items</TableHead>
-                  <TableHead className="text-right">Subtotal</TableHead>
-                  <TableHead className="text-right">Impuesto</TableHead>
                   <TableHead className="text-right">Total</TableHead>
-                  <TableHead>Cajero</TableHead>
                   <TableHead>Estado</TableHead>
                   <TableHead>Acciones</TableHead>
                 </TableRow>
@@ -506,7 +557,7 @@ export const SalesHistoryTab = () => {
                 {filteredSales.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={12}
+                      colSpan={9}
                       className="text-center text-muted-foreground py-8"
                     >
                       No se encontraron ventas
@@ -514,30 +565,21 @@ export const SalesHistoryTab = () => {
                   </TableRow>
                 ) : (
                   filteredSales.map((sale) => (
-                    <TableRow key={sale.id}>
+                    <TableRow key={sale.id} className="h-14 hover:bg-muted/40">
                       <TableCell className="font-medium">
                         {formatDateTimeSV(sale.date)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {sale.orderNumber}
                       </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {sale.controlNumber}
+                      </TableCell>
+                      <TableCell>{sale.customerName}</TableCell>
                       <TableCell>{sale.serviceType}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{sale.channel}</Badge>
-                      </TableCell>
                       <TableCell>{sale.paymentMethod}</TableCell>
-                      <TableCell>{sale.items}</TableCell>
-                      <TableCell className="text-right">
-                        ${sale.subtotal.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        ${sale.tax.toFixed(2)}
-                      </TableCell>
                       <TableCell className="text-right font-semibold">
                         ${sale.total.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {sale.cashier}
                       </TableCell>
                       <TableCell>{getStatusBadge(sale.status)}</TableCell>
                       <TableCell>

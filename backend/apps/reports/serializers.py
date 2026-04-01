@@ -14,4 +14,7 @@ class SalesReportSerializer(serializers.Serializer):
     financial_status = serializers.CharField()
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2)
     net_paid = serializers.DecimalField(max_digits=10, decimal_places=2)
+    customer_name = serializers.CharField(required=False, allow_blank=True)
+    control_number = serializers.CharField(required=False, allow_blank=True)
+    payment_method = serializers.CharField(required=False, allow_blank=True)
     sale_snapshot = serializers.JSONField(required=False)

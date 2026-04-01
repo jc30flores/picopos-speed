@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Plus, Search } from "lucide-react";
@@ -27,7 +27,6 @@ const ROLE_OPTIONS = [
 export const EmployeesTab = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedBranch, setSelectedBranch] = useState("all");
   const [selectedRole, setSelectedRole] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -59,17 +58,6 @@ export const EmployeesTab = () => {
     loadEmployees();
   }, [searchQuery, selectedRole, selectedStatus]);
 
-  const branchOptions = useMemo(() => {
-    const options = employees.map((employee) => employee.branch).filter(Boolean);
-    const unique = Array.from(new Set(options));
-    return unique.length ? unique : ["Sucursal Centro", "Sucursal Norte"];
-  }, [employees]);
-
-  const filteredEmployees = employees.filter((emp) => {
-    const matchesBranch = selectedBranch === "all" || emp.branch === selectedBranch;
-    return matchesBranch;
-  });
-
   const handleOpenDialog = (employee?: Employee) => {
     setEditingEmployee(employee || null);
     setIsDialogOpen(true);
@@ -81,46 +69,35 @@ export const EmployeesTab = () => {
   };
 
   const handleSaveEmployee = async (employeeData: EmployeeFormData) => {
-    const userIdentifier = employeeData.userIdentifier ?? "";
+    const username = employeeData.username ?? "";
     const userPassword = employeeData.userPassword ?? "";
-    const userRole = employeeData.userRole ?? "";
-    const createUser = employeeData.createUser ?? false;
-    const userPayload = createUser
-      ? {
-          username: userIdentifier,
-          email: userIdentifier.includes("@") ? userIdentifier : "",
-          password: userPassword,
-          role: userRole,
-        }
-      : undefined;
+    const userPayload = {
+      username,
+      password: userPassword,
+      role: employeeData.role ?? "",
+    };
     try {
       if (editingEmployee) {
         await updateEmployee(editingEmployee.id, {
-          ...employeeData,
-          createUser,
-          user: userPayload
-            ? {
-                ...userPayload,
-                password: userPassword || undefined,
-              }
-            : undefined,
+          name: employeeData.name,
+          role: employeeData.role,
+          status: employeeData.status,
+          createUser: true,
+          user: { ...userPayload, password: userPassword || undefined },
         });
       } else {
         await createEmployee({
           name: employeeData.name ?? "",
-          email: employeeData.email ?? "",
           role: employeeData.role ?? "",
-          phone: employeeData.phone ?? "",
-          branch: employeeData.branch ?? "",
           status: employeeData.status ?? "active",
-          createUser,
+          createUser: true,
           user: userPayload,
         });
       }
       await loadEmployees();
     } catch (error) {
       console.error("Failed to save employee", error);
-      toast.error(error instanceof Error ? error.message : "No se pudo guardar el empleado");
+      throw error;
     }
   };
 
@@ -190,19 +167,6 @@ export const EmployeesTab = () => {
               <SelectItem value="inactive">Inactivo</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-            <SelectTrigger className="w-full sm:w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas</SelectItem>
-              {branchOptions.map((branch) => (
-                <SelectItem key={branch} value={branch}>
-                  {branch}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
         <Button onClick={() => handleOpenDialog()} className="w-full sm:w-auto">
           <Plus className="h-4 w-4" />
@@ -211,7 +175,7 @@ export const EmployeesTab = () => {
       </div>
 
       <EmployeesTable
-        employees={filteredEmployees}
+        employees={employees}
         isLoading={isLoading}
         onEdit={handleOpenDialog}
         onToggleStatus={handleDeleteEmployee}
@@ -224,7 +188,6 @@ export const EmployeesTab = () => {
         onOpenChange={setIsDialogOpen}
         employee={editingEmployee}
         onSave={handleSaveEmployee}
-        branches={branchOptions}
       />
 
       <EmployeeProfileSheet

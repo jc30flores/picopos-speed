@@ -50,8 +50,8 @@ class CashSession(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["register"],
-                condition=models.Q(status="open"),
-                name="unique_open_session_per_register",
+                condition=models.Q(closed_at__isnull=True),
+                name="unique_open_session_per_register_unclosed",
             )
         ]
 

@@ -36,6 +36,12 @@ class PinAuthTests(TestCase):
         response = self.client.post("/api/auth/pin-login/", {"pin": "000000"}, format="json")
         self.assertEqual(response.status_code, 401)
 
+    def test_pin_login_accepts_leading_zero_pin(self):
+        self.user.set_password("070302")
+        self.user.save(update_fields=["password"])
+        response = self.client.post("/api/auth/pin-login/", {"pin": "070302"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
     def test_pin_login_is_rate_limited_after_5_attempts(self):
         for _ in range(5):
             response = self.client.post("/api/auth/pin-login/", {"pin": "000000"}, format="json")

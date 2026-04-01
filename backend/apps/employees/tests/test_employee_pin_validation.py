@@ -52,6 +52,43 @@ class EmployeePinValidationTests(TestCase):
         with self.assertRaisesMessage(serializers.ValidationError, "PIN ya usado por otro usuario"):
             serializer.save()
 
+    def test_create_employee_accepts_pin_with_leading_zero(self):
+        serializer = EmployeeSerializer(
+            data={
+                "full_name": "Empleado Cero",
+                "email": "empleado0@example.com",
+                "role": "cashier",
+                "status": "active",
+                "create_user": True,
+                "user": {
+                    "username": "empleado0",
+                    "password": "070302",
+                    "role": "cashier",
+                },
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        employee = serializer.save()
+        self.assertTrue(employee.user.check_password("070302"))
+
+    def test_create_employee_rejects_pin_not_six_digits(self):
+        serializer = EmployeeSerializer(
+            data={
+                "full_name": "Empleado Corto",
+                "email": "empleadocorto@example.com",
+                "role": "cashier",
+                "status": "active",
+                "create_user": True,
+                "user": {
+                    "username": "empleadocorto",
+                    "password": "12345",
+                    "role": "cashier",
+                },
+            }
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("PIN", str(serializer.errors))
+
     def test_update_employee_pin_changes_password(self):
         user_model = get_user_model()
         user = user_model.objects.create_user(username="emp3", password="111111", is_active=True)

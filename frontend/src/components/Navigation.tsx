@@ -7,23 +7,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/useAuth";
 import { branchOptions, type BranchOption } from "@/lib/api";
-
-const navItems = [
-  { label: "POS", path: "/" },
-  { label: "Kiosk", path: "/kiosk" },
-  { label: "Cocina", path: "/kitchen" },
-  { label: "Pedidos Clientes", path: "/customer-display" },
-  { label: "Menú & Descuentos", path: "/menu" },
-  { label: "Registros", path: "/registros/ventas" },
-  { label: "DTE", path: "/dte" },
-  { label: "Clientes", path: "/clientes" },
-  { label: "Configuración", path: "/settings" },
-];
+import { allowedNavItemsByRole } from "@/lib/roleAccess";
 
 export const Navigation = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
@@ -66,6 +55,7 @@ export const Navigation = () => {
     if (path.startsWith("/registros")) return location.pathname.startsWith("/registros");
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
+  const navItems = user ? allowedNavItemsByRole[user.role] : [];
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-card border-b border-border shadow-sm">

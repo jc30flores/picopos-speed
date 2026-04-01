@@ -315,6 +315,7 @@ export type Payment = {
   id: number;
   orderId: number;
   method: PaymentMethod;
+  cardType?: "debit" | "credit";
   amount: number;
   cashReceived?: number;
   tipAmount: number;
@@ -351,6 +352,9 @@ export type SalesReportRow = {
   financialStatus: Order["financialStatus"];
   refundTotal: number;
   netPaid: number;
+  customerName: string;
+  controlNumber: string;
+  paymentMethod: string;
 };
 
 export type SalesReportAggregates = {
@@ -499,6 +503,19 @@ export const logout = async (): Promise<void> => {
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
   return handleJson<AuthUser>(response);
+};
+
+export const verifyPrivilegedPin = async (pin: string): Promise<{ ok: boolean; role: "ADMIN" | "GERENTE"; userId: number }> => {
+  const response = await request("/auth/verify-privileged-pin/", {
+    method: "POST",
+    body: JSON.stringify({ pin }),
+  });
+  const data = await handleJson<{ ok: boolean; role: "ADMIN" | "MANAGER" | "GERENTE"; user_id: number }>(response);
+  return {
+    ok: Boolean(data.ok),
+    role: data.role === "MANAGER" ? "GERENTE" : (data.role as "ADMIN" | "GERENTE"),
+    userId: data.user_id,
+  };
 };
 
 let cachedTaxConfig: TaxConfig | null = null;
@@ -1860,12 +1877,19 @@ export const getSalesReport = async (filters?: {
   dateTo?: string;
   serviceType?: Order["serviceType"];
   status?: Order["status"];
+  search?: string;
+  today?: boolean;
 }): Promise<{ rows: SalesReportRow[]; aggregates: SalesReportAggregates }> => {
   const params = new URLSearchParams();
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
   if (filters?.status) params.set("status", filters.status);
+  if (filters?.search) {
+    params.set("search", filters.search);
+    params.set("q", filters.search);
+  }
+  if (filters?.today) params.set("today", "1");
   const query = params.toString();
   const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
@@ -1882,6 +1906,9 @@ export const getSalesReport = async (filters?: {
       financial_status: Order["financialStatus"];
       refund_total: string;
       net_paid: string;
+      customer_name?: string;
+      control_number?: string;
+      payment_method?: string;
     }>;
     aggregates: {
       count_orders: number;
@@ -1925,6 +1952,9 @@ export const getSalesReport = async (filters?: {
       financialStatus: row.financial_status,
       refundTotal: Number(row.refund_total ?? 0),
       netPaid: Number(row.net_paid ?? 0),
+      customerName: String(row.customer_name ?? ""),
+      controlNumber: String(row.control_number ?? ""),
+      paymentMethod: String(row.payment_method ?? ""),
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,
@@ -2194,16 +2224,12 @@ export const createEmployee = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       full_name: payload.name,
-      email: payload.email || null,
-      phone: payload.phone ?? "",
       role: roleKey,
-      branch_name_input: payload.branch || null,
       status: payload.status ?? "active",
       create_user: payload.createUser ?? false,
       user: payload.user
         ? {
             username: payload.user.username,
-            email: payload.user.email || null,
             password: payload.user.password,
             role: userRoleKey ?? payload.user.role,
           }
@@ -2271,17 +2297,13 @@ export const updateEmployee = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...(payload.name !== undefined ? { full_name: payload.name } : {}),
-      ...(payload.email !== undefined ? { email: payload.email || null } : {}),
-      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
       ...(roleKey ? { role: roleKey } : {}),
-      ...(payload.branch !== undefined ? { branch_name_input: payload.branch } : {}),
       ...(payload.status !== undefined ? { status: payload.status } : {}),
       ...(payload.createUser !== undefined ? { create_user: payload.createUser } : {}),
       ...(payload.user
         ? {
             user: {
               ...(payload.user.username !== undefined ? { username: payload.user.username } : {}),
-              ...(payload.user.email !== undefined ? { email: payload.user.email || null } : {}),
               ...(payload.user.password ? { password: payload.user.password } : {}),
               ...(payload.user.role ? { role: userRoleKey ?? payload.user.role } : {}),
             },
@@ -2555,6 +2577,7 @@ export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
   paymentMethodCode?: string;
+  cardType?: "debit" | "credit";
   amount: number;
   cashReceived?: number;
   tipAmount?: number;
@@ -2576,6 +2599,7 @@ export const createPayment = async (payload: {
       amount_applied: amountStr,
       cash_received: cashReceivedStr,
       tip_amount: tipAmountStr,
+      card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
     }),
   });
@@ -2585,6 +2609,7 @@ export const createPayment = async (payload: {
     method: PaymentMethod;
     amount: string;
     tip_amount: string;
+    card_type?: "debit" | "credit" | "";
     reference: string;
     received_by: string | null;
     created_at: string;
@@ -2600,6 +2625,7 @@ export const createPayment = async (payload: {
     amount: Number(data.amount),
     cashReceived: payload.cashReceived,
     tipAmount: Number(data.tip_amount),
+    cardType: (data.card_type as "debit" | "credit" | "") || undefined,
     reference: data.reference ?? undefined,
     receivedBy: data.received_by,
     createdAt: new Date(data.created_at),
@@ -2608,6 +2634,12 @@ export const createPayment = async (payload: {
     drawerOpened: Boolean(data.drawer_opened),
     drawerError: data.drawer_error ?? null,
   };
+};
+
+export const printPaymentTicket = async (paymentId: number): Promise<{ printed: boolean; printError: string | null }> => {
+  const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
+  const data = await handleJson<{ printed: boolean; print_error?: string | null }>(response);
+  return { printed: Boolean(data.printed), printError: data.print_error ?? null };
 };
 
 
@@ -2978,29 +3010,30 @@ export type CashSessionHistoryRow = {
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const response = await request('/cashier/session/current/');
   const data = await handleJson<any>(response);
-  if (!data.open) return { open: false };
+  const session = data.session ?? null;
+  if (!session) return { open: false };
   return {
     open: true,
     session: {
-      id: data.session.id,
-      openingCash: Number(data.session.opening_cash ?? 0),
-      openedAt: data.session.opened_at,
-      status: data.session.status,
+      id: session.id,
+      openingCash: Number(session.opening_cash ?? 0),
+      openedAt: session.opened_at,
+      status: session.status,
     },
     summary: {
-      openingCash: Number(data.summary.opening_cash ?? 0),
-      totalCashSales: Number(data.summary.total_cash_sales ?? 0),
-      totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
-      expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
-      countedCash: Number(data.summary.counted_cash ?? 0),
-      overShortCash: Number(data.summary.difference ?? 0),
+      openingCash: Number(data.summary?.opening_cash ?? 0),
+      totalCashSales: Number(data.summary?.total_cash_sales ?? 0),
+      totalCashOut: Number(data.summary?.cash_expenses_total ?? 0),
+      expectedCashInDrawer: Number(data.summary?.expected_cash_in_drawer ?? 0),
+      countedCash: Number(data.summary?.counted_cash ?? 0),
+      overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
-        cash: Number(data.summary.methods?.CASH?.total ?? 0),
-        card: Number(data.summary.methods?.CARD?.total ?? 0),
-        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(data.summary.cash_in_total ?? 0),
+        cash: Number(data.summary?.methods?.CASH?.total ?? 0),
+        card: Number(data.summary?.methods?.CARD?.total ?? 0),
+        transfer: Number(data.summary?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary?.cash_in_total ?? 0),
       },
     },
   };

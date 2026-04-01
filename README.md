@@ -71,20 +71,28 @@ Configura estas variables en tu entorno para el envío DTE:
 - `DTE_CONNECT_TIMEOUT`, `DTE_READ_TIMEOUT`, `DTE_TIMEOUT_SECONDS`
 - `DTE_MAX_RETRIES`, `DTE_BACKOFF_BASE_SECONDS`, `DTE_BACKOFF_MAX_SECONDS`
 - `DTE_OUTBOX_INTERVAL`, `DTE_OUTBOX_WORKER_ENABLED`
-- `DTE_LOG_LEVEL`, `DTE_LOG_IDLE_EVERY_SECONDS`, `DTE_DEBUG_LOG_PAYLOAD`
+- `DTE_LOG_LEVEL`, `DTE_LOG_IDLE_EVERY_SECONDS`, `DTE_LOG_SILENT_IDLE`, `DTE_DEBUG_LOG_PAYLOAD`
 - `IVA_INCLUDED_DEFAULT`
 - `DTE_EMISOR_DUI`, `DTE_NOMBRE_COMERCIAL`, `DTE_EMISOR_TELEFONO`, `DTE_EMISOR_CORREO`
 
 Valores recomendados para evitar cortes prematuros en worker outbox:
 
 - `DTE_CONNECT_TIMEOUT=5`
-- `DTE_READ_TIMEOUT=120` (o `180` en integraciones lentas)
+- `DTE_TIMEOUT_SECONDS=120` (read timeout efectivo para envío DTE)
+- `DTE_READ_TIMEOUT` es opcional; si no está definido, usa `DTE_TIMEOUT_SECONDS`
 - `DTE_LOG_IDLE_EVERY_SECONDS=300`
+- `DTE_LOG_SILENT_IDLE=1` (evita spam de logs cuando la cola está vacía)
 
 Comando de reintento automático:
 
 ```sh
 python backend/manage.py dte_autoresend --limit 25
+```
+
+Auditoría de tabla/constraints y correlativos (`dte_control_counter`):
+
+```sh
+python backend/manage.py check_dte_counters
 ```
 
 Auditar/reparar NIT emisor en outbox legado:
@@ -132,7 +140,7 @@ Example: create employee
 ```sh
 curl -X POST http://localhost:8102/api/employees/ \
   -H "Content-Type: application/json" \
-  -d '{"full_name":"Maria Gomez","email":"maria@example.com","role":"cashier","status":"active","branch_name_input":"Sucursal Centro"}'
+  -d '{"full_name":"Maria Gomez","role":"cashier","status":"active","create_user":true,"user":{"username":"maria","password":"070302","role":"cashier"}}'
 ```
 
 Example: get active tax config

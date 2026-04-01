@@ -143,7 +143,7 @@ class DTEClient:
         self.auth_prefix = getattr(settings, "DTE_API_AUTH_PREFIX", "Bearer")
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
         self.connect_timeout = float(getattr(settings, "DTE_CONNECT_TIMEOUT", 5) or 5)
-        self.read_timeout = float(getattr(settings, "DTE_READ_TIMEOUT", 120) or 120)
+        self.read_timeout = float(getattr(settings, "DTE_TIMEOUT_SECONDS", 120) or 120)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
         self.session = _shared_session()
 
@@ -231,12 +231,14 @@ class DTEClient:
             )
 
         DTE_LOGGER.info(
-            "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s",
+            "[CF01] invoice=%s url=%s numeroControl=%s codigoGeneracion=%s dte_type=%s timeout=(%ss,%ss)",
             order_id,
             url,
             numero_control,
             codigo_generacion,
             "CF",
+            self.connect_timeout,
+            self.read_timeout,
         )
         log_dte_request(context, url, payload)
 

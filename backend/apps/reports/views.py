@@ -1,24 +1,35 @@
 from decimal import Decimal
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
+from django.utils import timezone
 from rest_framework import generics
 from rest_framework.response import Response
 from apps.core.timezone_utils import parse_business_date_range
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund
 from apps.reports.serializers import SalesReportSerializer
-from apps.core.permissions import IsAdminOrManager
+from apps.core.permissions import IsCashierOrManagerOrAdmin
 
 
 class SalesReportListView(generics.ListAPIView):
     serializer_class = SalesReportSerializer
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
-        queryset = Order.objects.select_related("service_type", "invoice").all()
-        start_at, end_at = parse_business_date_range(
-            self.request.query_params.get("date_from"),
-            self.request.query_params.get("date_to"),
-        )
+        queryset = Order.objects.select_related("service_type", "invoice").prefetch_related("payments").all()
+        search = (self.request.query_params.get("q") or self.request.query_params.get("search") or "").strip()
+        only_today = str(self.request.query_params.get("today") or "").strip() == "1"
+        start_at = end_at = None
+        if not search:
+            if only_today:
+                start_at, end_at = parse_business_date_range("today", "today")
+            else:
+                date_from = self.request.query_params.get("date_from")
+                date_to = self.request.query_params.get("date_to")
+                if not date_from and not date_to:
+                    today = timezone.localdate().isoformat()
+                    start_at, end_at = parse_business_date_range(today, today)
+                else:
+                    start_at, end_at = parse_business_date_range(date_from, date_to)
         service_type = self.request.query_params.get("service_type")
         status = self.request.query_params.get("status")
 
@@ -30,6 +41,15 @@ class SalesReportListView(generics.ListAPIView):
             queryset = queryset.filter(service_type__key=service_type)
         if status:
             queryset = queryset.filter(status=status)
+        if search:
+            queryset = queryset.filter(
+                Q(order_number__icontains=search)
+                | Q(order_number__icontains=search.replace("ORD-", "").replace("ord-", ""))
+                | Q(customer_name__icontains=search)
+                | Q(status__icontains=search)
+                | Q(invoice__numero_control__icontains=search)
+            )
+            return queryset.order_by("-created_at")[:50]
 
         return queryset.order_by("-created_at")
 
@@ -49,6 +69,17 @@ class SalesReportListView(generics.ListAPIView):
                 "financial_status": order.financial_status,
                 "refund_total": order.refund_total,
                 "net_paid": order.net_paid,
+                "customer_name": order.customer_name,
+                "control_number": (order.invoice.numero_control if hasattr(order, "invoice") else ""),
+                "payment_method": ", ".join(
+                    sorted(
+                        {
+                            payment.get_method_display()
+                            for payment in order.payments.all()
+                            if payment.method
+                        }
+                    )
+                ),
                 "sale_snapshot": (order.invoice.sale_snapshot if hasattr(order, "invoice") else {}),
             }
             for order in queryset
@@ -150,14 +181,14 @@ class SalesReportListView(generics.ListAPIView):
 
 
 class SalesBookJsonView(SalesReportListView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
 
 
 class SalesBookPdfView(SalesReportListView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request, *args, **kwargs):
         data = self.list(request, *args, **kwargs).data

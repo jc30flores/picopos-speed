@@ -1,6 +1,5 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
-import AccessDenied from "@/pages/AccessDenied";
 
 interface ProtectedRouteProps {
   allowedRoles?: Array<"admin" | "manager" | "cashier" | "kitchen" | "accountant">;
@@ -23,7 +22,7 @@ export const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) 
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <AccessDenied />;
+    return <Navigate to="/" replace />;
   }
 
   return children;

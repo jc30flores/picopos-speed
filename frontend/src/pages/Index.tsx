@@ -56,6 +56,7 @@ import {
   openCashDrawer,
   validateOrderPricePin,
   getActiveDiscounts,
+  printPaymentTicket,
   Category,
   Discount,
   ModifierGroup,
@@ -70,6 +71,8 @@ import {
 import { toast } from "sonner";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
+import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 
 interface CartItem {
   id: string;
@@ -196,6 +199,7 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [cardType, setCardType] = useState<"debit" | "credit">("debit");
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -239,6 +243,9 @@ const POS = () => {
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
+  const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
+  const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -271,6 +278,7 @@ const POS = () => {
   const [pinInput, setPinInput] = useState("");
   const [validatedPin, setValidatedPin] = useState<string>("");
   const [newPriceInput, setNewPriceInput] = useState("");
+  const privilegedGuard = usePrivilegedActionGuard();
 
   const {
     itemsGross,
@@ -701,7 +709,8 @@ const POS = () => {
       const first = methods[0];
       if (first) {
         setSelectedPaymentMethodCode(first.code);
-        const fallback = first.isCash ? "cash" : first.code === "CARD" ? "card" : "transfer";
+        const code = (first.code || "").toUpperCase();
+        const fallback = first.isCash ? "cash" : code === "CARD" ? "card" : "transfer";
         setPaymentMethod(fallback as PaymentMethod);
       }
     }).catch(() => undefined);
@@ -788,7 +797,24 @@ const POS = () => {
       postOpenSessionActionRef.current = null;
       action?.();
     } catch (error) {
-      toast.error(`No se pudo aperturar la caja: ${error instanceof Error ? error.message : "Error desconocido"}`);
+      const message = error instanceof Error ? error.message : "Error desconocido";
+      if (message.includes("409") || message.toLowerCase().includes("abierta")) {
+        try {
+          const current = await getCurrentCashSession();
+          setCashSnapshot(current);
+          if (current.open) {
+            setIsOpenSessionModalOpen(false);
+            const action = postOpenSessionActionRef.current;
+            postOpenSessionActionRef.current = null;
+            action?.();
+            toast.success("Caja ya estaba aperturada");
+            return;
+          }
+        } catch {
+          // fallback to generic error below
+        }
+      }
+      toast.error(`No se pudo aperturar la caja: ${message}`);
     } finally {
       setIsSavingCashAction(false);
     }
@@ -917,6 +943,12 @@ const POS = () => {
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
+      if (postSalePrintChoice && lastPaymentId) {
+        const printResult = await printPaymentTicket(lastPaymentId);
+        if (!printResult.printed && printResult.printError) {
+          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
+        }
+      }
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
     } catch (error) {
@@ -1027,17 +1059,14 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
+        cardType: paymentMethod === "card" ? cardType : undefined,
         amount: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
       });
-      if (paymentResult.printed) {
-        toast.success("Ticket impreso");
-      } else if (paymentResult.printError) {
-        toast.warning(`Venta registrada, pero no se pudo imprimir: ${paymentResult.printError}`);
-      }
+      setLastPaymentId(paymentResult.id);
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
@@ -1058,6 +1087,8 @@ const POS = () => {
         } else {
           toast.success("Pago y factura registrados.");
           setKitchenPromptOrderId(orderId);
+          setPostSaleKitchenChoice(true);
+          setPostSalePrintChoice(true);
           setIsKitchenPromptOpen(true);
         }
       } else {
@@ -1339,7 +1370,9 @@ const POS = () => {
                             title="Producto manual"
                             aria-label="Producto manual"
                             className="h-11 w-11 rounded-xl border-emerald-500/60"
-                            onClick={() => setIsManualProductOpen(true)}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("manualProduct", () => setIsManualProductOpen(true))
+                            }
                           >
                             <Plus className="h-5 w-5" />
                           </Button>
@@ -1356,7 +1389,9 @@ const POS = () => {
                             title="Descuentos"
                             aria-label="Descuentos"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => setIsDiscountDialogOpen(true)}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))
+                            }
                           >
                             <BadgePercent className="h-5 w-5" />
                           </Button>
@@ -1373,10 +1408,12 @@ const POS = () => {
                             title="Transacciones de caja"
                             aria-label="Transacciones de caja"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => {
-                              setIsCashDialogOpen(true);
-                              loadCashData().catch(() => undefined);
-                            }}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("cashTransactions", () => {
+                                setIsCashDialogOpen(true);
+                                loadCashData().catch(() => undefined);
+                              })
+                            }
                           >
                             <Wallet className="h-5 w-5" />
                           </Button>
@@ -1854,17 +1891,53 @@ const POS = () => {
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Método</Label>
-                      <Select value={selectedPaymentMethodCode} onValueChange={(value: string) => { setSelectedPaymentMethodCode(value); const selected = paymentMethods.find((m) => m.code === value); const fallback = selected?.isCash ? "cash" : value === "CARD" ? "card" : "transfer"; setPaymentMethod(fallback as PaymentMethod); }}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>{paymentMethods.map((m) => <SelectItem key={m.id} value={m.code}>{m.name}</SelectItem>)}</SelectContent>
-                      </Select>
+                  <div className="space-y-3">
+                    <Label>Método</Label>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {[
+                        { code: "CASH", label: "Efectivo", method: "cash" as PaymentMethod },
+                        { code: "CARD", label: "Tarjeta", method: "card" as PaymentMethod },
+                        { code: "TRANSFER", label: "Transferencia", method: "transfer" as PaymentMethod },
+                        { code: "PEDIDOS_YA", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
+                        { code: "PAYPAL", label: "PayPal", method: "transfer" as PaymentMethod },
+                      ].map((option) => (
+                        <Button
+                          key={option.code}
+                          type="button"
+                          variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
+                          className="h-12"
+                          onClick={() => {
+                            setSelectedPaymentMethodCode(option.code);
+                            setPaymentMethod(option.method);
+                          }}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
                     </div>
-                    {(paymentMethod === "card" || paymentMethod === "transfer") && (
+                    {paymentMethod === "card" && (
                       <div className="space-y-2">
-                        <Label>Referencia</Label>
+                        <Label>Tipo de tarjeta</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button type="button" variant={cardType === "debit" ? "default" : "outline"} onClick={() => setCardType("debit")}>Débito</Button>
+                          <Button type="button" variant={cardType === "credit" ? "default" : "outline"} onClick={() => setCardType("credit")}>Crédito</Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Se enviará a Hacienda como Tarjeta {cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.
+                        </p>
+                      </div>
+                    )}
+                    {(paymentMethod === "card" || selectedPaymentMethodCode === "TRANSFER" || selectedPaymentMethodCode === "PEDIDOS_YA" || selectedPaymentMethodCode === "PAYPAL") && (
+                      <div className="space-y-2">
+                        <Label>
+                          {selectedPaymentMethodCode === "PEDIDOS_YA"
+                            ? "Código de pedido / referencia (opcional)"
+                            : selectedPaymentMethodCode === "PAYPAL"
+                              ? "ID de transacción (opcional)"
+                              : paymentMethod === "card"
+                                ? "Voucher / Autorización (opcional)"
+                                : "Referencia (opcional)"}
+                        </Label>
                         <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
                       </div>
                     )}
@@ -2119,32 +2192,60 @@ const POS = () => {
       <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
         <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
           <DialogHeader>
-            <DialogTitle className="text-2xl">¿Enviar a cocina?</DialogTitle>
+            <DialogTitle className="text-2xl">Finalizar venta</DialogTitle>
             <DialogDescription className="text-base">
-              La venta ya se guardó. Elige si deseas enviarla ahora a la pantalla de cocina.
+              La venta ya se guardó. Configura cocina e impresión.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+              <span>Enviar a cocina</span>
+              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(Boolean(value))} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+              <span>Imprimir ticket</span>
+              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(Boolean(value))} />
+            </div>
+          </div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Button
               type="button"
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
-              onClick={() => void handleKitchenChoice(true)}
+              onClick={() => void handleKitchenChoice(postSaleKitchenChoice)}
             >
-              {isSubmittingKitchenChoice ? "Enviando..." : "Sí, enviar"}
+              {isSubmittingKitchenChoice ? "Guardando..." : "Confirmar"}
             </Button>
             <Button
               type="button"
               variant="outline"
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
-              onClick={() => void handleKitchenChoice(false)}
+              onClick={() => {
+                setIsKitchenPromptOpen(false);
+                finalizePaidSale();
+              }}
             >
-              No
+              Omitir
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      <PrivilegePinModal
+        open={Boolean(privilegedGuard.pendingAction)}
+        onCancel={() => privilegedGuard.setPendingAction(null)}
+        onSuccess={() =>
+          privilegedGuard.onPinSuccess({
+            manualProduct: () => setIsManualProductOpen(true),
+            discounts: () => setIsDiscountDialogOpen(true),
+            cashTransactions: () => {
+              setIsCashDialogOpen(true);
+              loadCashData().catch(() => undefined);
+            },
+          })
+        }
+      />
 
       <PrintPreviewDialog
         open={isReceiptPreviewOpen}
