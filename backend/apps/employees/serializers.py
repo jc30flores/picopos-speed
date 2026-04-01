@@ -8,6 +8,7 @@ from rest_framework.validators import UniqueTogetherValidator
 from apps.core.models import Branch
 from apps.employees.models import Employee, AttendanceRecord, Schedule
 from apps.users.models import UserProfile
+from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format
 
 
 class EmployeeUserSerializer(serializers.Serializer):
@@ -165,8 +166,10 @@ class EmployeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"user": {"username": "Username already exists"}})
         if email and user_model.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError({"user": {"email": "Email already exists"}})
-        if not password or len(password) < 6:
-            raise serializers.ValidationError({"user": {"password": "Password must be at least 6 characters"}})
+        if not is_valid_pin_format(password):
+            raise serializers.ValidationError({"user": {"password": "El PIN debe tener exactamente 6 dígitos numéricos"}})
+        if find_active_users_matching_pin(password):
+            raise serializers.ValidationError({"user": {"password": "PIN ya usado por otro usuario"}})
         user = user_model.objects.create(username=username, email=email)
         user.set_password(password)
         user.save(update_fields=["password"])
@@ -194,8 +197,10 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if email is not None:
             user.email = email or ""
         if password:
-            if len(password) < 6:
-                raise serializers.ValidationError({"user": {"password": "Password must be at least 6 characters"}})
+            if not is_valid_pin_format(password):
+                raise serializers.ValidationError({"user": {"password": "El PIN debe tener exactamente 6 dígitos numéricos"}})
+            if find_active_users_matching_pin(password, exclude_user_id=user.id):
+                raise serializers.ValidationError({"user": {"password": "PIN ya usado por otro usuario"}})
             user.set_password(password)
         user.save()
         if role:

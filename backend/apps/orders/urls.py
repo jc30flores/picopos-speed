@@ -9,6 +9,7 @@ urlpatterns = [
     path("kitchen/", views.KitchenOrderListView.as_view(), name="orders-kitchen"),
     path("<int:pk>/", views.OrderDetailView.as_view(), name="orders-detail"),
     path("<int:pk>/status/", views.OrderStatusUpdateView.as_view(), name="orders-status"),
+    path("<int:pk>/send-to-kitchen/", views.OrderSendToKitchenView.as_view(), name="orders-send-to-kitchen"),
     path("<int:pk>/void/", views.OrderVoidView.as_view(), name="orders-void"),
     path("<int:pk>/receipt.pdf", views.OrderReceiptPDFView.as_view(), name="orders-receipt-pdf"),
     path("<int:pk>/credit-note/", dte_views.OrderCreditNoteView.as_view(), name="orders-credit-note"),

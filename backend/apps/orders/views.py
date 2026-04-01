@@ -109,7 +109,7 @@ class ActiveOrderListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = (
-            Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True)
+            Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True, send_to_kitchen=True)
             .prefetch_related("items__applied_modifiers")
             .order_by("created_at")
         )
@@ -150,7 +150,7 @@ class CustomerDisplayOrderListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        queryset = Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True).order_by("created_at")
+        queryset = Order.objects.filter(status__in=["preparing", "ready"], requires_kitchen=True, send_to_kitchen=True).order_by("created_at")
         queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
         logger.info("[ORDERS] customer-display branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "preparing,ready", queryset.count())
         return queryset
@@ -178,13 +178,39 @@ class KitchenOrderListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = (
-            Order.objects.filter(status__in=["new", "preparing"], requires_kitchen=True)
+            Order.objects.filter(status__in=["new", "preparing"], requires_kitchen=True, send_to_kitchen=True)
             .prefetch_related("items__applied_modifiers")
             .order_by("created_at")
         )
         queryset, branch_id, service_type = _apply_common_filters(self.request, queryset)
         logger.info("[ORDERS] kitchen branch_id=%s service_type=%s statuses=%s count=%s", branch_id, service_type, "new,preparing", queryset.count())
         return queryset
+
+
+class OrderSendToKitchenView(generics.UpdateAPIView):
+    queryset = Order.objects.all()
+    serializer_class = OrderSerializer
+    http_method_names = ["patch"]
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def patch(self, request, *args, **kwargs):
+        order = self.get_object()
+        requested_value = bool(request.data.get("send_to_kitchen", False))
+        should_enable = bool(requested_value and order.requires_kitchen)
+        order.send_to_kitchen = should_enable
+        if should_enable and order.payment_status == "paid":
+            if order.status != "preparing":
+                order.status = "preparing"
+            from apps.kitchen.models import KitchenOrderView
+            KitchenOrderView.objects.get_or_create(
+                order=order,
+                defaults={"service_type": order.service_type, "status": "preparing"},
+            )
+            order.save(update_fields=["send_to_kitchen", "status", "updated_at"])
+        else:
+            order.save(update_fields=["send_to_kitchen", "updated_at"])
+        data = OrderSerializer(order, context={"request": request}).data
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class OrderVoidView(generics.GenericAPIView):

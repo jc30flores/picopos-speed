@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from apps.users.models import UserProfile
+from apps.users.pin_utils import is_valid_pin_format
 
 
 class Command(BaseCommand):
@@ -24,6 +25,8 @@ class Command(BaseCommand):
 
         if not password:
             password = self._prompt_password()
+        if not is_valid_pin_format(password):
+            raise CommandError("El PIN/contraseña debe tener exactamente 6 dígitos numéricos.")
 
         user_model = get_user_model()
         user, created = user_model.objects.get_or_create(
@@ -49,10 +52,12 @@ class Command(BaseCommand):
     def _prompt_password(self) -> str:
         import getpass
 
-        password = getpass.getpass("Password: ")
-        confirm = getpass.getpass("Password (again): ")
+        password = getpass.getpass("PIN (6 dígitos): ")
+        confirm = getpass.getpass("PIN (6 dígitos, otra vez): ")
         if password != confirm:
             raise CommandError("Passwords do not match")
         if not password:
-            raise CommandError("Password cannot be empty")
+            raise CommandError("PIN cannot be empty")
+        if not is_valid_pin_format(password):
+            raise CommandError("El PIN debe tener exactamente 6 dígitos numéricos.")
         return password

@@ -142,8 +142,8 @@ class DTEClient:
         self.auth_header = getattr(settings, "DTE_API_AUTH_HEADER", "Authorization")
         self.auth_prefix = getattr(settings, "DTE_API_AUTH_PREFIX", "Bearer")
         self.api_token = getattr(settings, "DTE_API_TOKEN", "")
-        self.connect_timeout = float(getattr(settings, "DTE_CONNECT_TIMEOUT", 3) or 3)
-        self.read_timeout = float(getattr(settings, "DTE_READ_TIMEOUT", 15) or 15)
+        self.connect_timeout = float(getattr(settings, "DTE_CONNECT_TIMEOUT", 5) or 5)
+        self.read_timeout = float(getattr(settings, "DTE_READ_TIMEOUT", 120) or 120)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
         self.session = _shared_session()
 

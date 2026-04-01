@@ -111,6 +111,13 @@ def _log_full_payload(*, payload: dict, order_id: int | None, payment_id: int | 
 
 def parse_response_outcome(body: dict) -> str:
     data = body or {}
+    if data.get("success") is True:
+        return DTEOutbox.STATUS_ACCEPTED
+    if data.get("offline") is True:
+        return DTEOutbox.STATUS_PENDING
+    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+    if str(error.get("type") or "").upper() == "TIMEOUT":
+        return DTEOutbox.STATUS_PENDING
     values = {
         str(data.get("estado") or "").upper(),
         str(data.get("status") or "").upper(),
@@ -121,7 +128,32 @@ def parse_response_outcome(body: dict) -> str:
         return DTEOutbox.STATUS_ACCEPTED
     if data.get("rechazado") is True or data.get("rejected") is True or values & {"RECHAZADO", "REJECTED", "ERROR"}:
         return DTEOutbox.STATUS_REJECTED
-    return DTEOutbox.STATUS_SENT
+    return DTEOutbox.STATUS_PENDING
+
+
+def _classify_final_status(*, result, parsed: dict, inferred: str) -> str:
+    status_code = int(result.status_code or 0)
+    error_type = str(getattr(result, "error_type", "") or "").upper()
+
+    if parsed.get("success") is True:
+        return DTEOutbox.STATUS_ACCEPTED
+    if parsed.get("offline") is True or error_type == "TIMEOUT":
+        return DTEOutbox.STATUS_PENDING
+    if status_code == 0:
+        return DTEOutbox.STATUS_PENDING
+    if status_code in {429, 502, 503, 504}:
+        return DTEOutbox.STATUS_PENDING
+    if status_code >= 500:
+        return DTEOutbox.STATUS_PENDING
+    if status_code in {400, 401, 403, 422}:
+        return DTEOutbox.STATUS_FAILED
+    if 400 <= status_code < 500:
+        return DTEOutbox.STATUS_FAILED
+    if inferred == DTEOutbox.STATUS_ACCEPTED:
+        return DTEOutbox.STATUS_ACCEPTED
+    if inferred == DTEOutbox.STATUS_REJECTED:
+        return DTEOutbox.STATUS_FAILED
+    return DTEOutbox.STATUS_PENDING
 
 
 def _sync_invoice(outbox: DTEOutbox, response_body: dict) -> None:
@@ -251,15 +283,7 @@ def _repair_payload_nit_if_needed(outbox: DTEOutbox, payload: dict) -> tuple[dic
 def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
     parsed = result.json_body if isinstance(result.json_body, dict) else {}
     inferred = parse_response_outcome(parsed)
-
-    if result.status_code in {401, 403}:
-        final_status = DTEOutbox.STATUS_REJECTED
-    elif 500 <= (result.status_code or 0) <= 599:
-        final_status = DTEOutbox.STATUS_PENDING
-    elif 400 <= (result.status_code or 0) <= 499:
-        final_status = DTEOutbox.STATUS_REJECTED
-    else:
-        final_status = inferred
+    final_status = _classify_final_status(result=result, parsed=parsed, inferred=inferred)
 
     outbox.status = final_status
     outbox.response_status_code = result.status_code or None
@@ -268,10 +292,10 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
     outbox.next_attempt_at = timezone.now() + _compute_backoff(outbox.attempts) if final_status == DTEOutbox.STATUS_PENDING else None
     outbox.save(update_fields=["status", "response_status_code", "response_body", "error_message", "next_attempt_at", "updated_at"])
 
-    if 500 <= (result.status_code or 0) <= 599:
+    if final_status == DTEOutbox.STATUS_PENDING:
         _register_send_failure()
-        DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=http_5xx http=%s", outbox.order_id, outbox.payment_id, result.status_code)
-    elif final_status in {DTEOutbox.STATUS_ACCEPTED, DTEOutbox.STATUS_REJECTED, DTEOutbox.STATUS_FAILED}:
+        DTE_LOGGER.info("[DTE] QUEUED order=%s payment=%s reason=retryable http=%s", outbox.order_id, outbox.payment_id, result.status_code)
+    elif final_status in {DTEOutbox.STATUS_ACCEPTED, DTEOutbox.STATUS_FAILED}:
         _reset_circuit()
 
     DTE_LOGGER.info(
@@ -287,7 +311,6 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
     if outbox.dte_record_id:
         record_status = {
             DTEOutbox.STATUS_ACCEPTED: DTERecord.STATUS_ACCEPTED,
-            DTEOutbox.STATUS_REJECTED: DTERecord.STATUS_REJECTED,
             DTEOutbox.STATUS_FAILED: DTERecord.STATUS_REJECTED,
             DTEOutbox.STATUS_PENDING: DTERecord.STATUS_PENDING,
             DTEOutbox.STATUS_SENDING: DTERecord.STATUS_PENDING,
@@ -564,7 +587,7 @@ def process_pending_outbox(limit: int = 50) -> int:
 
 def _outbox_worker_loop() -> None:
     interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
-    batch_size = int(getattr(settings, "DTE_PENDING_BATCH_SIZE", 50) or 50)
+    batch_size = int(getattr(settings, "DTE_OUTBOX_CONCURRENCY", 1) or 1)
     db_backoff_seconds = 1.0
     while True:
         close_old_connections()
@@ -600,7 +623,8 @@ def start_outbox_worker() -> bool:
         if not bool(getattr(settings, "DTE_OUTBOX_WORKER_ENABLED", True)):
             return False
         interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
-        DTE_LOGGER.info("[DTE OUTBOX] starting worker interval=%ss", interval)
+        concurrency = int(getattr(settings, "DTE_OUTBOX_CONCURRENCY", 1) or 1)
+        DTE_LOGGER.info("[DTE OUTBOX] starting worker interval=%ss concurrency=%s", interval, concurrency)
         thread = threading.Thread(target=_outbox_worker_loop, daemon=True, name="dte-outbox-worker")
         thread.start()
         _OUTBOX_WORKER_STARTED = True

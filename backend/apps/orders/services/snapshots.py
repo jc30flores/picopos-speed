@@ -36,6 +36,7 @@ def build_sale_snapshot(order: Order) -> dict[str, Any]:
                 "unit_price": _money(item.effective_unit_price),
                 "unit_price_override": _money(item.unit_price_override) if item.unit_price_override is not None else None,
                 "subtotal": _money(subtotal),
+                "discount_amount": _money(item.discount_amount),
                 "code": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
                 "is_custom": bool(item.is_custom),
                 "modifiers": modifiers,
@@ -68,6 +69,7 @@ def build_sale_snapshot(order: Order) -> dict[str, Any]:
             "iva": _money(order.tax),
             "total": _money(order.total),
             "discount_total": _money(order.discount_total),
+            "discount_snapshot": order.discount_snapshot or {},
             "disposable_total": _money(order.disposable_total),
         },
         "payment": {

@@ -26,6 +26,7 @@ from apps.menu.serializers import (
     DiscountSerializer,
     ProductSpecialPriceRuleSerializer,
 )
+from apps.orders.discount_engine import discount_conditions_met, discount_has_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -621,6 +622,52 @@ class DiscountDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         discount = serializer.save()
         log_audit(self.request, "menu.discount.update", "Discount", discount.id, {"name": discount.name})
+
+
+class ActiveDiscountListView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        service_type_key = (request.query_params.get("service_type") or "").strip().upper()
+        subtotal_raw = request.query_params.get("subtotal")
+        try:
+            subtotal = Decimal(str(subtotal_raw or "0"))
+        except InvalidOperation:
+            subtotal = Decimal("0")
+
+        discounts = Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id")
+        data = []
+        for discount in discounts:
+            target_category_ids = list(discount.targets.filter(category__isnull=False).values_list("category_id", flat=True))
+            target_product_ids = list(discount.targets.filter(product__isnull=False).values_list("product_id", flat=True))
+            conditions_met = discount_conditions_met(
+                discount,
+                service_type_key=service_type_key or "POS",
+                subtotal_before_discounts=subtotal,
+            )
+            data.append(
+                {
+                    "id": discount.id,
+                    "name": discount.name,
+                    "type": discount.type,
+                    "value": discount.value,
+                    "scope": discount.applies_to,
+                    "target_category_ids": target_category_ids,
+                    "target_product_ids": target_product_ids,
+                    "auto_apply": discount.auto_apply,
+                    "is_active": discount.is_active,
+                    "conditions": {
+                        "days_of_week": discount.days_of_week or [],
+                        "start_time": discount.start_time,
+                        "end_time": discount.end_time,
+                        "service_types": discount.service_types or [],
+                        "min_ticket": discount.min_amount,
+                    },
+                    "has_conditions": discount_has_conditions(discount),
+                    "available_now": bool(conditions_met),
+                }
+            )
+        return Response(data)
 
 
 class ProductChangePriceView(APIView):

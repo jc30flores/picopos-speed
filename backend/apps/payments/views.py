@@ -88,7 +88,8 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 payment.order_id,
                 {"order_id": payment.order_id},
             )
-            if payment.order.requires_kitchen:
+            should_send_to_kitchen = bool(payment.order.requires_kitchen and payment.order.send_to_kitchen)
+            if should_send_to_kitchen:
                 if payment.order.status != "preparing":
                     payment.order.status = "preparing"
                     payment.order.save(update_fields=["status", "updated_at"])

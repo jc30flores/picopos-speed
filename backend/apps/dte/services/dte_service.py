@@ -173,10 +173,13 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_gravada = Decimal("0.00")
     total_exenta = Decimal("0.00")
     total_iva = Decimal("0.00")
+    total_descuento = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         effective_unit_price = item.unit_price
         line_total = _q2(effective_unit_price * item.quantity)
+        line_discount = _q2(min(line_total, Decimal(item.discount_amount or 0)))
+        net_line_total = _q2(line_total - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
@@ -189,24 +192,25 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             desc = f"{desc} ({', '.join(free_mods)})"
 
         if order.iva_exempt:
-            venta_exenta = _q2(line_total / Decimal("1.13"))
+            venta_exenta = _q2(net_line_total / Decimal("1.13"))
             venta_gravada = Decimal("0.00")
             iva_item = Decimal("0.00")
         else:
             venta_exenta = Decimal("0.00")
-            venta_gravada = line_total
-            base = _q2(line_total / Decimal("1.13"))
-            iva_item = _q2(line_total - base)
+            venta_gravada = net_line_total
+            base = _q2(net_line_total / Decimal("1.13"))
+            iva_item = _q2(net_line_total - base)
 
         total_gravada += venta_gravada
         total_exenta += venta_exenta
         total_iva += iva_item
+        total_descuento += line_discount
 
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
             "cantidad": int(item.quantity), "uniMedida": 59, "precioUni": str(_q2(effective_unit_price)),
-            "montoDescu": "0.00", "ventaNoSuj": "0.00", "ventaExenta": str(venta_exenta),
+            "montoDescu": str(line_discount), "ventaNoSuj": "0.00", "ventaExenta": str(venta_exenta),
             "ventaGravada": str(venta_gravada), "tributos": None, "psv": "0.00", "noGravado": "0.00",
             "ivaItem": str(iva_item), "codTributo": None, "numeroDocumento": None,
         })
@@ -258,8 +262,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     resumen = {
         "totalNoSuj": "0.00", "totalExenta": str(_q2(total_exenta)), "totalGravada": str(_q2(total_gravada)),
-        "subTotalVentas": str(total_pagar), "descuNoSuj": "0.00", "descuExenta": "0.00", "descuGravada": "0.00",
-        "porcentajeDescuento": "0.00", "totalDescu": "0.00", "tributos": None, "subTotal": str(total_pagar),
+        "subTotalVentas": str(total_pagar), "descuNoSuj": "0.00", "descuExenta": str(_q2(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": str(_q2(total_descuento if not order.iva_exempt else Decimal("0.00"))),
+        "porcentajeDescuento": "0.00", "totalDescu": str(_q2(total_descuento)), "tributos": None, "subTotal": str(total_pagar),
         "ivaRete1": "0.00", "reteRenta": "0.00", "montoTotalOperacion": str(total_pagar), "totalNoGravado": "0.00",
         "totalPagar": str(total_pagar), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": str(_q2(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": "0.00", "condicionOperacion": 1,

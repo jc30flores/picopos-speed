@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -33,6 +33,7 @@ import {
   createOrder,
   Customer,
   createPayment,
+  setOrderSendToKitchen,
   getPaymentMethods,
   getOrderById,
   createPrintJob,
@@ -44,13 +45,19 @@ import {
   getCurrentCashSession,
   getDefaultConsumerCustomer,
   listCustomers,
+  createCustomer,
+  listDepartments,
+  listMunicipalities,
+  listActivities,
   openCashSession,
   closeCashSession,
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
   validateOrderPricePin,
+  getActiveDiscounts,
   Category,
+  Discount,
   ModifierGroup,
   Product,
   PaymentMethod,
@@ -80,6 +87,15 @@ interface CartItem {
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
+const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
+const digitsOnly = (value: string) => value.replace(/\D+/g, "");
+const formatPhone = (raw: string) => {
+  const digits = digitsOnly(raw).slice(0, 8);
+  if (!digits) return "";
+  if (digits.length <= 4) return digits;
+  return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+};
+
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
 const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
@@ -103,6 +119,29 @@ const getOrderDisposableTotal = (
     if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
     return sum + fee * item.quantity;
   }, 0);
+
+const getEligibleLineTotalForDiscount = (item: CartItem, discount: Discount, products: Product[]): number => {
+  if (discount.appliesTo === "order") return getItemUnitTotal(item) * item.quantity;
+  if (!item.productId) return 0;
+  const product = products.find((candidate) => candidate.id === item.productId);
+  if (!product) return 0;
+  if (discount.appliesTo === "products") {
+    return (discount.targetProductIds ?? []).includes(product.id) ? getItemUnitTotal(item) * item.quantity : 0;
+  }
+  if (discount.appliesTo === "categories") {
+    return (discount.targetCategoryIds ?? []).includes(product.categoryId) ? getItemUnitTotal(item) * item.quantity : 0;
+  }
+  return 0;
+};
+
+const calculateManualDiscountAmount = (cart: CartItem[], discount: Discount | null, products: Product[]): number => {
+  if (!discount) return 0;
+  const eligible = cart.reduce((sum, item) => sum + getEligibleLineTotalForDiscount(item, discount, products), 0);
+  if (eligible <= 0) return 0;
+  if (discount.type === "percent") return Math.min(eligible, (eligible * discount.value) / 100);
+  if (discount.type === "fixed") return Math.min(eligible, discount.value);
+  return 0;
+};
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -160,7 +199,33 @@ const POS = () => {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [isCustomerPickerOpen, setIsCustomerPickerOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [isCustomerCreateOpen, setIsCustomerCreateOpen] = useState(false);
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [customerFormErrors, setCustomerFormErrors] = useState<Record<string, string>>({});
+  const [customerServerErrors, setCustomerServerErrors] = useState<Record<string, string>>({});
+  const [departments, setDepartments] = useState<Array<{ code: string; name: string }>>([]);
+  const [municipalities, setMunicipalities] = useState<Array<{ code: string; department_code: string; name: string }>>([]);
+  const [activities, setActivities] = useState<Array<{ code: string; description: string }>>([]);
+  const [activitySearch, setActivitySearch] = useState("");
+  const [customerForm, setCustomerForm] = useState({
+    fullName: "",
+    clientType: "CF" as "CF" | "CCF" | "SX",
+    companyName: "",
+    dui: "",
+    nit: "",
+    nrc: "",
+    phone: "",
+    email: "",
+    direccion: "",
+    departmentCode: "",
+    municipalityCode: "",
+    activityCode: "",
+    activityDescription: "",
+  });
   const [dteDocumentType, setDteDocumentType] = useState<"CF" | "CCF" | "SX">("CF");
   const [ivaExempt, setIvaExempt] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -171,6 +236,9 @@ const POS = () => {
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
+  const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
+  const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -188,6 +256,11 @@ const POS = () => {
     createdAt: number;
   } | null>(null);
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
+  const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
+  const [discountSearch, setDiscountSearch] = useState("");
+  const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
+  const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
+  const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("1");
   const [manualPrice, setManualPrice] = useState("");
@@ -198,6 +271,28 @@ const POS = () => {
   const [pinInput, setPinInput] = useState("");
   const [validatedPin, setValidatedPin] = useState<string>("");
   const [newPriceInput, setNewPriceInput] = useState("");
+
+  const {
+    itemsGross,
+    subtotal,
+    discountAmount,
+    cartDisposableTotal,
+    total,
+  } = useMemo(() => {
+    const computedItemsGross = calculateCartTotals(
+      cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
+      taxRate
+    ).total;
+    const computedDiscountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
+    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    return {
+      itemsGross: computedItemsGross,
+      subtotal: computedItemsGross,
+      discountAmount: computedDiscountAmount,
+      cartDisposableTotal: computedDisposableTotal,
+      total: Math.max(computedItemsGross - computedDiscountAmount, 0) + computedDisposableTotal,
+    };
+  }, [cart, products, selectedDiscount, serviceType, taxRate]);
 
   const loadMenuData = async (orderTypeId?: number) => {
     const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
@@ -236,6 +331,25 @@ const POS = () => {
         console.error("Failed to refresh products for service type", error);
       });
   }, [serviceType, serviceTypes]);
+
+  const loadActiveDiscounts = async () => {
+    try {
+      setIsLoadingDiscounts(true);
+      const discounts = await getActiveDiscounts({ serviceType, subtotal: itemsGross });
+      setAvailableDiscounts(discounts);
+    } catch (error) {
+      console.error("Failed to load active discounts", error);
+      toast.error("No se pudieron cargar los descuentos");
+    } finally {
+      setIsLoadingDiscounts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isDiscountDialogOpen) {
+      void loadActiveDiscounts();
+    }
+  }, [isDiscountDialogOpen, serviceType, itemsGross]);
 
   useEffect(() => {
     if (paymentMethod !== "cash") {
@@ -429,13 +543,6 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const cartDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-  const itemsGross = calculateCartTotals(
-    cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
-    taxRate
-  ).total;
-  const total = itemsGross + cartDisposableTotal;
-  const subtotal = itemsGross;
   const paymentTotal =
     (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
@@ -457,6 +564,9 @@ const POS = () => {
   const checkoutDisposableTotal = checkoutDraft
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
+  const filteredDiscounts = availableDiscounts.filter((discount) =>
+    discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
+  );
 
   const proceedToCheckout = () => {
     if (cart.length === 0) return;
@@ -466,7 +576,8 @@ const POS = () => {
       taxRate
     ).total;
     const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
-    const draftTotal = draftItemsGross + draftDisposableTotal;
+    const draftDiscount = calculateManualDiscountAmount(cart, selectedDiscount, products);
+    const draftTotal = Math.max(draftItemsGross - draftDiscount, 0) + draftDisposableTotal;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...cart],
@@ -596,13 +707,37 @@ const POS = () => {
     }).catch(() => undefined);
   }, []);
 
+  const refreshCustomers = async (search = "") => {
+    const next = await listCustomers(search);
+    setCustomers(next);
+    return next;
+  };
+
   useEffect(() => {
-    listCustomers().then(setCustomers).catch(() => undefined);
-    getDefaultConsumerCustomer().then((c) => {
-      setSelectedCustomerId(String(c.id));
-      setDteDocumentType(c.clientType ?? "CF");
-    }).catch(() => undefined);
+    refreshCustomers().catch(() => undefined);
+    Promise.all([listDepartments(), listActivities(""), getDefaultConsumerCustomer()])
+      .then(([deptRows, activityRows, consumerFinal]) => {
+        setDepartments(deptRows);
+        setActivities(activityRows);
+        setDefaultConsumerCustomer(consumerFinal);
+        setSelectedCustomerId(String(consumerFinal.id));
+        setDteDocumentType("CF");
+      })
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const departmentCode = customerForm.departmentCode;
+    if (!departmentCode) return;
+    listMunicipalities(departmentCode)
+      .then((rows) => {
+        setMunicipalities(rows);
+        if (!rows.some((row) => row.code === customerForm.municipalityCode)) {
+          setCustomerForm((prev) => ({ ...prev, municipalityCode: rows[0]?.code ?? "" }));
+        }
+      })
+      .catch(() => undefined);
+  }, [customerForm.departmentCode, customerForm.municipalityCode]);
 
   useEffect(() => {
     const selected = customers.find((c) => String(c.id) === selectedCustomerId);
@@ -610,6 +745,17 @@ const POS = () => {
       setDteDocumentType(selected.clientType);
     }
   }, [selectedCustomerId, customers]);
+
+  useEffect(() => {
+    const selected = customers.find((c) => String(c.id) === selectedCustomerId);
+    if (selected && selected.clientType !== dteDocumentType) {
+      setSelectedCustomerId("");
+      toast.warning("Selecciona un cliente compatible con el tipo DTE");
+    }
+    if (dteDocumentType === "CF" && !selectedCustomerId && defaultConsumerCustomer) {
+      setSelectedCustomerId(String(defaultConsumerCustomer.id));
+    }
+  }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
   useEffect(() => {
     if (isPaymentOpen) {
@@ -741,6 +887,48 @@ const POS = () => {
     setShouldResetTenderOnFirstTap(false);
   };
 
+  const finalizePaidSale = () => {
+    setIsPaymentOpen(false);
+    setCart([]);
+    setSelectedDiscount(null);
+    setCheckoutDraft(null);
+    setCreatedOrderId(null);
+    setCreatedOrderNumber(null);
+    setSplitEnabled(false);
+    setParts([]);
+    setActivePartId(null);
+    setKitchenPromptOrderId(null);
+  };
+
+  const handleKitchenChoice = async (shouldSend: boolean) => {
+    if (!kitchenPromptOrderId || isSubmittingKitchenChoice) return;
+    try {
+      setIsSubmittingKitchenChoice(true);
+      if (shouldSend) {
+        try {
+          await setOrderSendToKitchen(kitchenPromptOrderId, true);
+        } catch (error) {
+          await setOrderSendToKitchen(kitchenPromptOrderId, true);
+          if (import.meta.env.DEV) {
+            console.debug("Kitchen send retry succeeded", error);
+          }
+        }
+        toast.success("Venta enviada a cocina");
+      } else {
+        toast.success("Venta completada sin envío a cocina");
+      }
+      setIsKitchenPromptOpen(false);
+      finalizePaidSale();
+    } catch (error) {
+      console.error("Failed to update send_to_kitchen", error);
+      toast.error("No se pudo enviar a cocina. La venta se guardó. Puedes reenviar luego.");
+      setIsKitchenPromptOpen(false);
+      finalizePaidSale();
+    } finally {
+      setIsSubmittingKitchenChoice(false);
+    }
+  };
+
   const handleSubmitPayment = async () => {
     if (isProcessingPayment) return;
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
@@ -787,10 +975,13 @@ const POS = () => {
             serviceType: checkoutDraft.serviceType,
             source: "pos",
             channel: "pos",
+            sendToKitchen: checkoutDraft.serviceType === "KIOSK",
             priceChangePin: checkoutDraft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
             customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
             dteDocumentType,
             ivaExempt,
+            discountId: selectedDiscount?.id,
+            discountMode: selectedDiscount ? "manual" : undefined,
             items: checkoutDraft.items.map((item) => ({
               type: item.isCustom ? "manual" : "menu",
               productId: item.productId,
@@ -860,15 +1051,15 @@ const POS = () => {
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
-        toast.success(refreshed.requiresKitchen ? "Pago y factura registrados. Enviado a cocina." : "Pago y factura registrados. Orden entregada.");
-        setIsPaymentOpen(false);
-        setCart([]);
-        setCheckoutDraft(null);
-        setCreatedOrderId(null);
-        setCreatedOrderNumber(null);
-        setSplitEnabled(false);
-        setParts([]);
-        setActivePartId(null);
+        const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
+        if (isKiosk) {
+          toast.success("Pago y factura registrados. Enviado a cocina.");
+          finalizePaidSale();
+        } else {
+          toast.success("Pago y factura registrados.");
+          setKitchenPromptOrderId(orderId);
+          setIsKitchenPromptOpen(true);
+        }
       } else {
         toast.success("Pago registrado");
       }
@@ -881,6 +1072,155 @@ const POS = () => {
   };
 
   const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
+  const normalizedCustomerSearch = customerSearch.trim().toLowerCase();
+  const customersByDte = customers.filter((customer) => customer.clientType === dteDocumentType);
+  const filteredCustomers = useMemo(() => {
+    if (!normalizedCustomerSearch) return customersByDte;
+    return customersByDte.filter((customer) => {
+      const haystack = [
+        customer.fullName,
+        customer.email ?? "",
+        customer.phone ?? "",
+        customer.dui ?? "",
+        customer.nit ?? "",
+        customer.numDocumento ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedCustomerSearch);
+    });
+  }, [customersByDte, normalizedCustomerSearch]);
+  const visibleCustomers = filteredCustomers.slice(0, 4);
+  const filteredActivities = useMemo(() => {
+    const term = activitySearch.trim().toLowerCase();
+    if (!term) return activities.slice(0, 30);
+    return activities
+      .filter((activity) => `${activity.code} ${activity.description}`.toLowerCase().includes(term))
+      .slice(0, 30);
+  }, [activities, activitySearch]);
+
+  const validateCustomerForm = () => {
+    const errors: Record<string, string> = {};
+    const fullName = customerForm.fullName.trim();
+    if (!fullName) errors.fullName = "Nombre requerido";
+    if (!customerForm.departmentCode) errors.departmentCode = "Departamento requerido";
+    if (!customerForm.municipalityCode) errors.municipalityCode = "Municipio requerido";
+    if (customerForm.clientType === "CCF") {
+      if (!customerForm.companyName.trim()) errors.companyName = "Empresa requerida";
+      if (customerForm.nit.replace(/\D/g, "").length !== 14) errors.nit = "NIT de 14 dígitos";
+      if (!customerForm.nrc.trim()) errors.nrc = "NRC requerido";
+      if (customerForm.phone.replace(/\D/g, "").length !== 8) errors.phone = "Teléfono de 8 dígitos";
+      const email = customerForm.email.trim();
+      if (!email || !email.includes("@") || !email.includes(".")) errors.email = "Email válido requerido";
+      if (!customerForm.direccion.trim()) errors.direccion = "Dirección requerida";
+      if (!customerForm.activityCode.trim() && !customerForm.activityDescription.trim()) errors.activityCode = "Actividad económica requerida";
+    }
+    if (customerForm.clientType === "SX") {
+      if (!customerForm.dui.trim() && !customerForm.nit.trim()) errors.dui = "Documento requerido";
+      if (!customerForm.direccion.trim()) errors.direccion = "Dirección requerida";
+    }
+    setCustomerFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const preloadCustomerFormFromDTE = async (targetType: "CF" | "CCF" | "SX") => {
+    if (targetType === "CF") {
+      const base = defaultConsumerCustomer ?? (await getDefaultConsumerCustomer());
+      if (!defaultConsumerCustomer) setDefaultConsumerCustomer(base);
+      const deptCode = base.departmentCode || "12";
+      const muniRows = await listMunicipalities(deptCode);
+      setMunicipalities(muniRows);
+      setCustomerForm((prev) => ({
+        ...prev,
+        clientType: "CF",
+        companyName: "",
+        nit: "",
+        nrc: "",
+        activityCode: "",
+        activityDescription: "",
+        phone: base.phone || "0000-0000",
+        email: base.email || DEFAULT_CUSTOMER_EMAIL,
+        direccion: base.direccion || "SAN MIGUEL",
+        departmentCode: deptCode,
+        municipalityCode: base.municipalityCode || muniRows[0]?.code || "",
+      }));
+      return;
+    }
+    const deptCode = departments[0]?.code || "12";
+    const muniRows = await listMunicipalities(deptCode);
+    setMunicipalities(muniRows);
+    setCustomerForm((prev) => ({
+      ...prev,
+      clientType: targetType,
+      departmentCode: prev.departmentCode || deptCode,
+      municipalityCode: prev.municipalityCode || muniRows[0]?.code || "",
+    }));
+  };
+
+  const handleCreateCustomerFromPOS = async () => {
+    if (!validateCustomerForm()) {
+      toast.error("Revisa los campos requeridos");
+      return;
+    }
+    try {
+      setIsSavingCustomer(true);
+      setCustomerServerErrors({});
+      const created = await createCustomer({
+        fullName: customerForm.fullName.trim(),
+        clientType: customerForm.clientType,
+        companyName: customerForm.companyName.trim(),
+        dui: customerForm.dui.trim(),
+        nit: customerForm.nit.trim(),
+        nrc: customerForm.nrc.trim(),
+        phone: formatPhone(customerForm.phone.trim()),
+        email: customerForm.email.trim() || undefined,
+        direccion: customerForm.direccion.trim(),
+        departmentCode: customerForm.departmentCode,
+        municipalityCode: customerForm.municipalityCode,
+        activityCode: customerForm.activityCode.trim(),
+        activityDescription: customerForm.activityDescription.trim(),
+      });
+      await refreshCustomers();
+      setSelectedCustomerId(String(created.id));
+      setIsCustomerCreateOpen(false);
+      setIsCustomerPickerOpen(false);
+      setCustomerSearch("");
+      setCustomerFormErrors({});
+      setCustomerForm({
+        fullName: "",
+        clientType: "CF",
+        companyName: "",
+        dui: "",
+        nit: "",
+        nrc: "",
+        phone: "",
+        email: "",
+        direccion: "",
+        departmentCode: "",
+        municipalityCode: "",
+        activityCode: "",
+        activityDescription: "",
+      });
+      toast.success("Cliente creado");
+    } catch (error) {
+      if (error instanceof Error) {
+        try {
+          const parsed = JSON.parse(error.message) as Record<string, string[] | string>;
+          const mapped: Record<string, string> = {};
+          Object.entries(parsed).forEach(([key, value]) => {
+            mapped[key] = Array.isArray(value) ? String(value[0]) : String(value);
+          });
+          setCustomerServerErrors(mapped);
+        } catch {
+          toast.error(error.message || "No se pudo crear el cliente");
+        }
+      } else {
+        toast.error("No se pudo crear el cliente");
+      }
+    } finally {
+      setIsSavingCustomer(false);
+    }
+  };
 
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
@@ -985,26 +1325,66 @@ const POS = () => {
           <Card className="flex flex-col overflow-hidden">
             <div className="p-4 border-b">
               <div className="mb-3 space-y-2">
-                <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <TooltipProvider delayDuration={120}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-11 rounded-full border-emerald-500/60 px-3"
-                          onClick={() => setIsManualProductOpen(true)}
-                        >
-                          <Plus className="h-4 w-4 mr-1" />
-                          Producto manual
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Agregar ítem manual para esta venta</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  <Button variant="outline" size="sm" className="h-11" onClick={() => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); }}><Wallet className="mr-2 h-4 w-4" />Transacciones de Caja</Button>
+                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                  <div />
+                  <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
+                  <div className="flex items-center justify-end gap-2">
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            title="Producto manual"
+                            aria-label="Producto manual"
+                            className="h-11 w-11 rounded-xl border-emerald-500/60"
+                            onClick={() => setIsManualProductOpen(true)}
+                          >
+                            <Plus className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Producto manual</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Descuentos"
+                            aria-label="Descuentos"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => setIsDiscountDialogOpen(true)}
+                          >
+                            <BadgePercent className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Descuentos</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Transacciones de caja"
+                            aria-label="Transacciones de caja"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => {
+                              setIsCashDialogOpen(true);
+                              loadCashData().catch(() => undefined);
+                            }}
+                          >
+                            <Wallet className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Transacciones de caja</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 </div>
               </div>
 
@@ -1121,6 +1501,12 @@ const POS = () => {
                     <span>{formatMoney(cartDisposableTotal)}</span>
                   </div>
                 )}
+                {selectedDiscount && discountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-600">
+                    <span>Descuento ({selectedDiscount.name})</span>
+                    <span>-{formatMoney(discountAmount)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
                   <span className="text-secondary">{formatMoney(total)}</span>
@@ -1140,7 +1526,10 @@ const POS = () => {
                 <Button
                   variant="outline"
                   className="w-full"
-                  onClick={() => setCart([])}
+                  onClick={() => {
+                    setCart([]);
+                    setSelectedDiscount(null);
+                  }}
                 >
                   Cancelar
                 </Button>
@@ -1150,6 +1539,80 @@ const POS = () => {
         </div>
       </div>
 
+
+      <Dialog open={isDiscountDialogOpen} onOpenChange={setIsDiscountDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Seleccionar descuento</DialogTitle>
+            <DialogDescription>Aplica un descuento manual al pedido actual (solo 1 por pedido).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Buscar descuento..."
+              value={discountSearch}
+              onChange={(event) => setDiscountSearch(event.target.value)}
+            />
+            {selectedDiscount ? (
+              <div className="flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <p className="font-semibold">{selectedDiscount.name}</p>
+                  <p className="text-xs text-muted-foreground">Aplicado manualmente</p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedDiscount(null);
+                    toast.success("Descuento removido");
+                  }}
+                >
+                  Quitar descuento
+                </Button>
+              </div>
+            ) : null}
+            <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+              {isLoadingDiscounts ? (
+                <p className="text-sm text-muted-foreground">Cargando descuentos…</p>
+              ) : filteredDiscounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No hay descuentos activos.</p>
+              ) : (
+                filteredDiscounts.map((discount) => (
+                  <div key={discount.id} className="rounded-md border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-semibold">{discount.name}</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <Badge variant="secondary">{discount.type === "percent" ? `% ${discount.value}` : `$ ${discount.value}`}</Badge>
+                          <Badge variant="outline">{discount.appliesTo === "order" ? "Ticket" : discount.appliesTo === "categories" ? "Categorías" : "Productos"}</Badge>
+                          <Badge variant={discount.availableNow ? "default" : "secondary"}>
+                            {discount.availableNow ? "Disponible ahora" : "Fuera de condiciones"}
+                          </Badge>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          if (!discount.availableNow) {
+                            const confirmOut = window.confirm("Este descuento está fuera de condiciones. ¿Aplicar de todos modos?");
+                            if (!confirmOut) return;
+                          }
+                          if (selectedDiscount && selectedDiscount.id !== discount.id) {
+                            const confirmReplace = window.confirm("Ya hay un descuento aplicado. ¿Reemplazarlo?");
+                            if (!confirmReplace) return;
+                          }
+                          setSelectedDiscount(discount);
+                          setIsDiscountDialogOpen(false);
+                          toast.success(`Descuento "${discount.name}" aplicado`);
+                        }}
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
         <DialogContent className="max-w-2xl">
@@ -1334,22 +1797,41 @@ const POS = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Cliente</Label>
-                    <div className="flex gap-2">
-                      <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
-                        <SelectTrigger><SelectValue placeholder="Selecciona cliente" /></SelectTrigger>
-                        <SelectContent>{customers.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.fullName} ({c.clientType})</SelectItem>)}</SelectContent>
-                      </Select>
-                      <Button variant="outline" onClick={() => window.open('/clientes', '_blank')}>Administrar clientes</Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
                     <Label>Tipo DTE</Label>
                     <div className="flex gap-2">
                       <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
                       <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
                       <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Cliente</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1 justify-start"
+                        onClick={() => {
+                          setIsCustomerPickerOpen(true);
+                          setCustomerSearch("");
+                        }}
+                      >
+                        {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-12"
+                        onClick={() => {
+                          setCustomerFormErrors({});
+                          setCustomerServerErrors({});
+                          setActivitySearch("");
+                          setIsCustomerCreateOpen(true);
+                          void preloadCustomerFormFromDTE(dteDocumentType);
+                        }}
+                      >
+                        Administrar clientes
+                      </Button>
                     </div>
                   </div>
                   {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
@@ -1430,6 +1912,236 @@ const POS = () => {
             ) : (
               <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCustomerPickerOpen} onOpenChange={setIsCustomerPickerOpen}>
+        <DialogContent className="w-[92vw] max-w-lg rounded-2xl p-5">
+          <DialogHeader>
+            <DialogTitle>Seleccionar cliente</DialogTitle>
+            <DialogDescription>Busca por nombre, email, teléfono o documento.</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder="Buscar cliente…"
+            value={customerSearch}
+            onChange={(event) => setCustomerSearch(event.target.value)}
+            className="h-12"
+          />
+          <div className="max-h-72 space-y-2 overflow-y-auto">
+            {visibleCustomers.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">Sin resultados</p>
+            ) : (
+              visibleCustomers.map((customer) => (
+                <Button
+                  key={customer.id}
+                  type="button"
+                  variant={String(customer.id) === selectedCustomerId ? "default" : "outline"}
+                  className="h-12 w-full justify-start text-left"
+                  onClick={() => {
+                    setSelectedCustomerId(String(customer.id));
+                    setIsCustomerPickerOpen(false);
+                  }}
+                >
+                  <span className="truncate">{customer.fullName}</span>
+                  <span className="ml-2 text-xs opacity-80">({customer.clientType})</span>
+                </Button>
+              ))
+            )}
+          </div>
+          {filteredCustomers.length > visibleCustomers.length && (
+            <p className="text-xs text-muted-foreground">
+              Refina tu búsqueda (mostrando 4 de {filteredCustomers.length})
+            </p>
+          )}
+          {!normalizedCustomerSearch && customersByDte.length > visibleCustomers.length && (
+            <p className="text-xs text-muted-foreground">Mostrando 4 de {customersByDte.length}</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCustomerCreateOpen} onOpenChange={(open) => !isSavingCustomer && setIsCustomerCreateOpen(open)}>
+        <DialogContent className="w-[94vw] max-w-xl rounded-2xl p-5">
+          <DialogHeader>
+            <DialogTitle>Nuevo cliente</DialogTitle>
+            <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Tipo DTE</Label>
+              <div className="flex gap-2">
+                <Button type="button" variant={customerForm.clientType === "CF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CF")}>CF</Button>
+                <Button type="button" variant={customerForm.clientType === "CCF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CCF")}>CCF</Button>
+                <Button type="button" variant={customerForm.clientType === "SX" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("SX")}>SX</Button>
+              </div>
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Nombre completo</Label>
+              <Input
+                autoFocus
+                value={customerForm.fullName}
+                onChange={(event) => setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))}
+                className="h-12"
+              />
+              {customerFormErrors.fullName && <p className="text-xs text-destructive">{customerFormErrors.fullName}</p>}
+              {customerServerErrors.full_name && <p className="text-xs text-destructive">{customerServerErrors.full_name}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Teléfono</Label>
+              <Input value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} className="h-12" />
+              {customerFormErrors.phone && <p className="text-xs text-destructive">{customerFormErrors.phone}</p>}
+              {customerServerErrors.phone && <p className="text-xs text-destructive">{customerServerErrors.phone}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Email</Label>
+              <Input value={customerForm.email} onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))} className="h-12" />
+              {customerFormErrors.email && <p className="text-xs text-destructive">{customerFormErrors.email}</p>}
+              {customerServerErrors.email && <p className="text-xs text-destructive">{customerServerErrors.email}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>{customerForm.clientType === "SX" ? "Documento" : "DUI"}</Label>
+              <Input value={customerForm.dui} onChange={(event) => setCustomerForm((prev) => ({ ...prev, dui: event.target.value }))} className="h-12" />
+              {customerFormErrors.dui && <p className="text-xs text-destructive">{customerFormErrors.dui}</p>}
+              {customerServerErrors.dui && <p className="text-xs text-destructive">{customerServerErrors.dui}</p>}
+            </div>
+            {customerForm.clientType === "CCF" && (
+              <>
+                <div className="space-y-1">
+                  <Label>NIT</Label>
+                  <Input value={customerForm.nit} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nit: event.target.value }))} className="h-12" />
+                  {customerFormErrors.nit && <p className="text-xs text-destructive">{customerFormErrors.nit}</p>}
+                  {customerServerErrors.nit && <p className="text-xs text-destructive">{customerServerErrors.nit}</p>}
+                </div>
+                <div className="space-y-1">
+                  <Label>NRC</Label>
+                  <Input value={customerForm.nrc} onChange={(event) => setCustomerForm((prev) => ({ ...prev, nrc: event.target.value }))} className="h-12" />
+                  {customerFormErrors.nrc && <p className="text-xs text-destructive">{customerFormErrors.nrc}</p>}
+                  {customerServerErrors.nrc && <p className="text-xs text-destructive">{customerServerErrors.nrc}</p>}
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Empresa</Label>
+                  <Input value={customerForm.companyName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, companyName: event.target.value }))} className="h-12" />
+                  {customerFormErrors.companyName && <p className="text-xs text-destructive">{customerFormErrors.companyName}</p>}
+                </div>
+              </>
+            )}
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Dirección</Label>
+              <Input value={customerForm.direccion} onChange={(event) => setCustomerForm((prev) => ({ ...prev, direccion: event.target.value }))} className="h-12" />
+              {customerFormErrors.direccion && <p className="text-xs text-destructive">{customerFormErrors.direccion}</p>}
+              {customerServerErrors.direccion && <p className="text-xs text-destructive">{customerServerErrors.direccion}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Departamento</Label>
+              <Select
+                value={customerForm.departmentCode || "__empty"}
+                onValueChange={(value) =>
+                  setCustomerForm((prev) => ({
+                    ...prev,
+                    departmentCode: value === "__empty" ? "" : value,
+                    municipalityCode: "",
+                  }))
+                }
+              >
+                <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona departamento" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__empty">Selecciona</SelectItem>
+                  {departments.map((department) => (
+                    <SelectItem key={department.code} value={department.code}>{department.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {customerFormErrors.departmentCode && <p className="text-xs text-destructive">{customerFormErrors.departmentCode}</p>}
+              {customerServerErrors.department_code && <p className="text-xs text-destructive">{customerServerErrors.department_code}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label>Municipio</Label>
+              <Select
+                value={customerForm.municipalityCode || "__empty"}
+                onValueChange={(value) => setCustomerForm((prev) => ({ ...prev, municipalityCode: value === "__empty" ? "" : value }))}
+              >
+                <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona municipio" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__empty">Selecciona</SelectItem>
+                  {municipalities.map((municipality) => (
+                    <SelectItem key={municipality.code} value={municipality.code}>{municipality.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {customerFormErrors.municipalityCode && <p className="text-xs text-destructive">{customerFormErrors.municipalityCode}</p>}
+              {customerServerErrors.municipality_code && <p className="text-xs text-destructive">{customerServerErrors.municipality_code}</p>}
+            </div>
+            {customerForm.clientType === "CCF" && (
+              <div className="space-y-1 sm:col-span-2">
+                <Label>Actividad económica</Label>
+                <Input
+                  placeholder="Buscar actividad…"
+                  value={activitySearch}
+                  onChange={(event) => setActivitySearch(event.target.value)}
+                  className="h-12"
+                />
+                <Select
+                  value={customerForm.activityCode || "__empty"}
+                  onValueChange={(value) => {
+                    const selected = activities.find((activity) => activity.code === value);
+                    setCustomerForm((prev) => ({
+                      ...prev,
+                      activityCode: value === "__empty" ? "" : value,
+                      activityDescription: value === "__empty" ? "" : selected?.description ?? prev.activityDescription,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="h-12"><SelectValue placeholder="Selecciona actividad" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__empty">Selecciona</SelectItem>
+                    {filteredActivities.map((activity) => (
+                      <SelectItem key={activity.code} value={activity.code}>{activity.code} - {activity.description}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {customerFormErrors.activityCode && <p className="text-xs text-destructive">{customerFormErrors.activityCode}</p>}
+                {customerServerErrors.activity_code && <p className="text-xs text-destructive">{customerServerErrors.activity_code}</p>}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 flex gap-2">
+            <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setIsCustomerCreateOpen(false)} disabled={isSavingCustomer}>
+              Cancelar
+            </Button>
+            <Button type="button" className="h-12 flex-1" onClick={() => void handleCreateCustomerFromPOS()} disabled={isSavingCustomer}>
+              {isSavingCustomer ? "Guardando..." : "Guardar"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
+        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">¿Enviar a cocina?</DialogTitle>
+            <DialogDescription className="text-base">
+              La venta ya se guardó. Elige si deseas enviarla ahora a la pantalla de cocina.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Button
+              type="button"
+              className="h-14 text-lg"
+              disabled={isSubmittingKitchenChoice}
+              onClick={() => void handleKitchenChoice(true)}
+            >
+              {isSubmittingKitchenChoice ? "Enviando..." : "Sí, enviar"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-14 text-lg"
+              disabled={isSubmittingKitchenChoice}
+              onClick={() => void handleKitchenChoice(false)}
+            >
+              No
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
