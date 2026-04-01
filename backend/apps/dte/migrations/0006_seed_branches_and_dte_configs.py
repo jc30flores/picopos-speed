@@ -28,7 +28,7 @@ def seed_branches_and_configs(apps, schema_editor):
         "direccion_municipio": "22",
         "direccion_complemento": "9AV NORTE BO SAN FRANCISCO,#507, FRENTE COSTADO SUR DEL PENAL,SAN MIGUEL SAN MIGUEL",
         "telefono": "60038807",
-        "correo": "facturasPDG23@GMAIL.COM",
+        "correo": "facturasPDG23@gmail.com",
         "is_active": True,
     }
 

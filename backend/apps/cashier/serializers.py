@@ -53,11 +53,27 @@ class CloseoutCountSerializer(serializers.ModelSerializer):
 
 class CashTransactionSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    display_type = serializers.SerializerMethodField()
+    impacts_cash = serializers.SerializerMethodField()
 
     class Meta:
         model = CashTransaction
-        fields = ["id", "session", "type", "amount", "description", "created_by", "created_by_username", "created_at"]
+        fields = ["id", "session", "type", "display_type", "impacts_cash", "amount", "description", "created_by", "created_by_username", "created_at"]
         read_only_fields = ["session", "created_by", "created_at"]
+
+    def get_display_type(self, obj: CashTransaction) -> str:
+        mapping = {
+            "cash_in": "EFECTIVO",
+            "cash_out": "EFECTIVO",
+            "card": "TARJETA",
+            "transfer": "TRANSFERENCIA",
+            "pedidosya": "PEDIDOSYA",
+            "paypal": "PAYPAL",
+        }
+        return mapping.get(obj.type, obj.type.upper())
+
+    def get_impacts_cash(self, obj: CashTransaction) -> bool:
+        return obj.type in {"cash_in", "cash_out", "expense", "payout"}
 
 
 class CashSessionSummarySerializer(serializers.Serializer):
@@ -103,7 +119,7 @@ def calculate_shift_summary(session: CashSession) -> dict:
     cash_in_total = transactions.filter(type="cash_in").aggregate(total=Sum("amount")).get("total") or Decimal("0")
 
     total_cash_sales = methods["CASH"]["total"]
-    expected_cash_in_drawer = session.opening_cash + total_cash_sales + cash_in_total - cash_expenses_total
+    expected_cash_in_drawer = session.opening_cash + cash_in_total - cash_expenses_total
     counted_cash = session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0")
     difference = counted_cash - expected_cash_in_drawer
     order_ids = payments.values_list("order_id", flat=True).distinct()

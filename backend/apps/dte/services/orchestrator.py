@@ -55,9 +55,8 @@ def transmit_sale_dte(
 
     invoice, _ = OrderInvoice.objects.get_or_create(order=order)
     ambiente = _ambiente()
-    numero_control = invoice.numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
     codigo_generacion = build_generation_code(invoice.codigo_generacion)
-    DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
+    numero_control = invoice.numero_control or ""
 
     attempts = (invoice.dte_send_attempts or 0) + 1
     now = timezone.now()
@@ -89,6 +88,10 @@ def transmit_sale_dte(
     )
 
     try:
+        preflight_control_number = numero_control or "PREFLIGHT-CHECK"
+        build_payload_cf(order, control_number=preflight_control_number, generation_code=codigo_generacion, ambiente=ambiente)
+        numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
+        DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
         prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
         prebuilt_record.save(update_fields=["request_payload", "updated_at"])

@@ -77,12 +77,30 @@ class CashTransaction(models.Model):
         ("cash_in", "Cash In"),
         ("expense", "Expense"),
         ("payout", "Payout"),
+        ("card", "Card"),
+        ("transfer", "Transfer"),
+        ("pedidosya", "PedidosYa"),
+        ("paypal", "PayPal"),
     ]
 
     session = models.ForeignKey(CashSession, on_delete=models.CASCADE, related_name="transactions")
     type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="cash_out")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField()
+    refund = models.OneToOneField(
+        "payments.Refund",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cash_transaction",
+    )
+    payment = models.OneToOneField(
+        "payments.Payment",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cash_transaction",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
