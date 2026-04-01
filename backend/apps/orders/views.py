@@ -22,6 +22,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.payments.models import Payment
 from apps.dte.models import DTERecord
+from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
 from django.conf import settings
 
 
@@ -308,6 +309,13 @@ class OrderReceiptPDFView(generics.GenericAPIView):
             f"Sello/UUID: {(record.sello_recepcion or record.hacienda_uuid) if record else '-'}",
             f"Estado DTE: {record.status if record else '-'}",
         ]
+        if record:
+            ident = ((record.request_payload or {}).get("dte") or {}).get("identificacion") or {}
+            fecha_dte = ident.get("fecEmi") or ""
+            lines += [
+                f"Fecha DTE: {fecha_dte or '-'}",
+                f"Consulta publica: {build_hacienda_consulta_publica_url(fecha_dte, record.codigo_generacion)}",
+            ]
 
         try:
             from reportlab.lib.pagesizes import A4
