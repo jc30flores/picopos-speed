@@ -347,10 +347,23 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
     }
 
+    customer_name = (getattr(customer, "full_name", "") or getattr(customer, "name", "") or "").strip().upper()
     is_consumer_final = bool(
         not customer
         or getattr(customer, "is_consumer_final", False)
-        or str(getattr(customer, "client_type", "CF") or "CF").upper() == "CF"
+        or getattr(customer, "is_default_consumer_final", False)
+        or customer_name == "CONSUMIDOR FINAL"
+    )
+    logger.info(
+        "dte.receptor.customer_snapshot customer_id=%s nombre=%s correo=%s tipo_documento=%s num_documento=%s nrc=%s cod_actividad=%s is_consumer_final=%s",
+        getattr(customer, "id", None),
+        (getattr(customer, "full_name", None) or getattr(customer, "name", None) or order.customer_name or "CONSUMIDOR FINAL"),
+        getattr(customer, "correo", None),
+        getattr(customer, "tipo_documento", None),
+        getattr(customer, "num_documento", None),
+        getattr(customer, "nrc", None),
+        (getattr(customer, "activity_code", None) or getattr(customer, "cod_actividad", None)),
+        is_consumer_final,
     )
     has_real_dui = _has_real_dui(getattr(customer, "dui", None)) or _has_real_dui(getattr(customer, "num_documento", None))
     receptor_tipo_documento = None
@@ -375,8 +388,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "complemento": _none_if_blank((customer.direccion or customer.direccion_complemento) if customer else "Direccion del cliente"),
         },
         "telefono": _none_if_blank(customer.telefono if customer else "00000000"),
-        "correo": _none_if_blank((customer.correo if customer else None)) or _none_if_blank(emisor_payload.get("correo")),
+        "correo": _none_if_blank((customer.correo if customer else None)),
     }
+    if receptor["correo"] is None:
+        receptor["correo"] = _none_if_blank(emisor_payload.get("correo"))
     validate_receptor_payload(receptor)
 
     payment_code, payment_reference = get_mh_payment_info(order)

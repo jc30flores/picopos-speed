@@ -157,6 +157,22 @@ class DTECoreTests(TestCase):
         receptor = payload["dte"]["receptor"]
         self.assertEqual(receptor["tipoDocumento"], "13")
         self.assertEqual(receptor["numDocumento"], "01234567-8")
+        self.assertEqual(receptor["correo"], "cliente@correo.com")
+
+    def test_receptor_uses_customer_email_when_present(self):
+        self.order.customer = Customer.objects.create(
+            name="Cliente con correo",
+            full_name="Cliente con correo",
+            client_type="CF",
+            is_consumer_final=False,
+            tipo_documento="13",
+            num_documento="12345678-9",
+            correo="realcliente@correo.com",
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-M001P001-000000000000111", "G" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+        self.assertEqual(receptor["correo"], "realcliente@correo.com")
 
     def test_receptor_optional_fields_never_send_empty_string(self):
         self.order.customer = Customer.objects.create(
