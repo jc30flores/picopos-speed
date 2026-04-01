@@ -78,11 +78,16 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        _, session = _get_open_session_for_request(request)
+        session = (
+            CashSession.objects.filter(closed_at__isnull=True)
+            .select_related("register", "register__branch")
+            .order_by("-opened_at")
+            .first()
+        )
         if not session:
-            return Response({"open": False}, status=status.HTTP_200_OK)
+            return Response({"session": None, "summary": None}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session)
-        return Response({"open": True, "session": CashSessionSerializer(session).data, "summary": CashSessionSummarySerializer(summary).data})
+        return Response({"session": CashSessionSerializer(session).data, "summary": CashSessionSummarySerializer(summary).data}, status=status.HTTP_200_OK)
 
 
 class CashSessionOpenView(APIView):
@@ -113,13 +118,23 @@ class CashSessionOpenView(APIView):
             .first()
         )
         if existing_session:
-            payload = CashSessionSerializer(existing_session).data
-            payload["already_open"] = True
-            return Response(payload, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "already_open": True,
+                    "session": CashSessionSerializer(existing_session).data,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
-        return Response(CashSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+        return Response(
+            {
+                "already_open": False,
+                "session": CashSessionSerializer(session).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CashSessionCloseView(APIView):

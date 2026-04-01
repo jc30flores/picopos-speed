@@ -27,8 +27,8 @@ class CashierFlowTests(TestCase):
 
         self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 200)
-        self.assertEqual(first.data['id'], second.data['id'])
-        self.assertEqual(CashSession.objects.filter(opened_by_id=first.data['opened_by'], status='open').count(), 1)
+        self.assertEqual(first.data['session']['id'], second.data['session']['id'])
+        self.assertEqual(CashSession.objects.filter(opened_by_id=first.data['session']['opened_by'], status='open').count(), 1)
 
     def test_open_session_concurrent_requests_create_only_one_open_session(self):
         self.client.force_authenticate(None)
@@ -58,7 +58,7 @@ class CashierFlowTests(TestCase):
 
         current = self.client.get('/api/cashier/session/current/')
         self.assertEqual(current.status_code, 200)
-        self.assertEqual(current.data.get('open'), True)
+        self.assertIsNotNone(current.data.get('session'))
 
     def test_open_session_returns_200_if_register_already_open(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
