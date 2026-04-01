@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -97,7 +97,9 @@ export const SalesHistoryTab = () => {
   const serviceTypeLabelByKey = useMemo(() => new Map(serviceTypes.map((item) => [item.key, item.label])), [serviceTypes]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [sales, setSales] = useState<Sale[]>([]);
+  const requestSequence = useRef(0);
   const [isRefundOpen, setIsRefundOpen] = useState(false);
   const [isVoidOpen, setIsVoidOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
@@ -135,16 +137,32 @@ export const SalesHistoryTab = () => {
     }
   }, [timeRange]);
 
-  const loadSales = () => {
+  useEffect(() => {
+    const normalized = searchQuery.trim();
+    if (!normalized) {
+      setDebouncedSearchQuery("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(normalized);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const loadSales = (currentSearch: string) => {
+    const currentRequest = ++requestSequence.current;
     const serviceTypeFilter = serviceType === "all" ? undefined : serviceType;
+    const todayLocal = getLocalDateSV(new Date());
+    const useGlobalSearch = currentSearch.length > 0;
     return getSalesReport({
-      dateFrom: restrictedRole ? undefined : dateFrom,
-      dateTo: restrictedRole ? undefined : dateTo,
+      dateFrom: restrictedRole && !useGlobalSearch ? todayLocal : dateFrom,
+      dateTo: restrictedRole && !useGlobalSearch ? todayLocal : dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
-      today: restrictedRole && !searchQuery.trim() ? true : undefined,
-      search: searchQuery.trim() || undefined,
+      today: undefined,
+      search: useGlobalSearch ? currentSearch : undefined,
     })
       .then((report) => {
+        if (currentRequest !== requestSequence.current) return;
         const mapped = report.rows.map((row) => ({
           id: String(row.orderId),
           date: row.createdAt,
@@ -172,8 +190,8 @@ export const SalesHistoryTab = () => {
   };
 
   useEffect(() => {
-    loadSales();
-  }, [dateFrom, dateTo, serviceType, searchQuery, restrictedRole]);
+    void loadSales(debouncedSearchQuery);
+  }, [dateFrom, dateTo, serviceType, debouncedSearchQuery, restrictedRole]);
 
   const filteredSales = restrictedRole
     ? sales
@@ -489,9 +507,11 @@ export const SalesHistoryTab = () => {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>Transacciones</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              Total de ventas: <span className="font-semibold text-foreground">${totalSales.toFixed(2)}</span> · {filteredSales.length} transacciones
-            </p>
+            {!restrictedRole ? (
+              <p className="text-sm text-muted-foreground mt-1">
+                Total de ventas: <span className="font-semibold text-foreground">${totalSales.toFixed(2)}</span> · {filteredSales.length} transacciones
+              </p>
+            ) : null}
           </div>
           <Button variant="outline" size="sm">
             <Download className="h-4 w-4 mr-2" />

@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch
@@ -53,3 +55,24 @@ class SalesReportFiltersTests(TestCase):
         response = self.client.get("/api/reports/sales/?search=Cliente Pago")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["results"][0]["payment_method"], "Cash")
+
+    def test_without_search_defaults_to_today(self):
+        old_order = self._make_paid_order(order_number=11, customer_name="Ayer", control_number="DTE-01-M001P001-000000000000011")
+        old_dt = timezone.now() - timedelta(days=1)
+        Order.objects.filter(pk=old_order.pk).update(created_at=old_dt)
+        self._make_paid_order(order_number=12, customer_name="Hoy", control_number="DTE-01-M001P001-000000000000012")
+
+        response = self.client.get("/api/reports/sales/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["customer_name"], "Hoy")
+
+    def test_global_search_ignores_date_filters(self):
+        old_order = self._make_paid_order(order_number=21, customer_name="Historico", control_number="DTE-01-M001P001-000000000000021")
+        old_dt = timezone.now() - timedelta(days=60)
+        Order.objects.filter(pk=old_order.pk).update(created_at=old_dt)
+
+        response = self.client.get("/api/reports/sales/?q=Historico&date_from=2099-01-01&date_to=2099-01-01")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["customer_name"], "Historico")

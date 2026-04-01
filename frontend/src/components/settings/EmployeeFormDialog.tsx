@@ -215,7 +215,6 @@ export const EmployeeFormDialog = ({
                       type="password"
                       inputMode="numeric"
                       className="h-11 text-base"
-                      pattern="\d{6}"
                       maxLength={PIN_LENGTH}
                       value={formData.userPassword}
                       onFocus={() => setPinTarget("pin")}
@@ -232,7 +231,6 @@ export const EmployeeFormDialog = ({
                       type="password"
                       inputMode="numeric"
                       className="h-11 text-base"
-                      pattern="\d{6}"
                       maxLength={PIN_LENGTH}
                       value={formData.userPasswordConfirm}
                       onFocus={() => setPinTarget("confirm")}

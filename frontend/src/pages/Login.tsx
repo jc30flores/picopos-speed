@@ -87,7 +87,7 @@ const Login = () => {
         </CardHeader>
         <CardContent>
           {usePassword ? (
-            <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <form onSubmit={handlePasswordSubmit} className="space-y-4" noValidate>
               <div className="space-y-2">
                 <Label htmlFor="identifier">Usuario o correo</Label>
                 <Input id="identifier" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />
@@ -99,7 +99,6 @@ const Login = () => {
                   type="password"
                   value={password}
                   inputMode="numeric"
-                  pattern="\\d{6}"
                   maxLength={PIN_LENGTH}
                   onChange={(e) => setPassword(sanitizePin(e.target.value))}
                 />

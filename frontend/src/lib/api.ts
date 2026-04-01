@@ -1884,7 +1884,10 @@ export const getSalesReport = async (filters?: {
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
   if (filters?.status) params.set("status", filters.status);
-  if (filters?.search) params.set("search", filters.search);
+  if (filters?.search) {
+    params.set("search", filters.search);
+    params.set("q", filters.search);
+  }
   if (filters?.today) params.set("today", "1");
   const query = params.toString();
   const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);

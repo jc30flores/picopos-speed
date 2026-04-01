@@ -39,7 +39,7 @@ def login_view(request):
     try:
         email = request.data.get("email")
         username = request.data.get("username")
-        password = request.data.get("password")
+        password = str(request.data.get("password") or "").strip()
         if not password or not (email or username):
             return Response({"detail": "Missing credentials"}, status=status.HTTP_400_BAD_REQUEST)
         if not is_valid_pin_format(password):
