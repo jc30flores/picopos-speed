@@ -861,17 +861,28 @@ const POS = () => {
     lastDrawerOpenAtRef.current = now;
     setIsOpeningDrawer(true);
     try {
-      const result = await openCashDrawer();
-      if (result.ok) {
-        toast.success("Gaveta abierta");
-      } else {
-        toast.error(`No se pudo abrir la gaveta: ${result.message}`);
-      }
+      await triggerDrawerOpen({ showSuccessToast: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cajón");
     } finally {
       setIsOpeningDrawer(false);
     }
+  };
+
+  const isCashPaymentSelected = (method: PaymentMethod, methodCode?: string): boolean => {
+    if (method === "cash") return true;
+    const normalizedCode = String(methodCode || "").trim().toLowerCase();
+    return ["cash", "efectivo"].some((token) => normalizedCode.includes(token));
+  };
+
+  const triggerDrawerOpen = async ({ showSuccessToast }: { showSuccessToast: boolean }): Promise<boolean> => {
+    const result = await openCashDrawer();
+    if (result.ok) {
+      if (showSuccessToast) toast.success("Gaveta abierta");
+      return true;
+    }
+    toast.error(`No se pudo abrir la gaveta: ${result.message}`);
+    return false;
   };
 
   const closeExtrasDialog = (open: boolean) => {
@@ -1087,12 +1098,10 @@ const POS = () => {
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
-      if (paymentMethod === "cash") {
-        void openCashDrawer().then((drawer) => {
-          if (!drawer.ok) {
-            toast.error(`No se pudo abrir la gaveta: ${drawer.message}`);
-          }
-        }).catch(() => {
+      const shouldOpenDrawer = isCashPaymentSelected(paymentMethod, selectedPaymentMethodCode);
+      console.debug("payment success -> opening drawer", { shouldOpenDrawer, paymentMethod, selectedPaymentMethodCode });
+      if (shouldOpenDrawer) {
+        void triggerDrawerOpen({ showSuccessToast: false }).catch(() => {
           toast.error("No se pudo abrir la gaveta");
         });
       }
