@@ -117,9 +117,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-        branch = self._get_branch(validated_data)
-        if branch is not None:
-            validated_data["branch"] = branch
+        validated_data["branch"] = self._get_branch(validated_data, current_branch=validated_data.get("branch"))
         create_user = validated_data.pop("create_user", False)
         user_data = validated_data.pop("user", None)
         employee = super().create(validated_data)
@@ -132,9 +130,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        branch = self._get_branch(validated_data)
-        if branch is not None:
-            validated_data["branch"] = branch
+        validated_data["branch"] = self._get_branch(validated_data, current_branch=instance.branch)
         create_user = validated_data.pop("create_user", False)
         user_data = validated_data.pop("user", None)
         employee = super().update(instance, validated_data)
@@ -162,6 +158,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
         role = user_data.get("role")
         if not username:
             raise serializers.ValidationError({"user": {"username": "Username is required"}})
+        if not role:
+            raise serializers.ValidationError({"user": {"role": "Role is required"}})
         if user_model.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError({"user": {"username": "Username already exists"}})
         if email and user_model.objects.filter(email__iexact=email).exists():
@@ -209,16 +207,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
             profile.is_active = employee.status == "active"
             profile.save(update_fields=["role", "is_active"])
 
-    def _get_branch(self, validated_data):
+    def _get_branch(self, validated_data, current_branch=None):
         branch_name = validated_data.pop("branch_name_input", None)
-        if branch_name is None:
-            return None
-        if not branch_name:
-            return None
-        branch = Branch.objects.filter(name=branch_name).first()
-        if branch is None:
-            raise serializers.ValidationError({"branch_name_input": "Branch not found"})
-        return branch
+        if branch_name:
+            branch = Branch.objects.filter(name=branch_name).first()
+            if branch is None:
+                raise serializers.ValidationError({"branch_name_input": "Branch not found"})
+            return branch
+        if current_branch is not None:
+            return current_branch
+        return Branch.objects.order_by("id").first()
 
 
 class AttendanceSerializer(serializers.ModelSerializer):

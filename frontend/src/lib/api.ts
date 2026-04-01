@@ -2194,16 +2194,12 @@ export const createEmployee = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       full_name: payload.name,
-      email: payload.email || null,
-      phone: payload.phone ?? "",
       role: roleKey,
-      branch_name_input: payload.branch || null,
       status: payload.status ?? "active",
       create_user: payload.createUser ?? false,
       user: payload.user
         ? {
             username: payload.user.username,
-            email: payload.user.email || null,
             password: payload.user.password,
             role: userRoleKey ?? payload.user.role,
           }
@@ -2271,17 +2267,13 @@ export const updateEmployee = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...(payload.name !== undefined ? { full_name: payload.name } : {}),
-      ...(payload.email !== undefined ? { email: payload.email || null } : {}),
-      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
       ...(roleKey ? { role: roleKey } : {}),
-      ...(payload.branch !== undefined ? { branch_name_input: payload.branch } : {}),
       ...(payload.status !== undefined ? { status: payload.status } : {}),
       ...(payload.createUser !== undefined ? { create_user: payload.createUser } : {}),
       ...(payload.user
         ? {
             user: {
               ...(payload.user.username !== undefined ? { username: payload.user.username } : {}),
-              ...(payload.user.email !== undefined ? { email: payload.user.email || null } : {}),
               ...(payload.user.password ? { password: payload.user.password } : {}),
               ...(payload.user.role ? { role: userRoleKey ?? payload.user.role } : {}),
             },

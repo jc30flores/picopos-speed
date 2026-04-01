@@ -134,8 +134,11 @@ def parse_response_outcome(body: dict) -> str:
 def _classify_final_status(*, result, parsed: dict, inferred: str) -> str:
     status_code = int(result.status_code or 0)
     error_type = str(getattr(result, "error_type", "") or "").upper()
+    duplicate_msg = str(parsed.get("message") or parsed.get("detail") or "").lower()
 
-    if parsed.get("success") is True:
+    if 200 <= status_code < 300 and parsed.get("success") is True:
+        return DTEOutbox.STATUS_ACCEPTED
+    if "duplicate" in duplicate_msg or "already processed" in duplicate_msg:
         return DTEOutbox.STATUS_ACCEPTED
     if parsed.get("offline") is True or error_type == "TIMEOUT":
         return DTEOutbox.STATUS_PENDING
@@ -149,7 +152,7 @@ def _classify_final_status(*, result, parsed: dict, inferred: str) -> str:
         return DTEOutbox.STATUS_FAILED
     if 400 <= status_code < 500:
         return DTEOutbox.STATUS_FAILED
-    if inferred == DTEOutbox.STATUS_ACCEPTED:
+    if inferred == DTEOutbox.STATUS_ACCEPTED and 200 <= status_code < 300:
         return DTEOutbox.STATUS_ACCEPTED
     if inferred == DTEOutbox.STATUS_REJECTED:
         return DTEOutbox.STATUS_FAILED
@@ -557,6 +560,8 @@ def process_pending_outbox(limit: int = 50) -> int:
     if pending_ids:
         DTE_LOGGER.info("[DTE OUTBOX] picked=%s", len(pending_ids))
     else:
+        if bool(getattr(settings, "DTE_LOG_SILENT_IDLE", True)):
+            return 0
         idle_every = int(getattr(settings, "DTE_LOG_IDLE_EVERY_SECONDS", 300) or 300)
         now_ts = time.time()
         if now_ts - _LAST_IDLE_LOG_TS >= idle_every:
