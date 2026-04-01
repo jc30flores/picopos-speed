@@ -26,8 +26,6 @@ class CashDrawerOpenResult:
 
 
 class CashDrawerService:
-    TEST_LINE = "ABRIENDO CAJON DE DINERO.\n"
-
     def _parse_hex_bytes(self, value: str) -> bytes:
         chunks = [chunk for chunk in value.replace(",", " ").split() if chunk]
         if not chunks:
@@ -114,7 +112,6 @@ class CashDrawerService:
                 )
                 in_endpoint_address = int(bulk_in.bEndpointAddress) if bulk_in is not None else None
 
-            device.write(out_endpoint_address, self.TEST_LINE.encode("utf-8"))
             device.write(out_endpoint_address, pulse_command)
 
             return CashDrawerOpenResult(
@@ -147,7 +144,7 @@ class CashDrawerService:
 
         mode = (settings.CASH_DRAWER_MODE or "mock").lower()
         if mode == "mock":
-            logger.info(self.TEST_LINE.strip())
+            logger.info("cash_drawer.open.mock_pulse")
             return CashDrawerOpenResult(vendor_id=0, product_id=0, interface=0, out_endpoint=0, in_endpoint=None)
         if mode != "usb":
             raise CashDrawerError(f"Unsupported CASH_DRAWER_MODE: {mode}")

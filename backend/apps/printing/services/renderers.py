@@ -21,6 +21,12 @@ def _line(text: str) -> str:
     return text[:width].ljust(width)
 
 
+def _center(text: str) -> str:
+    width = _width()
+    raw = (text or "")[:width]
+    return raw.center(width)
+
+
 def _format_money(value: Decimal) -> str:
     return f"${value:.2f}"
 
@@ -181,16 +187,14 @@ def render_customer_ticket(order: Order) -> dict:
     col_total = 9
     col_desc = max(8, _width() - col_qty - col_unit - col_total - 3)
     lines: list[str] = []
-    lines.append(_line(ctx["tagline"]))
-    lines.append(_line(ctx["restaurant_name"]).center(_width()))
+    lines.append(_center(ctx["tagline"]))
+    lines.append(_center(ctx["restaurant_name"]))
     if ctx["address"]:
-        lines.append(_line(str(ctx["address"])))
+        lines.append(_center(str(ctx["address"])))
     if ctx["phone"]:
-        lines.append(_line(f"Tel: {ctx['phone']}"))
+        lines.append(_center(f"Tel: {ctx['phone']}"))
     lines.append(_divider())
-    if ctx["logo_exists"]:
-        lines.append(_line(f"[Logo] {ctx['logo_path']}"))
-    lines.append(_line(ctx["service_type_label"]).center(_width()))
+    lines.append(_center(ctx["service_type_label"]))
     lines.append(_line(f"Atendido por: {ctx['cashier_name']}"))
     lines.append(_line(f"Orden #{ctx['order_number']}"))
     lines.append(_line(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
@@ -228,9 +232,9 @@ def render_customer_ticket(order: Order) -> dict:
     for qr_line in wrap(ctx["public_url"], width=_width()):
         lines.append(_line(qr_line))
     lines.append(_divider())
-    lines.append(_line("Gracias por su visita"))
-    lines.append(_line(f"Order No: {ctx['order_number']}"))
-    lines.append(_line(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
+    lines.append(_center("Gracias por su visita"))
+    lines.append(_center(f"Order No: {ctx['order_number']}"))
+    lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
 
     text = "\n".join(lines)
     return {
@@ -244,6 +248,7 @@ def render_customer_ticket(order: Order) -> dict:
             "public_url": ctx["public_url"],
             "logo_path": ctx["logo_path"],
             "logo_exists": ctx["logo_exists"],
+            "receipt_context": ctx,
         },
     }
 

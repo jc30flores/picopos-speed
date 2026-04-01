@@ -39,3 +39,4 @@ class ReceiptRendererTests(SimpleTestCase):
         self.assertIn("Gracias por su visita", payload["text"])
         self.assertIn("consultaPubli", payload["text"])
         self.assertFalse(payload["meta"]["logo_exists"])
+        self.assertNotIn("[Logo]", payload["text"])

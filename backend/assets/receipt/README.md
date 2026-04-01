@@ -1,6 +1,6 @@
 # Receipt logo
 
-Coloque aquí el archivo `logo_pdg.png` para el encabezado del ticket impreso.
+Colocar `logo_pdg.png` aquí (no se versiona) para el encabezado del ticket impreso.
 
 - Ruta esperada por el backend: `backend/assets/receipt/logo_pdg.png`
 - Este archivo **no se versiona** en git.

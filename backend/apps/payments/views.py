@@ -237,7 +237,7 @@ class PaymentPrintTicketView(APIView):
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
             payload = render_customer_ticket(payment.order)
-            printed, print_error = USBPrinterService().print_text(payload["text"])
+            printed, print_error = USBPrinterService().print_receipt(payload)
             return Response({"printed": bool(printed), "print_error": print_error}, status=status.HTTP_200_OK)
         except Exception as exc:  # noqa: BLE001
             logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
