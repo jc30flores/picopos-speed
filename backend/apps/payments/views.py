@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
-from apps.cashier.models import CashSession
+from apps.cashier.models import CashSession, CashTransaction
 from apps.payments.models import Payment, Refund, PaymentMethod
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
@@ -26,6 +26,48 @@ logger = logging.getLogger(__name__)
 
 def _get_open_session(user):
     return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
+
+
+def _is_cash_payment_method(payment_method: PaymentMethod | None) -> bool:
+    if not payment_method:
+        return False
+    code = str(payment_method.code or "").strip().upper()
+    return bool(payment_method.is_cash or code in {"01", "CASH", "EFECTIVO"})
+
+
+def _refund_is_cash(*, method: str, payment_method: PaymentMethod | None, original_payment: Payment | None) -> bool:
+    if _is_cash_payment_method(payment_method):
+        return True
+    if str(method or "").strip().lower() == "cash":
+        return True
+    if not original_payment:
+        return False
+    if _is_cash_payment_method(original_payment.payment_method):
+        return True
+    return str(original_payment.method or "").strip().lower() == "cash"
+
+
+def _get_open_session_for_branch(branch_id: int) -> CashSession | None:
+    return (
+        CashSession.objects.filter(register__branch_id=branch_id, status="open", closed_at__isnull=True)
+        .select_related("register", "register__branch")
+        .order_by("-opened_at")
+        .first()
+    )
+
+
+def _create_cash_out_for_refund(refund: Refund, user) -> tuple[CashTransaction, bool]:
+    amount = (refund.amount + (refund.tip_refunded or Decimal("0"))).quantize(Decimal("0.01"))
+    return CashTransaction.objects.get_or_create(
+        refund=refund,
+        defaults={
+            "session": refund.cash_session,
+            "type": "cash_out",
+            "amount": amount,
+            "description": f"Reembolso orden #{refund.order_id} (refund_id={refund.id})",
+            "created_by": user,
+        },
+    )
 
 
 
@@ -187,18 +229,38 @@ class RefundListCreateView(generics.ListCreateAPIView):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        cash_session = _get_open_session(request.user)
-        if not cash_session:
-            return Response({"detail": "Open shift required"}, status=status.HTTP_400_BAD_REQUEST)
-
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning("refund.create.bad_request errors=%s payload=%s", serializer.errors, request.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated = serializer.validated_data
+        order = validated["order"]
+        original_payment = validated.get("original_payment")
+        payment_method = validated.get("payment_method")
+        method = validated.get("method")
+        is_cash_refund = _refund_is_cash(method=method, payment_method=payment_method, original_payment=original_payment)
+        cash_session = _get_open_session_for_branch(order.branch_id) if is_cash_refund else None
+        if is_cash_refund and not cash_session:
+            return Response({"detail": "No hay caja abierta para registrar el reembolso."}, status=status.HTTP_400_BAD_REQUEST)
+
         refund = serializer.save(
             cash_session=cash_session,
             approved_by=request.user,
             created_by=request.user,
         )
         refund.order.recalculate_financials()
+        cash_tx = None
+        if is_cash_refund:
+            cash_tx, created = _create_cash_out_for_refund(refund, request.user)
+            logger.info(
+                "cashier.refund.cash_out.created refund_id=%s session_id=%s amount=%s branch_id=%s created=%s",
+                refund.id,
+                cash_tx.session_id,
+                cash_tx.amount,
+                refund.order.branch_id,
+                created,
+            )
 
         log_audit(
             request,
@@ -211,8 +273,9 @@ class RefundListCreateView(generics.ListCreateAPIView):
                 "tip_refunded": str(refund.tip_refunded),
                 "method": refund.method,
                 "reason": refund.reason,
-                "shift_id": cash_session.id,
+                "shift_id": cash_session.id if cash_session else None,
                 "approved_by": request.user.id,
+                "cash_transaction_id": cash_tx.id if cash_tx else None,
             },
         )
 

@@ -83,6 +83,13 @@ class CashTransaction(models.Model):
     type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="cash_out")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField()
+    refund = models.OneToOneField(
+        "payments.Refund",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cash_transaction",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
