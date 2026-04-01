@@ -12,6 +12,7 @@ urlpatterns = [
     path("sessions/<int:pk>/ticket.pdf", views.CashSessionTicketPDFView.as_view(), name="cashier-session-ticket-pdf"),
     path("transactions/", views.CashTransactionListCreateView.as_view(), name="cashier-transactions"),
     path("drawer/open/", views.CashDrawerOpenView.as_view(), name="cashier-drawer-open"),
+    path("drawer/test/", views.CashDrawerTestView.as_view(), name="cashier-drawer-test"),
     path("drawer/status/", views.CashDrawerStatusView.as_view(), name="cashier-drawer-status"),
     # legacy
     path("shifts/open/", views.ShiftOpenView.as_view(), name="cashier-shift-open"),

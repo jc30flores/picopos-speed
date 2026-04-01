@@ -24,8 +24,10 @@ CASH_DRAWER_USB_PRODUCT_ID=0x2016
 CASH_DRAWER_USB_INTERFACE=0
 CASH_DRAWER_USB_OUT_ENDPOINT=0x03
 CASH_DRAWER_USB_IN_ENDPOINT=0x81
-# opcional:
-# CASH_DRAWER_PIN=2
+# opcional (kick ESC/POS):
+# CASH_DRAWER_KICK_VARIANT=0
+# CASH_DRAWER_KICK_ON=25
+# CASH_DRAWER_KICK_OFF=250
 # CASH_DRAWER_PULSE_COMMAND=1B 70 00 19 FA
 
 # impresión de tickets (cierre de caja)
@@ -80,6 +82,7 @@ python manage.py cash_drawer_test
 ## 5) Endpoint API
 
 - Abrir cajón: `POST /api/cashier/drawer/open/`
+- Test de pulso: `POST /api/cashier/drawer/test/`
 - Estado cajón: `GET /api/cashier/drawer/status/`
 - Cierre de caja imprime ticket automáticamente al cerrar sesión.
 
@@ -87,8 +90,12 @@ Respuesta exitosa esperada:
 
 ```json
 {
-  "ok": true,
-  "message": "Cash drawer opened successfully"
+  "success": true,
+  "variant": 0,
+  "on": 25,
+  "off": 250,
+  "error": null,
+  "message": "Pulso enviado a la gaveta"
 }
 ```
 

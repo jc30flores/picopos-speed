@@ -106,10 +106,19 @@ class CashierFlowTests(TestCase):
             res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data.get("success"), True)
-        self.assertEqual(res.data.get("message"), "Cash drawer opened successfully")
+        self.assertEqual(res.data.get("message"), "Pulso enviado a la gaveta")
 
     def test_open_drawer_without_config_returns_400(self):
         with override_settings(CASH_DRAWER_ENABLED=False, CASH_DRAWER_MODE="usb"):
             res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data.get("success"), False)
+
+    def test_drawer_test_endpoint_returns_parameters(self):
+        with override_settings(CASH_DRAWER_ENABLED=True, CASH_DRAWER_MODE="mock"):
+            res = self.client.post('/api/cashier/drawer/test/', {"variant": 1, "on": 50, "off": 200}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get("success"), True)
+        self.assertEqual(res.data.get("variant"), 1)
+        self.assertEqual(res.data.get("on"), 50)
+        self.assertEqual(res.data.get("off"), 200)
