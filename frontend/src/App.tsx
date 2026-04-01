@@ -38,7 +38,7 @@ const App = () => (
             <Route
               path="/kiosk"
               element={
-                <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin"]}>
                   <Kiosk />
                 </ProtectedRoute>
               }
@@ -46,13 +46,13 @@ const App = () => (
             <Route
               path="/kitchen"
               element={
-                <ProtectedRoute allowedRoles={["kitchen", "admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["kitchen", "admin"]}>
                   <Kitchen />
                 </ProtectedRoute>
               }
             />
-            <Route path="/customer-display" element={<CustomerDisplay />} />
-            <Route path="/clientes" element={<CustomersPage />} />
+            <Route path="/customer-display" element={<ProtectedRoute allowedRoles={["admin"]}><CustomerDisplay /></ProtectedRoute>} />
+            <Route path="/clientes" element={<ProtectedRoute allowedRoles={["admin", "manager"]}><CustomersPage /></ProtectedRoute>} />
             <Route
               path="/menu"
               element={
@@ -64,7 +64,7 @@ const App = () => (
             <Route
               path="/registros/ventas"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager", "cashier"]}>
                   <RegistrosVentas />
                 </ProtectedRoute>
               }
@@ -72,7 +72,7 @@ const App = () => (
             <Route
               path="/registros/caja"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin"]}>
                   <RegistrosCaja />
                 </ProtectedRoute>
               }
@@ -81,7 +81,7 @@ const App = () => (
             <Route
               path="/dte"
               element={
-                <ProtectedRoute allowedRoles={["cashier", "admin", "manager", "accountant"]}>
+                <ProtectedRoute allowedRoles={["admin"]}>
                   <DTEPage />
                 </ProtectedRoute>
               }
@@ -89,7 +89,7 @@ const App = () => (
             <Route
               path="/settings"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin"]}>
                   <Settings />
                 </ProtectedRoute>
               }

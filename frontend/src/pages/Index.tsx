@@ -56,6 +56,7 @@ import {
   openCashDrawer,
   validateOrderPricePin,
   getActiveDiscounts,
+  printPaymentTicket,
   Category,
   Discount,
   ModifierGroup,
@@ -70,6 +71,8 @@ import {
 import { toast } from "sonner";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
+import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 
 interface CartItem {
   id: string;
@@ -239,6 +242,9 @@ const POS = () => {
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
+  const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
+  const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -271,6 +277,7 @@ const POS = () => {
   const [pinInput, setPinInput] = useState("");
   const [validatedPin, setValidatedPin] = useState<string>("");
   const [newPriceInput, setNewPriceInput] = useState("");
+  const privilegedGuard = usePrivilegedActionGuard();
 
   const {
     itemsGross,
@@ -917,6 +924,12 @@ const POS = () => {
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
+      if (postSalePrintChoice && lastPaymentId) {
+        const printResult = await printPaymentTicket(lastPaymentId);
+        if (!printResult.printed && printResult.printError) {
+          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
+        }
+      }
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
     } catch (error) {
@@ -1033,11 +1046,7 @@ const POS = () => {
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
       });
-      if (paymentResult.printed) {
-        toast.success("Ticket impreso");
-      } else if (paymentResult.printError) {
-        toast.warning(`Venta registrada, pero no se pudo imprimir: ${paymentResult.printError}`);
-      }
+      setLastPaymentId(paymentResult.id);
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
@@ -1058,6 +1067,8 @@ const POS = () => {
         } else {
           toast.success("Pago y factura registrados.");
           setKitchenPromptOrderId(orderId);
+          setPostSaleKitchenChoice(true);
+          setPostSalePrintChoice(true);
           setIsKitchenPromptOpen(true);
         }
       } else {
@@ -1339,7 +1350,9 @@ const POS = () => {
                             title="Producto manual"
                             aria-label="Producto manual"
                             className="h-11 w-11 rounded-xl border-emerald-500/60"
-                            onClick={() => setIsManualProductOpen(true)}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("manualProduct", () => setIsManualProductOpen(true))
+                            }
                           >
                             <Plus className="h-5 w-5" />
                           </Button>
@@ -1356,7 +1369,9 @@ const POS = () => {
                             title="Descuentos"
                             aria-label="Descuentos"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => setIsDiscountDialogOpen(true)}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))
+                            }
                           >
                             <BadgePercent className="h-5 w-5" />
                           </Button>
@@ -1373,10 +1388,12 @@ const POS = () => {
                             title="Transacciones de caja"
                             aria-label="Transacciones de caja"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => {
-                              setIsCashDialogOpen(true);
-                              loadCashData().catch(() => undefined);
-                            }}
+                            onClick={() =>
+                              privilegedGuard.requirePrivilege("cashTransactions", () => {
+                                setIsCashDialogOpen(true);
+                                loadCashData().catch(() => undefined);
+                              })
+                            }
                           >
                             <Wallet className="h-5 w-5" />
                           </Button>
@@ -2119,32 +2136,60 @@ const POS = () => {
       <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
         <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
           <DialogHeader>
-            <DialogTitle className="text-2xl">¿Enviar a cocina?</DialogTitle>
+            <DialogTitle className="text-2xl">Finalizar venta</DialogTitle>
             <DialogDescription className="text-base">
-              La venta ya se guardó. Elige si deseas enviarla ahora a la pantalla de cocina.
+              La venta ya se guardó. Configura cocina e impresión.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+              <span>Enviar a cocina</span>
+              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(Boolean(value))} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+              <span>Imprimir ticket</span>
+              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(Boolean(value))} />
+            </div>
+          </div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Button
               type="button"
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
-              onClick={() => void handleKitchenChoice(true)}
+              onClick={() => void handleKitchenChoice(postSaleKitchenChoice)}
             >
-              {isSubmittingKitchenChoice ? "Enviando..." : "Sí, enviar"}
+              {isSubmittingKitchenChoice ? "Guardando..." : "Confirmar"}
             </Button>
             <Button
               type="button"
               variant="outline"
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
-              onClick={() => void handleKitchenChoice(false)}
+              onClick={() => {
+                setIsKitchenPromptOpen(false);
+                finalizePaidSale();
+              }}
             >
-              No
+              Omitir
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      <PrivilegePinModal
+        open={Boolean(privilegedGuard.pendingAction)}
+        onCancel={() => privilegedGuard.setPendingAction(null)}
+        onSuccess={() =>
+          privilegedGuard.onPinSuccess({
+            manualProduct: () => setIsManualProductOpen(true),
+            discounts: () => setIsDiscountDialogOpen(true),
+            cashTransactions: () => {
+              setIsCashDialogOpen(true);
+              loadCashData().catch(() => undefined);
+            },
+          })
+        }
+      />
 
       <PrintPreviewDialog
         open={isReceiptPreviewOpen}

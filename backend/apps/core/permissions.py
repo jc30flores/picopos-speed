@@ -57,6 +57,11 @@ class IsKitchenOrManagerOrAdmin(BasePermission):
         return _role_is(request.user, {"kitchen", "admin", "manager"})
 
 
+class IsKitchenOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return _role_is(request.user, {"kitchen", "admin"})
+
+
 class IsAuthenticatedOrReadOnly(BasePermission):
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:

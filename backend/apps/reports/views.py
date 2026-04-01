@@ -6,19 +6,26 @@ from apps.core.timezone_utils import parse_business_date_range
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund
 from apps.reports.serializers import SalesReportSerializer
-from apps.core.permissions import IsAdminOrManager
+from apps.core.permissions import IsCashierOrManagerOrAdmin
 
 
 class SalesReportListView(generics.ListAPIView):
     serializer_class = SalesReportSerializer
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
         queryset = Order.objects.select_related("service_type", "invoice").all()
-        start_at, end_at = parse_business_date_range(
-            self.request.query_params.get("date_from"),
-            self.request.query_params.get("date_to"),
-        )
+        search = (self.request.query_params.get("search") or "").strip()
+        only_today = str(self.request.query_params.get("today") or "").strip() == "1"
+        start_at = end_at = None
+        if not search:
+            if only_today:
+                start_at, end_at = parse_business_date_range("today", "today")
+            else:
+                start_at, end_at = parse_business_date_range(
+                    self.request.query_params.get("date_from"),
+                    self.request.query_params.get("date_to"),
+                )
         service_type = self.request.query_params.get("service_type")
         status = self.request.query_params.get("status")
 
@@ -30,6 +37,12 @@ class SalesReportListView(generics.ListAPIView):
             queryset = queryset.filter(service_type__key=service_type)
         if status:
             queryset = queryset.filter(status=status)
+        if search:
+            queryset = queryset.filter(
+                Q(order_number__icontains=search)
+                | Q(customer_name__icontains=search)
+                | Q(status__icontains=search)
+            )
 
         return queryset.order_by("-created_at")
 
@@ -150,14 +163,14 @@ class SalesReportListView(generics.ListAPIView):
 
 
 class SalesBookJsonView(SalesReportListView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
 
 
 class SalesBookPdfView(SalesReportListView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request, *args, **kwargs):
         data = self.list(request, *args, **kwargs).data

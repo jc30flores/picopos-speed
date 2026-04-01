@@ -49,6 +49,7 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
+import { useAuth } from "@/context/useAuth";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
@@ -84,6 +85,8 @@ const mapStatus = (
 };
 
 export const SalesHistoryTab = () => {
+  const { user } = useAuth();
+  const restrictedRole = user?.role === "cashier" || user?.role === "manager";
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
@@ -133,9 +136,11 @@ export const SalesHistoryTab = () => {
   const loadSales = () => {
     const serviceTypeFilter = serviceType === "all" ? undefined : serviceType;
     return getSalesReport({
-      dateFrom,
-      dateTo,
+      dateFrom: restrictedRole ? undefined : dateFrom,
+      dateTo: restrictedRole ? undefined : dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
+      today: restrictedRole && !searchQuery.trim() ? true : undefined,
+      search: restrictedRole ? searchQuery.trim() || undefined : undefined,
     })
       .then((report) => {
         const mapped = report.rows.map((row) => ({
@@ -164,9 +169,11 @@ export const SalesHistoryTab = () => {
 
   useEffect(() => {
     loadSales();
-  }, [dateFrom, dateTo, serviceType]);
+  }, [dateFrom, dateTo, serviceType, searchQuery, restrictedRole]);
 
-  const filteredSales = sales.filter((sale) => {
+  const filteredSales = restrictedRole
+    ? sales
+    : sales.filter((sale) => {
     const matchesSearch =
       sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
@@ -316,34 +323,36 @@ export const SalesHistoryTab = () => {
       {/* Filters Section */}
       <Card>
         <CardContent className="pt-6 space-y-4">
-          {/* Time Range Filters */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              Período de tiempo
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { value: "daily", label: "Diario" },
-                { value: "weekly", label: "Semanal" },
-                { value: "monthly", label: "Mensual" },
-                { value: "all", label: "Todos" },
-              ].map((range) => (
-                <Button
-                  key={range.value}
-                  variant={timeRange === range.value ? "default" : "outline"}
-                  onClick={() => setTimeRange(range.value as TimeRange)}
-                  className="rounded-full"
-                >
-                  {range.label}
-                </Button>
-              ))}
+          {!restrictedRole ? (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                Período de tiempo
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "daily", label: "Diario" },
+                  { value: "weekly", label: "Semanal" },
+                  { value: "monthly", label: "Mensual" },
+                  { value: "all", label: "Todos" },
+                ].map((range) => (
+                  <Button
+                    key={range.value}
+                    variant={timeRange === range.value ? "default" : "outline"}
+                    onClick={() => setTimeRange(range.value as TimeRange)}
+                    className="rounded-full"
+                  >
+                    {range.label}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Filtro activo: <strong>Hoy</strong>.</p>
+          )}
 
           {/* Date Range Pickers */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            {/* Start Date */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Desde
               </label>
@@ -372,10 +381,10 @@ export const SalesHistoryTab = () => {
                   />
                 </PopoverContent>
               </Popover>
-            </div>
+            </div> : null}
 
             {/* End Date */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Hasta
               </label>
@@ -404,10 +413,10 @@ export const SalesHistoryTab = () => {
                   />
                 </PopoverContent>
               </Popover>
-            </div>
+            </div> : null}
 
             {/* Service Type Filter */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Tipo de servicio
               </label>
@@ -425,10 +434,10 @@ export const SalesHistoryTab = () => {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </div> : null}
 
             {/* Payment Method Filter */}
-            <div className="space-y-2">
+            {!restrictedRole ? <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
                 Método de pago
               </label>
@@ -448,7 +457,7 @@ export const SalesHistoryTab = () => {
                   <SelectItem value="transferencia">Transferencia</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </div> : null}
 
             {/* Search */}
             <div className="space-y-2">

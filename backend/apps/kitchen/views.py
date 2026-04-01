@@ -1,12 +1,12 @@
 from rest_framework import generics
 from apps.kitchen.models import KitchenOrderView
 from apps.kitchen.serializers import KitchenOrderSerializer
-from apps.core.permissions import IsKitchenOrManagerOrAdmin
+from apps.core.permissions import IsKitchenOrAdmin
 
 
 class KitchenOrderListView(generics.ListAPIView):
     serializer_class = KitchenOrderSerializer
-    permission_classes = [IsKitchenOrManagerOrAdmin]
+    permission_classes = [IsKitchenOrAdmin]
 
     def get_queryset(self):
         return (

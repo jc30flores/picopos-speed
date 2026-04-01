@@ -501,6 +501,19 @@ export const me = async (): Promise<AuthUser> => {
   return handleJson<AuthUser>(response);
 };
 
+export const verifyPrivilegedPin = async (pin: string): Promise<{ ok: boolean; role: "ADMIN" | "GERENTE"; userId: number }> => {
+  const response = await request("/auth/verify-privileged-pin/", {
+    method: "POST",
+    body: JSON.stringify({ pin }),
+  });
+  const data = await handleJson<{ ok: boolean; role: "ADMIN" | "MANAGER" | "GERENTE"; user_id: number }>(response);
+  return {
+    ok: Boolean(data.ok),
+    role: data.role === "MANAGER" ? "GERENTE" : (data.role as "ADMIN" | "GERENTE"),
+    userId: data.user_id,
+  };
+};
+
 let cachedTaxConfig: TaxConfig | null = null;
 
 export const getCategories = async (query?: string): Promise<Category[]> => {
@@ -1860,12 +1873,16 @@ export const getSalesReport = async (filters?: {
   dateTo?: string;
   serviceType?: Order["serviceType"];
   status?: Order["status"];
+  search?: string;
+  today?: boolean;
 }): Promise<{ rows: SalesReportRow[]; aggregates: SalesReportAggregates }> => {
   const params = new URLSearchParams();
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
   if (filters?.status) params.set("status", filters.status);
+  if (filters?.search) params.set("search", filters.search);
+  if (filters?.today) params.set("today", "1");
   const query = params.toString();
   const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
@@ -2600,6 +2617,12 @@ export const createPayment = async (payload: {
     drawerOpened: Boolean(data.drawer_opened),
     drawerError: data.drawer_error ?? null,
   };
+};
+
+export const printPaymentTicket = async (paymentId: number): Promise<{ printed: boolean; printError: string | null }> => {
+  const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
+  const data = await handleJson<{ printed: boolean; print_error?: string | null }>(response);
+  return { printed: Boolean(data.printed), printError: data.print_error ?? null };
 };
 
 

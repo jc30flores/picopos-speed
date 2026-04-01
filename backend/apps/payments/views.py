@@ -3,6 +3,7 @@ import logging
 import threading
 from django.db import transaction
 from rest_framework import generics, status
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
@@ -135,35 +136,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 except Exception:
                     _enqueue_dte_async()
             transaction.on_commit(_after_commit_dte)
-            exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
-            if not exists:
-                create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
-
-            def _after_commit_print():
+            if payment.method == "cash":
                 try:
-                    payload = render_customer_ticket(payment.order)
-                    printed, print_error = USBPrinterService().print_text(payload["text"])
-                    print_result["printed"] = printed
-                    print_result["print_error"] = print_error
-                    if payment.method == "cash":
-                        try:
-                            CashDrawerService().open_drawer()
-                            print_result["drawer_opened"] = True
-                        except Exception as drawer_exc:  # noqa: BLE001
-                            print_result["drawer_error"] = str(drawer_exc)
-                    if printed:
-                        logger.info("payment.print.success", extra={"payment_id": payment.id, "order_id": payment.order_id})
-                    else:
-                        logger.warning(
-                            "payment.print.failed",
-                            extra={"payment_id": payment.id, "order_id": payment.order_id, "print_error": print_error},
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    print_result["printed"] = False
-                    print_result["print_error"] = str(exc)
-                    logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
-
-            transaction.on_commit(_after_commit_print)
+                    CashDrawerService().open_drawer()
+                    print_result["drawer_opened"] = True
+                except Exception as drawer_exc:  # noqa: BLE001
+                    print_result["drawer_error"] = str(drawer_exc)
         else:
             log_audit(
                 request,
@@ -245,3 +223,22 @@ class RefundListCreateView(generics.ListCreateAPIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class PaymentPrintTicketView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request, pk: int):
+        payment = Payment.objects.select_related("order").filter(pk=pk).first()
+        if not payment:
+            return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
+            if not exists:
+                create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
+            payload = render_customer_ticket(payment.order)
+            printed, print_error = USBPrinterService().print_text(payload["text"])
+            return Response({"printed": bool(printed), "print_error": print_error}, status=status.HTTP_200_OK)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
+            return Response({"printed": False, "print_error": str(exc)}, status=status.HTTP_200_OK)

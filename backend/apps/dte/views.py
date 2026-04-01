@@ -32,13 +32,13 @@ logger = logging.getLogger("apps.dte")
 class IsDTECashierOrAbove(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"cashier", "manager", "admin", "accountant"})
+        return bool(profile and profile.is_active and profile.role in {"admin"})
 
 
 class IsDTEAccountantOrAdmin(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"manager", "admin", "accountant"})
+        return bool(profile and profile.is_active and profile.role in {"admin"})
 
 
 class DTEIssuedListView(generics.ListAPIView):

@@ -154,3 +154,21 @@ def me_view(request):
     except Exception:  # noqa: BLE001
         logger.exception("auth.me.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+def verify_privileged_pin_view(request):
+    pin = str(request.data.get("pin") or "").strip()
+    if not is_valid_pin_format(pin):
+        return Response({"ok": False, "detail": "invalid_pin_format"}, status=status.HTTP_400_BAD_REQUEST)
+
+    privileged_profiles = UserProfile.objects.select_related("user").filter(
+        is_active=True,
+        role__in=["admin", "manager"],
+        user__is_active=True,
+    )
+    for profile in privileged_profiles:
+        user = profile.user
+        if user and user.check_password(pin):
+            return Response({"ok": True, "role": profile.role.upper(), "user_id": user.id}, status=status.HTTP_200_OK)
+    return Response({"ok": False, "detail": "invalid"}, status=status.HTTP_401_UNAUTHORIZED)
