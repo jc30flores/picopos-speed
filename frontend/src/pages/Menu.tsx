@@ -11,7 +11,7 @@ const Menu = () => {
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
-      <div className="px-4 pb-4 pt-20">
+      <div className="px-4 pb-4 pt-4">
         <div className="mx-auto max-w-[1600px]">
           <div className="mb-4 space-y-1">
             <h1 className="text-2xl font-bold sm:text-3xl">Menú y Descuentos</h1>

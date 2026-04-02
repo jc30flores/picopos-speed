@@ -1,11 +1,10 @@
-import { Navigation } from "@/components/Navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -73,6 +72,7 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
+import { useNavigate } from "react-router-dom";
 
 interface CartItem {
   id: string;
@@ -162,6 +162,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 
 const POS = () => {
+  const navigate = useNavigate();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -195,6 +196,8 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
+  const [isCustomerDteOpen, setIsCustomerDteOpen] = useState(false);
+  const [isSplitConfigOpen, setIsSplitConfigOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
@@ -1312,8 +1315,6 @@ const POS = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navigation />
-      
       <div className="px-2 pb-4 pt-4 lg:px-4">
         <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-5rem)] lg:grid-cols-5">
           {/* Products Section */}
@@ -1321,14 +1322,27 @@ const POS = () => {
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="h-12 w-12 shrink-0 rounded-full"
+                    onClick={() => navigate("/")}
+                    aria-label="Menú principal"
+                    title="Menú principal"
+                  >
+                    <LayoutGrid className="h-5 w-5" />
+                  </Button>
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Buscar productos..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10"
+                    className="h-12 pl-10 text-base"
                   />
+                  </div>
                 </div>
                 
                 <div className="flex flex-wrap gap-2.5 pb-1">
@@ -1511,7 +1525,7 @@ const POS = () => {
                         </div>
                         <div className="flex items-center gap-1">
                           {!item.isCustom && (
-                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-8 w-8" title="Cambiar precio para esta venta">
+                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-10 w-10" title="Cambiar precio para esta venta">
                               <PencilLine className="h-4 w-4" />
                             </Button>
                           )}
@@ -1519,7 +1533,7 @@ const POS = () => {
                             variant="ghost"
                             size="icon"
                             onClick={() => removeItem(item.id)}
-                            className="h-7 w-7 text-danger"
+                            className="h-10 w-10 text-danger"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1532,7 +1546,7 @@ const POS = () => {
                             variant="outline"
                             size="icon"
                             onClick={() => updateQuantity(item.id, -1)}
-                            className="h-7 w-7"
+                            className="h-10 w-10"
                           >
                             <Minus className="h-3 w-3" />
                           </Button>
@@ -1541,7 +1555,7 @@ const POS = () => {
                             variant="outline"
                             size="icon"
                             onClick={() => updateQuantity(item.id, 1)}
-                            className="h-7 w-7"
+                            className="h-10 w-10"
                           >
                             <Plus className="h-3 w-3" />
                           </Button>
@@ -1554,7 +1568,7 @@ const POS = () => {
               )}
             </div>
 
-            <div className="p-4 border-t space-y-3">
+            <div className="sticky bottom-0 border-t bg-background p-4 space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal (productos)</span>
@@ -1581,7 +1595,7 @@ const POS = () => {
               <div className="grid grid-cols-1 gap-3">
                 <Button
                   variant="default"
-                  className="w-full font-bold"
+                  className="h-14 w-full text-base font-bold"
                   size="lg"
                   disabled={cart.length === 0 || isProcessingPayment}
                   onClick={handleCheckout}
@@ -1590,7 +1604,7 @@ const POS = () => {
                 </Button>
                 <Button
                   variant="outline"
-                  className="w-full"
+                  className="h-14 w-full text-base"
                   onClick={() => {
                     setCart([]);
                     setSelectedDiscount(null);
@@ -1863,71 +1877,19 @@ const POS = () => {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Tipo DTE</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Cliente</Label>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="flex-1 justify-start"
-                        onClick={() => {
-                          setIsCustomerPickerOpen(true);
-                          setCustomerSearch("");
-                        }}
-                      >
-                        {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-12"
-                        onClick={() => {
-                          setCustomerFormErrors({});
-                          setCustomerServerErrors({});
-                          setActivitySearch("");
-                          setIsCustomerCreateOpen(true);
-                          void preloadCustomerFormFromDTE(dteDocumentType);
-                        }}
-                      >
-                        Administrar clientes
-                      </Button>
-                    </div>
-                  </div>
-                  {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
-                  {dteDocumentType === "CCF" ? (
-                    <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
-                  ) : null}
-                  <SplitPanel
-                    enabled={splitEnabled}
-                    onEnabledChange={setSplitEnabled}
-                    totalCents={checkoutTotalCents}
-                    parts={parts}
-                    onPartsChange={setParts}
-                    activePartId={activePartId}
-                    onActivePartIdChange={setActivePartId}
-                  />
-
-                  {splitEnabled && activeSplitPart && (
+                  {splitEnabled && activeSplitPart ? (
                     <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
                       Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerPickerOpen(true)}>
-                      Cliente: {selectedCustomer ? selectedCustomer.fullName : "Consumidor final"}
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
+                      Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
                     </Button>
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setSplitEnabled((prev) => !prev)}>
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
@@ -1950,11 +1912,13 @@ const POS = () => {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Pago</DialogTitle>
-            <DialogDescription>
-              Total a pagar: {formatMoney(expectedPaymentCents / 100)} {splitEnabled && activeSplitPart ? `· Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}` : ""}
-            </DialogDescription>
+            <DialogDescription>{splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="rounded-xl border bg-muted/30 p-4 text-center">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Total a pagar</div>
+              <div className="text-4xl font-extrabold text-secondary">{formatMoney(expectedPaymentCents / 100)}</div>
+            </div>
             <Label>Método</Label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               {[
@@ -2005,12 +1969,100 @@ const POS = () => {
               {isExactPayment && <span className="text-secondary">Pago exacto</span>}
               {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
             </div>
+            {activeTenderField ? (
+              <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                {DENOMINATION_CENTS.map((value) => (
+                  <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                    {formatMoney(value / 100)}
+                  </Button>
+                ))}
+                <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
+                <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
+              </div>
+            ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
               <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
                 {isProcessingPayment ? "Procesando..." : "Registrar pago"}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCustomerDteOpen} onOpenChange={setIsCustomerDteOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Cliente / DTE</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Tipo DTE</Label>
+              <div className="grid grid-cols-3 gap-2">
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Cliente</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 flex-1 justify-start text-base"
+                  onClick={() => {
+                    setIsCustomerPickerOpen(true);
+                    setCustomerSearch("");
+                  }}
+                >
+                  {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 text-base"
+                  onClick={() => {
+                    setCustomerFormErrors({});
+                    setCustomerServerErrors({});
+                    setActivitySearch("");
+                    setIsCustomerCreateOpen(true);
+                    void preloadCustomerFormFromDTE(dteDocumentType);
+                  }}
+                >
+                  Administrar
+                </Button>
+              </div>
+            </div>
+            {dteDocumentType === "CCF" ? (
+              <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+            ) : null}
+            <div className="flex gap-2">
+              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => setIsCustomerDteOpen(false)}>Aceptar</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Dividir cuenta</DialogTitle>
+          </DialogHeader>
+          <SplitPanel
+            enabled={splitEnabled}
+            onEnabledChange={setSplitEnabled}
+            totalCents={checkoutTotalCents}
+            parts={parts}
+            onPartsChange={setParts}
+            activePartId={activePartId}
+            onActivePartIdChange={setActivePartId}
+          />
+          <div className="flex gap-2">
+            <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cerrar</Button>
+            <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aceptar</Button>
           </div>
         </DialogContent>
       </Dialog>

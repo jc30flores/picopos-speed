@@ -103,7 +103,7 @@ const Kitchen = () => {
     <div className="min-h-screen bg-background">
       <Navigation />
       
-      <div className="pt-20 px-4 pb-4">
+      <div className="pt-4 px-4 pb-4">
         <div className="mb-6">
           <div className="flex items-center gap-3 mb-4">
             <ChefHat className="h-8 w-8 text-secondary" />
