@@ -14,12 +14,11 @@ from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.printing.services.renderers import render_customer_ticket
-from apps.printing.services.usb_printer import USBPrinterService
+from apps.printing.services.system_printer import SystemPrinterService
 from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order
-from apps.cashier.services import CashDrawerService
 from apps.core.money import to_cents, from_cents
 
 
@@ -256,14 +255,6 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 except Exception:
                     _enqueue_dte_async()
             transaction.on_commit(_after_commit_dte)
-            if payment.method == "cash":
-                try:
-                    drawer_result = CashDrawerService().open_drawer()
-                    print_result["drawer_opened"] = bool(drawer_result.success)
-                    if not drawer_result.success:
-                        print_result["drawer_error"] = drawer_result.message or drawer_result.error
-                except Exception as drawer_exc:  # noqa: BLE001
-                    print_result["drawer_error"] = str(drawer_exc)
         else:
             log_audit(
                 request,
@@ -377,13 +368,51 @@ class PaymentPrintTicketView(APIView):
         payment = Payment.objects.select_related("order").filter(pk=pk).first()
         if not payment:
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+        context = {
+            "order_id": payment.order_id,
+            "payment_id": payment.id,
+            "user_id": getattr(request.user, "id", None),
+            "endpoint": "payments.print-ticket",
+        }
         try:
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
             payload = render_customer_ticket(payment.order)
-            printed, print_error = USBPrinterService().print_receipt(payload)
-            return Response({"printed": bool(printed), "print_error": print_error}, status=status.HTTP_200_OK)
+            printer = SystemPrinterService()
+            print_result = printer.print_with_pdf_fallback(
+                payload.get("text", ""),
+                order_id=payment.order_id,
+                payment_id=payment.id,
+                context=context,
+                endpoint="payments.print-ticket",
+            )
+
+            drawer_opened = False
+            drawer_error = None
+            if print_result["printed"] and payment.method == "cash":
+                drawer_opened, drawer_error = printer.open_cash_drawer(context=context, endpoint="payments.print-ticket.drawer")
+            job = PrintJob.objects.filter(order=payment.order, type="customer").order_by("-created_at").first()
+            if job:
+                if print_result["receipt_pdf_path"]:
+                    job.content_pdf_path = str(print_result["receipt_pdf_path"])
+                if print_result["printed"]:
+                    job.status = "printed"
+                else:
+                    job.status = "failed"
+                    job.error_message = print_result["print_error"] or ""
+                job.save(update_fields=["status", "content_pdf_path", "error_message"])
+
+            return Response(
+                {
+                    "printed": bool(print_result["printed"]),
+                    "print_error": print_result["print_error"],
+                    "receipt_pdf_url": print_result["receipt_pdf_url"],
+                    "drawer_opened": bool(drawer_opened),
+                    "drawer_error": drawer_error,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
-            return Response({"printed": False, "print_error": str(exc)}, status=status.HTTP_200_OK)
+            return Response({"printed": False, "print_error": str(exc), "drawer_opened": False, "drawer_error": None}, status=status.HTTP_200_OK)

@@ -1,12 +1,23 @@
 from pathlib import Path
 import logging
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - fallback for minimal runtime envs
+    load_dotenv = None
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env_path = BASE_DIR / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+if load_dotenv is not None:
+    load_dotenv(dotenv_path=env_path, override=True)
+elif env_path.exists():
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ[key.strip()] = value.strip()
 print("ENV LOADED FROM:", env_path)
 
 

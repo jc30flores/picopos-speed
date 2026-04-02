@@ -2685,10 +2685,24 @@ export const createPayment = async (payload: {
   };
 };
 
-export const printPaymentTicket = async (paymentId: number): Promise<{ printed: boolean; printError: string | null }> => {
+export const printPaymentTicket = async (
+  paymentId: number
+): Promise<{ printed: boolean; printError: string | null; receiptPdfUrl?: string | null; drawerOpened?: boolean; drawerError?: string | null }> => {
   const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
-  const data = await handleJson<{ printed: boolean; print_error?: string | null }>(response);
-  return { printed: Boolean(data.printed), printError: data.print_error ?? null };
+  const data = await handleJson<{
+    printed: boolean;
+    print_error?: string | null;
+    receipt_pdf_url?: string | null;
+    drawer_opened?: boolean;
+    drawer_error?: string | null;
+  }>(response);
+  return {
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+    receiptPdfUrl: data.receipt_pdf_url ?? null,
+    drawerOpened: Boolean(data.drawer_opened),
+    drawerError: data.drawer_error ?? null,
+  };
 };
 
 

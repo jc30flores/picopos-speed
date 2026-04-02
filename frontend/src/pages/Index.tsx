@@ -1055,8 +1055,23 @@ const POS = () => {
       }
       if (lastPaymentId) {
         const printResult = await printPaymentTicket(lastPaymentId);
-        if (!printResult.printed && printResult.printError) {
-          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
+        if (!printResult.printed) {
+          if (printResult.receiptPdfUrl) {
+            const anchor = document.createElement("a");
+            anchor.href = printResult.receiptPdfUrl;
+            anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
+            anchor.target = "_blank";
+            anchor.rel = "noopener";
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            toast.warning("No se detectó impresora. Se descargó el ticket en PDF.");
+          } else if (printResult.printError) {
+            toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
+          }
+        }
+        if (printResult.printed && printResult.drawerError) {
+          toast.warning(`Ticket impreso, pero no se pudo abrir caja: ${printResult.drawerError}`);
         }
       }
       setIsKitchenPromptOpen(false);
