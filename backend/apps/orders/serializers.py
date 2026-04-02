@@ -469,7 +469,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     modifier_price_snapshot=modifier_data["price"],
                 )
 
-            if product and channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and service_type_key in (product.disposable_apply_to or []):
+            if product and channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and bool(getattr(service_type, "disposables_enabled", False)):
                 fee_total = (Decimal(product.disposable_fee) * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 disposable_total += fee_total
                 OrderFee.objects.create(

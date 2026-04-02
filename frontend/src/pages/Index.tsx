@@ -114,14 +114,15 @@ const getPaidExtrasLines = (item: CartItem) =>
 const getOrderDisposableTotal = (
   items: CartItem[],
   products: Product[],
-  serviceType: string
+  serviceType: string,
+  serviceTypes: Array<{ key: string; disposablesEnabled?: boolean }>
 ) =>
   items.reduce((sum, item) => {
     const product = products.find((candidate) => candidate.id === item.productId);
     if (!product) return sum;
-    const applyTo = product.disposableApplyTo ?? [];
+    const selectedOrderType = serviceTypes.find((type) => type.key === serviceType);
     const fee = product.disposableFee ?? 0;
-    if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
+    if (fee <= 0 || selectedOrderType?.disposablesEnabled !== true) return sum;
     return sum + fee * item.quantity;
   }, 0);
 
@@ -241,6 +242,7 @@ const POS = () => {
   const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
+  const previousCartLengthRef = useRef(0);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
@@ -294,7 +296,7 @@ const POS = () => {
       taxRate
     ).total;
     const computedDiscountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
-    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
     return {
       itemsGross: computedItemsGross,
       subtotal: computedItemsGross,
@@ -302,7 +304,7 @@ const POS = () => {
       cartDisposableTotal: computedDisposableTotal,
       total: Math.max(computedItemsGross - computedDiscountAmount, 0) + computedDisposableTotal,
     };
-  }, [cart, products, selectedDiscount, serviceType, taxRate]);
+  }, [cart, products, selectedDiscount, serviceType, serviceTypes, taxRate]);
 
   const loadMenuData = async () => {
     const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
@@ -446,7 +448,10 @@ const POS = () => {
   useLayoutEffect(() => {
     const el = cartItemsScrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (cart.length > previousCartLengthRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    previousCartLengthRef.current = cart.length;
   }, [cart]);
 
   const openCheckoutFromItems = (items: CartItem[]) => {
@@ -455,7 +460,7 @@ const POS = () => {
       items.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
       taxRate
     ).total;
-    const draftDisposable = getOrderDisposableTotal(items, products, serviceType);
+    const draftDisposable = getOrderDisposableTotal(items, products, serviceType, serviceTypes);
     const draftTotal = draftItemsGross + draftDisposable;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
@@ -614,7 +619,7 @@ const POS = () => {
   const changeTotal = Math.max(changeCents, 0) / 100;
   const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDisposableTotal = checkoutDraft
-    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
+    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType, serviceTypes)
     : 0;
   const checkoutSummarySubtotalBefore = activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
   const checkoutSummaryDiscount = activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount;
@@ -630,7 +635,7 @@ const POS = () => {
       cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
       taxRate
     ).total;
-    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
     const draftDiscount = calculateManualDiscountAmount(cart, selectedDiscount, products);
     const draftTotal = Math.max(draftItemsGross - draftDiscount, 0) + draftDisposableTotal;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
