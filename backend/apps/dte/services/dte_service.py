@@ -9,7 +9,7 @@ from typing import Any
 from django.conf import settings
 
 from apps.dte.client import DTEClient
-from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.models import CreditNote, DTEBranchConfig, DTERecord, DteInvalidationAttempt
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 from apps.dte.services.payment_methods import get_cat017_code_and_label
@@ -69,7 +69,21 @@ def build_headers() -> dict[str, str]:
 
 
 def _resolve_branch_config(order):
-    return get_emisor_config(order.branch)
+    if not order.branch_id or not getattr(order, "branch", None):
+        raise DTEPreflightError(f"Order {order.id} no tiene branch asignado; no se permite fallback de emisor.")
+    if not DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).exists():
+        raise DTEPreflightError(
+            f"Order {order.id} branch_id={order.branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
+        )
+    config = get_emisor_config(order.branch)
+    required = ("codEstableMH", "codEstable", "codPuntoVentaMH", "codPuntoVenta")
+    missing = [key for key in required if not str(config.get(key) or "").strip()]
+    if missing:
+        raise DTEPreflightError(
+            f"Configuración DTE incompleta para branch_id={order.branch_id}: faltan {','.join(missing)}. "
+            "No se permite fallback automático."
+        )
+    return config
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -334,10 +348,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "codActividad": emisor.get("codActividad") or "56101",
         "descActividad": emisor.get("descActividad") or "Restaurantes y puestos de comidas",
         "tipoEstablecimiento": emisor.get("tipoEstablecimiento") or "02",
-        "codEstableMH": emisor.get("codEstableMH") or "S001",
-        "codEstable": emisor.get("codEstable") or "S001",
-        "codPuntoVentaMH": emisor.get("codPuntoVentaMH") or "P001",
-        "codPuntoVenta": emisor.get("codPuntoVenta") or "P001",
+        "codEstableMH": emisor.get("codEstableMH"),
+        "codEstable": emisor.get("codEstable"),
+        "codPuntoVentaMH": emisor.get("codPuntoVentaMH"),
+        "codPuntoVenta": emisor.get("codPuntoVenta"),
         "telefono": emisor.get("telefono") or "00000000",
         "correo": emisor.get("correo") or "facturas@example.com",
         "direccion": {

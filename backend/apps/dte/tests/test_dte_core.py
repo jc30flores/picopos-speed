@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -298,6 +299,54 @@ class DTECoreTests(TestCase):
         code, reference = get_mh_payment_info(self.order)
         self.assertEqual(code, "99")
         self.assertTrue(reference)
+
+    @patch("apps.dte.services.orchestrator.send_or_queue_dte")
+    def test_transmit_sale_dte_uses_order_branch_config_without_fallback(self, mock_send_or_queue):
+        Branch.objects.create(id=2, name="B2", code="B2")
+        Branch.objects.create(id=3, name="B3", code="B3")
+        Branch.objects.create(id=4, name="B4", code="B4")
+        branch5 = Branch.objects.create(id=5, name="Plaza Monaco", code="PM")
+        order = Order.objects.create(
+            order_number=5001,
+            branch=branch5,
+            service_type=self.service_type,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            dte_document_type="CF",
+        )
+        DTEBranchConfig.objects.create(
+            branch=branch5,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa Plaza Monaco",
+            emisor_nombre_comercial="Empresa Plaza Monaco",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            cod_estable_mh="S001",
+            cod_estable="S001",
+            cod_punto_venta_mh="P001",
+            cod_punto_venta="P001",
+            is_active=True,
+        )
+        mock_send_or_queue.return_value = SimpleNamespace(
+            response_body=json.dumps({"success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}),
+            response_status_code=200,
+            status="ACCEPTED",
+        )
+
+        with self.assertLogs("apps.dte", level="INFO") as captured:
+            record = transmit_sale_dte(order.id)
+
+        self.assertEqual(record.branch_id, 5)
+        self.assertIn("DTE-01-S001P001-", record.control_number)
+        self.assertNotIn("M001", record.control_number)
+        log_output = "\n".join(captured.output)
+        self.assertIn("order_branch_id=5", log_output)
+        self.assertIn("selected_branch_id=5", log_output)
+        self.assertIn("branch_id=5", log_output)
+        self.assertNotIn("branch_id=4", log_output)
+        self.assertNotIn("M001", log_output)
 
     @patch("apps.dte.client.DTEClient._build_url")
     @patch("apps.dte.client.requests.Session.post")

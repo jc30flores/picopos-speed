@@ -8,6 +8,10 @@ from apps.dte.models import DTEBranchConfig, DTEControlCounter
 from apps.orders.models import Order
 
 
+class DTEBranchResolutionError(Exception):
+    pass
+
+
 DOC_CODE_BY_TYPE = {
     "CF_01": "01",
     "CCF_03": "03",
@@ -47,9 +51,20 @@ def reserve_next_control(*, branch, document_type: str, series: str = "S001P001"
 
 
 def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "00") -> str:
+    if not order.branch_id or not getattr(order, "branch", None):
+        raise DTEBranchResolutionError(f"Order {order.id} no tiene branch asignado; no se puede generar numeroControl.")
+
     cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
-    est_code = (cfg.cod_estable if cfg and cfg.cod_estable else "S001")
-    pv_code = (cfg.cod_punto_venta if cfg and cfg.cod_punto_venta else "P001")
+    if not cfg:
+        raise DTEBranchResolutionError(
+            f"Order {order.id} branch_id={order.branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
+        )
+    est_code = (cfg.cod_estable or "").strip().upper()
+    pv_code = (cfg.cod_punto_venta or "").strip().upper()
+    if not est_code or not pv_code:
+        raise DTEBranchResolutionError(
+            f"Order {order.id} branch_id={order.branch_id} tiene cod_estable/cod_punto_venta incompletos en DTEBranchConfig."
+        )
     return reserve_next_control(
         branch=order.branch,
         document_type=dte_type,
