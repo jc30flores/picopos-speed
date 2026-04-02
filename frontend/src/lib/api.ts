@@ -1,3 +1,4 @@
+import { fromCents, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 
 export type Category = {
@@ -1960,7 +1961,7 @@ export const getSalesReport = async (filters?: {
       netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
-        card: Number((Number(data.aggregates.payment_methods?.card_debit ?? 0) + Number(data.aggregates.payment_methods?.card_credit ?? 0)).toFixed(2)),
+        card: fromCents(toCents(data.aggregates.payment_methods?.card_debit ?? 0) + toCents(data.aggregates.payment_methods?.card_credit ?? 0)),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
@@ -3022,12 +3023,7 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
-        card: Number(
-          (
-            Number(data.summary?.totals_by_method?.card_debit ?? 0) +
-            Number(data.summary?.totals_by_method?.card_credit ?? 0)
-          ).toFixed(2)
-        ),
+        card: fromCents(toCents(data.summary?.totals_by_method?.card_debit ?? 0) + toCents(data.summary?.totals_by_method?.card_credit ?? 0)),
         transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),

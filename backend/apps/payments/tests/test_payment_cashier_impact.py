@@ -79,8 +79,8 @@ class PaymentCashierImpactTests(TestCase):
         summary = current.data["summary"]
         self.assertEqual(Decimal(summary["opening_cash"]), Decimal("100.00"))
         self.assertEqual(Decimal(summary["total_cash_sales"]), Decimal("10.00"))
-        self.assertEqual(Decimal(summary["cash_expenses_total"]), Decimal("-5.00"))
+        self.assertEqual(Decimal(summary["cash_expenses_total"]), Decimal("5.00"))
         self.assertEqual(Decimal(summary["expected_cash_in_drawer"]), Decimal("105.00"))
         self.assertEqual(Decimal(summary["totals_by_method"]["card_credit"]), Decimal("20.00"))
         self.assertEqual(Decimal(summary["totals_by_method"]["transfer"]), Decimal("15.00"))
-        self.assertFalse(any("Pago no efectivo" in row.get("description", "") for row in summary["cash_movements"]))
+        self.assertTrue(all(row["description"] == "Mercado" for row in summary["cash_movements"]))

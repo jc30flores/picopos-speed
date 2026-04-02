@@ -50,6 +50,7 @@ import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
 import { useAuth } from "@/context/useAuth";
+import { fromCents, toCents } from "@/lib/money";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
@@ -194,22 +195,9 @@ export const SalesHistoryTab = () => {
     void loadSales(debouncedSearchQuery);
   }, [dateFrom, dateTo, serviceType, paymentMethod, debouncedSearchQuery, restrictedRole]);
 
-  const filteredSales = restrictedRole
-    ? sales
-    : sales.filter((sale) => {
-    const matchesSearch =
-      sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.controlNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesService =
-      serviceType === "all" ||
-      sale.serviceType.toLowerCase().replace(" ", "-") === serviceType;
-    const matchesPayment = true;
-    return matchesSearch && matchesService && matchesPayment;
-  });
+  const filteredSales = sales;
 
-  const totalSales = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
+  const totalSales = fromCents(filteredSales.reduce((sum, sale) => sum + toCents(sale.total), 0));
 
   const getStatusBadge = (status: Sale["status"]) => {
     const variants: Record<Sale["status"], "default" | "destructive" | "secondary"> = {
@@ -362,7 +350,7 @@ export const SalesHistoryTab = () => {
                     key={range.value}
                     variant={timeRange === range.value ? "default" : "outline"}
                     onClick={() => setTimeRange(range.value as TimeRange)}
-                    className="rounded-full"
+                    className="h-12 rounded-full px-5 text-base"
                   >
                     {range.label}
                   </Button>
@@ -384,7 +372,7 @@ export const SalesHistoryTab = () => {
                   <Button
                     variant="outline"
                     className={cn(
-                      "w-full justify-start text-left font-normal",
+                      "h-12 w-full justify-start text-left text-base font-normal",
                       !startDate && "text-muted-foreground"
                     )}
                   >
@@ -416,7 +404,7 @@ export const SalesHistoryTab = () => {
                   <Button
                     variant="outline"
                     className={cn(
-                      "w-full justify-start text-left font-normal",
+                      "h-12 w-full justify-start text-left text-base font-normal",
                       !endDate && "text-muted-foreground"
                     )}
                   >
@@ -447,7 +435,7 @@ export const SalesHistoryTab = () => {
                 value={serviceType}
                 onValueChange={(value) => setServiceType(value as ServiceTypeFilter)}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-12 text-base">
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -470,7 +458,7 @@ export const SalesHistoryTab = () => {
                   setPaymentMethod(value as PaymentMethodFilter)
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-12 text-base">
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>

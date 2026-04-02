@@ -7,6 +7,7 @@ from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
+from apps.core.service_types import normalize_service_type
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
 from apps.menu.utils.pricing import resolve_effective_price
@@ -287,10 +288,11 @@ class OrderCreateSerializer(serializers.Serializer):
         if service_type_id is not None:
             service_type = ServiceType.objects.filter(id=service_type_id).first()
         if service_type is None and service_type_key:
-            normalized_key = service_type_key.strip().upper().replace("-", "_")
-            service_type = ServiceType.objects.filter(key__iexact=normalized_key).first()
-            if service_type is None:
-                service_type = ServiceType.objects.filter(key__iexact=service_type_key.strip()).first()
+            normalized_key = normalize_service_type(service_type_key, default="")
+            for candidate in ServiceType.objects.filter(is_active=True):
+                if normalize_service_type(candidate.key, default="") == normalized_key:
+                    service_type = candidate
+                    break
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
         service_type_key = service_type.key

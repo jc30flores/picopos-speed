@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
+import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { SplitPanel } from "@/components/pos/SplitPanel";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
@@ -148,12 +148,7 @@ const calculateManualDiscountAmount = (cart: CartItem[], discount: Discount | nu
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
-const parseMoneyToCents = (value: string): number => {
-  const normalized = value.replace(/[^\d.]/g, "");
-  const amount = Number(normalized || 0);
-  if (!Number.isFinite(amount) || amount < 0) return 0;
-  return Math.round(amount * 100);
-};
+const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
 
 const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
 
@@ -200,7 +195,7 @@ const POS = () => {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
-  const [cardType, setCardType] = useState<"debit" | "credit">("debit");
+  const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("cash");
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -1004,6 +999,10 @@ const POS = () => {
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
+    if (paymentMethod === "card" && !cardType) {
+      toast.error("Selecciona débito o crédito para tarjeta");
+      return;
+    }
     if (amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
@@ -1078,7 +1077,7 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        cardType: paymentMethod === "card" ? cardType : undefined,
+        cardType: paymentMethod === "card" ? (cardType ?? undefined) : undefined,
         amount: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
@@ -1696,6 +1695,8 @@ const POS = () => {
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
                   <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
                   <div>Transferencia: {formatMoney(cashSnapshot.summary.methods.transfer)}</div>
+                  <div>Pedidos Ya: {formatMoney(cashSnapshot.summary.methods.pedidosYa)}</div>
+                  <div>PayPal: {formatMoney(cashSnapshot.summary.methods.payPal)}</div>
                   <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.totalCashOut)}</div>
                   <div className="font-semibold text-foreground">Esperado en caja: {formatMoney(cashSnapshot.summary.expectedCashInDrawer)}</div>
                 </div>
@@ -1738,7 +1739,7 @@ const POS = () => {
 
             <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
               {cashTransactions.length === 0 ? (
-                <div className="text-muted-foreground">Sin pagos registrados.</div>
+                <div className="text-muted-foreground">Sin gastos registrados.</div>
               ) : (
                 cashTransactions.map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
@@ -1922,8 +1923,7 @@ const POS = () => {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                       {[
                         { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
-                        { code: "card_debit", label: "Tarjeta Débito", method: "card" as PaymentMethod },
-                        { code: "card_credit", label: "Tarjeta Crédito", method: "card" as PaymentMethod },
+                        { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
                         { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
                         { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
                         { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
@@ -1931,11 +1931,17 @@ const POS = () => {
                         <Button
                           key={option.code}
                           type="button"
-                          variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
-                          className="h-12"
+                          variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                          className="h-14 text-base"
                           onClick={() => {
-                            setSelectedPaymentMethodCode(option.code);
                             setPaymentMethod(option.method);
+                            if (option.code === "card") {
+                              setSelectedPaymentMethodCode("card_credit");
+                              setCardType(null);
+                            } else {
+                              setSelectedPaymentMethodCode(option.code);
+                              setCardType(null);
+                            }
                           }}
                         >
                           {option.label}
@@ -1946,12 +1952,10 @@ const POS = () => {
                       <div className="space-y-2">
                         <Label>Tipo de tarjeta</Label>
                         <div className="grid grid-cols-2 gap-2">
-                          <Button type="button" variant={cardType === "debit" ? "default" : "outline"} onClick={() => setCardType("debit")}>Débito</Button>
-                          <Button type="button" variant={cardType === "credit" ? "default" : "outline"} onClick={() => setCardType("credit")}>Crédito</Button>
+                          <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
+                          <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          Se enviará a Hacienda como Tarjeta {cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.
-                        </p>
+                        <p className="text-xs text-muted-foreground">{cardType ? `Se enviará a Hacienda como Tarjeta ${cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.` : "Selecciona débito o crédito para continuar."}</p>
                       </div>
                     )}
                     {(paymentMethod === "card" || selectedPaymentMethodCode === "transfer" || selectedPaymentMethodCode === "pedidos_ya" || selectedPaymentMethodCode === "paypal") && (
@@ -2002,7 +2006,7 @@ const POS = () => {
 
                   <div className="flex gap-2">
                     <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
+                    <Button className="flex-1 h-14 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
                       {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                     </Button>
                   </div>

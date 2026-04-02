@@ -4,6 +4,7 @@ from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund, PaymentMethod
+from apps.payments.normalization import normalize_payment_method_code
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         if attrs.get("cash_received") is not None:
             attrs["cash_received"] = self._normalize_money(attrs.get("cash_received"), field="cash_received")
 
-        code = (attrs.pop("payment_method_code", "") or "").strip().lower()
+        code = normalize_payment_method_code(attrs.pop("payment_method_code", ""))
         payment_method = attrs.get("payment_method")
         if code and not payment_method:
             payment_method = PaymentMethod.objects.filter(code__iexact=code, is_active=True).first()
