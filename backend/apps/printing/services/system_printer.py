@@ -6,6 +6,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 from django.conf import settings
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 STAR_QUEUE = "star_tsp100"
 DRAWER_RAW_COMMAND = r"""printf '\x1b\x07\x0b\x19\x07' | lp -d star_tsp100 -o raw"""
+RECEIPT_PAGE_WIDTH_MM = 80
+RECEIPT_LEFT_MARGIN_MM = 4
+RECEIPT_TOP_BOTTOM_MARGIN_MM = 4
+RECEIPT_LINE_HEIGHT_MM = 4.2
+RECEIPT_MIN_HEIGHT_MM = 40
 
 @dataclass
 class CommandResult:
@@ -94,6 +100,8 @@ class SystemPrinterService:
         return False, combined_error
 
     def open_cash_drawer(self, *, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
+        if not self.check_queue_exists(context=context, endpoint=endpoint):
+            return False, f"Queue '{self.queue}' not found"
         result = self.run_command(
             ["/bin/bash", "-lc", DRAWER_RAW_COMMAND],
             timeout=10,
@@ -105,7 +113,7 @@ class SystemPrinterService:
         return False, (result.stderr or result.stdout or "Cash drawer command failed").strip()
 
     def generate_receipt_pdf(self, ticket_text: str, *, order_id: int, payment_id: int | None = None) -> tuple[str, str]:
-        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
         from reportlab.pdfgen import canvas
 
         receipts_dir = Path(settings.MEDIA_ROOT) / "receipts"
@@ -114,17 +122,23 @@ class SystemPrinterService:
         filename = f"receipt_{order_id}_{payment_id or 'na'}_{ts}.pdf"
         filepath = receipts_dir / filename
 
-        pdf = canvas.Canvas(str(filepath), pagesize=A4)
-        pdf.setFont("Courier", 10)
-        y = 820
-        for line in (ticket_text or "").splitlines():
-            pdf.drawString(36, y, line)
-            y -= 12
-            if y < 36:
-                pdf.showPage()
-                pdf.setFont("Courier", 10)
-                y = 820
+        lines = (ticket_text or "").splitlines() or [""]
+        page_width = RECEIPT_PAGE_WIDTH_MM * mm
+        left_margin = RECEIPT_LEFT_MARGIN_MM * mm
+        top_bottom_margin = RECEIPT_TOP_BOTTOM_MARGIN_MM * mm
+        line_height = RECEIPT_LINE_HEIGHT_MM * mm
+        min_height = RECEIPT_MIN_HEIGHT_MM * mm
+        page_height = max((len(lines) * line_height) + (top_bottom_margin * 2), min_height)
+
+        buf = BytesIO()
+        pdf = canvas.Canvas(buf, pagesize=(page_width, page_height))
+        pdf.setFont("Courier", 8.5)
+        text_obj = pdf.beginText(left_margin, page_height - top_bottom_margin)
+        for line in lines:
+            text_obj.textLine(line)
+        pdf.drawText(text_obj)
         pdf.save()
+        filepath.write_bytes(buf.getvalue())
 
         media_url = str(settings.MEDIA_URL).rstrip("/")
         url = f"{media_url}/receipts/{filename}"
