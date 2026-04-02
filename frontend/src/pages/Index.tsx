@@ -1323,9 +1323,9 @@ const POS = () => {
   return (
     <div className="min-h-screen bg-background">
       <div className="px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-[calc(100vh-5rem)] grid-cols-5 gap-4">
+        <div className="flex h-[calc(100vh-5rem)] flex-row flex-nowrap gap-4 overflow-hidden">
           {/* Products Section */}
-          <div className="col-span-3 flex h-full flex-col gap-4 overflow-hidden">
+          <div className="flex h-full min-w-0 flex-1 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -1402,7 +1402,7 @@ const POS = () => {
           </div>
 
           {/* Cart Section */}
-          <Card className="col-span-2 flex h-full flex-col overflow-hidden">
+          <Card className="flex h-full w-[clamp(320px,35vw,460px)] shrink-0 flex-col overflow-hidden">
             <div className="p-4 border-b">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
