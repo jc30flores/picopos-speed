@@ -21,7 +21,7 @@ export const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) 
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  if (allowedRoles && !user.isSuperuser && !allowedRoles.includes(user.role)) {
     return <Navigate to="/" replace />;
   }
 

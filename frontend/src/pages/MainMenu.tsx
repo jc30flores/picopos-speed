@@ -3,24 +3,27 @@ import { useAuth } from "@/context/useAuth";
 import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
 
 const MainMenu = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
+  const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
+    pos: ShoppingCart,
+    kiosk: Store,
+    kitchen: ChefHat,
+    orders_customers: ClipboardList,
+    menu_discounts: Tags,
+    registers: BarChart3,
+    dte: FileText,
+    clients: Users,
+    settings: Settings,
+  };
+
   const cards = useMemo(
-    () => [
-      { label: "POS", path: "/pos", icon: ShoppingCart },
-      { label: "KIOSK", path: "/kiosk", icon: Store },
-      { label: "COCINA", path: "/kitchen", icon: ChefHat },
-      { label: "PEDIDOS CLIENTES", path: "/customer-display", icon: ClipboardList },
-      { label: "MENÚ & DESCUENTOS", path: "/menu", icon: Tags },
-      { label: "REGISTROS", path: "/registros/ventas", icon: BarChart3 },
-      { label: "DTE", path: "/dte", icon: FileText },
-      { label: "CLIENTES", path: "/clientes", icon: Users },
-      { label: "CONFIGURACIÓN", path: "/settings", icon: Settings },
-    ],
-    []
+    () => filterModulesForUser(user, appModules).map((module) => ({ ...module, icon: iconByModule[module.key] })),
+    [user]
   );
 
   const toggleTheme = () => {

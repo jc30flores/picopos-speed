@@ -418,6 +418,8 @@ export type AuthUser = {
   username: string;
   email: string;
   role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
+  isSuperuser: boolean;
+  isStaff: boolean;
 };
 
 const buildApiUrl = (path: string) => {
@@ -495,7 +497,12 @@ export const login = async (payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
@@ -503,7 +510,12 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const logout = async (): Promise<void> => {
@@ -516,7 +528,12 @@ export const logout = async (): Promise<void> => {
 
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const verifyPrivilegedPin = async (pin: string): Promise<{ ok: boolean; role: "ADMIN" | "GERENTE"; userId: number }> => {

@@ -67,6 +67,8 @@ def login_view(request):
                 "username": user.get_username(),
                 "email": user.email,
                 "role": profile.role,
+                "is_superuser": bool(user.is_superuser),
+                "is_staff": bool(user.is_staff),
             }
         )
     except Exception:  # noqa: BLE001
@@ -118,6 +120,8 @@ def pin_login_view(request):
                 "username": user.get_username(),
                 "email": user.email,
                 "role": profile.role,
+                "is_superuser": bool(user.is_superuser),
+                "is_staff": bool(user.is_staff),
             }
         )
     except Exception:  # noqa: BLE001
@@ -149,6 +153,8 @@ def me_view(request):
                 "username": request.user.get_username(),
                 "email": request.user.email,
                 "role": profile.role,
+                "is_superuser": bool(request.user.is_superuser),
+                "is_staff": bool(request.user.is_staff),
             }
         )
     except Exception:  # noqa: BLE001

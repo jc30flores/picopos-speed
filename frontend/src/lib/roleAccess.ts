@@ -1,11 +1,49 @@
 import type { AuthUser } from "@/lib/api";
 
 export type AppRole = AuthUser["role"];
+export type AppModuleKey =
+  | "pos"
+  | "kiosk"
+  | "kitchen"
+  | "orders_customers"
+  | "menu_discounts"
+  | "registers"
+  | "dte"
+  | "clients"
+  | "settings";
+
+export type AppModuleConfig = {
+  key: AppModuleKey;
+  label: string;
+  path: string;
+  requiredRoles: AppRole[];
+};
+
+export const appModules: AppModuleConfig[] = [
+  { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
+  { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin"] },
+  { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
+  { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
+  { key: "menu_discounts", label: "MENÚ & DESCUENTOS", path: "/menu", requiredRoles: ["admin", "manager"] },
+  { key: "registers", label: "REGISTROS", path: "/registros/ventas", requiredRoles: ["admin", "manager", "cashier"] },
+  { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["admin"] },
+  { key: "clients", label: "CLIENTES", path: "/clientes", requiredRoles: ["admin", "manager"] },
+  { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin"] },
+];
+
+export const canAccessModule = (user: Pick<AuthUser, "role" | "isSuperuser"> | null, module: AppModuleConfig) => {
+  if (!user) return false;
+  if (user.isSuperuser) return true;
+  return module.requiredRoles.includes(user.role);
+};
+
+export const filterModulesForUser = (user: Pick<AuthUser, "role" | "isSuperuser"> | null, modules: AppModuleConfig[] = appModules) =>
+  modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/dte", "/settings"],
-  manager: ["/", "/menu", "/clientes", "/registros/ventas"],
-  cashier: ["/", "/registros/ventas"],
+  admin: ["/", "/pos", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/dte", "/settings"],
+  manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas"],
+  cashier: ["/", "/pos", "/registros/ventas"],
   kitchen: ["/kitchen"],
   accountant: ["/"],
 };
@@ -36,7 +74,8 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
   accountant: [{ label: "POS", path: "/" }],
 };
 
-export const canAccessPath = (role: AppRole, path: string) => {
+export const canAccessPath = (role: AppRole, path: string, isSuperuser = false) => {
+  if (isSuperuser) return true;
   if (path.startsWith("/registros")) {
     return allowedRoutesByRole[role].includes("/registros/ventas") && (path === "/registros/ventas" || (role === "admin" && path === "/registros/caja"));
   }
