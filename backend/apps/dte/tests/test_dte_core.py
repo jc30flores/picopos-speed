@@ -122,6 +122,28 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
 
+    def test_build_payload_cf_sets_discount_summary_from_item_discounts(self):
+        category = Category.objects.create(name="DESCUENTOS")
+        product = Product.objects.create(name="Con descuento", description="", price=Decimal("5.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Item descontado",
+            price_snapshot=Decimal("5.00"),
+            quantity=2,
+            discount_amount=Decimal("1.50"),
+            snapshot_sku_or_code="DISC-1",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000201", "H" * 36, "00")
+        resumen = payload["dte"]["resumen"]
+
+        self.assertEqual(resumen["totalGravada"], 8.5)
+        self.assertEqual(resumen["subTotalVentas"], 8.5)
+        self.assertEqual(resumen["descuGravada"], 1.5)
+        self.assertEqual(resumen["totalDescu"], 1.5)
+
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
             name="CONSUMIDOR FINAL",

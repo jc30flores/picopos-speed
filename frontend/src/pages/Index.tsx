@@ -87,6 +87,7 @@ interface CartItem {
   assignedName?: string;
   unitPriceOverride?: number | null;
   appliedSpecialPriceRuleName?: string | null;
+  requiresKitchen?: boolean;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
@@ -244,7 +245,6 @@ const POS = () => {
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
-  const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -472,6 +472,7 @@ const POS = () => {
           quantity: 1,
           isCustom: false,
           appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
+          requiresKitchen: Boolean(product.requiresKitchen),
           modifiers,
         },
       ];
@@ -547,6 +548,7 @@ const POS = () => {
         customCode: code,
         assignedName: manualNote.trim() || undefined,
         unitPriceOverride: null,
+        requiresKitchen: false,
         modifiers: [],
       },
     ]);
@@ -968,6 +970,7 @@ const POS = () => {
 
   const finalizePaidSale = () => {
     setIsPaymentOpen(false);
+    setActiveOrder(null);
     setCart([]);
     setSelectedDiscount(null);
     setCheckoutDraft(null);
@@ -996,7 +999,7 @@ const POS = () => {
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
-      if (postSalePrintChoice && lastPaymentId) {
+      if (lastPaymentId) {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (!printResult.printed && printResult.printError) {
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
@@ -1024,7 +1027,8 @@ const POS = () => {
     const tipValue = toNumber(tipAmount);
     const totalDue = totalDueCents / 100;
     const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
-    const paymentAmountForApi = splitEnabled ? expectedPaymentCents / 100 : remainingOrderAmount;
+    const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
+    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
 
     if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
@@ -1073,7 +1077,7 @@ const POS = () => {
       const latestRemaining = Math.max(0, toNumber(latestOrder.remaining));
       const amountForApi =
         splitEnabled
-          ? paymentAmountForApi
+          ? Math.min(paymentAmountForApi, latestRemaining)
           : paymentMethod === "cash"
             ? latestRemaining
             : Math.min(paymentAmountForApi, latestRemaining);
@@ -1116,10 +1120,10 @@ const POS = () => {
           toast.success("Pago y factura registrados. Enviado a cocina.");
           finalizePaidSale();
         } else {
+          const hasKitchenItems = Boolean(refreshed.requiresKitchen);
           toast.success("Pago y factura registrados.");
           setKitchenPromptOrderId(orderId);
-          setPostSaleKitchenChoice(true);
-          setPostSalePrintChoice(true);
+          setPostSaleKitchenChoice(hasKitchenItems);
           setIsKitchenPromptOpen(true);
         }
       } else {
@@ -1316,9 +1320,9 @@ const POS = () => {
   return (
     <div className="min-h-screen bg-background">
       <div className="px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-5rem)] lg:grid-cols-5">
+        <div className="grid h-[calc(100vh-5rem)] grid-cols-5 gap-4">
           {/* Products Section */}
-          <div className="flex h-auto flex-col gap-4 lg:col-span-3 lg:overflow-hidden">
+          <div className="col-span-3 flex h-full flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -1364,7 +1368,7 @@ const POS = () => {
             </Card>
 
             {/* Products Grid */}
-            <div className="lg:flex-1 lg:overflow-y-auto pb-4 lg:pb-0">
+            <div className="flex-1 overflow-y-auto pb-4">
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                   {filteredProducts.map((product) => (
                     <Card
@@ -1395,7 +1399,7 @@ const POS = () => {
           </div>
 
           {/* Cart Section */}
-          <Card className="flex flex-col overflow-hidden">
+          <Card className="col-span-2 flex h-full flex-col overflow-hidden">
             <div className="p-4 border-b">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
@@ -2278,11 +2282,11 @@ const POS = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
-              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(Boolean(value))} />
+              <Checkbox checked={postSaleKitchenChoice} disabled />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Imprimir ticket</span>
-              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(Boolean(value))} />
+              <Checkbox checked disabled />
             </div>
           </div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

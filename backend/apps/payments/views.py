@@ -139,10 +139,8 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
             for p in Payment.objects.select_for_update().filter(order=order)
         )
-        due_cents = int(order.amount_due_cents or to_cents(order.total))
-        if due_cents <= 0:
-            due_cents = to_cents(order.total)
-            order.amount_due_cents = due_cents
+        due_cents = to_cents(order.total)
+        order.amount_due_cents = due_cents
         remaining_cents = max(due_cents - existing_applied_cents, 0)
         requested_applied_cents = to_cents(serializer.validated_data.get("amount"))
         tip_cents = to_cents(serializer.validated_data.get("tip_amount"))

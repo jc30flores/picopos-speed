@@ -268,9 +268,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         effective_unit_price = money(item.unit_price)
-        line_total = money(effective_unit_price * to_decimal(item.quantity or 0))
-        line_discount = money(min(line_total, money(item.discount_amount)))
-        net_line_total = _q2(line_total - line_discount)
+        line_total_original = money(effective_unit_price * to_decimal(item.quantity or 0))
+        line_discount = money(min(line_total_original, money(item.discount_amount)))
+        net_line_total = _q2(line_total_original - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
@@ -329,7 +329,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
-    total_pagar = _q2(total_exenta if order.iva_exempt else total_gravada)
+    subtotal_ventas = _q2(total_gravada + total_exenta)
+    total_pagar = subtotal_ventas
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -401,7 +402,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     pagos = get_mh_payment_info(order)
     resumen = {
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
-        "subTotalVentas": json_number(money(total_pagar)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
+        "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
         "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(total_pagar)),
         "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
