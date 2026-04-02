@@ -1,23 +1,16 @@
-import { Navigation } from "@/components/Navigation";
 import { useState } from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PageTabs } from "@/components/ui/page-tabs";
 import { ReportsTab } from "@/components/reports/ReportsTab";
 import { SalesHistoryTab } from "@/components/reports/SalesHistoryTab";
 import { CashHistoryTab } from "@/components/reports/CashHistoryTab";
+import { PageLayout } from "@/components/layout/PageLayout";
 
 const ReportsHistory = () => {
   const [activeTab, setActiveTab] = useState("reports");
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      <div className="px-4 pb-8 pt-4">
-        <div className="mx-auto max-w-7xl">
-          <div className="mb-4 space-y-1">
-            <h1 className="text-2xl font-bold sm:text-3xl">Reportes & Historial</h1>
-            <p className="text-sm text-muted-foreground">Consulta métricas operativas y el historial de ventas.</p>
-          </div>
+    <PageLayout title="Reportes & Historial" subtitle="Consulta métricas operativas y el historial de ventas.">
 
           <PageTabs
             tabs={[
@@ -42,9 +35,7 @@ const ReportsHistory = () => {
               <CashHistoryTab />
             </TabsContent>
           </Tabs>
-        </div>
-      </div>
-    </div>
+    </PageLayout>
   );
 };
 

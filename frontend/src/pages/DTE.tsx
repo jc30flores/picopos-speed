@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Navigation } from "@/components/Navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,6 +18,7 @@ import {
 import { formatDateTimeSV } from "@/lib/datetime";
 import { Copy } from "lucide-react";
 import { DteRowActions } from "@/components/dte/DteRowActions";
+import { PageLayout } from "@/components/layout/PageLayout";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -193,9 +193,12 @@ export default function DTEPage() {
   const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      <div className="container mx-auto space-y-4 px-4 pb-6 pt-24">
+    <PageLayout
+      title="DTE"
+      subtitle="Consulta, reenvía e invalida documentos electrónicos."
+      maxWidthClassName="max-w-[1600px]"
+    >
+      <div className="space-y-4">
         <div className="space-y-3 rounded-xl border bg-card/40 p-4">
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-12">
             <Input
@@ -339,6 +342,6 @@ export default function DTEPage() {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </PageLayout>
   );
 }

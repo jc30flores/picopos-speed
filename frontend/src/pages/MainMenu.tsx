@@ -32,28 +32,34 @@ const MainMenu = () => {
 
   return (
     <div className="min-h-screen bg-background p-4 sm:p-6">
-      <div className="mx-auto grid max-w-7xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {cards.map((card) => (
-          <Button key={card.path} className="h-24 justify-start gap-3 px-6 text-lg font-semibold" onClick={() => navigate(card.path)}>
-            <card.icon className="h-6 w-6" />
-            {card.label}
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-7xl flex-col justify-center gap-6">
+        <div className="space-y-1 text-center">
+          <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Centro de Control</p>
+          <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Pico de Gallo POS</h1>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {cards.map((card) => (
+            <Button key={card.path} className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm" onClick={() => navigate(card.path)}>
+              <card.icon className="h-6 w-6" />
+              {card.label}
+            </Button>
+          ))}
+          <Button className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm" variant="outline" onClick={toggleTheme}>
+            {theme === "light" ? <Moon className="h-6 w-6" /> : <Sun className="h-6 w-6" />}
+            Tema
           </Button>
-        ))}
-        <Button className="h-24 justify-start gap-3 px-6 text-lg font-semibold" variant="outline" onClick={toggleTheme}>
-          {theme === "light" ? <Moon className="h-6 w-6" /> : <Sun className="h-6 w-6" />}
-          Tema
-        </Button>
-        <Button
-          className="h-24 justify-start gap-3 px-6 text-lg font-semibold"
-          variant="destructive"
-          onClick={async () => {
-            await logout();
-            navigate("/login");
-          }}
-        >
-          <LogOut className="h-6 w-6" />
-          Cerrar sesión
-        </Button>
+          <Button
+            className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm"
+            variant="destructive"
+            onClick={async () => {
+              await logout();
+              navigate("/login");
+            }}
+          >
+            <LogOut className="h-6 w-6" />
+            Cerrar sesión
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -1,4 +1,3 @@
-import { Navigation } from "@/components/Navigation";
 import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +8,7 @@ import { createPrintJob, markPrintJobPrinted, getActiveOrders, updateOrderStatus
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { toast } from "sonner";
+import { PageLayout } from "@/components/layout/PageLayout";
 
 const Kitchen = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -100,17 +100,13 @@ const Kitchen = () => {
   }, {});
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      
-      <div className="pt-4 px-4 pb-4">
-        <div className="mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            <ChefHat className="h-8 w-8 text-secondary" />
-            <h1 className="text-3xl font-bold">Pantalla de Cocina</h1>
-          </div>
-
-          <div className="flex gap-2 flex-wrap">
+    <PageLayout
+      title="Pantalla de Cocina"
+      subtitle="Monitorea pedidos activos y gestiona su estado en tiempo real."
+      actions={<ChefHat className="h-6 w-6 text-secondary" />}
+    >
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
             {[{ key: "all", label: "Todos" }, ...serviceTypes.map((item) => ({ key: item.key, label: item.label }))].map((item) => (
               <Button
                 key={item.key}
@@ -121,9 +117,8 @@ const Kitchen = () => {
               </Button>
             ))}
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredOrders.map((order) => {
             const statusBadge = getStatusBadge(order.prepTime);
             const statusColor = getStatusColor(order.prepTime);
@@ -236,7 +231,7 @@ const Kitchen = () => {
           </div>
         )}
       </div>
-    </div>
+    </PageLayout>
   );
 };
 
