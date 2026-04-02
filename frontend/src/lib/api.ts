@@ -272,7 +272,7 @@ export type Customer = {
 
 export type PaymentMethodOption = {
   id: number;
-  code: "CASH" | "CARD" | "TRANSFER" | "PEDIDOS_YA" | "PAYPAL" | string;
+  code: "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal" | string;
   name: string;
   isCash: boolean;
   sortOrder: number;
@@ -342,19 +342,15 @@ export type PrintJob = {
 export type SalesReportRow = {
   orderId: number;
   orderNumber: number;
-  serviceType: Order["serviceType"];
+  serviceType: Order["serviceType"] | string;
+  serviceTypeLabel: string;
   createdAt: Date;
-  subtotal: number;
-  tax: number;
   total: number;
-  discountTotal: number;
   status: Order["status"];
-  financialStatus: Order["financialStatus"];
-  refundTotal: number;
-  netPaid: number;
   customerName: string;
   controlNumber: string;
-  paymentMethod: string;
+  paymentMethodCode: string;
+  paymentMethodLabel: string;
 };
 
 export type SalesReportAggregates = {
@@ -1876,6 +1872,7 @@ export const getSalesReport = async (filters?: {
   dateFrom?: string;
   dateTo?: string;
   serviceType?: Order["serviceType"];
+  paymentMethod?: string;
   status?: Order["status"];
   search?: string;
   today?: boolean;
@@ -1884,6 +1881,7 @@ export const getSalesReport = async (filters?: {
   if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters?.dateTo) params.set("date_to", filters.dateTo);
   if (filters?.serviceType) params.set("service_type", filters.serviceType);
+  if (filters?.paymentMethod) params.set("payment_method", filters.paymentMethod);
   if (filters?.status) params.set("status", filters.status);
   if (filters?.search) {
     params.set("search", filters.search);
@@ -1896,19 +1894,15 @@ export const getSalesReport = async (filters?: {
     results: Array<{
       order_id: number;
       order_number: number;
-      service_type: Order["serviceType"];
-      date: string;
-      subtotal: string;
-      tax: string;
-      total: string;
-      discount_total: string;
+      service_type_code: string;
+      service_type_label: string;
+      created_at: string;
+      total_amount: string;
       status: Order["status"];
-      financial_status: Order["financialStatus"];
-      refund_total: string;
-      net_paid: string;
       customer_name?: string;
       control_number?: string;
-      payment_method?: string;
+      payment_method_code?: string;
+      payment_method_label?: string;
     }>;
     aggregates: {
       count_orders: number;
@@ -1921,8 +1915,11 @@ export const getSalesReport = async (filters?: {
       net_total?: string;
       payment_methods?: {
         cash: string;
-        card: string;
+        card_debit: string;
+        card_credit: string;
         transfer: string;
+        pedidos_ya: string;
+        paypal: string;
       };
       tips_total?: string;
       tips_net?: string;
@@ -1942,32 +1939,28 @@ export const getSalesReport = async (filters?: {
     rows: data.results.map((row) => ({
       orderId: row.order_id,
       orderNumber: row.order_number,
-      serviceType: row.service_type,
-      createdAt: new Date(row.date),
-      subtotal: Number(row.subtotal),
-      tax: Number(row.tax),
-      total: Number(row.total),
-      discountTotal: Number(row.discount_total),
+      serviceType: row.service_type_code,
+      serviceTypeLabel: row.service_type_label,
+      createdAt: new Date(row.created_at),
+      total: Number(row.total_amount),
       status: row.status,
-      financialStatus: row.financial_status,
-      refundTotal: Number(row.refund_total ?? 0),
-      netPaid: Number(row.net_paid ?? 0),
       customerName: String(row.customer_name ?? ""),
       controlNumber: String(row.control_number ?? ""),
-      paymentMethod: String(row.payment_method ?? ""),
+      paymentMethodCode: String(row.payment_method_code ?? ""),
+      paymentMethodLabel: String(row.payment_method_label ?? ""),
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,
-      sumSubtotal: Number(data.aggregates.sum_subtotal),
-      sumTax: Number(data.aggregates.sum_tax),
       sumTotal: Number(data.aggregates.sum_total),
-      sumDiscountTotal: Number(data.aggregates.sum_discount_total),
-      grossTotal: Number(data.aggregates.gross_total ?? data.aggregates.sum_total ?? 0),
+      sumSubtotal: 0,
+      sumTax: 0,
+      sumDiscountTotal: 0,
+      grossTotal: Number(data.aggregates.sum_total ?? 0),
       refundTotal: Number(data.aggregates.refund_total ?? 0),
       netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
-        card: Number(data.aggregates.payment_methods?.card ?? 0),
+        card: Number((Number(data.aggregates.payment_methods?.card_debit ?? 0) + Number(data.aggregates.payment_methods?.card_credit ?? 0)).toFixed(2)),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
@@ -3028,12 +3021,17 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       countedCash: Number(data.summary?.counted_cash ?? 0),
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
-        cash: Number(data.summary?.methods?.CASH?.total ?? 0),
-        card: Number(data.summary?.methods?.CARD?.total ?? 0),
-        transfer: Number(data.summary?.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(data.summary?.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(data.summary?.cash_in_total ?? 0),
+        cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
+        card: Number(
+          (
+            Number(data.summary?.totals_by_method?.card_debit ?? 0) +
+            Number(data.summary?.totals_by_method?.card_credit ?? 0)
+          ).toFixed(2)
+        ),
+        transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary?.total_cash_sales ?? data.summary?.cash_in_total ?? 0),
       },
     },
   };

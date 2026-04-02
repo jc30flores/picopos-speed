@@ -1,12 +1,15 @@
-from decimal import Decimal
-from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum, Count
+from decimal import Decimal, ROUND_HALF_UP
+
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import serializers
+
 from apps.cashier.models import Register, CashSession, CloseoutCount, CashTransaction
 from apps.orders.models import Order
 from apps.payments.models import Payment
 
+MONEY_Q = Decimal("0.01")
 
-PAYMENT_METHOD_CODES = ["CASH", "CARD", "TRANSFER", "PEDIDOS_YA", "PAYPAL"]
+PAYMENT_METHOD_CODES = ["cash", "card_debit", "card_credit", "transfer", "pedidos_ya", "paypal"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -65,6 +68,8 @@ class CashTransactionSerializer(serializers.ModelSerializer):
         mapping = {
             "cash_in": "EFECTIVO",
             "cash_out": "EFECTIVO",
+            "expense": "EFECTIVO",
+            "payout": "EFECTIVO",
             "card": "TARJETA",
             "transfer": "TRANSFERENCIA",
             "pedidosya": "PEDIDOSYA",
@@ -77,19 +82,36 @@ class CashTransactionSerializer(serializers.ModelSerializer):
 
 
 class CashSessionSummarySerializer(serializers.Serializer):
-    opening_cash = serializers.DecimalField(max_digits=10, decimal_places=2)
-    total_cash_sales = serializers.DecimalField(max_digits=10, decimal_places=2)
-    cash_expenses_total = serializers.DecimalField(max_digits=10, decimal_places=2)
-    expected_cash_in_drawer = serializers.DecimalField(max_digits=10, decimal_places=2)
-    counted_cash = serializers.DecimalField(max_digits=10, decimal_places=2)
-    difference = serializers.DecimalField(max_digits=10, decimal_places=2)
-    methods = serializers.DictField()
+    opening_cash = serializers.CharField()
+    total_cash_sales = serializers.CharField()
+    cash_expenses_total = serializers.CharField()
+    expected_cash_in_drawer = serializers.CharField()
+    counted_cash = serializers.CharField()
+    difference = serializers.CharField()
+    totals_by_method = serializers.DictField()
+    cash_movements = serializers.ListField()
+    non_cash_sales = serializers.ListField()
     orders_count = serializers.IntegerField()
 
 
-def _method_code_expr():
-    # prefer FK method code, fallback to legacy char method
-    return None
+
+def _q2(value: Decimal | None) -> Decimal:
+    return (value or Decimal("0")).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+
+
+def _payment_code(payment: Payment) -> str:
+    code = str(payment.payment_method.code if payment.payment_method_id else "").strip().lower()
+    method = str(payment.method or "").strip().lower()
+    card_type = str(payment.card_type or "").strip().lower()
+    if code:
+        if code in {"card", "credit_card", "debit_card"}:
+            return "card_debit" if card_type == "debit" else "card_credit"
+        return code
+    if method == "cash":
+        return "cash"
+    if method == "card":
+        return "card_debit" if card_type == "debit" else "card_credit"
+    return "transfer"
 
 
 def calculate_shift_summary(session: CashSession) -> dict:
@@ -101,37 +123,56 @@ def calculate_shift_summary(session: CashSession) -> dict:
     if end:
         payments = payments.filter(created_at__lte=end)
 
-    methods: dict[str, dict[str, Decimal | int]] = {}
-    for code in PAYMENT_METHOD_CODES:
-        q = Q(payment_method__code=code)
-        if code == "CASH":
-            q = q | Q(payment_method__isnull=True, method="cash")
-        elif code == "CARD":
-            q = q | Q(payment_method__isnull=True, method="card")
-        elif code == "TRANSFER":
-            q = q | Q(payment_method__isnull=True, method="transfer")
-        total = payments.aggregate(v=Sum(ExpressionWrapper(F("amount") + F("tip_amount"), output_field=DecimalField(max_digits=10, decimal_places=2)), filter=q))["v"] or Decimal("0")
-        count = payments.aggregate(c=Count("id", filter=q))["c"] or 0
-        methods[code] = {"count": int(count), "total": total}
+    totals_by_method = {code: Decimal("0") for code in PAYMENT_METHOD_CODES}
+    non_cash_sales = []
+    for payment in payments.select_related("payment_method", "order"):
+        code = _payment_code(payment)
+        total = _q2((payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0")))
+        if code in totals_by_method:
+            totals_by_method[code] = _q2(totals_by_method[code] + total)
+        if code != "cash":
+            non_cash_sales.append(
+                {
+                    "payment_id": payment.id,
+                    "order_id": payment.order_id,
+                    "payment_method_code": code,
+                    "amount": f"{total:.2f}",
+                    "created_at": payment.created_at.isoformat(),
+                }
+            )
 
-    transactions = CashTransaction.objects.filter(session=session)
-    cash_expenses_total = transactions.filter(type__in=["cash_out", "expense", "payout"]).aggregate(total=Sum("amount")).get("total") or Decimal("0")
-    cash_in_total = transactions.filter(type="cash_in").aggregate(total=Sum("amount")).get("total") or Decimal("0")
+    transactions = CashTransaction.objects.filter(session=session).order_by("-created_at")
+    cash_movements = [
+        {
+            "id": tx.id,
+            "type": tx.type,
+            "description": tx.description,
+            "amount": f"{(-_q2(tx.amount) if tx.type in {'cash_out', 'expense', 'payout'} else _q2(tx.amount)):.2f}",
+            "created_at": tx.created_at.isoformat(),
+        }
+        for tx in transactions
+        if tx.type in {"cash_in", "cash_out", "expense", "payout"}
+    ]
 
-    total_cash_sales = methods["CASH"]["total"]
-    expected_cash_in_drawer = session.opening_cash + cash_in_total - cash_expenses_total
-    counted_cash = session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0")
-    difference = counted_cash - expected_cash_in_drawer
+    expenses_total = transactions.filter(type__in=["cash_out", "expense", "payout"]).aggregate(total=Sum("amount")).get("total") or Decimal("0")
+    expenses_total = -_q2(expenses_total)
+
+    cash_initial = _q2(session.opening_cash)
+    cash_sales = _q2(totals_by_method["cash"])
+    expected_cash_in_drawer = _q2(cash_initial + cash_sales + expenses_total)
+    counted_cash = _q2(session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0"))
+    difference = _q2(counted_cash - expected_cash_in_drawer)
     order_ids = payments.values_list("order_id", flat=True).distinct()
 
     return {
-        "opening_cash": session.opening_cash,
-        "total_cash_sales": total_cash_sales,
-        "cash_expenses_total": cash_expenses_total,
-        "cash_in_total": cash_in_total,
-        "expected_cash_in_drawer": expected_cash_in_drawer,
-        "counted_cash": counted_cash,
-        "difference": difference,
-        "methods": methods,
+        "opening_cash": f"{cash_initial:.2f}",
+        "total_cash_sales": f"{cash_sales:.2f}",
+        "cash_expenses_total": f"{expenses_total:.2f}",
+        "expected_cash_in_drawer": f"{expected_cash_in_drawer:.2f}",
+        "counted_cash": f"{counted_cash:.2f}",
+        "difference": f"{difference:.2f}",
+        "totals_by_method": {k: f"{_q2(v):.2f}" for k, v in totals_by_method.items()},
+        "cash_movements": cash_movements,
+        "non_cash_sales": non_cash_sales,
         "orders_count": Order.objects.filter(id__in=order_ids).count(),
     }
