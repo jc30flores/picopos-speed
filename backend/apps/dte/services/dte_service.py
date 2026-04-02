@@ -71,12 +71,25 @@ def build_headers() -> dict[str, str]:
 def _resolve_branch_config(order):
     if not order.branch_id or not getattr(order, "branch", None):
         raise DTEPreflightError(f"Order {order.id} no tiene branch asignado; no se permite fallback de emisor.")
-    if not DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).exists():
+    cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
+    if not cfg:
         raise DTEPreflightError(
             f"Order {order.id} branch_id={order.branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
         )
+    if not str(cfg.emisor_nit or "").strip():
+        raise DTEPreflightError(f"DTEBranchConfig de branch_id={order.branch_id} no tiene emisor_nit configurado.")
     config = get_emisor_config(order.branch)
-    required = ("codEstableMH", "codEstable", "codPuntoVentaMH", "codPuntoVenta")
+    required = (
+        "codEstableMH",
+        "codEstable",
+        "codPuntoVentaMH",
+        "codPuntoVenta",
+        "departamento",
+        "municipio",
+        "complemento",
+        "telefono",
+        "correo",
+    )
     missing = [key for key in required if not str(config.get(key) or "").strip()]
     if missing:
         raise DTEPreflightError(
@@ -352,12 +365,12 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "codEstable": emisor.get("codEstable"),
         "codPuntoVentaMH": emisor.get("codPuntoVentaMH"),
         "codPuntoVenta": emisor.get("codPuntoVenta"),
-        "telefono": emisor.get("telefono") or "00000000",
-        "correo": emisor.get("correo") or "facturas@example.com",
+        "telefono": emisor.get("telefono"),
+        "correo": emisor.get("correo"),
         "direccion": {
-            "departamento": emisor.get("departamento") or "12",
-            "municipio": emisor.get("municipio") or "22",
-            "complemento": emisor.get("complemento") or "Direccion emisor pendiente",
+            "departamento": emisor.get("departamento"),
+            "municipio": emisor.get("municipio"),
+            "complemento": emisor.get("complemento"),
         },
     }
 

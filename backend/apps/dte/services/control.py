@@ -25,23 +25,37 @@ def build_generation_code(current: str | None = None) -> str:
     return (current or str(uuid.uuid4())).upper()
 
 
-def reserve_next_control(*, branch, document_type: str, series: str = "S001P001", ambiente: str = "00", year: int | None = None) -> str:
+def reserve_next_control(
+    *,
+    branch,
+    document_type: str,
+    establishment_code: str,
+    pos_code: str,
+    ambiente: str = "00",
+    year: int | None = None,
+) -> str:
     now = timezone.localtime()
     year_value = int(year or now.year)
-    normalized_series = (series or "S001P001").upper()
-    establishment_code = normalized_series[:4]
-    pos_code = normalized_series[4:8]
+    establishment_code = (establishment_code or "").strip().upper()
+    pos_code = (pos_code or "").strip().upper()
+    if not establishment_code or not pos_code:
+        raise DTEBranchResolutionError("cod_estable_mh/cod_punto_venta_mh son requeridos para reservar correlativo.")
 
     with transaction.atomic():
-        counter, _ = DTEControlCounter.objects.select_for_update().get_or_create(
+        counter = DTEControlCounter.objects.select_for_update().filter(
             branch=branch,
             dte_type=document_type,
             year=year_value,
             establishment_code=establishment_code,
             pos_code=pos_code,
             ambiente=ambiente,
-            defaults={"last_number": 0},
-        )
+        ).first()
+        if not counter:
+            raise DTEBranchResolutionError(
+                f"No existe DTEControlCounter para branch_id={branch.id}, dte_type={document_type}, ambiente={ambiente}, "
+                f"year={year_value}, establishment_code={establishment_code}, pos_code={pos_code}. "
+                "Cree el registro en dte_dtecontrolcounter antes de enviar DTE."
+            )
         counter.last_number += 1
         counter.save(update_fields=["last_number", "updated_at"])
         last_number = counter.last_number
@@ -59,15 +73,16 @@ def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "
         raise DTEBranchResolutionError(
             f"Order {order.id} branch_id={order.branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
         )
-    est_code = (cfg.cod_estable or "").strip().upper()
-    pv_code = (cfg.cod_punto_venta or "").strip().upper()
+    est_code = (cfg.cod_estable_mh or "").strip().upper()
+    pv_code = (cfg.cod_punto_venta_mh or "").strip().upper()
     if not est_code or not pv_code:
         raise DTEBranchResolutionError(
-            f"Order {order.id} branch_id={order.branch_id} tiene cod_estable/cod_punto_venta incompletos en DTEBranchConfig."
+            f"Order {order.id} branch_id={order.branch_id} tiene cod_estable_mh/cod_punto_venta_mh incompletos en DTEBranchConfig."
         )
     return reserve_next_control(
         branch=order.branch,
         document_type=dte_type,
-        series=f"{est_code}{pv_code}",
+        establishment_code=est_code,
+        pos_code=pv_code,
         ambiente=ambiente,
     )

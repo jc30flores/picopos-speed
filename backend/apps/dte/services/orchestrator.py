@@ -34,6 +34,17 @@ def _ambiente() -> str:
     return _normalize_ambiente(raw)
 
 
+def _has_duplicate_control_error(invoice: OrderInvoice) -> bool:
+    error_text = " ".join(
+        [
+            str(invoice.last_error or ""),
+            str(invoice.last_dte_error or ""),
+            str(invoice.last_dte_error_code or ""),
+        ]
+    ).upper()
+    return "YA EXISTE UN REGISTRO CON ESE VALOR" in error_text or "NUMEROCONTROL" in error_text and "DUPLIC" in error_text
+
+
 def transmit_sale_dte(
     sale_id: int,
     source: str = "normal_send",
@@ -54,9 +65,12 @@ def transmit_sale_dte(
         return accepted
 
     invoice, _ = OrderInvoice.objects.get_or_create(order=order)
-    ambiente = _ambiente()
+    ambiente = "01"
     codigo_generacion = build_generation_code(invoice.codigo_generacion)
     numero_control = invoice.numero_control or ""
+    if numero_control and _has_duplicate_control_error(invoice):
+        DTE_LOGGER.warning("[DTE] duplicate_control_detected order=%s old_numeroControl=%s -> reserving_new_control", sale_id, numero_control)
+        numero_control = ""
 
     attempts = (invoice.dte_send_attempts or 0) + 1
     now = timezone.now()
@@ -120,6 +134,16 @@ def transmit_sale_dte(
         numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
         DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
+        emisor = ((payload or {}).get("dte") or {}).get("emisor") or {}
+        DTE_LOGGER.info(
+            "[DTE] control_context order_id=%s order_branch_id=%s dte_branch_id=%s cod_estable_mh=%s cod_punto_venta_mh=%s numeroControl=%s",
+            order.id,
+            order.branch_id,
+            order.branch_id,
+            emisor.get("codEstableMH"),
+            emisor.get("codPuntoVentaMH"),
+            numero_control,
+        )
         prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
         prebuilt_record.save(update_fields=["request_payload", "updated_at"])
     except (DTEPreflightError, DTEBranchResolutionError) as exc:
