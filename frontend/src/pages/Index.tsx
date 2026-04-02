@@ -1411,7 +1411,7 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[3fr_2fr]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
