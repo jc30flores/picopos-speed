@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -338,15 +338,23 @@ class DTECoreTests(TestCase):
         self.assertEqual(code, "99")
         self.assertTrue(reference)
 
+    @override_settings(
+        DTE_BRANCH_ID=5,
+        DTE_COD_ESTABLE_MH="S001",
+        DTE_COD_ESTABLE="S001",
+        DTE_COD_PUNTO_VENTA_MH="P001",
+        DTE_COD_PUNTO_VENTA="P001",
+        DTE_DIRECCION_COMPLEMENTO="CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL",
+        DTE_DIRECCION_DEPARTAMENTO="12",
+        DTE_DIRECCION_MUNICIPIO="22",
+    )
     @patch("apps.dte.services.orchestrator.send_or_queue_dte")
     def test_transmit_sale_dte_uses_order_branch_config_without_fallback(self, mock_send_or_queue):
-        Branch.objects.create(id=2, name="B2", code="B2")
-        Branch.objects.create(id=3, name="B3", code="B3")
-        Branch.objects.create(id=4, name="B4", code="B4")
+        Branch.objects.create(id=4, name="Centro", code="CEN")
         branch5 = Branch.objects.create(id=5, name="Plaza Monaco", code="PM")
         order = Order.objects.create(
             order_number=5001,
-            branch=branch5,
+            branch_id=4,
             service_type=self.service_type,
             subtotal=Decimal("10.00"),
             tax=Decimal("0.00"),
@@ -398,12 +406,14 @@ class DTECoreTests(TestCase):
         self.assertEqual(emisor["direccion"]["complemento"], "CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL")
         self.assertEqual(called_payload["dte"]["identificacion"]["numeroControl"], "DTE-01-S001P001-000000000001846")
         log_output = "\n".join(captured.output)
-        self.assertIn("order_branch_id=5", log_output)
+        self.assertIn("order_branch_id=4", log_output)
         self.assertIn("selected_branch_id=5", log_output)
+        self.assertIn("env_branch_id=5", log_output)
         self.assertIn("dte_branch_id=5", log_output)
         self.assertIn("cod_estable_mh=S001", log_output)
         self.assertIn("cod_punto_venta_mh=P001", log_output)
-        self.assertNotIn("branch_id=4", log_output)
+        self.assertNotIn("selected_branch_id=4", log_output)
+        self.assertNotIn("dte_branch_id=4", log_output)
         self.assertNotIn("M001", log_output)
 
     @patch("apps.dte.client.DTEClient._build_url")

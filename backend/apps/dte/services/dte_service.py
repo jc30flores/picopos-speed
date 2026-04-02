@@ -51,6 +51,16 @@ def _get_env(name: str, default: str = "") -> str:
     return getattr(settings, name, os.environ.get(name, default))
 
 
+def _env_int(name: str, default: int | None = None) -> int | None:
+    raw = _get_env(name, "")
+    if raw in (None, ""):
+        return default
+    try:
+        return int(str(raw), 0)
+    except Exception:
+        return default
+
+
 def build_dte_url(dte_type: str) -> tuple[str, str]:
     base_url = (_get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
     endpoint = DTE_ENDPOINT_BY_TYPE.get(dte_type)
@@ -69,16 +79,34 @@ def build_headers() -> dict[str, str]:
 
 
 def _resolve_branch_config(order):
-    if not order.branch_id or not getattr(order, "branch", None):
+    env_branch_id = _env_int("DTE_BRANCH_ID", None)
+    branch = order.branch
+    if env_branch_id and env_branch_id > 0:
+        from apps.core.models import Branch
+
+        branch = Branch.objects.filter(id=env_branch_id).first()
+    if not branch or not getattr(branch, "id", None):
         raise DTEPreflightError(f"Order {order.id} no tiene branch asignado; no se permite fallback de emisor.")
-    cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
+    cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first()
     if not cfg:
         raise DTEPreflightError(
-            f"Order {order.id} branch_id={order.branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
+            f"Order {order.id} branch_id={branch.id} no tiene DTEBranchConfig activa; no se permite fallback."
         )
     if not str(cfg.emisor_nit or "").strip():
-        raise DTEPreflightError(f"DTEBranchConfig de branch_id={order.branch_id} no tiene emisor_nit configurado.")
-    config = get_emisor_config(order.branch)
+        raise DTEPreflightError(f"DTEBranchConfig de branch_id={branch.id} no tiene emisor_nit configurado.")
+    config = get_emisor_config(branch)
+    env_overrides = {
+        "codEstableMH": _get_env("DTE_COD_ESTABLE_MH"),
+        "codEstable": _get_env("DTE_COD_ESTABLE"),
+        "codPuntoVentaMH": _get_env("DTE_COD_PUNTO_VENTA_MH"),
+        "codPuntoVenta": _get_env("DTE_COD_PUNTO_VENTA"),
+        "complemento": _get_env("DTE_DIRECCION_COMPLEMENTO"),
+        "departamento": _get_env("DTE_DIRECCION_DEPARTAMENTO"),
+        "municipio": _get_env("DTE_DIRECCION_MUNICIPIO"),
+    }
+    for key, value in env_overrides.items():
+        if str(value or "").strip():
+            config[key] = str(value).strip()
     required = (
         "codEstableMH",
         "codEstable",
@@ -267,10 +295,14 @@ def get_mh_payment_info(order) -> tuple[str, str | None]:
 
 def build_payload_cf(order, control_number: str, generation_code: str, ambiente: str) -> dict:
     from django.utils import timezone
+    from apps.core.models import Branch
 
     emisor = _resolve_branch_config(order)
-    final_nit = get_emisor_nit(order.branch)
-    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, order.branch_id)
+    env_branch_id = _env_int("DTE_BRANCH_ID", None)
+    final_branch_id = env_branch_id if env_branch_id and env_branch_id > 0 else order.branch_id
+    nit_branch = Branch.objects.filter(id=final_branch_id).first() if final_branch_id else order.branch
+    final_nit = get_emisor_nit(nit_branch or order.branch)
+    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, final_branch_id)
     print(f"[DTE DEBUG] Emisor NIT final utilizado={final_nit}")
     required_emisor = ["nit", "nrc", "nombre", "nombreComercial", "codActividad", "descActividad"]
     missing = [k for k in required_emisor if not emisor.get(k)]

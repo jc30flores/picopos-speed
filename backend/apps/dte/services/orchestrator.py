@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from apps.core.models import Branch
 from apps.dte.models import DTERecord
 from apps.dte.outbox import send_or_queue_dte
 from apps.dte.services.control import DTEBranchResolutionError, build_generation_code, next_control_number
@@ -45,6 +47,16 @@ def _has_duplicate_control_error(invoice: OrderInvoice) -> bool:
     return "YA EXISTE UN REGISTRO CON ESE VALOR" in error_text or "NUMEROCONTROL" in error_text and "DUPLIC" in error_text
 
 
+def _resolve_selected_branch(order: Order) -> Branch:
+    env_branch_id = getattr(settings, "DTE_BRANCH_ID", None)
+    if env_branch_id and int(env_branch_id) > 0:
+        branch = Branch.objects.filter(id=int(env_branch_id)).first()
+        if not branch:
+            raise DTEPreflightError(f"DTE_BRANCH_ID={env_branch_id} no existe en core_branch.")
+        return branch
+    return order.branch
+
+
 def transmit_sale_dte(
     sale_id: int,
     source: str = "normal_send",
@@ -75,6 +87,9 @@ def transmit_sale_dte(
     attempts = (invoice.dte_send_attempts or 0) + 1
     now = timezone.now()
     payment = order.payments.filter(id=payment_id).first() if payment_id else None
+    env_branch_id = getattr(settings, "DTE_BRANCH_ID", None)
+    selected_branch = _resolve_selected_branch(order)
+    selected_branch_id = getattr(selected_branch, "id", None)
     payment_branch_id = None
     payment_register_id = getattr(getattr(payment, "cash_session", None), "register_id", None) if payment else None
     payment_register_branch_id = (
@@ -83,13 +98,12 @@ def transmit_sale_dte(
     user_profile_branch_id = None
     if payment and getattr(payment, "received_by", None):
         user_profile_branch_id = getattr(getattr(payment.received_by, "profile", None), "branch_id", None)
-    selected_branch = getattr(order, "branch", None)
-    selected_branch_id = getattr(selected_branch, "id", None)
     DTE_LOGGER.info(
-        "[DTE] branch_resolution order_id=%s order_branch_id=%s payment_branch_id=%s payment_register_id=%s "
+        "[DTE] branch_resolution order_id=%s order_branch_id=%s env_branch_id=%s payment_branch_id=%s payment_register_id=%s "
         "payment_register_branch_id=%s user_profile_branch_id=%s selected_branch_id=%s",
         order.id,
         order.branch_id,
+        env_branch_id,
         payment_branch_id,
         payment_register_id,
         payment_register_branch_id,
@@ -98,16 +112,16 @@ def transmit_sale_dte(
     )
     if not selected_branch_id:
         raise DTEPreflightError(f"Order {order.id} no tiene branch asignado; no se permite fallback de DTE.")
-    if selected_branch_id != order.branch_id:
+    if (not env_branch_id or int(env_branch_id) <= 0) and selected_branch_id != order.branch_id:
         raise DTEPreflightError(
-            f"Branch inconsistente para order {order.id}: order.branch_id={order.branch_id} selected_branch.id={selected_branch_id}"
+            f"Branch inconsistente para order {order.id}: order.branch_id={order.branch_id} selected_branch.id={selected_branch_id} env_branch_id={env_branch_id}"
         )
 
     payload: dict = {}
     prebuilt_record = DTERecord.objects.create(
         order=order,
         payment=payment,
-        branch=order.branch,
+        branch=selected_branch,
         dte_type=dte_type,
         status=DTERecord.STATUS_PENDING,
         ambiente=ambiente,
@@ -131,7 +145,7 @@ def transmit_sale_dte(
     try:
         preflight_control_number = numero_control or "PREFLIGHT-CHECK"
         build_payload_cf(order, control_number=preflight_control_number, generation_code=codigo_generacion, ambiente=ambiente)
-        numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
+        numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente, branch=selected_branch)
         DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
         emisor = ((payload or {}).get("dte") or {}).get("emisor") or {}
@@ -139,12 +153,12 @@ def transmit_sale_dte(
             "[DTE] control_context order_id=%s order_branch_id=%s dte_branch_id=%s cod_estable_mh=%s cod_punto_venta_mh=%s numeroControl=%s",
             order.id,
             order.branch_id,
-            order.branch_id,
+            selected_branch_id,
             emisor.get("codEstableMH"),
             emisor.get("codPuntoVentaMH"),
             numero_control,
         )
-        prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
+        prebuilt_record.request_payload = {**payload, "branch": selected_branch.name}
         prebuilt_record.save(update_fields=["request_payload", "updated_at"])
     except (DTEPreflightError, DTEBranchResolutionError) as exc:
         DTE_LOGGER.info("[DTE] send_dte.preflight_failed order=%s error=%s", sale_id, exc)
@@ -194,7 +208,7 @@ def transmit_sale_dte(
             parsed.get("recibido_at") or "-",
         )
     prebuilt_record.status = parsed["status"]
-    prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
+    prebuilt_record.request_payload = {**payload, "branch": selected_branch.name}
     prebuilt_record.response_payload = response if isinstance(response, dict) else {}
     prebuilt_record.response_text = parsed.get("response_text", "")
     prebuilt_record.mh_response_json = response if isinstance(response, dict) else {}
