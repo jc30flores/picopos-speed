@@ -95,7 +95,7 @@ class DTECoreTests(TestCase):
             is_custom=True,
         )
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "A" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "A" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Nombre histórico")
         self.assertEqual(first["precioUni"], 4.25)
@@ -116,7 +116,7 @@ class DTECoreTests(TestCase):
             is_custom=False,
         )
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "B" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "B" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], 2.1)
@@ -197,7 +197,7 @@ class DTECoreTests(TestCase):
             is_consumer_final=True,
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000010", "D" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000010", "D" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertIsNone(receptor["tipoDocumento"])
         self.assertIsNone(receptor["numDocumento"])
@@ -216,7 +216,7 @@ class DTECoreTests(TestCase):
             correo="cliente@correo.com",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000011", "E" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000011", "E" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertEqual(receptor["tipoDocumento"], "13")
         self.assertEqual(receptor["numDocumento"], "01234567-8")
@@ -233,7 +233,7 @@ class DTECoreTests(TestCase):
             correo="realcliente@correo.com",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000111", "G" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000111", "G" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertEqual(receptor["correo"], "realcliente@correo.com")
 
@@ -249,7 +249,7 @@ class DTECoreTests(TestCase):
             telefono="",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000012", "F" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000012", "F" * 36, "01")
         receptor = payload["dte"]["receptor"]
 
         def _assert_no_empty_strings(value):
@@ -276,7 +276,7 @@ class DTECoreTests(TestCase):
             snapshot_sku_or_code="JSON-1",
             is_custom=True,
         )
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000099", "C" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000099", "C" * 36, "00")
         serialized = json.dumps(payload, ensure_ascii=False)
 
         first = payload["dte"]["cuerpoDocumento"][0]
@@ -366,7 +366,7 @@ class DTECoreTests(TestCase):
     @patch("apps.dte.client.requests.Session.post")
     def test_client_blocks_send_on_emisor_nit_mismatch(self, mock_post, mock_build_url):
         DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="12171409901063", is_active=True)
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "A" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "A" * 36, "00")
         payload["dte"]["emisor"]["nit"] = "00000000000000"
         mock_build_url.return_value = "https://example.test/api/v1/dte/factura"
 
@@ -394,7 +394,7 @@ class DTEResendEndpointTests(TestCase):
             branch=branch,
             dte_type="CF_01",
             status=DTERecord.STATUS_PENDING,
-            control_number="DTE-01-S001P001-000000000000001",
+            control_number="DTE-01-X001X001-000000000000001",
             generation_code="A" * 36,
             codigo_generacion="A" * 36,
             send_attempts=0,
