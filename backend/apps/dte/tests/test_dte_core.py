@@ -434,6 +434,46 @@ class DTECoreTests(TestCase):
         self.assertEqual(result.error_type, "EMISOR_NIT_MISMATCH")
         mock_post.assert_not_called()
 
+    @override_settings(
+        DTE_BRANCH_ID=5,
+        DTE_COD_ESTABLE_MH="S001",
+        DTE_COD_PUNTO_VENTA_MH="S001",
+    )
+    def test_transmit_sale_dte_fails_when_env_series_codes_are_equal(self):
+        branch5 = Branch.objects.create(id=5, name="Plaza Monaco", code="PM")
+        order = Order.objects.create(
+            order_number=5002,
+            branch=self.branch,
+            service_type=self.service_type,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            dte_document_type="CF",
+        )
+        DTEBranchConfig.objects.create(
+            branch=branch5,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa Plaza Monaco",
+            emisor_nombre_comercial="Empresa Plaza Monaco",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            cod_estable_mh="S001",
+            cod_estable="S001",
+            cod_punto_venta_mh="P001",
+            cod_punto_venta="P001",
+            direccion_departamento="12",
+            direccion_municipio="22",
+            direccion_complemento="CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL",
+            telefono="22223333",
+            correo="pm@example.com",
+            is_active=True,
+        )
+
+        record = transmit_sale_dte(order.id)
+        self.assertEqual(record.status, DTERecord.STATUS_REJECTED)
+        self.assertIn("no pueden ser iguales", record.error_message)
+
 
 class DTEResendEndpointTests(TestCase):
     def setUp(self):

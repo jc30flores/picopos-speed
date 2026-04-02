@@ -268,6 +268,12 @@ logging.getLogger(__name__).info(
     DTE_BASE_URL,
     MH_AMBIENTE,
 )
+logging.getLogger(__name__).info(
+    "[DTE CONFIG] env_branch_id=%r cod_estable_mh=%r cod_punto_venta_mh=%r",
+    DTE_BRANCH_ID,
+    DTE_COD_ESTABLE_MH,
+    DTE_COD_PUNTO_VENTA_MH,
+)
 
 LOGGING = {
     "version": 1,

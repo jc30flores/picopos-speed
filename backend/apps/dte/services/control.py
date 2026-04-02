@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import uuid
+import logging
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from apps.dte.models import DTEBranchConfig, DTEControlCounter
 from apps.orders.models import Order
+
+logger = logging.getLogger("apps.dte")
 
 
 class DTEBranchResolutionError(Exception):
@@ -41,6 +44,15 @@ def reserve_next_control(
     pos_code = (pos_code or "").strip().upper()
     if not establishment_code or not pos_code:
         raise DTEBranchResolutionError("cod_estable_mh/cod_punto_venta_mh son requeridos para reservar correlativo.")
+    logger.info(
+        "[DTE] counter_lookup branch_id=%s ambiente=%s dte_type=%s year=%s establishment_code=%s pos_code=%s",
+        getattr(branch, "id", None),
+        ambiente,
+        document_type,
+        year_value,
+        establishment_code,
+        pos_code,
+    )
 
     with transaction.atomic():
         counter = DTEControlCounter.objects.select_for_update().filter(
@@ -78,8 +90,24 @@ def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "
         raise DTEBranchResolutionError(
             f"Order {order.id} branch_id={selected_branch_id} no tiene DTEBranchConfig activa; no se permite fallback."
         )
-    est_code = (getattr(settings, "DTE_COD_ESTABLE_MH", "") or cfg.cod_estable_mh or "").strip().upper()
-    pv_code = (getattr(settings, "DTE_COD_PUNTO_VENTA_MH", "") or cfg.cod_punto_venta_mh or "").strip().upper()
+    env_est_code = (getattr(settings, "DTE_COD_ESTABLE_MH", "") or "").strip().upper()
+    env_pv_code = (getattr(settings, "DTE_COD_PUNTO_VENTA_MH", "") or "").strip().upper()
+    est_code = env_est_code or (cfg.cod_estable_mh or "").strip().upper()
+    pv_code = env_pv_code or (cfg.cod_punto_venta_mh or "").strip().upper()
+    if env_est_code and env_pv_code and env_est_code == env_pv_code:
+        logger.warning(
+            "[DTE] invalid_env_series env_establishment_code=%s env_pos_code=%s order=%s branch_id=%s",
+            env_est_code,
+            env_pv_code,
+            order.id,
+            selected_branch_id,
+        )
+        raise DTEBranchResolutionError(
+            "Configuración inválida: DTE_COD_ESTABLE_MH y DTE_COD_PUNTO_VENTA_MH no pueden ser iguales."
+        )
+    if env_pv_code and not env_pv_code.startswith("P"):
+        logger.warning("[DTE] suspicious_env_pos_code value=%s order=%s branch_id=%s", env_pv_code, order.id, selected_branch_id)
+        raise DTEBranchResolutionError("Configuración inválida: DTE_COD_PUNTO_VENTA_MH debe iniciar con 'P' (ejemplo: P001).")
     if not est_code or not pv_code:
         raise DTEBranchResolutionError(
             f"Order {order.id} branch_id={selected_branch_id} tiene cod_estable_mh/cod_punto_venta_mh incompletos en DTEBranchConfig/env."
