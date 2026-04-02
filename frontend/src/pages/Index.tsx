@@ -194,6 +194,7 @@ const POS = () => {
   const [taxRate, setTaxRate] = useState(0.13);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
@@ -360,6 +361,11 @@ const POS = () => {
       setActiveTenderField(null);
     }
   }, [paymentMethod]);
+  useEffect(() => {
+    if (dteDocumentType !== "CCF" && ivaExempt) {
+      setIvaExempt(false);
+    }
+  }, [dteDocumentType, ivaExempt]);
 
   useEffect(() => {
     if (!activeTenderField) return;
@@ -432,6 +438,7 @@ const POS = () => {
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
+    setIsPaymentMethodOpen(false);
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
@@ -1307,10 +1314,10 @@ const POS = () => {
     <div className="min-h-screen bg-background">
       <Navigation />
       
-      <div className="pt-20 px-2 lg:px-4 pb-4">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:h-[calc(100vh-6rem)]">
+      <div className="px-2 pb-4 pt-4 lg:px-4">
+        <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-5rem)] lg:grid-cols-5">
           {/* Products Section */}
-          <div className="lg:col-span-2 flex flex-col gap-4 h-auto lg:overflow-hidden">
+          <div className="flex h-auto flex-col gap-4 lg:col-span-3 lg:overflow-hidden">
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -1324,13 +1331,13 @@ const POS = () => {
                   />
                 </div>
                 
-                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                <div className="flex flex-wrap gap-2.5 pb-1">
                   {["Todos", ...categories.filter((cat) => !cat.isHidden && !cat.name.toUpperCase().includes("SIN CATEGORÍA")).map((cat) => cat.name)].map((cat) => (
                     <Badge
                       key={cat}
                       variant={selectedCategory === cat ? "default" : "outline"}
                       className={cn(
-                        "cursor-pointer transition-all whitespace-nowrap rounded-full px-4 py-2 text-sm min-h-10 inline-flex items-center",
+                        "inline-flex min-h-14 cursor-pointer items-center whitespace-nowrap rounded-full px-5 py-2 text-base transition-all",
                         selectedCategory === cat && "bg-primary text-primary-foreground"
                       )}
                       onClick={() => setSelectedCategory(cat)}
@@ -1344,11 +1351,11 @@ const POS = () => {
 
             {/* Products Grid */}
             <div className="lg:flex-1 lg:overflow-y-auto pb-4 lg:pb-0">
-                <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                   {filteredProducts.map((product) => (
                     <Card
                       key={product.id}
-                    className="p-3 cursor-pointer hover-lift"
+                    className="cursor-pointer p-4 hover-lift min-h-40"
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
@@ -1446,7 +1453,7 @@ const POS = () => {
                 </div>
               </div>
 
-              <div className="flex gap-2 overflow-x-auto pb-1">
+              <div className="flex flex-wrap gap-2 pb-1">
                 {serviceTypes.length > 0 ? (
                   serviceTypes.map((type) => (
                     <Button
@@ -1454,7 +1461,7 @@ const POS = () => {
                       variant={serviceType === type.key ? "default" : "outline"}
                       size="sm"
                       onClick={() => setServiceType(type.key)}
-                      className="min-w-fit whitespace-nowrap"
+                      className="min-h-14 min-w-fit whitespace-nowrap px-4 text-base"
                     >
                       {type.label}
                     </Button>
@@ -1895,7 +1902,9 @@ const POS = () => {
                     </div>
                   </div>
                   {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
-                  <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+                  {dteDocumentType === "CCF" ? (
+                    <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+                  ) : null}
                   <SplitPanel
                     enabled={splitEnabled}
                     onEnabledChange={setSplitEnabled}
@@ -1914,104 +1923,94 @@ const POS = () => {
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="space-y-3">
-                    <Label>Método</Label>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {[
-                        { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
-                        { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
-                        { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
-                        { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
-                        { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
-                      ].map((option) => (
-                        <Button
-                          key={option.code}
-                          type="button"
-                          variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
-                          className="h-14 text-base"
-                          onClick={() => {
-                            setPaymentMethod(option.method);
-                            if (option.code === "card") {
-                              setSelectedPaymentMethodCode("card_credit");
-                              setCardType(null);
-                            } else {
-                              setSelectedPaymentMethodCode(option.code);
-                              setCardType(null);
-                            }
-                          }}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                    </div>
-                    {paymentMethod === "card" && (
-                      <div className="space-y-2">
-                        <Label>Tipo de tarjeta</Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
-                          <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{cardType ? `Se enviará a Hacienda como Tarjeta ${cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.` : "Selecciona débito o crédito para continuar."}</p>
-                      </div>
-                    )}
-                    {(paymentMethod === "card" || selectedPaymentMethodCode === "transfer" || selectedPaymentMethodCode === "pedidos_ya" || selectedPaymentMethodCode === "paypal") && (
-                      <div className="space-y-2">
-                        <Label>
-                          {selectedPaymentMethodCode === "pedidos_ya"
-                            ? "Código de pedido / referencia (opcional)"
-                            : selectedPaymentMethodCode === "paypal"
-                              ? "ID de transacción (opcional)"
-                              : paymentMethod === "card"
-                                ? "Voucher / Autorización (opcional)"
-                                : "Referencia (opcional)"}
-                        </Label>
-                        <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label>Monto recibido</Label>
-                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Propina</Label>
-                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border p-3 text-center text-lg font-semibold">
-                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-                    {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-                  </div>
-
-                  {activeTenderField && (
-                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
-                      {DENOMINATION_CENTS.map((value) => (
-                        <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                          {formatMoney(value / 100)}
-                        </Button>
-                      ))}
-                      <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                      <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
-                      <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="flex-1 h-14 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
-                      {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerPickerOpen(true)}>
+                      Cliente: {selectedCustomer ? selectedCustomer.fullName : "Consumidor final"}
+                    </Button>
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setSplitEnabled((prev) => !prev)}>
+                      Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
-                  {isPaid && <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>Imprimir recibo</Button>}
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="h-14 flex-1 text-base" onClick={() => { setIsPaymentOpen(false); setIsPaymentMethodOpen(true); }} disabled={splitEnabled && !splitValidation.isValid}>
+                      Continuar al pago
+                    </Button>
+                  </div>
                 </div>
               </>
             ) : (
               <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPaymentMethodOpen} onOpenChange={setIsPaymentMethodOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Pago</DialogTitle>
+            <DialogDescription>
+              Total a pagar: {formatMoney(expectedPaymentCents / 100)} {splitEnabled && activeSplitPart ? `· Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label>Método</Label>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {[
+                { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
+                { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
+                { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
+                { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
+                { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
+              ].map((option) => (
+                <Button
+                  key={option.code}
+                  type="button"
+                  variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                  className="h-14 text-base"
+                  onClick={() => {
+                    setPaymentMethod(option.method);
+                    if (option.code === "card") {
+                      setSelectedPaymentMethodCode("card_credit");
+                      setCardType(null);
+                    } else {
+                      setSelectedPaymentMethodCode(option.code);
+                      setCardType(null);
+                    }
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            {paymentMethod === "card" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
+                <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
+              </div>
+            ) : null}
+            <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Monto recibido</Label>
+                <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+              </div>
+              <div className="space-y-2">
+                <Label>Propina</Label>
+                <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+              </div>
+            </div>
+            <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+              {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+              {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+              {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
+                {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
