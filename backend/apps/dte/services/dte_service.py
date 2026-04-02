@@ -9,7 +9,7 @@ from typing import Any
 from django.conf import settings
 
 from apps.dte.client import DTEClient
-from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.models import CreditNote, DTEBranchConfig, DTERecord, DteInvalidationAttempt
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 from apps.dte.services.payment_methods import get_cat017_code_and_label
@@ -51,6 +51,16 @@ def _get_env(name: str, default: str = "") -> str:
     return getattr(settings, name, os.environ.get(name, default))
 
 
+def _env_int(name: str, default: int | None = None) -> int | None:
+    raw = _get_env(name, "")
+    if raw in (None, ""):
+        return default
+    try:
+        return int(str(raw), 0)
+    except Exception:
+        return default
+
+
 def build_dte_url(dte_type: str) -> tuple[str, str]:
     base_url = (_get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
     endpoint = DTE_ENDPOINT_BY_TYPE.get(dte_type)
@@ -69,7 +79,52 @@ def build_headers() -> dict[str, str]:
 
 
 def _resolve_branch_config(order):
-    return get_emisor_config(order.branch)
+    env_branch_id = _env_int("DTE_BRANCH_ID", None)
+    branch = order.branch
+    if env_branch_id and env_branch_id > 0:
+        from apps.core.models import Branch
+
+        branch = Branch.objects.filter(id=env_branch_id).first()
+    if not branch or not getattr(branch, "id", None):
+        raise DTEPreflightError(f"Order {order.id} no tiene branch asignado; no se permite fallback de emisor.")
+    cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first()
+    if not cfg:
+        raise DTEPreflightError(
+            f"Order {order.id} branch_id={branch.id} no tiene DTEBranchConfig activa; no se permite fallback."
+        )
+    if not str(cfg.emisor_nit or "").strip():
+        raise DTEPreflightError(f"DTEBranchConfig de branch_id={branch.id} no tiene emisor_nit configurado.")
+    config = get_emisor_config(branch)
+    env_overrides = {
+        "codEstableMH": _get_env("DTE_COD_ESTABLE_MH"),
+        "codEstable": _get_env("DTE_COD_ESTABLE"),
+        "codPuntoVentaMH": _get_env("DTE_COD_PUNTO_VENTA_MH"),
+        "codPuntoVenta": _get_env("DTE_COD_PUNTO_VENTA"),
+        "complemento": _get_env("DTE_DIRECCION_COMPLEMENTO"),
+        "departamento": _get_env("DTE_DIRECCION_DEPARTAMENTO"),
+        "municipio": _get_env("DTE_DIRECCION_MUNICIPIO"),
+    }
+    for key, value in env_overrides.items():
+        if str(value or "").strip():
+            config[key] = str(value).strip()
+    required = (
+        "codEstableMH",
+        "codEstable",
+        "codPuntoVentaMH",
+        "codPuntoVenta",
+        "departamento",
+        "municipio",
+        "complemento",
+        "telefono",
+        "correo",
+    )
+    missing = [key for key in required if not str(config.get(key) or "").strip()]
+    if missing:
+        raise DTEPreflightError(
+            f"Configuración DTE incompleta para branch_id={order.branch_id}: faltan {','.join(missing)}. "
+            "No se permite fallback automático."
+        )
+    return config
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -240,10 +295,14 @@ def get_mh_payment_info(order) -> tuple[str, str | None]:
 
 def build_payload_cf(order, control_number: str, generation_code: str, ambiente: str) -> dict:
     from django.utils import timezone
+    from apps.core.models import Branch
 
     emisor = _resolve_branch_config(order)
-    final_nit = get_emisor_nit(order.branch)
-    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, order.branch_id)
+    env_branch_id = _env_int("DTE_BRANCH_ID", None)
+    final_branch_id = env_branch_id if env_branch_id and env_branch_id > 0 else order.branch_id
+    nit_branch = Branch.objects.filter(id=final_branch_id).first() if final_branch_id else order.branch
+    final_nit = get_emisor_nit(nit_branch or order.branch)
+    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, final_branch_id)
     print(f"[DTE DEBUG] Emisor NIT final utilizado={final_nit}")
     required_emisor = ["nit", "nrc", "nombre", "nombreComercial", "codActividad", "descActividad"]
     missing = [k for k in required_emisor if not emisor.get(k)]
@@ -334,16 +393,16 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "codActividad": emisor.get("codActividad") or "56101",
         "descActividad": emisor.get("descActividad") or "Restaurantes y puestos de comidas",
         "tipoEstablecimiento": emisor.get("tipoEstablecimiento") or "02",
-        "codEstableMH": emisor.get("codEstableMH") or "S001",
-        "codEstable": emisor.get("codEstable") or "S001",
-        "codPuntoVentaMH": emisor.get("codPuntoVentaMH") or "P001",
-        "codPuntoVenta": emisor.get("codPuntoVenta") or "P001",
-        "telefono": emisor.get("telefono") or "00000000",
-        "correo": emisor.get("correo") or "facturas@example.com",
+        "codEstableMH": emisor.get("codEstableMH"),
+        "codEstable": emisor.get("codEstable"),
+        "codPuntoVentaMH": emisor.get("codPuntoVentaMH"),
+        "codPuntoVenta": emisor.get("codPuntoVenta"),
+        "telefono": emisor.get("telefono"),
+        "correo": emisor.get("correo"),
         "direccion": {
-            "departamento": emisor.get("departamento") or "12",
-            "municipio": emisor.get("municipio") or "22",
-            "complemento": emisor.get("complemento") or "Direccion emisor pendiente",
+            "departamento": emisor.get("departamento"),
+            "municipio": emisor.get("municipio"),
+            "complemento": emisor.get("complemento"),
         },
     }
 

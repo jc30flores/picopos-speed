@@ -1,9 +1,11 @@
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
@@ -33,6 +35,44 @@ class DTECoreTests(TestCase):
     def setUp(self):
         self.branch = Branch.objects.create(name="Main", code="MAIN")
         self.service_type = ServiceType.objects.create(key="dine-in", label="En local")
+        DTEBranchConfig.objects.create(
+            branch=self.branch,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa Main",
+            emisor_nombre_comercial="Empresa Main",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            tipo_establecimiento="02",
+            cod_estable_mh="S001",
+            cod_estable="S001",
+            cod_punto_venta_mh="P001",
+            cod_punto_venta="P001",
+            direccion_departamento="12",
+            direccion_municipio="22",
+            direccion_complemento="Sucursal Main",
+            telefono="22223333",
+            correo="main@example.com",
+            is_active=True,
+        )
+        DTEControlCounter.objects.create(
+            branch=self.branch,
+            dte_type="CF_01",
+            year=timezone.localdate().year,
+            establishment_code="S001",
+            pos_code="P001",
+            ambiente="00",
+            last_number=0,
+        )
+        DTEControlCounter.objects.create(
+            branch=self.branch,
+            dte_type="CF_01",
+            year=timezone.localdate().year,
+            establishment_code="S001",
+            pos_code="P001",
+            ambiente="01",
+            last_number=0,
+        )
         self.order = Order.objects.create(
             order_number=1001,
             branch=self.branch,
@@ -69,12 +109,11 @@ class DTECoreTests(TestCase):
         self.assertIn("html", parsed["response_text"].lower())
 
     def test_get_emisor_nit_uses_branch_config(self):
-        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="1217-140990-106-3", is_active=True)
+        DTEBranchConfig.objects.filter(branch=self.branch).update(emisor_nit="1217-140990-106-3", is_active=True)
         self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
 
     def test_build_payload_cf_uses_order_item_snapshots(self):
-        DTEBranchConfig.objects.create(
-            branch=self.branch,
+        DTEBranchConfig.objects.filter(branch=self.branch).update(
             emisor_nit="1217-140990-106-3",
             emisor_nrc="123",
             emisor_nombre="Empresa",
@@ -299,10 +338,88 @@ class DTECoreTests(TestCase):
         self.assertEqual(code, "99")
         self.assertTrue(reference)
 
+    @override_settings(
+        DTE_BRANCH_ID=5,
+        DTE_COD_ESTABLE_MH="S001",
+        DTE_COD_ESTABLE="S001",
+        DTE_COD_PUNTO_VENTA_MH="P001",
+        DTE_COD_PUNTO_VENTA="P001",
+        DTE_DIRECCION_COMPLEMENTO="CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL",
+        DTE_DIRECCION_DEPARTAMENTO="12",
+        DTE_DIRECCION_MUNICIPIO="22",
+    )
+    @patch("apps.dte.services.orchestrator.send_or_queue_dte")
+    def test_transmit_sale_dte_uses_order_branch_config_without_fallback(self, mock_send_or_queue):
+        Branch.objects.create(id=4, name="Centro", code="CEN")
+        branch5 = Branch.objects.create(id=5, name="Plaza Monaco", code="PM")
+        order = Order.objects.create(
+            order_number=5001,
+            branch_id=4,
+            service_type=self.service_type,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            dte_document_type="CF",
+        )
+        DTEBranchConfig.objects.create(
+            branch=branch5,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa Plaza Monaco",
+            emisor_nombre_comercial="Empresa Plaza Monaco",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            cod_estable_mh="S001",
+            cod_estable="S001",
+            cod_punto_venta_mh="P001",
+            cod_punto_venta="P001",
+            direccion_departamento="12",
+            direccion_municipio="22",
+            direccion_complemento="CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL",
+            is_active=True,
+        )
+        DTEControlCounter.objects.create(
+            branch=branch5,
+            dte_type="CF_01",
+            year=timezone.localdate().year,
+            establishment_code="S001",
+            pos_code="P001",
+            ambiente="01",
+            last_number=1845,
+        )
+        mock_send_or_queue.return_value = SimpleNamespace(
+            response_body=json.dumps({"success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}),
+            response_status_code=200,
+            status="ACCEPTED",
+        )
+
+        with self.assertLogs("apps.dte", level="INFO") as captured:
+            record = transmit_sale_dte(order.id)
+
+        self.assertEqual(record.branch_id, 5)
+        self.assertEqual(record.control_number, "DTE-01-S001P001-000000000001846")
+        self.assertNotIn("M001", record.control_number)
+        called_payload = mock_send_or_queue.call_args.kwargs["payload"]
+        emisor = called_payload["dte"]["emisor"]
+        self.assertEqual(emisor["codEstableMH"], "S001")
+        self.assertEqual(emisor["codPuntoVentaMH"], "P001")
+        self.assertEqual(emisor["direccion"]["complemento"], "CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL")
+        self.assertEqual(called_payload["dte"]["identificacion"]["numeroControl"], "DTE-01-S001P001-000000000001846")
+        log_output = "\n".join(captured.output)
+        self.assertIn("order_branch_id=4", log_output)
+        self.assertIn("selected_branch_id=5", log_output)
+        self.assertIn("env_branch_id=5", log_output)
+        self.assertIn("dte_branch_id=5", log_output)
+        self.assertIn("cod_estable_mh=S001", log_output)
+        self.assertIn("cod_punto_venta_mh=P001", log_output)
+        self.assertNotIn("selected_branch_id=4", log_output)
+        self.assertNotIn("dte_branch_id=4", log_output)
+        self.assertNotIn("M001", log_output)
+
     @patch("apps.dte.client.DTEClient._build_url")
     @patch("apps.dte.client.requests.Session.post")
     def test_client_blocks_send_on_emisor_nit_mismatch(self, mock_post, mock_build_url):
-        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="12171409901063", is_active=True)
+        DTEBranchConfig.objects.filter(branch=self.branch).update(emisor_nit="12171409901063", is_active=True)
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "A" * 36, "00")
         payload["dte"]["emisor"]["nit"] = "00000000000000"
         mock_build_url.return_value = "https://example.test/api/v1/dte/factura"
@@ -316,6 +433,46 @@ class DTECoreTests(TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error_type, "EMISOR_NIT_MISMATCH")
         mock_post.assert_not_called()
+
+    @override_settings(
+        DTE_BRANCH_ID=5,
+        DTE_COD_ESTABLE_MH="S001",
+        DTE_COD_PUNTO_VENTA_MH="S001",
+    )
+    def test_transmit_sale_dte_fails_when_env_series_codes_are_equal(self):
+        branch5 = Branch.objects.create(id=5, name="Plaza Monaco", code="PM")
+        order = Order.objects.create(
+            order_number=5002,
+            branch=self.branch,
+            service_type=self.service_type,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            dte_document_type="CF",
+        )
+        DTEBranchConfig.objects.create(
+            branch=branch5,
+            emisor_nit="1217-140990-106-3",
+            emisor_nrc="123",
+            emisor_nombre="Empresa Plaza Monaco",
+            emisor_nombre_comercial="Empresa Plaza Monaco",
+            cod_actividad="56101",
+            desc_actividad="Restaurantes",
+            cod_estable_mh="S001",
+            cod_estable="S001",
+            cod_punto_venta_mh="P001",
+            cod_punto_venta="P001",
+            direccion_departamento="12",
+            direccion_municipio="22",
+            direccion_complemento="CALLE ELIZABETH, PLAZA MONACO, LOCAL B-6, SAN MIGUEL",
+            telefono="22223333",
+            correo="pm@example.com",
+            is_active=True,
+        )
+
+        record = transmit_sale_dte(order.id)
+        self.assertEqual(record.status, DTERecord.STATUS_REJECTED)
+        self.assertIn("no pueden ser iguales", record.error_message)
 
 
 class DTEResendEndpointTests(TestCase):

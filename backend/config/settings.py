@@ -253,12 +253,26 @@ DTE_LOG_DIR = os.environ.get("DTE_LOG_DIR", DTE_LOG_PAYLOAD_DIR).strip() or DTE_
 DTE_LOG_TRUNCATE_CHARS = _env_int("DTE_LOG_TRUNCATE_CHARS", 0) or 0
 DTE_LOG_INCLUDE_SIGNED_DOCUMENT = _env_bool("DTE_LOG_INCLUDE_SIGNED_DOCUMENT", default=False)
 DTE_EMISOR_NIT = os.environ.get("DTE_EMISOR_NIT", "").strip()
+DTE_BRANCH_ID = _env_int("DTE_BRANCH_ID")
+DTE_COD_ESTABLE_MH = os.environ.get("DTE_COD_ESTABLE_MH", "").strip()
+DTE_COD_ESTABLE = os.environ.get("DTE_COD_ESTABLE", "").strip()
+DTE_COD_PUNTO_VENTA_MH = os.environ.get("DTE_COD_PUNTO_VENTA_MH", "").strip()
+DTE_COD_PUNTO_VENTA = os.environ.get("DTE_COD_PUNTO_VENTA", "").strip()
+DTE_DIRECCION_COMPLEMENTO = os.environ.get("DTE_DIRECCION_COMPLEMENTO", "").strip()
+DTE_DIRECCION_DEPARTAMENTO = os.environ.get("DTE_DIRECCION_DEPARTAMENTO", "").strip()
+DTE_DIRECCION_MUNICIPIO = os.environ.get("DTE_DIRECCION_MUNICIPIO", "").strip()
 CODE_CHANGE_PRICE = os.environ.get("CODE_CHANGE_PRICE", "").strip()
 
 logging.getLogger(__name__).info(
     "[DTE CONFIG] base_url=%r mh_ambiente=%r",
     DTE_BASE_URL,
     MH_AMBIENTE,
+)
+logging.getLogger(__name__).info(
+    "[DTE CONFIG] env_branch_id=%r cod_estable_mh=%r cod_punto_venta_mh=%r",
+    DTE_BRANCH_ID,
+    DTE_COD_ESTABLE_MH,
+    DTE_COD_PUNTO_VENTA_MH,
 )
 
 LOGGING = {
