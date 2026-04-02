@@ -333,7 +333,7 @@ export const SalesHistoryTab = () => {
 
       {/* Filters Section */}
       <Card>
-        <CardContent className="pt-6 space-y-4">
+        <CardContent className="space-y-4 pt-6 md:pt-7">
           {!restrictedRole ? (
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
@@ -513,13 +513,13 @@ export const SalesHistoryTab = () => {
               </p>
             ) : null}
           </div>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
             <Download className="h-4 w-4 mr-2" />
             Exportar
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border overflow-auto max-h-[70vh]">
+          <div className="max-h-[70vh] overflow-auto rounded-xl border">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
@@ -568,6 +568,7 @@ export const SalesHistoryTab = () => {
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-11 rounded-xl px-4"
                             onClick={() => openRefundDialog(sale)}
                             disabled={sale.financialStatus === "voided" || sale.netPaid <= 0}
                           >
@@ -576,6 +577,7 @@ export const SalesHistoryTab = () => {
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-11 rounded-xl px-4"
                             onClick={() => openVoidDialog(sale)}
                             disabled={sale.financialStatus === "voided" || sale.netPaid > 0}
                           >

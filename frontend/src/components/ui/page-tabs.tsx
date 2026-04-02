@@ -14,7 +14,7 @@ interface PageTabsProps {
 
 export const PageTabs = ({ tabs, activeValue, onChange, className }: PageTabsProps) => {
   return (
-    <div className={cn("mb-6 flex flex-wrap gap-2", className)}>
+    <div className={cn("mb-6 flex flex-wrap gap-3", className)}>
       {tabs.map((tab) => {
         const active = tab.value === activeValue;
         return (
@@ -23,9 +23,9 @@ export const PageTabs = ({ tabs, activeValue, onChange, className }: PageTabsPro
             type="button"
             onClick={() => onChange(tab.value)}
             className={cn(
-              "rounded-xl border px-4 py-2 text-sm font-medium transition-colors",
+              "min-h-12 rounded-xl border px-5 py-2 text-sm font-semibold transition-colors md:min-h-14 md:text-base",
               active
-                ? "border-primary bg-primary text-primary-foreground"
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
                 : "border-border bg-card text-foreground hover:bg-muted"
             )}
           >

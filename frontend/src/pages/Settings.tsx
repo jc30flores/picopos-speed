@@ -15,35 +15,34 @@ const Settings = () => {
       title="Configuración"
       subtitle="Gestiona usuarios, horarios del personal y funciones avanzadas del sistema."
     >
+      <PageTabs
+        tabs={[
+          { label: "Empleados", value: "employees" },
+          { label: "Horarios", value: "schedules" },
+          { label: "Funciones", value: "features" },
+          { label: "Tipos de Pedido", value: "order-types" },
+        ]}
+        activeValue={activeTab}
+        onChange={setActiveTab}
+      />
 
-          <PageTabs
-            tabs={[
-              { label: "Empleados", value: "employees" },
-              { label: "Horarios", value: "schedules" },
-              { label: "Funciones", value: "features" },
-              { label: "Tipos de Pedido", value: "order-types" },
-            ]}
-            activeValue={activeTab}
-            onChange={setActiveTab}
-          />
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsContent value="employees" className="mt-0">
+          <EmployeesTab />
+        </TabsContent>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsContent value="employees">
-              <EmployeesTab />
-            </TabsContent>
+        <TabsContent value="schedules" className="mt-0">
+          <SchedulesTab />
+        </TabsContent>
 
-            <TabsContent value="schedules">
-              <SchedulesTab />
-            </TabsContent>
+        <TabsContent value="features" className="mt-0">
+          <FeatureFlagsTab />
+        </TabsContent>
 
-            <TabsContent value="features">
-              <FeatureFlagsTab />
-            </TabsContent>
-
-            <TabsContent value="order-types">
-              <OrderTypesTab />
-            </TabsContent>
-          </Tabs>
+        <TabsContent value="order-types" className="mt-0">
+          <OrderTypesTab />
+        </TabsContent>
+      </Tabs>
     </PageLayout>
   );
 };

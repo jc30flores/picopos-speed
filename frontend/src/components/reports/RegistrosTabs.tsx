@@ -7,12 +7,12 @@ export const RegistrosTabs = () => {
   const { user } = useAuth();
   const canViewCash = user?.role === "admin";
   return (
-    <div className="mb-4 flex gap-2">
-      <Button asChild variant={location.pathname === "/registros/ventas" ? "default" : "outline"}>
+    <div className="mb-4 flex flex-wrap gap-3">
+      <Button asChild variant={location.pathname === "/registros/ventas" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
         <Link to="/registros/ventas">Ventas</Link>
       </Button>
       {canViewCash ? (
-        <Button asChild variant={location.pathname === "/registros/caja" ? "default" : "outline"}>
+        <Button asChild variant={location.pathname === "/registros/caja" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
           <Link to="/registros/caja">Caja</Link>
         </Button>
       ) : null}

@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { downloadCashSessionTicketPdf, getCashSessionsHistory, type CashSessionHistoryRow } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { formatMoney } from "@/lib/money";
@@ -26,45 +27,52 @@ export const CashHistoryTab = () => {
   );
 
   return (
-    <div className="space-y-3">
-      <div className="flex gap-2">
-        <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-        <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-        <Button onClick={load}>Filtrar</Button>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Fecha apertura</TableHead>
-            <TableHead>Fecha cierre</TableHead>
-            <TableHead>Usuario</TableHead>
-            <TableHead>Esperado</TableHead>
-            <TableHead>Contado</TableHead>
-            <TableHead>Diferencia</TableHead>
-            <TableHead>Estado</TableHead>
-            <TableHead>Acciones</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sortedRows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>{formatDateTimeSV(r.openedAt)}</TableCell>
-              <TableCell>{r.closedAt ? formatDateTimeSV(r.closedAt) : "-"}</TableCell>
-              <TableCell>{r.openedByUsername}</TableCell>
-              <TableCell>{formatMoney(r.expectedCash)}</TableCell>
-              <TableCell>{formatMoney(r.countedCash)}</TableCell>
-              <TableCell className={r.difference === 0 ? "" : r.difference > 0 ? "text-emerald-600 font-semibold" : "text-destructive font-semibold"}>{formatMoney(r.difference)}</TableCell>
-              <TableCell>
-                <Badge variant={r.status === "closed" ? "default" : "secondary"}>{r.status === "closed" ? "Cerrada" : "Abierta"}</Badge>
-              </TableCell>
-              <TableCell className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => { setSelectedRow(r); setOpenDetail(true); }}>Ver detalle</Button>
-                <Button size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="space-y-4">
+      <Card className="p-4 md:p-6">
+        <div className="flex flex-wrap gap-3">
+          <Input className="h-12 min-w-[180px] rounded-xl md:h-14" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <Input className="h-12 min-w-[180px] rounded-xl md:h-14" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <Button className="min-h-12 rounded-xl px-5 md:min-h-14" onClick={load}>Filtrar</Button>
+        </div>
+      </Card>
+
+      <Card className="p-0">
+        <div className="overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Fecha apertura</TableHead>
+                <TableHead>Fecha cierre</TableHead>
+                <TableHead>Usuario</TableHead>
+                <TableHead>Esperado</TableHead>
+                <TableHead>Contado</TableHead>
+                <TableHead>Diferencia</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead>Acciones</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedRows.map((r) => (
+                <TableRow key={r.id} className="min-h-14">
+                  <TableCell>{formatDateTimeSV(r.openedAt)}</TableCell>
+                  <TableCell>{r.closedAt ? formatDateTimeSV(r.closedAt) : "-"}</TableCell>
+                  <TableCell>{r.openedByUsername}</TableCell>
+                  <TableCell>{formatMoney(r.expectedCash)}</TableCell>
+                  <TableCell>{formatMoney(r.countedCash)}</TableCell>
+                  <TableCell className={r.difference === 0 ? "" : r.difference > 0 ? "text-emerald-600 font-semibold" : "text-destructive font-semibold"}>{formatMoney(r.difference)}</TableCell>
+                  <TableCell>
+                    <Badge variant={r.status === "closed" ? "default" : "secondary"}>{r.status === "closed" ? "Cerrada" : "Abierta"}</Badge>
+                  </TableCell>
+                  <TableCell className="flex flex-wrap gap-2 py-3">
+                    <Button className="min-h-11 rounded-xl px-4" size="sm" variant="outline" onClick={() => { setSelectedRow(r); setOpenDetail(true); }}>Ver detalle</Button>
+                    <Button className="min-h-11 rounded-xl px-4" size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
 
       <Dialog open={openDetail} onOpenChange={setOpenDetail}>
         <DialogContent className="max-w-lg">

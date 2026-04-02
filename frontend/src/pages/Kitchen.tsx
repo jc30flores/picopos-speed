@@ -105,20 +105,32 @@ const Kitchen = () => {
       subtitle="Monitorea pedidos activos y gestiona su estado en tiempo real."
       actions={<ChefHat className="h-6 w-6 text-secondary" />}
     >
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
+      <div className="space-y-6">
+        <Card className="p-4 md:p-6">
+          <div className="flex flex-wrap gap-3">
             {[{ key: "all", label: "Todos" }, ...serviceTypes.map((item) => ({ key: item.key, label: item.label }))].map((item) => (
               <Button
                 key={item.key}
                 variant={filter === item.key ? "default" : "outline"}
                 onClick={() => setFilter(item.key)}
+                className="min-h-12 rounded-xl px-5 text-sm font-semibold md:min-h-14 md:text-base"
               >
                 {item.label}
               </Button>
             ))}
           </div>
+        </Card>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {filteredOrders.length === 0 ? (
+          <Card className="flex min-h-[45vh] items-center justify-center p-8">
+            <div className="text-center">
+              <ChefHat className="mx-auto mb-4 h-20 w-20 text-muted-foreground/50" />
+              <h3 className="mb-2 text-xl font-semibold">No hay pedidos pendientes</h3>
+              <p className="text-muted-foreground">Los nuevos pedidos aparecerán aquí automáticamente</p>
+            </div>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
           {filteredOrders.map((order) => {
             const statusBadge = getStatusBadge(order.prepTime);
             const statusColor = getStatusColor(order.prepTime);
@@ -175,7 +187,7 @@ const Kitchen = () => {
                 <div className="flex gap-2">
                   {order.status === "new" && (
                     <Button
-                      className="flex-1"
+                      className="min-h-12 flex-1 rounded-xl md:min-h-14"
                       variant="outline"
                       onClick={() => handleStatusUpdate(order.id, "preparing")}
                     >
@@ -184,7 +196,7 @@ const Kitchen = () => {
                   )}
                   {order.status === "preparing" && (
                     <Button
-                      className="flex-1"
+                      className="min-h-12 flex-1 rounded-xl md:min-h-14"
                       variant="default"
                       onClick={() => handleStatusUpdate(order.id, "ready")}
                     >
@@ -193,7 +205,7 @@ const Kitchen = () => {
                   )}
                   {order.status === "ready" && (
                     <Button
-                      className="flex-1"
+                      className="min-h-12 flex-1 rounded-xl md:min-h-14"
                       variant="secondary"
                       onClick={() => handleStatusUpdate(order.id, "delivered")}
                     >
@@ -201,7 +213,7 @@ const Kitchen = () => {
                     </Button>
                   )}
                   <Button
-                    className="flex-1"
+                    className="min-h-12 flex-1 rounded-xl md:min-h-14"
                     variant="outline"
                     onClick={() => handlePrintKitchen(order)}
                   >
@@ -211,7 +223,8 @@ const Kitchen = () => {
               </Card>
             );
           })}
-        </div>
+          </div>
+        )}
 
         <PrintPreviewDialog
           open={isPreviewOpen}
@@ -221,15 +234,6 @@ const Kitchen = () => {
           onReprint={handleReprint}
         />
 
-        {filteredOrders.length === 0 && (
-          <div className="text-center py-16">
-            <ChefHat className="h-20 w-20 mx-auto text-muted-foreground/50 mb-4" />
-            <h3 className="text-xl font-semibold mb-2">No hay pedidos pendientes</h3>
-            <p className="text-muted-foreground">
-              Los nuevos pedidos aparecerán aquí automáticamente
-            </p>
-          </div>
-        )}
       </div>
     </PageLayout>
   );
