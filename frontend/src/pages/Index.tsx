@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
+import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { SplitPanel } from "@/components/pos/SplitPanel";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
@@ -302,14 +303,12 @@ const POS = () => {
     };
   }, [cart, products, selectedDiscount, serviceType, taxRate]);
 
-  const loadMenuData = async (orderTypeId?: number) => {
-    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+  const loadMenuData = async () => {
+    const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
-      getProducts(orderTypeId ? { orderTypeId } : undefined),
       getModifierGroups(),
     ]);
     setCategories(categoriesResponse);
-    setProducts(productsResponse);
     setModifierGroups(modifierGroupsResponse);
   };
 
@@ -332,13 +331,42 @@ const POS = () => {
   }, [serviceTypes, serviceType]);
 
   useEffect(() => {
+    if (!serviceTypes.length || !serviceType) return;
     const selectedServiceType = serviceTypes.find((item) => item.key === serviceType);
-    getProducts(selectedServiceType ? { orderTypeId: selectedServiceType.id } : undefined)
-      .then(setProducts)
+    if (!selectedServiceType) return;
+    let cancelled = false;
+    getProducts({ orderTypeId: selectedServiceType.id })
+      .then((rows) => {
+        if (cancelled) return;
+        setProducts(rows);
+      })
       .catch((error) => {
+        if (cancelled) return;
         console.error("Failed to refresh products for service type", error);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [serviceType, serviceTypes]);
+
+  useEffect(() => {
+    if (!products.length) return;
+    setCart((prev) =>
+      prev.map((item) => {
+        if (!item.productId || item.unitPriceOverride != null || item.isCustom) return item;
+        const latestProduct = products.find((candidate) => candidate.id === item.productId);
+        if (!latestProduct) return item;
+        const pricing = resolveEffectiveUnitPrice(latestProduct, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        return {
+          ...item,
+          basePrice: pricing.effectivePrice,
+          originalBasePrice: pricing.display.showOfferBadge ? pricing.basePrice : undefined,
+          appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
+          price: pricing.effectivePrice + getItemModifierTotal(item),
+        };
+      })
+    );
+  }, [products, serviceType]);
 
   const loadActiveDiscounts = async () => {
     try {
@@ -445,7 +473,8 @@ const POS = () => {
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
-    const effectiveBasePrice = product.effectivePrice ?? product.price;
+    const pricing = resolveEffectiveUnitPrice(product, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    const effectiveBasePrice = pricing.effectivePrice;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = effectiveBasePrice + modifierPrice;
 
@@ -467,11 +496,11 @@ const POS = () => {
           productId: product.id,
           name: product.name,
           basePrice: effectiveBasePrice,
-          originalBasePrice: (product.effectivePrice ?? product.price) < product.price ? product.price : undefined,
+          originalBasePrice: pricing.display.showOfferBadge ? pricing.basePrice : undefined,
           price: totalPrice,
           quantity: 1,
           isCustom: false,
-          appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
+          appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
           requiresKitchen: Boolean(product.requiresKitchen),
           modifiers,
         },
@@ -1373,21 +1402,28 @@ const POS = () => {
             {/* Products Grid */}
             <div className="flex-1 overflow-y-auto pb-4">
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-                  {filteredProducts.map((product) => (
+                  {filteredProducts.map((product) => {
+                    const productPricing = resolveEffectiveUnitPrice(
+                      product,
+                      serviceType,
+                      new Date(),
+                      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+                    );
+                    return (
                     <Card
                       key={product.id}
                     className="cursor-pointer p-4 hover-lift min-h-40"
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    {(product.effectivePrice ?? product.price) < product.price && (
+                    {productPricing.display.showOfferBadge && (
                       <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
                     )}
                     <div className="space-y-0.5">
-                      {(product.effectivePrice ?? product.price) < product.price && (
+                      {productPricing.display.showOfferBadge && (
                         <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
                       )}
-                      <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                      <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
                     </div>
                     {product.modifierGroups && product.modifierGroups.length > 0 && (
                       <Badge variant="secondary" className="mt-1 text-xs">
@@ -1396,7 +1432,8 @@ const POS = () => {
                       </Badge>
                     )}
                   </Card>
-                ))}
+                );
+                })}
               </div>
             </div>
           </div>
