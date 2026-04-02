@@ -2,6 +2,7 @@ from decimal import Decimal
 import logging
 import threading
 from django.db import transaction
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
@@ -390,7 +391,8 @@ class PaymentPrintTicketView(APIView):
 
             drawer_opened = False
             drawer_error = None
-            if print_result["printed"] and payment.method == "cash":
+            should_open_drawer = payment.method == "cash" and (print_result["printed"] or bool(print_result["receipt_pdf_path"]))
+            if should_open_drawer:
                 drawer_opened, drawer_error = printer.open_cash_drawer(context=context, endpoint="payments.print-ticket.drawer")
             job = PrintJob.objects.filter(order=payment.order, type="customer").order_by("-created_at").first()
             if job:
@@ -402,6 +404,18 @@ class PaymentPrintTicketView(APIView):
                     job.status = "failed"
                     job.error_message = print_result["print_error"] or ""
                 job.save(update_fields=["status", "content_pdf_path", "error_message"])
+
+            if print_result["receipt_pdf_path"]:
+                with open(print_result["receipt_pdf_path"], "rb") as fh:
+                    pdf_bytes = fh.read()
+                response = HttpResponse(pdf_bytes, content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="ticket_{payment.order_id}_{payment.id}.pdf"'
+                response["X-Printed"] = "0"
+                response["X-Print-Error"] = str(print_result["print_error"] or "")
+                response["X-Drawer-Opened"] = "1" if drawer_opened else "0"
+                response["X-Drawer-Error"] = str(drawer_error or "")
+                response["X-Ticket-Fallback"] = "1"
+                return response
 
             return Response(
                 {

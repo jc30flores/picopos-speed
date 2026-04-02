@@ -8,6 +8,7 @@ from apps.payments.models import Refund
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
+from apps.printing.services.system_printer import SystemPrinterService
 from apps.users.models import UserProfile
 
 
@@ -91,3 +92,12 @@ class RefundPrintJobCreateView(APIView):
         job = create_refund_print_job(refund, requested_by=request.user)
         serializer = PrintJobSerializer(job)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class PrintingStatusView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        service = SystemPrinterService()
+        available = service.is_printer_available(context={"user_id": getattr(request.user, "id", None)}, endpoint="printing.status")
+        return Response({"ok": True, "available": bool(available), "queue": service.queue}, status=status.HTTP_200_OK)

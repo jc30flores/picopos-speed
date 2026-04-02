@@ -83,12 +83,19 @@ class SystemPrinterService:
         )
         return result
 
+    def is_printer_available(self, *, context: dict | None = None, endpoint: str | None = None) -> bool:
+        result = self.run_command(["lpstat", "-v"], timeout=8, context=context, endpoint=endpoint)
+        if not result.ok:
+            return False
+        return self.queue in (result.stdout + result.stderr)
+
     def check_queue_exists(self, *, context: dict | None = None, endpoint: str | None = None) -> bool:
-        result = self.run_command(["lpstat", "-p", self.queue], timeout=8, context=context, endpoint=endpoint)
-        return result.ok and self.queue in (result.stdout + result.stderr)
+        # Backward-compatible alias for existing callers/tests.
+        return self.is_printer_available(context=context, endpoint=endpoint)
 
     def print_ticket_text(self, ticket_text: str, *, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
-        if not self.check_queue_exists(context=context, endpoint=endpoint):
+        logger.info("printer.ticket.attempt timestamp=%s queue=%s endpoint=%s context=%s", _now_iso(), self.queue, endpoint or "", context or {})
+        if not self.is_printer_available(context=context, endpoint=endpoint):
             return False, f"Queue '{self.queue}' not found"
         with tempfile.NamedTemporaryFile(prefix="ticket_", suffix=".txt", delete=True) as temp:
             temp.write(ticket_text.encode("utf-8", errors="replace"))
@@ -100,7 +107,8 @@ class SystemPrinterService:
         return False, combined_error
 
     def open_cash_drawer(self, *, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
-        if not self.check_queue_exists(context=context, endpoint=endpoint):
+        logger.info("printer.drawer.attempt timestamp=%s queue=%s endpoint=%s context=%s", _now_iso(), self.queue, endpoint or "", context or {})
+        if not self.is_printer_available(context=context, endpoint=endpoint):
             return False, f"Queue '{self.queue}' not found"
         result = self.run_command(
             ["/bin/bash", "-lc", DRAWER_RAW_COMMAND],
@@ -113,9 +121,6 @@ class SystemPrinterService:
         return False, (result.stderr or result.stdout or "Cash drawer command failed").strip()
 
     def generate_receipt_pdf(self, ticket_text: str, *, order_id: int, payment_id: int | None = None) -> tuple[str, str]:
-        from reportlab.lib.units import mm
-        from reportlab.pdfgen import canvas
-
         receipts_dir = Path(settings.MEDIA_ROOT) / "receipts"
         receipts_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -123,26 +128,56 @@ class SystemPrinterService:
         filepath = receipts_dir / filename
 
         lines = (ticket_text or "").splitlines() or [""]
-        page_width = RECEIPT_PAGE_WIDTH_MM * mm
-        left_margin = RECEIPT_LEFT_MARGIN_MM * mm
-        top_bottom_margin = RECEIPT_TOP_BOTTOM_MARGIN_MM * mm
-        line_height = RECEIPT_LINE_HEIGHT_MM * mm
-        min_height = RECEIPT_MIN_HEIGHT_MM * mm
-        page_height = max((len(lines) * line_height) + (top_bottom_margin * 2), min_height)
+        try:
+            from reportlab.lib.units import mm
+            from reportlab.pdfgen import canvas
 
-        buf = BytesIO()
-        pdf = canvas.Canvas(buf, pagesize=(page_width, page_height))
-        pdf.setFont("Courier", 8.5)
-        text_obj = pdf.beginText(left_margin, page_height - top_bottom_margin)
-        for line in lines:
-            text_obj.textLine(line)
-        pdf.drawText(text_obj)
-        pdf.save()
-        filepath.write_bytes(buf.getvalue())
+            page_width = RECEIPT_PAGE_WIDTH_MM * mm
+            left_margin = RECEIPT_LEFT_MARGIN_MM * mm
+            top_bottom_margin = RECEIPT_TOP_BOTTOM_MARGIN_MM * mm
+            line_height = RECEIPT_LINE_HEIGHT_MM * mm
+            min_height = RECEIPT_MIN_HEIGHT_MM * mm
+            page_height = max((len(lines) * line_height) + (top_bottom_margin * 2), min_height)
+
+            buf = BytesIO()
+            pdf = canvas.Canvas(buf, pagesize=(page_width, page_height))
+            pdf.setFont("Courier", 8.5)
+            text_obj = pdf.beginText(left_margin, page_height - top_bottom_margin)
+            for line in lines:
+                text_obj.textLine(line)
+            pdf.drawText(text_obj)
+            pdf.save()
+            filepath.write_bytes(buf.getvalue())
+        except Exception:
+            filepath.write_bytes(self._fallback_pdf_bytes(lines))
 
         media_url = str(settings.MEDIA_URL).rstrip("/")
         url = f"{media_url}/receipts/{filename}"
         return str(filepath), url
+
+    def _fallback_pdf_bytes(self, lines: list[str]) -> bytes:
+        escaped_lines = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
+        joined = "\\n".join(escaped_lines)
+        content_lines = joined.replace("\\n", ") Tj T* (")
+        content = f"BT /F1 10 Tf 24 760 Td ({content_lines}) Tj ET"
+        objects = [
+            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj",
+            f"4 0 obj << /Length {len(content)} >> stream\n{content}\nendstream endobj",
+            "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj",
+        ]
+        pdf = "%PDF-1.4\n"
+        offsets: list[int] = []
+        for obj in objects:
+            offsets.append(len(pdf.encode("latin-1")))
+            pdf += obj + "\n"
+        xref_offset = len(pdf.encode("latin-1"))
+        pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
+        for off in offsets:
+            pdf += f"{off:010d} 00000 n \n"
+        pdf += f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF"
+        return pdf.encode("latin-1", errors="ignore")
 
     def print_with_pdf_fallback(
         self,

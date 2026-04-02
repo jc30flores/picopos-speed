@@ -2163,6 +2163,14 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
   };
 };
 
+export const deleteDiscount = async (discountId: number): Promise<void> => {
+  const response = await request(`/menu/discounts/${discountId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const body = await response.text().catch(() => "");
+    throw new Error(body || "No se pudo eliminar el descuento");
+  }
+};
+
 const ROLE_LABELS: Record<string, string> = {
   cashier: "Cajero",
   kitchen: "Cocinero",
@@ -2687,8 +2695,33 @@ export const createPayment = async (payload: {
 
 export const printPaymentTicket = async (
   paymentId: number
-): Promise<{ printed: boolean; printError: string | null; receiptPdfUrl?: string | null; drawerOpened?: boolean; drawerError?: string | null }> => {
+): Promise<{
+  printed: boolean;
+  printError: string | null;
+  receiptPdfUrl?: string | null;
+  drawerOpened?: boolean;
+  drawerError?: string | null;
+  pdfBlob?: Blob | null;
+  pdfFilename?: string | null;
+}> => {
   const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
+  const contentType = response.headers.get("content-type") || "";
+  if (response.ok && contentType.includes("application/pdf")) {
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    const printErrorHeader = response.headers.get("X-Print-Error");
+    const drawerOpenedHeader = response.headers.get("X-Drawer-Opened");
+    const drawerErrorHeader = response.headers.get("X-Drawer-Error");
+    return {
+      printed: false,
+      printError: printErrorHeader || null,
+      receiptPdfUrl: null,
+      drawerOpened: drawerOpenedHeader === "1",
+      drawerError: drawerErrorHeader || null,
+      pdfBlob: await response.blob(),
+      pdfFilename: filenameMatch?.[1] ?? `ticket_pago_${paymentId}.pdf`,
+    };
+  }
   const data = await handleJson<{
     printed: boolean;
     print_error?: string | null;
@@ -2702,7 +2735,15 @@ export const printPaymentTicket = async (
     receiptPdfUrl: data.receipt_pdf_url ?? null,
     drawerOpened: Boolean(data.drawer_opened),
     drawerError: data.drawer_error ?? null,
+    pdfBlob: null,
+    pdfFilename: null,
   };
+};
+
+export const getPrintingStatus = async (): Promise<{ available: boolean; queue: string }> => {
+  const response = await request("/printing/status/");
+  const data = await handleJson<{ available: boolean; queue: string }>(response);
+  return { available: Boolean(data.available), queue: data.queue || "star_tsp100" };
 };
 
 

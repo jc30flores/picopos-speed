@@ -10,6 +10,15 @@ from apps.printing.services.system_printer import CommandResult, SystemPrinterSe
 
 
 class SystemPrinterServiceTests(SimpleTestCase):
+    def test_is_printer_available_checks_lpstat_v(self):
+        service = SystemPrinterService()
+        with patch.object(
+            service,
+            "run_command",
+            return_value=CommandResult(ok=True, exit_code=0, stdout="device for star_tsp100: usb://Star", stderr="", elapsed_ms=5, command="lpstat -v"),
+        ):
+            self.assertTrue(service.is_printer_available())
+
     @override_settings(MEDIA_ROOT=tempfile.gettempdir(), MEDIA_URL="/media/")
     def test_print_with_pdf_fallback_printer_ok(self):
         service = SystemPrinterService()

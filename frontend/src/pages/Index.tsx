@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
@@ -57,6 +57,7 @@ import {
   validateOrderPricePin,
   getActiveDiscounts,
   printPaymentTicket,
+  getPrintingStatus,
   Category,
   Discount,
   ModifierGroup,
@@ -250,6 +251,8 @@ const POS = () => {
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
+  const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [printerAvailable, setPrinterAvailable] = useState(true);
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -463,6 +466,13 @@ const POS = () => {
       document.documentElement.style.overflow = previousHtmlOverflow;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isKitchenPromptOpen) return;
+    getPrintingStatus()
+      .then((status) => setPrinterAvailable(status.available))
+      .catch(() => setPrinterAvailable(false));
+  }, [isKitchenPromptOpen]);
 
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
@@ -1036,6 +1046,21 @@ const POS = () => {
     setKitchenPromptOrderId(null);
   };
 
+  const scheduleReload = () => {
+    window.setTimeout(() => window.location.reload(), 250);
+  };
+
+  const triggerPdfDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
   const handleKitchenChoice = async (shouldSend: boolean) => {
     if (!kitchenPromptOrderId || isSubmittingKitchenChoice) return;
     try {
@@ -1053,22 +1078,23 @@ const POS = () => {
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
-      if (lastPaymentId) {
+      if (lastPaymentId && postSalePrintChoice) {
         const printResult = await printPaymentTicket(lastPaymentId);
-        if (!printResult.printed) {
-          if (printResult.receiptPdfUrl) {
-            const anchor = document.createElement("a");
-            anchor.href = printResult.receiptPdfUrl;
-            anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
-            anchor.target = "_blank";
-            anchor.rel = "noopener";
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
-            toast.warning("No se detectó impresora. Se descargó el ticket en PDF.");
-          } else if (printResult.printError) {
-            toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
-          }
+        if (printResult.pdfBlob) {
+          triggerPdfDownload(printResult.pdfBlob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
+          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+        } else if (!printResult.printed && printResult.receiptPdfUrl) {
+          const anchor = document.createElement("a");
+          anchor.href = printResult.receiptPdfUrl;
+          anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
+          anchor.target = "_blank";
+          anchor.rel = "noopener";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+        } else if (!printResult.printed && printResult.printError) {
+          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
         if (printResult.printed && printResult.drawerError) {
           toast.warning(`Ticket impreso, pero no se pudo abrir caja: ${printResult.drawerError}`);
@@ -1076,11 +1102,13 @@ const POS = () => {
       }
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
+      scheduleReload();
     } catch (error) {
       console.error("Failed to update send_to_kitchen", error);
       toast.error("No se pudo enviar a cocina. La venta se guardó. Puedes reenviar luego.");
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
+      scheduleReload();
     } finally {
       setIsSubmittingKitchenChoice(false);
     }
@@ -1176,13 +1204,6 @@ const POS = () => {
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
-      const shouldOpenDrawer = isCashPaymentSelected(paymentMethod, selectedPaymentMethodCode);
-      console.debug("payment success -> opening drawer", { shouldOpenDrawer, paymentMethod, selectedPaymentMethodCode });
-      if (shouldOpenDrawer) {
-        void triggerDrawerOpen({ showSuccessToast: false }).catch(() => {
-          toast.error("No se pudo abrir la gaveta");
-        });
-      }
       if (refreshed.paymentStatus === "paid") {
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {
@@ -1193,6 +1214,7 @@ const POS = () => {
           toast.success("Pago y factura registrados.");
           setKitchenPromptOrderId(orderId);
           setPostSaleKitchenChoice(hasKitchenItems);
+          setPostSalePrintChoice(true);
           setIsKitchenPromptOpen(true);
         }
       } else {
@@ -1449,7 +1471,7 @@ const POS = () => {
                     return (
                     <Card
                       key={product.id}
-                    className="cursor-pointer p-4 hover-lift min-h-40"
+                    className="cursor-pointer p-4 hover-lift"
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
@@ -1536,6 +1558,23 @@ const POS = () => {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Transacciones de caja</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Refrescar"
+                            aria-label="Refrescar"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => window.location.reload()}
+                          >
+                            <RefreshCw className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Refrescar</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </div>
@@ -2369,11 +2408,11 @@ const POS = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
-              <Checkbox checked={postSaleKitchenChoice} disabled />
+              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
-              <span>Imprimir ticket</span>
-              <Checkbox checked disabled />
+              <span>{printerAvailable ? "Imprimir ticket" : "Descargar Ticket"}</span>
+              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
           </div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2393,6 +2432,7 @@ const POS = () => {
               onClick={() => {
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
+                scheduleReload();
               }}
             >
               Omitir

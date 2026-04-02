@@ -12,9 +12,11 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 import {
   getCategories,
   getDiscounts,
+  deleteDiscount,
   Category,
   Discount as ApiDiscount,
 } from "@/lib/api";
+import { toast } from "sonner";
 
 const DAYS_SHORT = ["D", "L", "M", "X", "J", "V", "S"];
 
@@ -149,6 +151,19 @@ export const DiscountsTab = () => {
     setShowFormDialog(true);
   };
 
+  const handleDelete = async (discount: Discount) => {
+    const confirmed = window.confirm(`¿Eliminar descuento "${discount.name}"?`);
+    if (!confirmed) return;
+    try {
+      await deleteDiscount(Number(discount.id));
+      setDiscounts((prev) => prev.filter((row) => row.id !== discount.id));
+      toast.success("Descuento eliminado");
+    } catch (error) {
+      console.error("Failed to delete discount", error);
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el descuento");
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card className="p-6">
@@ -270,7 +285,7 @@ export const DiscountsTab = () => {
                       >
                         <Copy className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm">
+                      <Button variant="ghost" size="sm" onClick={() => void handleDelete(discount)}>
                         <Trash2 className="h-4 w-4 text-danger" />
                       </Button>
                     </div>
