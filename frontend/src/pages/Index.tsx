@@ -202,7 +202,7 @@ const POS = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [cardType, setCardType] = useState<"debit" | "credit">("debit");
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
-  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("CASH");
+  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("cash");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
@@ -710,8 +710,8 @@ const POS = () => {
       const first = methods[0];
       if (first) {
         setSelectedPaymentMethodCode(first.code);
-        const code = (first.code || "").toUpperCase();
-        const fallback = first.isCash ? "cash" : code === "CARD" ? "card" : "transfer";
+        const code = (first.code || "").toLowerCase();
+        const fallback = first.isCash ? "cash" : code.startsWith("card") ? "card" : "transfer";
         setPaymentMethod(fallback as PaymentMethod);
       }
     }).catch(() => undefined);
@@ -1921,11 +1921,12 @@ const POS = () => {
                     <Label>Método</Label>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                       {[
-                        { code: "CASH", label: "Efectivo", method: "cash" as PaymentMethod },
-                        { code: "CARD", label: "Tarjeta", method: "card" as PaymentMethod },
-                        { code: "TRANSFER", label: "Transferencia", method: "transfer" as PaymentMethod },
-                        { code: "PEDIDOS_YA", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
-                        { code: "PAYPAL", label: "PayPal", method: "transfer" as PaymentMethod },
+                        { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
+                        { code: "card_debit", label: "Tarjeta Débito", method: "card" as PaymentMethod },
+                        { code: "card_credit", label: "Tarjeta Crédito", method: "card" as PaymentMethod },
+                        { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
+                        { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
+                        { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
                       ].map((option) => (
                         <Button
                           key={option.code}
@@ -1953,12 +1954,12 @@ const POS = () => {
                         </p>
                       </div>
                     )}
-                    {(paymentMethod === "card" || selectedPaymentMethodCode === "TRANSFER" || selectedPaymentMethodCode === "PEDIDOS_YA" || selectedPaymentMethodCode === "PAYPAL") && (
+                    {(paymentMethod === "card" || selectedPaymentMethodCode === "transfer" || selectedPaymentMethodCode === "pedidos_ya" || selectedPaymentMethodCode === "paypal") && (
                       <div className="space-y-2">
                         <Label>
-                          {selectedPaymentMethodCode === "PEDIDOS_YA"
+                          {selectedPaymentMethodCode === "pedidos_ya"
                             ? "Código de pedido / referencia (opcional)"
-                            : selectedPaymentMethodCode === "PAYPAL"
+                            : selectedPaymentMethodCode === "paypal"
                               ? "ID de transacción (opcional)"
                               : paymentMethod === "card"
                                 ? "Voucher / Autorización (opcional)"

@@ -54,16 +54,26 @@ class PaymentSerializer(serializers.ModelSerializer):
         if attrs.get("cash_received") is not None:
             attrs["cash_received"] = self._normalize_money(attrs.get("cash_received"), field="cash_received")
 
-        code = (attrs.pop("payment_method_code", "") or "").strip().upper()
+        code = (attrs.pop("payment_method_code", "") or "").strip().lower()
         payment_method = attrs.get("payment_method")
         if code and not payment_method:
-            payment_method = PaymentMethod.objects.filter(code=code, is_active=True).first()
+            payment_method = PaymentMethod.objects.filter(code__iexact=code, is_active=True).first()
             if not payment_method:
                 raise serializers.ValidationError("Payment method not found")
             attrs["payment_method"] = payment_method
 
         if payment_method and not attrs.get("method"):
-            attrs["method"] = payment_method.code.lower().replace("pedidos_ya", "transfer").replace("paypal", "transfer")
+            method_code = payment_method.code.lower()
+            if method_code == "cash":
+                attrs["method"] = "cash"
+            elif method_code in {"card_debit", "card_credit", "card"}:
+                attrs["method"] = "card"
+            else:
+                attrs["method"] = "transfer"
+            if method_code == "card_debit":
+                attrs["card_type"] = "debit"
+            elif method_code in {"card_credit", "card"} and not attrs.get("card_type"):
+                attrs["card_type"] = "credit"
 
         method_value = (attrs.get("method") or "").strip().lower()
         card_type = (attrs.get("card_type") or "").strip().lower()

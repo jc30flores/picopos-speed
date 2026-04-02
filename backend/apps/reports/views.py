@@ -1,13 +1,74 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
-from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import generics
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-from apps.core.timezone_utils import parse_business_date_range
-from apps.orders.models import Order
+
+from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.payments.models import Payment, Refund
 from apps.reports.serializers import SalesReportSerializer
-from apps.core.permissions import IsCashierOrManagerOrAdmin
+
+MONEY_Q = Decimal("0.01")
+
+PAYMENT_METHOD_LABELS = {
+    "cash": "Efectivo",
+    "card_debit": "Tarjeta Débito",
+    "card_credit": "Tarjeta Crédito",
+    "transfer": "Transferencia",
+    "pedidos_ya": "Pedidos Ya",
+    "paypal": "PayPal",
+}
+
+SERVICE_TYPE_LABELS = {
+    "dine_in": "DINE IN",
+    "takeout": "TAKEOUT",
+    "pedidos_ya": "PEDIDOS YA",
+    "online": "ONLINE",
+    "kiosk": "KIOSK",
+}
+
+SERVICE_TYPE_ALIASES = {
+    "mesa": "dine_in",
+    "dine-in": "dine_in",
+    "dinein": "dine_in",
+    "dine_in": "dine_in",
+    "en_local": "dine_in",
+    "para_llevar": "takeout",
+    "takeout": "takeout",
+    "pedidos_ya": "pedidos_ya",
+    "delivery": "pedidos_ya",
+    "online": "online",
+    "kiosk": "kiosk",
+}
+
+
+
+def q2(value: Decimal | None) -> Decimal:
+    return (value or Decimal("0")).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+
+
+
+def payment_code(payment: Payment) -> str:
+    code = str(payment.payment_method.code if payment.payment_method_id else "").strip().lower()
+    method = str(payment.method or "").strip().lower()
+    card_type = str(payment.card_type or "").strip().lower()
+    if code:
+        if code in {"card", "credit_card", "debit_card"}:
+            return "card_debit" if card_type == "debit" else "card_credit"
+        return code
+    if method == "cash":
+        return "cash"
+    if method == "card":
+        return "card_debit" if card_type == "debit" else "card_credit"
+    return "transfer"
+
+
+
+def service_type_code(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    return SERVICE_TYPE_ALIASES.get(normalized, normalized or "dine_in")
 
 
 class SalesReportListView(generics.ListAPIView):
@@ -15,169 +76,103 @@ class SalesReportListView(generics.ListAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
-        queryset = Order.objects.select_related("service_type", "invoice").prefetch_related("payments").all()
+        date_from = self.request.query_params.get("date_from")
+        date_to = self.request.query_params.get("date_to")
+        if not date_from or not date_to:
+            raise ValidationError({"detail": "date_from y date_to son obligatorios (YYYY-MM-DD)."})
+
+        from_date = parse_date(date_from)
+        to_date = parse_date(date_to)
+        if not from_date or not to_date:
+            raise ValidationError({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."})
+
+        start = f"{from_date.isoformat()} 00:00:00"
+        end = f"{to_date.isoformat()} 23:59:59.999999"
+        queryset = Payment.objects.select_related("order", "order__service_type", "order__invoice", "payment_method").filter(
+            created_at__gte=start,
+            created_at__lte=end,
+        )
+
         search = (self.request.query_params.get("q") or self.request.query_params.get("search") or "").strip()
-        only_today = str(self.request.query_params.get("today") or "").strip() == "1"
-        start_at = end_at = None
-        if not search:
-            if only_today:
-                start_at, end_at = parse_business_date_range("today", "today")
-            else:
-                date_from = self.request.query_params.get("date_from")
-                date_to = self.request.query_params.get("date_to")
-                if not date_from and not date_to:
-                    today = timezone.localdate().isoformat()
-                    start_at, end_at = parse_business_date_range(today, today)
-                else:
-                    start_at, end_at = parse_business_date_range(date_from, date_to)
-        service_type = self.request.query_params.get("service_type")
+        payment_method = (self.request.query_params.get("payment_method") or "").strip().lower()
+        service_type = service_type_code(self.request.query_params.get("service_type")) if self.request.query_params.get("service_type") else ""
         status = self.request.query_params.get("status")
 
-        if start_at:
-            queryset = queryset.filter(created_at__gte=start_at)
-        if end_at:
-            queryset = queryset.filter(created_at__lte=end_at)
+        if payment_method:
+            if payment_method == "card_debit":
+                queryset = queryset.filter(Q(payment_method__code__iexact="card_debit") | Q(payment_method__code__iexact="card", card_type="debit"))
+            elif payment_method == "card_credit":
+                queryset = queryset.filter(
+                    Q(payment_method__code__iexact="card_credit")
+                    | Q(payment_method__code__iexact="card", card_type="credit")
+                    | Q(payment_method__isnull=True, method="card", card_type="credit")
+                )
+            else:
+                q = Q(payment_method__code__iexact=payment_method)
+                if payment_method == "cash":
+                    q = q | Q(payment_method__isnull=True, method="cash")
+                queryset = queryset.filter(q)
+
         if service_type:
-            queryset = queryset.filter(service_type__key=service_type)
+            queryset = queryset.filter(order__service_type__key__in=[
+                k for k, v in SERVICE_TYPE_ALIASES.items() if v == service_type
+            ])
         if status:
-            queryset = queryset.filter(status=status)
+            queryset = queryset.filter(order__status=status)
         if search:
             queryset = queryset.filter(
-                Q(order_number__icontains=search)
-                | Q(order_number__icontains=search.replace("ORD-", "").replace("ord-", ""))
-                | Q(customer_name__icontains=search)
-                | Q(status__icontains=search)
-                | Q(invoice__numero_control__icontains=search)
+                Q(order__order_number__icontains=search)
+                | Q(order__customer_name__icontains=search)
+                | Q(order__invoice__numero_control__icontains=search)
             )
-            return queryset.order_by("-created_at")[:50]
-
         return queryset.order_by("-created_at")
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        data = [
+        rows = []
+        for payment in queryset:
+            order = payment.order
+            pm_code = payment_code(payment)
+            st_code = service_type_code(order.service_type.key if order.service_type_id else None)
+            rows.append(
+                {
+                    "order_id": order.id,
+                    "order_number": order.order_number,
+                    "created_at": payment.created_at,
+                    "customer_name": order.customer_name,
+                    "service_type_code": st_code,
+                    "service_type_label": SERVICE_TYPE_LABELS.get(st_code, st_code.upper()),
+                    "payment_method_code": pm_code,
+                    "payment_method_label": PAYMENT_METHOD_LABELS.get(pm_code, pm_code),
+                    "total_amount": f"{q2(payment.amount + (payment.tip_amount or Decimal('0'))):.2f}",
+                    "status": order.status,
+                    "control_number": order.invoice.numero_control if hasattr(order, "invoice") else "",
+                }
+            )
+
+        serializer = self.get_serializer(rows, many=True)
+        method_totals = {code: Decimal("0") for code in PAYMENT_METHOD_LABELS.keys()}
+        for row in rows:
+            method_totals[row["payment_method_code"]] = q2(method_totals[row["payment_method_code"]] + Decimal(row["total_amount"]))
+
+        refunds = Refund.objects.filter(order_id__in=[r["order_id"] for r in rows]).aggregate(
+            total=Sum(ExpressionWrapper(F("amount") + F("tip_refunded"), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        )
+        gross = sum((Decimal(r["total_amount"]) for r in rows), Decimal("0"))
+        refund_total = q2(refunds["total"])
+        net = q2(gross - refund_total)
+        return Response(
             {
-                "order_id": order.id,
-                "order_number": order.order_number,
-                "service_type": (order.service_type.key if order.service_type else "SIN_TIPO"),
-                "date": order.created_at,
-                "subtotal": order.subtotal,
-                "tax": order.tax,
-                "total": order.total,
-                "status": order.status,
-                "discount_total": order.discount_total,
-                "financial_status": order.financial_status,
-                "refund_total": order.refund_total,
-                "net_paid": order.net_paid,
-                "customer_name": order.customer_name,
-                "control_number": (order.invoice.numero_control if hasattr(order, "invoice") else ""),
-                "payment_method": ", ".join(
-                    sorted(
-                        {
-                            payment.get_method_display()
-                            for payment in order.payments.all()
-                            if payment.method
-                        }
-                    )
-                ),
-                "sale_snapshot": (order.invoice.sale_snapshot if hasattr(order, "invoice") else {}),
+                "results": serializer.data,
+                "aggregates": {
+                    "count_orders": len(rows),
+                    "sum_total": f"{q2(gross):.2f}",
+                    "refund_total": f"{refund_total:.2f}",
+                    "net_total": f"{net:.2f}",
+                    "payment_methods": {k: f"{q2(v):.2f}" for k, v in method_totals.items()},
+                },
             }
-            for order in queryset
-        ]
-        serializer = self.get_serializer(data, many=True)
-        payment_totals = Payment.objects.filter(order__in=queryset).aggregate(
-            total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            ),
-            tips=Sum("tip_amount"),
-            cash_total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="cash"),
-            ),
-            card_total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="card"),
-            ),
-            transfer_total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="transfer"),
-            ),
         )
-        refund_totals = Refund.objects.filter(order__in=queryset).aggregate(
-            refund_total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_refunded"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            ),
-            refund_tips=Sum("tip_refunded"),
-            refund_cash=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_refunded"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="cash"),
-            ),
-            refund_card=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_refunded"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="card"),
-            ),
-            refund_transfer=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_refunded"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                ),
-                filter=Q(method="transfer"),
-            ),
-        )
-        refunds_count = Refund.objects.filter(order__in=queryset).count()
-        orders_paid = queryset.filter(financial_status="paid").count()
-        orders_voided = queryset.filter(financial_status="voided").count()
-        aggregates = {
-            "count_orders": queryset.count(),
-            "sum_subtotal": sum((order.subtotal for order in queryset), Decimal("0")),
-            "sum_tax": sum((order.tax for order in queryset), Decimal("0")),
-            "sum_total": sum((order.total for order in queryset), Decimal("0")),
-            "sum_discount_total": sum((order.discount_total for order in queryset), Decimal("0")),
-            "gross_total": sum((order.total for order in queryset), Decimal("0")),
-            "refund_total": refund_totals["refund_total"] or Decimal("0"),
-            "net_total": sum((order.total for order in queryset), Decimal("0"))
-            - (refund_totals["refund_total"] or Decimal("0")),
-            "payment_methods": {
-                "cash": payment_totals["cash_total"] or Decimal("0"),
-                "card": payment_totals["card_total"] or Decimal("0"),
-                "transfer": payment_totals["transfer_total"] or Decimal("0"),
-            },
-            "tips_total": payment_totals["tips"] or Decimal("0"),
-            "tips_net": (payment_totals["tips"] or Decimal("0")) - (refund_totals["refund_tips"] or Decimal("0")),
-            "cash_total": payment_totals["cash_total"] or Decimal("0"),
-            "non_cash_total": (payment_totals["card_total"] or Decimal("0"))
-            + (payment_totals["transfer_total"] or Decimal("0")),
-            "refunds_count": refunds_count,
-            "orders_paid": orders_paid,
-            "orders_voided": orders_voided,
-            "refunds_by_method": {
-                "cash": refund_totals["refund_cash"] or Decimal("0"),
-                "card": refund_totals["refund_card"] or Decimal("0"),
-                "transfer": refund_totals["refund_transfer"] or Decimal("0"),
-            },
-        }
-        return Response({"results": serializer.data, "aggregates": aggregates})
 
 
 class SalesBookJsonView(SalesReportListView):

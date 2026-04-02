@@ -339,3 +339,10 @@ python manage.py dte_autoresend --limit 50
 ### Pruebas locales con mock
 En local usar `DTE_BRIDGE_MODE=mock`; el backend responderá aceptado o rechazado sin dependencia externa.
 - Endpoints de envío a cliente (`/send-email/`, `/send-whatsapp/`) están en modo stub y responden `501 Not Implemented` hasta integrar proveedor real.
+
+## Contrato de códigos (Pagos y Servicios)
+
+- `payment_method_code`: `cash`, `card_debit`, `card_credit`, `transfer`, `pedidos_ya`, `paypal`.
+- `service_type_code`: `dine_in`, `takeout`, `pedidos_ya`, `online`, `kiosk`.
+- Montos API se serializan como string con dos decimales (`"0.00"`) y el cálculo de caja usa Decimal con redondeo `ROUND_HALF_UP`.
+- Fórmula de caja esperada: `expected_cash = opening_cash + cash_sales + expenses_total` (donde `expenses_total` se retorna negativo).

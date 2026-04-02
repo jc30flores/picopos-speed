@@ -71,41 +71,10 @@ def _create_cash_out_for_refund(refund: Refund, user) -> tuple[CashTransaction, 
 
 
 def _create_non_cash_transaction_for_refund(refund: Refund, user) -> tuple[CashTransaction | None, bool]:
-    if not refund.cash_session:
-        return None, False
-    code = (refund.payment_method.code if refund.payment_method_id else refund.method) or ""
-    tx_type = _non_cash_tx_type_from_code(code)
-    amount = (refund.amount + (refund.tip_refunded or Decimal("0"))).quantize(Decimal("0.01"))
-    tx, created = CashTransaction.objects.get_or_create(
-        refund=refund,
-        defaults={
-            "session": refund.cash_session,
-            "type": tx_type,
-            "amount": amount,
-            "description": f"Reembolso no efectivo orden #{refund.order_id} (refund_id={refund.id})",
-            "created_by": user,
-        },
-    )
-    logger.info(
-        "cashier.refund.non_cash refund_id=%s session_id=%s amount=%s method=%s branch_id=%s created=%s",
-        refund.id,
-        tx.session_id,
-        tx.amount,
-        tx_type,
-        refund.order.branch_id,
-        created,
-    )
-    return tx, created
+    return None, False
 
 
 def _non_cash_tx_type_from_code(code: str) -> str:
-    normalized = (code or "").strip().upper()
-    if normalized == "PEDIDOS_YA":
-        return "pedidosya"
-    if normalized == "PAYPAL":
-        return "paypal"
-    if normalized in {"CARD", "CREDIT_CARD", "DEBIT_CARD"}:
-        return "card"
     return "transfer"
 
 
@@ -135,27 +104,7 @@ def _create_transaction_for_payment(payment: Payment, user) -> tuple[CashTransac
         )
         return tx, created
 
-    non_cash_type = _non_cash_tx_type_from_code((payment.payment_method.code if payment.payment_method_id else payment.method) or "")
-    tx, created = CashTransaction.objects.get_or_create(
-        payment=payment,
-        defaults={
-            "session": session,
-            "type": non_cash_type,
-            "amount": total_amount,
-            "description": f"Pago no efectivo orden #{payment.order_id} (payment_id={payment.id})",
-            "created_by": user,
-        },
-    )
-    logger.info(
-        "cashier.payment.non_cash payment_id=%s session_id=%s amount=%s method=%s branch_id=%s created=%s",
-        payment.id,
-        tx.session_id,
-        tx.amount,
-        non_cash_type,
-        payment.order.branch_id,
-        created,
-    )
-    return tx, created
+    return None, False
 
 
 

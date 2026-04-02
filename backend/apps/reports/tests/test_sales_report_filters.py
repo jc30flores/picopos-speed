@@ -1,12 +1,12 @@
+from datetime import date
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.utils import timezone
-from datetime import timedelta
 from rest_framework.test import APIClient
 
-from apps.core.models import Branch
+from apps.core.models import Branch, ServiceType
 from apps.orders.models import Order, OrderInvoice
-from apps.payments.models import Payment
+from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
 
@@ -17,13 +17,19 @@ class SalesReportFiltersTests(TestCase):
         UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
         self.client.force_authenticate(self.user)
         self.branch = Branch.objects.create(name="Main", code="MAIN")
+        self.service_dine = ServiceType.objects.create(key="dine_in", label="Dine In")
+        self.service_takeout = ServiceType.objects.create(key="takeout", label="Takeout")
 
-    def _make_paid_order(self, *, order_number: int, customer_name: str, control_number: str) -> Order:
+        self.pm_cash = PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True)
+        self.pm_paypal = PaymentMethod.objects.create(code="paypal", name="PayPal", is_cash=False)
+
+    def _make_payment(self, *, order_number: int, service_type: ServiceType, payment_method: PaymentMethod, method: str):
         order = Order.objects.create(
             order_number=order_number,
             branch=self.branch,
+            service_type=service_type,
             status="delivered",
-            customer_name=customer_name,
+            customer_name=f"Cliente {order_number}",
             subtotal="10.00",
             tax="1.30",
             total="11.30",
@@ -31,48 +37,25 @@ class SalesReportFiltersTests(TestCase):
             financial_status="paid",
             net_paid="11.30",
         )
-        OrderInvoice.objects.create(order=order, numero_control=control_number)
-        Payment.objects.create(order=order, method="cash", amount="11.30", tip_amount="0.00", received_by=self.user)
-        return order
+        OrderInvoice.objects.create(order=order, numero_control=f"DTE-{order_number}")
+        Payment.objects.create(order=order, method=method, payment_method=payment_method, amount="11.30", tip_amount="0.00", received_by=self.user)
 
-    def test_search_matches_customer_and_control_number(self):
-        self._make_paid_order(order_number=1, customer_name="Cliente Uno", control_number="DTE-01-S001P001-000000000000001")
-        self._make_paid_order(order_number=2, customer_name="Cliente Dos", control_number="DTE-01-S001P001-000000000000002")
-
-        by_customer = self.client.get("/api/reports/sales/?search=Cliente Dos")
-        self.assertEqual(by_customer.status_code, 200)
-        self.assertEqual(len(by_customer.data["results"]), 1)
-        self.assertEqual(by_customer.data["results"][0]["customer_name"], "Cliente Dos")
-
-        by_control = self.client.get("/api/reports/sales/?search=000000000000001")
-        self.assertEqual(by_control.status_code, 200)
-        self.assertEqual(len(by_control.data["results"]), 1)
-        self.assertEqual(by_control.data["results"][0]["control_number"], "DTE-01-S001P001-000000000000001")
-
-    def test_results_include_payment_method_column(self):
-        self._make_paid_order(order_number=7, customer_name="Cliente Pago", control_number="DTE-01-S001P001-000000000000007")
-
-        response = self.client.get("/api/reports/sales/?search=Cliente Pago")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["results"][0]["payment_method"], "Cash")
-
-    def test_without_search_defaults_to_today(self):
-        old_order = self._make_paid_order(order_number=11, customer_name="Ayer", control_number="DTE-01-S001P001-000000000000011")
-        old_dt = timezone.now() - timedelta(days=1)
-        Order.objects.filter(pk=old_order.pk).update(created_at=old_dt)
-        self._make_paid_order(order_number=12, customer_name="Hoy", control_number="DTE-01-S001P001-000000000000012")
-
+    def test_requires_date_range(self):
         response = self.client.get("/api/reports/sales/")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data["results"]), 1)
-        self.assertEqual(response.data["results"][0]["customer_name"], "Hoy")
+        self.assertEqual(response.status_code, 400)
 
-    def test_global_search_ignores_date_filters(self):
-        old_order = self._make_paid_order(order_number=21, customer_name="Historico", control_number="DTE-01-S001P001-000000000000021")
-        old_dt = timezone.now() - timedelta(days=60)
-        Order.objects.filter(pk=old_order.pk).update(created_at=old_dt)
+    def test_filter_by_payment_method_and_service_type(self):
+        self._make_payment(order_number=1, service_type=self.service_dine, payment_method=self.pm_cash, method="cash")
+        self._make_payment(order_number=2, service_type=self.service_takeout, payment_method=self.pm_paypal, method="transfer")
 
-        response = self.client.get("/api/reports/sales/?q=Historico&date_from=2099-01-01&date_to=2099-01-01")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data["results"]), 1)
-        self.assertEqual(response.data["results"][0]["customer_name"], "Historico")
+        base_qs = f"date_from={date.today().isoformat()}&date_to={date.today().isoformat()}"
+        paypal = self.client.get(f"/api/reports/sales/?{base_qs}&payment_method=paypal")
+        self.assertEqual(paypal.status_code, 200)
+        self.assertEqual(len(paypal.data["results"]), 1)
+        self.assertEqual(paypal.data["results"][0]["payment_method_code"], "paypal")
+
+        dine_cash = self.client.get(f"/api/reports/sales/?{base_qs}&payment_method=cash&service_type=dine_in")
+        self.assertEqual(dine_cash.status_code, 200)
+        self.assertEqual(len(dine_cash.data["results"]), 1)
+        self.assertEqual(dine_cash.data["results"][0]["service_type_code"], "dine_in")
+        self.assertEqual(dine_cash.data["results"][0]["payment_method_code"], "cash")

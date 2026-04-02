@@ -53,7 +53,7 @@ import { useAuth } from "@/context/useAuth";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
-type PaymentMethodFilter = "all" | "cash" | "card" | "transfer";
+type PaymentMethodFilter = "all" | "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal";
 
 interface Sale {
   id: string;
@@ -84,15 +84,6 @@ const mapStatus = (
     return "reembolsado";
   }
   return "completado";
-};
-
-const mapPaymentMethodLabel = (value: string): string => {
-  const normalized = (value || "").trim().toLowerCase();
-  if (!normalized) return "N/A";
-  if (normalized.includes("cash") || normalized.includes("efectivo")) return "Efectivo";
-  if (normalized.includes("card") || normalized.includes("tarjeta")) return "Tarjeta";
-  if (normalized.includes("transfer")) return "Transferencia";
-  return value;
 };
 
 export const SalesHistoryTab = () => {
@@ -167,6 +158,7 @@ export const SalesHistoryTab = () => {
       dateFrom: restrictedRole && !useGlobalSearch ? todayLocal : dateFrom,
       dateTo: restrictedRole && !useGlobalSearch ? todayLocal : dateTo,
       serviceType: serviceTypeFilter as SalesReportRow["serviceType"] | undefined,
+      paymentMethod: paymentMethod === "all" ? undefined : paymentMethod,
       today: undefined,
       search: useGlobalSearch ? currentSearch : undefined,
     })
@@ -178,18 +170,18 @@ export const SalesHistoryTab = () => {
           orderNumber: `ORD-${row.orderNumber}`,
           controlNumber: row.controlNumber || "-",
           customerName: row.customerName || "-",
-          serviceType: serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
+          serviceType: row.serviceTypeLabel ?? serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
-          paymentMethod: mapPaymentMethodLabel(row.paymentMethod || ""),
+          paymentMethod: row.paymentMethodLabel || "-",
           items: 0,
-          subtotal: row.subtotal,
-          tax: row.tax,
+          subtotal: 0,
+          tax: 0,
           total: row.total,
           cashier: "Auto",
           status: mapStatus(row.status, row.financialStatus),
-          financialStatus: row.financialStatus,
-          refundTotal: row.refundTotal,
-          netPaid: row.netPaid,
+          financialStatus: "paid",
+          refundTotal: 0,
+          netPaid: row.total,
         }));
         setSales(mapped);
       })
@@ -200,7 +192,7 @@ export const SalesHistoryTab = () => {
 
   useEffect(() => {
     void loadSales(debouncedSearchQuery);
-  }, [dateFrom, dateTo, serviceType, debouncedSearchQuery, restrictedRole]);
+  }, [dateFrom, dateTo, serviceType, paymentMethod, debouncedSearchQuery, restrictedRole]);
 
   const filteredSales = restrictedRole
     ? sales
@@ -213,9 +205,7 @@ export const SalesHistoryTab = () => {
     const matchesService =
       serviceType === "all" ||
       sale.serviceType.toLowerCase().replace(" ", "-") === serviceType;
-    const matchesPayment =
-      paymentMethod === "all" ||
-      sale.paymentMethod.toLowerCase().includes(paymentMethod);
+    const matchesPayment = true;
     return matchesSearch && matchesService && matchesPayment;
   });
 
@@ -486,8 +476,11 @@ export const SalesHistoryTab = () => {
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="cash">Efectivo</SelectItem>
-                  <SelectItem value="card">Tarjeta</SelectItem>
+                  <SelectItem value="card_debit">Tarjeta Débito</SelectItem>
+                  <SelectItem value="card_credit">Tarjeta Crédito</SelectItem>
                   <SelectItem value="transfer">Transferencia</SelectItem>
+                  <SelectItem value="pedidos_ya">Pedidos Ya</SelectItem>
+                  <SelectItem value="paypal">PayPal</SelectItem>
                 </SelectContent>
               </Select>
             </div> : null}
