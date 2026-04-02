@@ -1448,12 +1448,6 @@ const POS = () => {
                       )}
                       <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
                     </div>
-                    {product.modifierGroups && product.modifierGroups.length > 0 && (
-                      <Badge variant="secondary" className="mt-1 text-xs">
-                        <span className="md:hidden">Custom</span>
-                        <span className="hidden md:inline">Customizable</span>
-                      </Badge>
-                    )}
                   </Card>
                 );
                 })}
