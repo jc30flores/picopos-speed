@@ -1,30 +1,13 @@
 from pathlib import Path
 import logging
 import os
-
-try:
-    from dotenv import load_dotenv
-except Exception:  # pragma: no cover
-    load_dotenv = None
-
-
-def _load_env_file(base_dir: Path) -> None:
-    env_path = base_dir / ".env"
-    if load_dotenv is not None:
-        load_dotenv(env_path, override=True)
-        return
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ[key.strip()] = value.strip()
-
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-_load_env_file(BASE_DIR)
+
+env_path = BASE_DIR / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+print("ENV LOADED FROM:", env_path)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
