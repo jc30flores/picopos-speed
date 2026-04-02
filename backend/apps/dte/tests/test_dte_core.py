@@ -137,13 +137,33 @@ class DTECoreTests(TestCase):
         )
 
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000201", "H" * 36, "00")
+        linea = payload["dte"]["cuerpoDocumento"][0]
         resumen = payload["dte"]["resumen"]
 
+        self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
         self.assertEqual(resumen["totalGravada"], 8.5)
         self.assertEqual(resumen["subTotalVentas"], 10.0)
         self.assertEqual(resumen["subTotal"], 8.5)
         self.assertEqual(resumen["descuGravada"], 1.5)
         self.assertEqual(resumen["totalDescu"], 1.5)
+
+    def test_build_payload_cf_with_special_price_and_global_discount_is_consistent(self):
+        category = Category.objects.create(name="MIX")
+        p1 = Product.objects.create(name="Coke", description="", price=Decimal("1.49"), category=category, available=True)
+        p2 = Product.objects.create(name="Shrimp Tampico Burrito", description="", price=Decimal("9.99"), category=category, available=True)
+        p3 = Product.objects.create(name="Grilled Chicken Burrito", description="", price=Decimal("6.99"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=p1, product_name_snapshot="Coke", price_snapshot=Decimal("1.49"), quantity=1, discount_amount=Decimal("0.74"))
+        OrderItem.objects.create(order=self.order, product=p2, product_name_snapshot="Shrimp Tampico Burrito", price_snapshot=Decimal("9.99"), quantity=1, discount_amount=Decimal("5.00"))
+        OrderItem.objects.create(order=self.order, product=p3, product_name_snapshot="Grilled Chicken Burrito", price_snapshot=Decimal("5.00"), quantity=1, discount_amount=Decimal("2.50"))
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000203", "J" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        for linea in cuerpo:
+            self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
+        descuentos_linea = sum(float(linea["montoDescu"]) for linea in cuerpo)
+        self.assertEqual(round(descuentos_linea, 2), round(float(resumen["totalDescu"]), 2))
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"]), 2))
 
     def test_build_payload_cf_without_discounts_keeps_subtotals_equal(self):
         category = Category.objects.create(name="SIN-DESC")

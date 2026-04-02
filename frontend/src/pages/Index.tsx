@@ -467,7 +467,7 @@ const POS = () => {
           productId: product.id,
           name: product.name,
           basePrice: effectiveBasePrice,
-          originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
+          originalBasePrice: (product.effectivePrice ?? product.price) < product.price ? product.price : undefined,
           price: totalPrice,
           quantity: 1,
           isCustom: false,
@@ -1380,11 +1380,11 @@ const POS = () => {
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    {product.isSpecialPriceActiveNow && (
+                    {(product.effectivePrice ?? product.price) < product.price && (
                       <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
                     )}
                     <div className="space-y-0.5">
-                      {product.isSpecialPriceActiveNow && (
+                      {(product.effectivePrice ?? product.price) < product.price && (
                         <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
                       )}
                       <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>

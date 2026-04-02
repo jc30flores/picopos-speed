@@ -155,6 +155,16 @@ def transmit_sale_dte(
             parsed.get("firma") or "-",
             parsed.get("recibido_at") or "-",
         )
+        if parsed.get("status") in {DTERecord.STATUS_REJECTED}:
+            DTE_LOGGER.error(
+                "[DTE] rejection order=%s payment=%s code=%s message=%s ambiente=%s resumen=%s",
+                sale_id,
+                payment_id,
+                parsed.get("error_code") or "",
+                parsed.get("error_message") or "",
+                ambiente,
+                (payload.get("dte", {}).get("resumen", {}) if isinstance(payload, dict) else {}),
+            )
     prebuilt_record.status = parsed["status"]
     prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
     prebuilt_record.response_payload = response if isinstance(response, dict) else {}
