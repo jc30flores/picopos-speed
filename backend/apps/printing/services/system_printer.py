@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 STAR_QUEUE = "star_tsp100"
 DRAWER_RAW_COMMAND = r"""printf '\x1b\x07\x0b\x19\x07' | lp -d star_tsp100 -o raw"""
+DRAWER_RAW_BYTES = bytes((0x1B, 0x07, 0x0B, 0x19, 0x07))
 RECEIPT_PAGE_WIDTH_MM = 80
 RECEIPT_LEFT_MARGIN_MM = 4
 RECEIPT_TOP_BOTTOM_MARGIN_MM = 4
@@ -107,11 +108,19 @@ class SystemPrinterService:
         return False, combined_error
 
     def open_cash_drawer(self, *, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
-        logger.info("printer.drawer.attempt timestamp=%s queue=%s endpoint=%s context=%s", _now_iso(), self.queue, endpoint or "", context or {})
+        logger.info(
+            "printer.drawer.attempt timestamp=%s queue=%s endpoint=%s raw_equivalent=%s context=%s",
+            _now_iso(),
+            self.queue,
+            endpoint or "",
+            DRAWER_RAW_COMMAND,
+            context or {},
+        )
         if not self.is_printer_available(context=context, endpoint=endpoint):
             return False, f"Queue '{self.queue}' not found"
         result = self.run_command(
-            ["/bin/bash", "-lc", DRAWER_RAW_COMMAND],
+            ["lp", "-d", self.queue, "-o", "raw"],
+            input_bytes=DRAWER_RAW_BYTES,
             timeout=10,
             context=context,
             endpoint=endpoint,

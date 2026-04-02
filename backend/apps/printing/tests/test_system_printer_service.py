@@ -19,6 +19,17 @@ class SystemPrinterServiceTests(SimpleTestCase):
         ):
             self.assertTrue(service.is_printer_available())
 
+    def test_open_cash_drawer_uses_lp_raw_with_bytes(self):
+        service = SystemPrinterService()
+        with patch.object(service, "is_printer_available", return_value=True), patch.object(service, "run_command") as run_command:
+            run_command.return_value = CommandResult(ok=True, exit_code=0, stdout="ok", stderr="", elapsed_ms=5, command="lp -d star_tsp100 -o raw")
+            opened, error = service.open_cash_drawer()
+        self.assertTrue(opened)
+        self.assertIsNone(error)
+        args, kwargs = run_command.call_args
+        self.assertEqual(args[0], ["lp", "-d", "star_tsp100", "-o", "raw"])
+        self.assertEqual(kwargs.get("input_bytes"), bytes((0x1B, 0x07, 0x0B, 0x19, 0x07)))
+
     @override_settings(MEDIA_ROOT=tempfile.gettempdir(), MEDIA_URL="/media/")
     def test_print_with_pdf_fallback_printer_ok(self):
         service = SystemPrinterService()

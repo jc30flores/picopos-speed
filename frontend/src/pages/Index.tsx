@@ -1096,8 +1096,8 @@ const POS = () => {
         } else if (!printResult.printed && printResult.printError) {
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
-        if (printResult.printed && printResult.drawerError) {
-          toast.warning(`Ticket impreso, pero no se pudo abrir caja: ${printResult.drawerError}`);
+        if (printResult.drawerError) {
+          toast.warning(printResult.drawerError);
         }
       }
       setIsKitchenPromptOpen(false);
@@ -1460,7 +1460,7 @@ const POS = () => {
 
             {/* Products Grid */}
             <div className="flex-1 overflow-y-auto pb-4">
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                <div className="grid items-start grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                   {filteredProducts.map((product) => {
                     const productPricing = resolveEffectiveUnitPrice(
                       product,
@@ -2411,7 +2411,7 @@ const POS = () => {
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
-              <span>{printerAvailable ? "Imprimir ticket" : "Descargar Ticket"}</span>
+              <span>{printerAvailable ? "Imprimir ticket" : "Descargar ticket"}</span>
               <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
           </div>
