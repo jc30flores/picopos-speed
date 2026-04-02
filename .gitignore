@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 backend/assets/receipt/logo_pdg.png
+backend/venv/
+backend/**/__pycache__/
+*.pyc
