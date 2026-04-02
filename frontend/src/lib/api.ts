@@ -311,7 +311,7 @@ export type CashSessionSnapshot = {
     expectedCashInDrawer: number;
     countedCash: number;
     overShortCash: number;
-    methods: { cash: number; card: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
+    methods: { cash: number; card: number; cardDebit: number; cardCredit: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
 };
 
@@ -3134,6 +3134,8 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
         card: fromCents(toCents(data.summary?.totals_by_method?.card_debit ?? 0) + toCents(data.summary?.totals_by_method?.card_credit ?? 0)),
+        cardDebit: Number(data.summary?.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(data.summary?.totals_by_method?.card_credit ?? 0),
         transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),
@@ -3217,12 +3219,14 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
-        cash: Number(row.summary_snapshot?.methods?.CASH?.total ?? 0),
-        card: Number(row.summary_snapshot?.methods?.CARD?.total ?? 0),
-        transfer: Number(row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(row.summary_snapshot?.cash_in_total ?? 0),
+        cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
+        cardDebit: Number(row.summary_snapshot?.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(row.summary_snapshot?.totals_by_method?.card_credit ?? 0),
+        card: fromCents(toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0) + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)),
+        transfer: Number(row.summary_snapshot?.totals_by_method?.transfer ?? row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary_snapshot?.totals_by_method?.pedidos_ya ?? row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary_snapshot?.totals_by_method?.paypal ?? row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary_snapshot?.total_cash_sales ?? row.summary_snapshot?.cash_in_total ?? 0),
       },
     },
   }));
@@ -3240,12 +3244,14 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       countedCash: Number(data.summary.counted_cash ?? 0),
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
-        cash: Number(data.summary.methods?.CASH?.total ?? 0),
-        card: Number(data.summary.methods?.CARD?.total ?? 0),
-        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(data.summary.cash_in_total ?? 0),
+        cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
+        cardDebit: Number(data.summary.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(data.summary.totals_by_method?.card_credit ?? 0),
+        card: fromCents(toCents(data.summary.totals_by_method?.card_debit ?? 0) + toCents(data.summary.totals_by_method?.card_credit ?? 0)),
+        transfer: Number(data.summary.totals_by_method?.transfer ?? data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.totals_by_method?.pedidos_ya ?? data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.totals_by_method?.paypal ?? data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.total_cash_sales ?? data.summary.cash_in_total ?? 0),
       },
     },
     transactions: (data.transactions || []).map((tx: any) => ({
