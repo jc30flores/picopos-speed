@@ -1,7 +1,10 @@
+from django.db import transaction
+from django.db.models.expressions import RawSQL
 from rest_framework import serializers
 import re
 
 from apps.core.models import ActivityCatalog, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
+from apps.menu.models import Product
 
 
 class ServiceTypeSerializer(serializers.ModelSerializer):
@@ -20,6 +23,42 @@ class ServiceTypeSerializer(serializers.ModelSerializer):
         if not cleaned:
             raise serializers.ValidationError("Nombre requerido.")
         return cleaned
+
+    @transaction.atomic
+    def update(self, instance: ServiceType, validated_data):
+        previous_disposables_enabled = bool(instance.disposables_enabled)
+        updated = super().update(instance, validated_data)
+        current_disposables_enabled = bool(updated.disposables_enabled)
+        service_type_key = (updated.key or "").strip()
+
+        if not service_type_key or previous_disposables_enabled == current_disposables_enabled:
+            return updated
+
+        if current_disposables_enabled:
+            Product.objects.exclude(disposable_apply_to__contains=[service_type_key]).update(
+                disposable_apply_to=RawSQL(
+                    "COALESCE(disposable_apply_to, '[]'::jsonb) || to_jsonb(ARRAY[%s]::text[])",
+                    [service_type_key],
+                )
+            )
+        else:
+            Product.objects.filter(disposable_apply_to__contains=[service_type_key]).update(
+                disposable_apply_to=RawSQL(
+                    """
+                    COALESCE(
+                        (
+                            SELECT jsonb_agg(entry)
+                            FROM jsonb_array_elements_text(COALESCE(disposable_apply_to, '[]'::jsonb)) AS entry
+                            WHERE entry <> %s
+                        ),
+                        '[]'::jsonb
+                    )
+                    """,
+                    [service_type_key],
+                )
+            )
+
+        return updated
 
 
 class TaxConfigSerializer(serializers.ModelSerializer):

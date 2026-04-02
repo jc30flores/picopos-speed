@@ -1476,7 +1476,9 @@ const POS = () => {
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
                     {productPricing.display.showOfferBadge && (
-                      <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
+                      <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                        {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                      </Badge>
                     )}
                     <div className="space-y-0.5">
                       {productPricing.display.showOfferBadge && (
@@ -1630,6 +1632,9 @@ const POS = () => {
                           )}
                           {item.appliedSpecialPriceRuleName && (
                             <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                          )}
+                          {!item.appliedSpecialPriceRuleName && item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                            <p className="text-[11px] text-emerald-600/90">OFERTA</p>
                           )}
                           {item.unitPriceOverride != null && (
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
