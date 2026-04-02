@@ -1389,9 +1389,9 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="flex h-full min-h-0 flex-row flex-nowrap gap-4 overflow-hidden">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,60fr)_minmax(320px,40fr)]">
           {/* Products Section */}
-          <div className="flex h-full min-h-0 min-w-0 grow-0 basis-[60%] flex-col gap-4 overflow-hidden">
+          <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -1470,7 +1470,7 @@ const POS = () => {
           </div>
 
           {/* Cart Section */}
-          <Card className="flex h-full min-h-0 min-w-[360px] grow-0 basis-[40%] shrink-0 flex-col overflow-hidden">
+          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[320px]">
             <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
