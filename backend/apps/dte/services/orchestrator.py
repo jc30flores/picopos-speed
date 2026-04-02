@@ -31,7 +31,11 @@ def _normalize_ambiente(raw_value: str | None) -> str:
 
 def _ambiente() -> str:
     raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
-    return _normalize_ambiente(raw)
+    normalized = _normalize_ambiente(raw)
+    requires_prod = str(os.environ.get("DTE_REQUIRE_AMBIENTE_01", "")).strip().lower() in {"1", "true", "yes"}
+    if requires_prod and normalized != "01":
+        return "01"
+    return normalized
 
 
 def transmit_sale_dte(

@@ -1,5 +1,6 @@
 from django.db import models
 from apps.core.models import Branch, Customer, ServiceType, Table
+from apps.core.money import to_cents
 from apps.menu.models import Product, ProductSpecialPriceRule
 
 
@@ -55,6 +56,8 @@ class Order(models.Model):
     )
     refund_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     net_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    amount_due_cents = models.IntegerField(default=0)
+    financial_locked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -77,14 +80,7 @@ class Order(models.Model):
         from django.db.models import DecimalField, ExpressionWrapper, F, Sum
         from apps.payments.models import Payment, Refund
 
-        totals = Payment.objects.filter(order=self).aggregate(
-            total_paid=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            )
-        )
+        totals = Payment.objects.filter(order=self).aggregate(total_paid=Sum("amount_applied"))
         refunded = Refund.objects.filter(order=self).aggregate(
             total_refunded=Sum(
                 ExpressionWrapper(
@@ -93,7 +89,7 @@ class Order(models.Model):
                 )
             )
         )
-        total_paid = totals["total_paid"] or Decimal("0")
+        total_paid = (totals["total_paid"] or Decimal("0")).quantize(Decimal("0.01"))
         total_refunded = refunded["total_refunded"] or Decimal("0")
         net_paid = max(total_paid - total_refunded, Decimal("0")).quantize(Decimal("0.01"))
 
@@ -101,7 +97,10 @@ class Order(models.Model):
             if total_paid <= 0:
                 self.payment_status = "unpaid"
                 self.financial_status = "open"
-            elif total_paid < self.total:
+            amount_due = Decimal(self.amount_due_cents or to_cents(self.total)) / Decimal("100")
+            if self.amount_due_cents <= 0:
+                self.amount_due_cents = to_cents(self.total)
+            elif total_paid < amount_due:
                 self.payment_status = "partial"
                 self.financial_status = "open"
             else:
@@ -121,6 +120,7 @@ class Order(models.Model):
                 "financial_status",
                 "refund_total",
                 "net_paid",
+                "amount_due_cents",
                 "updated_at",
             ]
         )

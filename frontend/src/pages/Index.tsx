@@ -547,14 +547,14 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const paymentTotal =
-    (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+  const canonicalDueCents = activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? checkoutDraft?.total ?? 0);
+  const paymentTotal = canonicalDueCents / 100;
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
-  const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
-  const checkoutTotalCents = Math.round(checkoutTotal * 100);
+  const checkoutTotal = paymentTotal;
+  const checkoutTotalCents = canonicalDueCents;
   const splitValidation = validateParts(checkoutTotalCents, parts);
   const activeSplitPart = parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.isPaid) ?? parts[0];
   const expectedPaymentCents = splitEnabled ? (activeSplitPart?.amountCents ?? checkoutTotalCents) : checkoutTotalCents;
@@ -572,7 +572,7 @@ const POS = () => {
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
 
-  const proceedToCheckout = () => {
+  const proceedToCheckout = async () => {
     if (cart.length === 0) return;
 
     const draftItemsGross = calculateCartTotals(
@@ -599,16 +599,45 @@ const POS = () => {
       checkoutDraft.total === draft.total &&
       JSON.stringify(checkoutDraft.items) === JSON.stringify(draft.items);
     setCheckoutDraft(draft);
-    if (!hasSameDraft) {
-      setActiveOrder(null);
-      setCreatedOrderId(null);
-      setCreatedOrderNumber(null);
+    let order = activeOrder;
+    if (!hasSameDraft || !order) {
+      order = await createOrder({
+        serviceType: draft.serviceType,
+        source: "pos",
+        channel: "pos",
+        sendToKitchen: draft.serviceType === "KIOSK",
+        priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
+        customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+        dteDocumentType,
+        ivaExempt,
+        discountId: selectedDiscount?.id,
+        discountMode: selectedDiscount ? "manual" : undefined,
+        items: draft.items.map((item) => ({
+          type: item.isCustom ? "manual" : "menu",
+          productId: item.productId,
+          productName: item.name,
+          price: item.basePrice,
+          unitPriceOverride: item.unitPriceOverride ?? null,
+          quantity: item.quantity,
+          isCustom: Boolean(item.isCustom),
+          customCode: item.customCode,
+          assignedName: item.assignedName,
+          modifiers: item.modifiers,
+        })),
+      });
+      setActiveOrder(order);
+      setCreatedOrderId(order.id);
+      setCreatedOrderNumber(order.orderNumber ?? null);
+    } else {
+      order = await getOrderById(order.id);
+      setActiveOrder(order);
     }
-    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    const dueCents = typeof order.remainingCents === "number" ? order.remainingCents : Math.round(toNumber(order.remaining) * 100);
+    setPaymentAmount(centsToInput(dueCents));
     setTipAmount("0");
     setPaymentReference("");
     setSplitEnabled(false);
-    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
@@ -621,12 +650,12 @@ const POS = () => {
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
-  const ensureCashSessionOpen = async (postAction: () => void) => {
+  const ensureCashSessionOpen = async (postAction: () => Promise<void> | void) => {
     try {
       const current = await getCurrentCashSession();
       setCashSnapshot(current);
       if (current.open) {
-        postAction();
+        await postAction();
         return;
       }
       requestOpenSession(postAction);
@@ -637,7 +666,7 @@ const POS = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    await ensureCashSessionOpen(proceedToCheckout);
+    await ensureCashSessionOpen(() => proceedToCheckout());
   };
 
   const getPendingSelectionValidation = () => {
@@ -1016,47 +1045,12 @@ const POS = () => {
     try {
       setIsProcessingPayment(true);
       let order = activeOrder;
-      if (!order) {
-        if (createdOrderId) {
-          order = await getOrderById(createdOrderId);
-          setCreatedOrderNumber(order.orderNumber ?? null);
-        } else {
-          order = await createOrder({
-            serviceType: checkoutDraft.serviceType,
-            source: "pos",
-            channel: "pos",
-            sendToKitchen: checkoutDraft.serviceType === "KIOSK",
-            priceChangePin: checkoutDraft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
-            customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
-            dteDocumentType,
-            ivaExempt,
-            discountId: selectedDiscount?.id,
-            discountMode: selectedDiscount ? "manual" : undefined,
-            items: checkoutDraft.items.map((item) => ({
-              type: item.isCustom ? "manual" : "menu",
-              productId: item.productId,
-              productName: item.name,
-              price: item.basePrice,
-              unitPriceOverride: item.unitPriceOverride ?? null,
-              quantity: item.quantity,
-              isCustom: Boolean(item.isCustom),
-              customCode: item.customCode,
-              assignedName: item.assignedName,
-              modifiers: item.modifiers,
-            })),
-          });
-          const createdId =
-            (order as Order | undefined)?.id ??
-            (order as unknown as { order_id?: number }).order_id ??
-            (order as unknown as { pk?: number }).pk;
-          if (!createdId) {
-            throw new Error("createOrder did not return an id");
-          }
-          setCreatedOrderId(createdId);
-          setCreatedOrderNumber((order as Order | undefined)?.orderNumber ?? null);
-        }
+      if (!order && createdOrderId) {
+        order = await getOrderById(createdOrderId);
+        setCreatedOrderNumber(order.orderNumber ?? null);
         setActiveOrder(order);
       }
+      if (!order) throw new Error("No active order for checkout");
       const orderId =
         (order as Order | undefined)?.id ??
         (order as unknown as { order_id?: number }).order_id ??
@@ -1079,10 +1073,12 @@ const POS = () => {
         method: paymentMethod,
         cardType: paymentMethod === "card" ? (cardType ?? undefined) : undefined,
         amount: amountForApi,
+        amountApplied: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
+        splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
       });
       setLastPaymentId(paymentResult.id);
       const refreshed = await getOrderById(orderId);
@@ -1817,7 +1813,7 @@ const POS = () => {
                 <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
                   <div className="rounded-lg border bg-muted/30 p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(checkoutDraft.total)}</div>
+                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -1856,7 +1852,7 @@ const POS = () => {
                     <div className="space-y-1 text-muted-foreground">
                       <div className="flex justify-between"><span>Subtotal (productos)</span><span>{formatMoney(checkoutDraft.subtotal)}</span></div>
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutDraft.total)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(paymentTotal)}</span></div>
                     </div>
                   </div>
 

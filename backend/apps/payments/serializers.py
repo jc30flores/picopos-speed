@@ -24,6 +24,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     payment_method_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
     card_type = serializers.CharField(required=False, allow_blank=True)
+    split_part = serializers.IntegerField(required=False, allow_null=True)
 
     class Meta:
         model = Payment
@@ -37,12 +38,20 @@ class PaymentSerializer(serializers.ModelSerializer):
             "amount",
             "amount_applied",
             "cash_received",
+            "amount_received",
+            "change_amount",
             "tip_amount",
+            "amount_applied_cents",
+            "amount_received_cents",
+            "change_cents",
+            "tip_cents",
+            "split_part",
             "card_type",
             "reference",
             "received_by",
             "created_at",
         ]
+        read_only_fields = ["amount_received", "change_amount", "amount_applied_cents", "amount_received_cents", "change_cents", "tip_cents"]
 
     def validate(self, attrs):
         order = attrs.get("order")
@@ -95,27 +104,6 @@ class PaymentSerializer(serializers.ModelSerializer):
         if order.financial_status == "voided":
             raise serializers.ValidationError("Voided orders cannot accept payments")
 
-        remaining = self._remaining_balance(order)
-        if remaining <= 0:
-            raise serializers.ValidationError("Order is already paid")
-        diff = (amount - remaining).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        logger.info(
-            "payment.validation.balance_check order_id=%s remaining_balance=%s amount_request=%s diff=%s",
-            getattr(order, "id", None),
-            remaining,
-            amount,
-            diff,
-        )
-        if diff > Decimal("0.01"):
-            logger.warning(
-                "payment.validation.exceeds_remaining order_id=%s remaining=%s amount=%s diff=%s",
-                getattr(order, "id", None),
-                remaining,
-                amount,
-                diff,
-            )
-            raise serializers.ValidationError("Payment exceeds remaining balance")
-
         return attrs
 
     def _normalize_money(self, value: Decimal | str | float | None, *, field: str) -> Decimal:
@@ -134,18 +122,6 @@ class PaymentSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             validated_data["received_by"] = request.user
         return super().create(validated_data)
-
-    def _remaining_balance(self, order: Order) -> Decimal:
-        paid = Payment.objects.filter(order=order).aggregate(
-            total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            )
-        )["total"] or Decimal("0")
-        return (order.total - paid).quantize(Decimal("0.01"))
-
 
 class RefundSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by.username", read_only=True)

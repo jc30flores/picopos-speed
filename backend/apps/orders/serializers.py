@@ -13,6 +13,7 @@ from apps.orders.discount_engine import apply_discounts, discount_conditions_met
 from apps.menu.utils.pricing import resolve_effective_price
 from django.conf import settings
 from apps.core.audit import log_audit
+from apps.core.money import to_cents
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -48,6 +49,8 @@ class OrderSerializer(serializers.ModelSerializer):
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
+    amount_due_cents = serializers.IntegerField(read_only=True)
+    remaining_cents = serializers.SerializerMethodField()
     financial_status = serializers.CharField(read_only=True)
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     net_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
@@ -75,6 +78,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "financial_status",
             "total_paid",
             "remaining",
+            "amount_due_cents",
+            "remaining_cents",
             "refund_total",
             "net_paid",
             "service_type",
@@ -116,20 +121,17 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
 
     def get_total_paid(self, obj: Order):
-        total = Payment.objects.filter(order=obj).aggregate(
-            total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            )
-        )["total"] or Decimal("0")
+        total = Payment.objects.filter(order=obj).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0")
         return total
 
     def get_remaining(self, obj: Order):
         total_paid = self.get_total_paid(obj)
-        remaining = (obj.total - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        due = Decimal(obj.amount_due_cents or to_cents(obj.total)) / Decimal("100")
+        remaining = (due - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return remaining
+
+    def get_remaining_cents(self, obj: Order):
+        return max(to_cents(self.get_remaining(obj)), 0)
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):
@@ -458,6 +460,7 @@ class OrderCreateSerializer(serializers.Serializer):
             order.total = (total - exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         else:
             order.iva_exempt_discount = Decimal("0.00")
+        order.amount_due_cents = to_cents(order.total)
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
         order.send_to_kitchen = order.requires_kitchen and (is_kiosk_service or requested_send_to_kitchen)
         if order.send_to_kitchen and order.status == "preparing":
@@ -466,7 +469,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "amount_due_cents", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
 
         breakdown_by_discount = {}
         for entry in discount_result["applied_breakdown"]:

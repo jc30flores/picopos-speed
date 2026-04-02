@@ -2,6 +2,7 @@ from decimal import Decimal
 import logging
 import threading
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,6 +20,7 @@ from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order
 from apps.cashier.services import CashDrawerService
+from apps.core.money import to_cents, from_cents
 
 
 logger = logging.getLogger(__name__)
@@ -131,8 +133,44 @@ class PaymentListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        order = serializer.validated_data["order"]
+        order = order.__class__.objects.select_for_update().get(pk=order.pk)
+        existing_applied_cents = sum(
+            to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
+            for p in Payment.objects.select_for_update().filter(order=order)
+        )
+        due_cents = int(order.amount_due_cents or to_cents(order.total))
+        if due_cents <= 0:
+            due_cents = to_cents(order.total)
+            order.amount_due_cents = due_cents
+        remaining_cents = max(due_cents - existing_applied_cents, 0)
+        requested_applied_cents = to_cents(serializer.validated_data.get("amount"))
+        tip_cents = to_cents(serializer.validated_data.get("tip_amount"))
+        if remaining_cents <= 0:
+            return Response({"detail": "Order is already paid"}, status=status.HTTP_400_BAD_REQUEST)
+        if requested_applied_cents > remaining_cents + 1:
+            return Response({"detail": "Payment exceeds remaining balance"}, status=status.HTTP_400_BAD_REQUEST)
+        applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents
+        method = str(serializer.validated_data.get("method") or "").strip().lower()
+        cash_received = serializer.validated_data.get("cash_received")
+        received_cents = to_cents(cash_received) if method == "cash" and cash_received is not None else applied_cents + tip_cents
+        if method == "cash" and received_cents < applied_cents + tip_cents:
+            return Response({"detail": "Cash received must cover amount + tip"}, status=status.HTTP_400_BAD_REQUEST)
+        change_cents = max(received_cents - (applied_cents + tip_cents), 0)
+        if order.financial_locked_at is None:
+            order.financial_locked_at = timezone.now()
+            order.save(update_fields=["amount_due_cents", "financial_locked_at", "updated_at"])
         payment = serializer.save(
             cash_session=_get_open_session(request.user),
+            amount=from_cents(applied_cents),
+            amount_applied=from_cents(applied_cents),
+            amount_received=from_cents(received_cents),
+            change_amount=from_cents(change_cents),
+            amount_applied_cents=applied_cents,
+            amount_received_cents=received_cents,
+            change_cents=change_cents,
+            tip_cents=tip_cents,
+            cash_received=from_cents(received_cents) if method == "cash" else None,
         )
         _create_transaction_for_payment(payment, request.user)
         logger.info(
@@ -143,8 +181,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             payment.method,
         )
         payment.order.recalculate_financials()
-        total_paid = payment.order.net_paid + payment.order.refund_total
-        remaining = (payment.order.total - total_paid).quantize(Decimal("0.01"))
+        total_paid_cents = sum(
+            to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
+            for p in Payment.objects.filter(order=payment.order)
+        )
+        remaining_cents = max((payment.order.amount_due_cents or to_cents(payment.order.total)) - total_paid_cents, 0)
+        remaining = from_cents(remaining_cents)
         log_audit(
             request,
             "payment.create",

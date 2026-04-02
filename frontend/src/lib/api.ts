@@ -213,6 +213,8 @@ export type Order = {
   financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
   remaining: number;
+  amountDueCents?: number;
+  remainingCents?: number;
   refundTotal: number;
   netPaid: number;
   discountSnapshot?: Record<string, unknown> | null;
@@ -1544,6 +1546,8 @@ const mapOrder = (order: {
   financial_status: Order["financialStatus"];
   total_paid: string;
   remaining: string;
+  amount_due_cents?: number;
+  remaining_cents?: number;
   refund_total: string;
   net_paid: string;
   discount_snapshot?: Record<string, unknown> | null;
@@ -1585,6 +1589,8 @@ const mapOrder = (order: {
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
     remaining: Number(order.remaining ?? 0),
+    amountDueCents: Number(order.amount_due_cents ?? 0),
+    remainingCents: Number(order.remaining_cents ?? 0),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
@@ -2573,14 +2579,17 @@ export const createPayment = async (payload: {
   paymentMethodCode?: string;
   cardType?: "debit" | "credit";
   amount: number;
+  amountApplied?: number;
   cashReceived?: number;
   tipAmount?: number;
   reference?: string;
+  splitPart?: number;
 }): Promise<Payment> => {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
   }
-  const amountStr = Number(payload.amount || 0).toFixed(2);
+  const amountApplied = payload.amountApplied ?? payload.amount;
+  const amountStr = Number(amountApplied || 0).toFixed(2);
   const cashReceivedStr = payload.cashReceived == null ? undefined : Number(payload.cashReceived || 0).toFixed(2);
   const tipAmountStr = Number(payload.tipAmount ?? 0).toFixed(2);
   const response = await request("/payments/", {
@@ -2595,6 +2604,7 @@ export const createPayment = async (payload: {
       tip_amount: tipAmountStr,
       card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
+      split_part: payload.splitPart ?? null,
     }),
   });
   const data = await handleJson<{

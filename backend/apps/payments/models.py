@@ -30,8 +30,16 @@ class Payment(models.Model):
     method = models.CharField(max_length=20, choices=METHOD_CHOICES)
     card_type = models.CharField(max_length=10, blank=True, default="")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount_applied = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     cash_received = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    amount_received = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    change_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tip_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    amount_applied_cents = models.IntegerField(default=0)
+    amount_received_cents = models.IntegerField(default=0)
+    change_cents = models.IntegerField(default=0)
+    tip_cents = models.IntegerField(default=0)
+    split_part = models.PositiveIntegerField(null=True, blank=True)
     reference = models.CharField(max_length=120, blank=True)
     cash_session = models.ForeignKey(
         CashSession,
