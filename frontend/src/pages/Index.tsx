@@ -454,6 +454,17 @@ const POS = () => {
     previousCartLengthRef.current = cart.length;
   }, [cart]);
 
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, []);
+
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
     const draftItemsGross = calculateCartTotals(
@@ -1362,7 +1373,7 @@ const POS = () => {
   };
 
   return (
-    <div className="h-screen overflow-hidden bg-background">
+    <div className="h-[100dvh] overflow-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
         <div className="flex h-full min-h-0 flex-row flex-nowrap gap-4 overflow-hidden">
           {/* Products Section */}
@@ -1452,7 +1463,7 @@ const POS = () => {
 
           {/* Cart Section */}
           <Card className="flex h-full min-h-0 w-[clamp(320px,35vw,460px)] shrink-0 flex-col overflow-hidden">
-            <div className="p-4 border-b">
+            <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                   <div />
@@ -1523,7 +1534,10 @@ const POS = () => {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 pb-1">
+            </div>
+
+            <div className="flex-none border-b px-4 py-3">
+              <div className="flex flex-wrap gap-2">
                 {serviceTypes.length > 0 ? (
                   serviceTypes.map((type) => (
                     <Button
@@ -1624,7 +1638,7 @@ const POS = () => {
               )}
             </div>
 
-            <div className="sticky bottom-0 border-t bg-background p-4 space-y-3">
+            <div className="flex-none border-t bg-background p-4 space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal (productos)</span>
