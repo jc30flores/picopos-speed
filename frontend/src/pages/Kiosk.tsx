@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, Minus, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,6 +23,7 @@ import { KioskImage } from "@/components/kiosk/KioskImage";
 import { KioskImageLightbox } from "@/components/kiosk/KioskImageLightbox";
 import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { PageLayout } from "@/components/layout/PageLayout";
 
 type Step = "welcome" | "category" | "products" | "modifiers" | "review" | "payment" | "complete";
 
@@ -66,7 +66,6 @@ const buildItemSignature = (item: CartItem) => {
 };
 
 const Kiosk = () => {
-  const navigate = useNavigate();
   const [step, setStep] = useState<Step>("category");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -487,14 +486,11 @@ const Kiosk = () => {
 
   if (step === "category") {
     return (
-      <div className="min-h-screen bg-background p-4 sm:p-8">
-        <div className="mx-auto max-w-7xl">
-          <Button variant="outline" size="lg" onClick={() => navigate(-1)} className="mb-6 text-lg">
-            <ArrowLeft className="mr-2" />
-            Volver
-          </Button>
-          <h1 className="mb-8 text-center text-3xl font-bold break-words sm:text-4xl md:text-5xl">Selecciona una Categoría</h1>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6">
+      <PageLayout
+        title="Kiosk"
+        subtitle="Selecciona una categoría para iniciar tu pedido."
+      >
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6">
             {categoriesForGrid.map((category) => {
               const src = getSafeImage(getEntityImageSrc(category));
               return (
@@ -529,22 +525,20 @@ const Kiosk = () => {
                 </Card>
               );
             })}
-          </div>
-
-          {cartUnitsCount > 0 ? (
-            <div className="sticky bottom-4 mt-6">
-              <Button
-                size="lg"
-                className="h-16 w-full text-xl font-black"
-                onClick={() => setStep("review")}
-              >
-                <ReceiptText className="mr-2 h-6 w-6" />
-                VER ORDEN ({cartUnitsCount})
-              </Button>
-            </div>
-          ) : null}
         </div>
-      </div>
+        {cartUnitsCount > 0 ? (
+          <div className="sticky bottom-4 mt-6">
+            <Button
+              size="lg"
+              className="h-16 w-full rounded-2xl text-xl font-black"
+              onClick={() => setStep("review")}
+            >
+              <ReceiptText className="mr-2 h-6 w-6" />
+              VER ORDEN ({cartUnitsCount})
+            </Button>
+          </div>
+        ) : null}
+      </PageLayout>
     );
   }
 
@@ -552,16 +546,17 @@ const Kiosk = () => {
     const productsForCategory = products.filter((p) => p.category === selectedCategory && p.available);
     return (
       <>
-        <div className="min-h-screen bg-background p-4 md:p-8">
-          <div className="mx-auto max-w-[1440px]">
-            <Button variant="outline" size="lg" onClick={() => setStep("category")} className="mb-6 text-lg">
-              <ArrowLeft className="mr-2" />
+        <PageLayout
+          title={selectedCategory}
+          subtitle="Elige tus productos para continuar."
+          actions={(
+            <Button variant="outline" size="lg" className="h-12 rounded-xl px-5 md:h-14 md:text-base" onClick={() => setStep("category")}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
               Volver
             </Button>
-
-            <h1 className="mb-8 text-center text-4xl font-bold md:text-5xl">{selectedCategory}</h1>
-
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
+          )}
+        >
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
               {productsForCategory.map((product) => {
                 const imageSrc = getSafeImage(getProductImageSrc(product));
                 return (
@@ -599,9 +594,8 @@ const Kiosk = () => {
                   </Card>
                 );
               })}
-            </div>
           </div>
-        </div>
+        </PageLayout>
 
         {assignedNameDialogNode}
 
@@ -619,17 +613,17 @@ const Kiosk = () => {
   if (step === "modifiers") {
     return (
       <>
-        <div className="min-h-screen bg-background p-4 md:p-8">
-          <div className="mx-auto max-w-[1520px]">
-            <Button variant="outline" size="lg" onClick={() => setStep("products")} className="mb-6 text-lg">
-              <ArrowLeft className="mr-2" />
+        <PageLayout
+          title={`Personaliza ${selectedProduct?.name ?? "tu producto"}`}
+          subtitle="Selecciona tus opciones favoritas."
+          actions={(
+            <Button variant="outline" size="lg" className="h-12 rounded-xl px-5 md:h-14 md:text-base" onClick={() => setStep("products")}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
               Volver
             </Button>
-
-            <h1 className="mb-2 text-center text-4xl font-bold md:text-5xl">Personaliza tu {selectedProduct?.name}</h1>
-            <p className="mb-8 text-center text-xl text-muted-foreground md:text-2xl">Selecciona tus opciones favoritas</p>
-
-            <div className="space-y-8">
+          )}
+        >
+          <div className="space-y-8">
               {selectedProduct?.modifierGroups?.map((groupId: number) => {
                 const group = modifierGroups.find((g) => g.id === groupId);
                 if (!group) return null;
@@ -694,28 +688,26 @@ const Kiosk = () => {
                   </Card>
                 );
               })}
-            </div>
-
-            <Button
-              size="lg"
-              variant="outline"
-              className="mt-8 w-full py-8 text-xl font-bold md:text-2xl"
-              onClick={() => handleNameModalOpen("send")}
-              disabled={!canContinue() || isAssigningName}
-            >
-              Enviar al carrito
-            </Button>
-            <Button
-              size="lg"
-              variant="default"
-              className="mt-4 w-full py-8 text-xl font-bold md:text-2xl"
-              onClick={() => handleNameModalOpen("continue")}
-              disabled={!canContinue() || isAssigningName}
-            >
-              Continuar
-            </Button>
           </div>
-        </div>
+          <Button
+            size="lg"
+            variant="outline"
+            className="mt-8 min-h-14 w-full rounded-2xl py-8 text-xl font-bold md:text-2xl"
+            onClick={() => handleNameModalOpen("send")}
+            disabled={!canContinue() || isAssigningName}
+          >
+            Enviar al carrito
+          </Button>
+          <Button
+            size="lg"
+            variant="default"
+            className="mt-4 min-h-14 w-full rounded-2xl py-8 text-xl font-bold md:text-2xl"
+            onClick={() => handleNameModalOpen("continue")}
+            disabled={!canContinue() || isAssigningName}
+          >
+            Continuar
+          </Button>
+        </PageLayout>
 
 
         {assignedNameDialogNode}
@@ -733,11 +725,17 @@ const Kiosk = () => {
 
   if (step === "review") {
     return (
-      <div className="min-h-screen bg-background p-4 sm:p-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-8 text-center break-words">Resumen de Pedido</h1>
-
-          <div className="space-y-4 mb-8">
+      <PageLayout
+        title="Resumen de Pedido"
+        subtitle="Revisa cantidades y confirma antes de pagar."
+        actions={(
+          <Button variant="outline" size="lg" className="h-12 rounded-xl px-5 md:h-14 md:text-base" onClick={() => setStep("category")}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Volver
+          </Button>
+        )}
+      >
+        <div className="mb-8 space-y-4">
             {groupedCart.map((grouped) => {
               const item = grouped.representative;
               const unitCount = grouped.itemIds.length;
@@ -803,15 +801,15 @@ const Kiosk = () => {
                 </Card>
               );
             })}
-          </div>
+        </div>
 
-          <Card className="p-6 mb-8">
+        <Card className="mb-8 p-6">
             <div className="text-2xl sm:text-3xl font-bold text-center break-words">
               Total: <span className="text-secondary">${total.toFixed(2)}</span>
             </div>
-          </Card>
+        </Card>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Button size="lg" variant="outline" className="text-lg sm:text-xl py-6 sm:py-8 w-full" onClick={() => setStep("category")}>
               <span className="truncate">Agregar Más</span>
             </Button>
@@ -824,7 +822,6 @@ const Kiosk = () => {
             >
               <span className="truncate">Proceder al Pago</span>
             </Button>
-          </div>
         </div>
 
         <Dialog open={unitPicker.open} onOpenChange={(open) => setUnitPicker((prev) => ({ ...prev, open }))}>
@@ -849,34 +846,34 @@ const Kiosk = () => {
             </div>
           </DialogContent>
         </Dialog>
-      </div>
+      </PageLayout>
     );
   }
 
   if (step === "payment") {
     return (
-      <div className="min-h-screen bg-background p-8">
-        <div className="max-w-2xl mx-auto text-center">
-          <h1 className="text-4xl font-bold mb-8">Método de Pago</h1>
-
-          <div className="grid gap-6 mb-8">
-            <Card className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")} onClick={() => { if (!isSubmitting) handleSubmitOrder(); }}>
-              <h3 className="text-2xl font-bold">💳 Pagar con Tarjeta</h3>
-              <p className="text-muted-foreground mt-2">Inserta o acerca tu tarjeta</p>
-            </Card>
-
-            <Card className={cn("p-8 cursor-pointer hover-lift", isSubmitting && "opacity-70")} onClick={() => { if (!isSubmitting) handleSubmitOrder(); }}>
-              <h3 className="text-2xl font-bold">💵 Pagar en Caja</h3>
-              <p className="text-muted-foreground mt-2">Dirígete a caja para pagar</p>
-            </Card>
-          </div>
-
-          <Button variant="outline" size="lg" onClick={() => setStep("review")} disabled={isSubmitting}>
-            <ArrowLeft className="mr-2" />
+      <PageLayout
+        title="Método de Pago"
+        subtitle="Selecciona cómo deseas finalizar tu pedido."
+        actions={(
+          <Button variant="outline" size="lg" className="h-12 rounded-xl px-5 md:h-14 md:text-base" onClick={() => setStep("review")} disabled={isSubmitting}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
             Volver
           </Button>
+        )}
+      >
+        <div className="mx-auto grid max-w-3xl gap-6">
+          <Card className={cn("cursor-pointer rounded-2xl p-8 hover-lift", isSubmitting && "opacity-70")} onClick={() => { if (!isSubmitting) handleSubmitOrder(); }}>
+              <h3 className="text-2xl font-bold">💳 Pagar con Tarjeta</h3>
+              <p className="text-muted-foreground mt-2">Inserta o acerca tu tarjeta</p>
+          </Card>
+
+          <Card className={cn("cursor-pointer rounded-2xl p-8 hover-lift", isSubmitting && "opacity-70")} onClick={() => { if (!isSubmitting) handleSubmitOrder(); }}>
+              <h3 className="text-2xl font-bold">💵 Pagar en Caja</h3>
+              <p className="text-muted-foreground mt-2">Dirígete a caja para pagar</p>
+          </Card>
         </div>
-      </div>
+      </PageLayout>
     );
   }
 

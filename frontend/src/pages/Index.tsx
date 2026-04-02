@@ -1,13 +1,13 @@
-import { Navigation } from "@/components/Navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { calculateCartTotals, formatMoney, toNumber } from "@/lib/money";
+import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
+import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { SplitPanel } from "@/components/pos/SplitPanel";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
@@ -57,6 +57,7 @@ import {
   validateOrderPricePin,
   getActiveDiscounts,
   printPaymentTicket,
+  getPrintingStatus,
   Category,
   Discount,
   ModifierGroup,
@@ -73,6 +74,7 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
+import { useNavigate } from "react-router-dom";
 
 interface CartItem {
   id: string;
@@ -87,6 +89,7 @@ interface CartItem {
   assignedName?: string;
   unitPriceOverride?: number | null;
   appliedSpecialPriceRuleName?: string | null;
+  requiresKitchen?: boolean;
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
@@ -112,14 +115,15 @@ const getPaidExtrasLines = (item: CartItem) =>
 const getOrderDisposableTotal = (
   items: CartItem[],
   products: Product[],
-  serviceType: string
+  serviceType: string,
+  serviceTypes: Array<{ key: string; disposablesEnabled?: boolean }>
 ) =>
   items.reduce((sum, item) => {
     const product = products.find((candidate) => candidate.id === item.productId);
     if (!product) return sum;
-    const applyTo = product.disposableApplyTo ?? [];
+    const selectedOrderType = serviceTypes.find((type) => type.key === serviceType);
     const fee = product.disposableFee ?? 0;
-    if (fee <= 0 || !applyTo.includes(serviceType)) return sum;
+    if (fee <= 0 || selectedOrderType?.disposablesEnabled !== true) return sum;
     return sum + fee * item.quantity;
   }, 0);
 
@@ -148,12 +152,7 @@ const calculateManualDiscountAmount = (cart: CartItem[], discount: Discount | nu
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
-const parseMoneyToCents = (value: string): number => {
-  const normalized = value.replace(/[^\d.]/g, "");
-  const amount = Number(normalized || 0);
-  if (!Number.isFinite(amount) || amount < 0) return 0;
-  return Math.round(amount * 100);
-};
+const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
 
 const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
 
@@ -167,6 +166,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 
 const POS = () => {
+  const navigate = useNavigate();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -199,8 +199,11 @@ const POS = () => {
   const [taxRate, setTaxRate] = useState(0.13);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
+  const [isCustomerDteOpen, setIsCustomerDteOpen] = useState(false);
+  const [isSplitConfigOpen, setIsSplitConfigOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
-  const [cardType, setCardType] = useState<"debit" | "credit">("debit");
+  const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("cash");
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -239,6 +242,9 @@ const POS = () => {
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
   const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
+  const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
+  const cartEndRef = useRef<HTMLDivElement | null>(null);
+  const previousCartLengthRef = useRef(0);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
@@ -246,6 +252,7 @@ const POS = () => {
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
   const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [printerAvailable, setPrinterAvailable] = useState(true);
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -293,7 +300,7 @@ const POS = () => {
       taxRate
     ).total;
     const computedDiscountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
-    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
     return {
       itemsGross: computedItemsGross,
       subtotal: computedItemsGross,
@@ -301,16 +308,14 @@ const POS = () => {
       cartDisposableTotal: computedDisposableTotal,
       total: Math.max(computedItemsGross - computedDiscountAmount, 0) + computedDisposableTotal,
     };
-  }, [cart, products, selectedDiscount, serviceType, taxRate]);
+  }, [cart, products, selectedDiscount, serviceType, serviceTypes, taxRate]);
 
-  const loadMenuData = async (orderTypeId?: number) => {
-    const [categoriesResponse, productsResponse, modifierGroupsResponse] = await Promise.all([
+  const loadMenuData = async () => {
+    const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
-      getProducts(orderTypeId ? { orderTypeId } : undefined),
       getModifierGroups(),
     ]);
     setCategories(categoriesResponse);
-    setProducts(productsResponse);
     setModifierGroups(modifierGroupsResponse);
   };
 
@@ -333,13 +338,42 @@ const POS = () => {
   }, [serviceTypes, serviceType]);
 
   useEffect(() => {
+    if (!serviceTypes.length || !serviceType) return;
     const selectedServiceType = serviceTypes.find((item) => item.key === serviceType);
-    getProducts(selectedServiceType ? { orderTypeId: selectedServiceType.id } : undefined)
-      .then(setProducts)
+    if (!selectedServiceType) return;
+    let cancelled = false;
+    getProducts({ orderTypeId: selectedServiceType.id })
+      .then((rows) => {
+        if (cancelled) return;
+        setProducts(rows);
+      })
       .catch((error) => {
+        if (cancelled) return;
         console.error("Failed to refresh products for service type", error);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [serviceType, serviceTypes]);
+
+  useEffect(() => {
+    if (!products.length) return;
+    setCart((prev) =>
+      prev.map((item) => {
+        if (!item.productId || item.unitPriceOverride != null || item.isCustom) return item;
+        const latestProduct = products.find((candidate) => candidate.id === item.productId);
+        if (!latestProduct) return item;
+        const pricing = resolveEffectiveUnitPrice(latestProduct, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        return {
+          ...item,
+          basePrice: pricing.effectivePrice,
+          originalBasePrice: pricing.display.showOfferBadge ? pricing.basePrice : undefined,
+          appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
+          price: pricing.effectivePrice + getItemModifierTotal(item),
+        };
+      })
+    );
+  }, [products, serviceType]);
 
   const loadActiveDiscounts = async () => {
     try {
@@ -365,6 +399,11 @@ const POS = () => {
       setActiveTenderField(null);
     }
   }, [paymentMethod]);
+  useEffect(() => {
+    if (dteDocumentType !== "CCF" && ivaExempt) {
+      setIvaExempt(false);
+    }
+  }, [dteDocumentType, ivaExempt]);
 
   useEffect(() => {
     if (!activeTenderField) return;
@@ -410,13 +449,38 @@ const POS = () => {
     setIsExtrasOpen(true);
   };
 
+  useLayoutEffect(() => {
+    if (cart.length > previousCartLengthRef.current) {
+      cartEndRef.current?.scrollIntoView({ block: "end" });
+    }
+    previousCartLengthRef.current = cart.length;
+  }, [cart]);
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isKitchenPromptOpen) return;
+    getPrintingStatus()
+      .then((status) => setPrinterAvailable(status.available))
+      .catch(() => setPrinterAvailable(false));
+  }, [isKitchenPromptOpen]);
+
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
     const draftItemsGross = calculateCartTotals(
       items.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
       taxRate
     ).total;
-    const draftDisposable = getOrderDisposableTotal(items, products, serviceType);
+    const draftDisposable = getOrderDisposableTotal(items, products, serviceType, serviceTypes);
     const draftTotal = draftItemsGross + draftDisposable;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
@@ -437,10 +501,12 @@ const POS = () => {
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
+    setIsPaymentMethodOpen(false);
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
-    const effectiveBasePrice = product.effectivePrice ?? product.price;
+    const pricing = resolveEffectiveUnitPrice(product, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    const effectiveBasePrice = pricing.effectivePrice;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = effectiveBasePrice + modifierPrice;
 
@@ -462,11 +528,12 @@ const POS = () => {
           productId: product.id,
           name: product.name,
           basePrice: effectiveBasePrice,
-          originalBasePrice: product.isSpecialPriceActiveNow ? product.price : undefined,
+          originalBasePrice: pricing.display.showOfferBadge ? pricing.basePrice : undefined,
           price: totalPrice,
           quantity: 1,
           isCustom: false,
-          appliedSpecialPriceRuleName: product.appliedSpecialPriceRuleName,
+          appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
+          requiresKitchen: Boolean(product.requiresKitchen),
           modifiers,
         },
       ];
@@ -542,6 +609,7 @@ const POS = () => {
         customCode: code,
         assignedName: manualNote.trim() || undefined,
         unitPriceOverride: null,
+        requiresKitchen: false,
         modifiers: [],
       },
     ]);
@@ -552,14 +620,14 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const paymentTotal =
-    (ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : checkoutDraft?.total) ?? (cart.length > 0 ? total : toNumber(activeOrder?.total));
+  const canonicalDueCents = activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? checkoutDraft?.total ?? 0);
+  const paymentTotal = canonicalDueCents / 100;
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
   const paymentAmountValue = toNumber(paymentAmount);
   const tipAmountValue = toNumber(tipAmount);
-  const checkoutTotal = ivaExempt ? (checkoutDraft?.total ?? 0) / 1.13 : (checkoutDraft?.total ?? 0);
-  const checkoutTotalCents = Math.round(checkoutTotal * 100);
+  const checkoutTotal = paymentTotal;
+  const checkoutTotalCents = canonicalDueCents;
   const splitValidation = validateParts(checkoutTotalCents, parts);
   const activeSplitPart = parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.isPaid) ?? parts[0];
   const expectedPaymentCents = splitEnabled ? (activeSplitPart?.amountCents ?? checkoutTotalCents) : checkoutTotalCents;
@@ -571,20 +639,23 @@ const POS = () => {
   const changeTotal = Math.max(changeCents, 0) / 100;
   const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDisposableTotal = checkoutDraft
-    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
+    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType, serviceTypes)
     : 0;
+  const checkoutSummarySubtotalBefore = activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
+  const checkoutSummaryDiscount = activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount;
+  const checkoutSummaryTotal = activeOrder?.totalPayable ?? paymentTotal;
   const filteredDiscounts = availableDiscounts.filter((discount) =>
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
 
-  const proceedToCheckout = () => {
+  const proceedToCheckout = async () => {
     if (cart.length === 0) return;
 
     const draftItemsGross = calculateCartTotals(
       cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
       taxRate
     ).total;
-    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType);
+    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
     const draftDiscount = calculateManualDiscountAmount(cart, selectedDiscount, products);
     const draftTotal = Math.max(draftItemsGross - draftDiscount, 0) + draftDisposableTotal;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
@@ -604,16 +675,45 @@ const POS = () => {
       checkoutDraft.total === draft.total &&
       JSON.stringify(checkoutDraft.items) === JSON.stringify(draft.items);
     setCheckoutDraft(draft);
-    if (!hasSameDraft) {
-      setActiveOrder(null);
-      setCreatedOrderId(null);
-      setCreatedOrderNumber(null);
+    let order = activeOrder;
+    if (!hasSameDraft || !order) {
+      order = await createOrder({
+        serviceType: draft.serviceType,
+        source: "pos",
+        channel: "pos",
+        sendToKitchen: draft.serviceType === "KIOSK",
+        priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
+        customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+        dteDocumentType,
+        ivaExempt,
+        discountId: selectedDiscount?.id,
+        discountMode: selectedDiscount ? "manual" : undefined,
+        items: draft.items.map((item) => ({
+          type: item.isCustom ? "manual" : "menu",
+          productId: item.productId,
+          productName: item.name,
+          price: item.basePrice,
+          unitPriceOverride: item.unitPriceOverride ?? null,
+          quantity: item.quantity,
+          isCustom: Boolean(item.isCustom),
+          customCode: item.customCode,
+          assignedName: item.assignedName,
+          modifiers: item.modifiers,
+        })),
+      });
+      setActiveOrder(order);
+      setCreatedOrderId(order.id);
+      setCreatedOrderNumber(order.orderNumber ?? null);
+    } else {
+      order = await getOrderById(order.id);
+      setActiveOrder(order);
     }
-    setPaymentAmount(toNumber(draft.total).toFixed(2));
+    const dueCents = typeof order.remainingCents === "number" ? order.remainingCents : Math.round(toNumber(order.remaining) * 100);
+    setPaymentAmount(centsToInput(dueCents));
     setTipAmount("0");
     setPaymentReference("");
     setSplitEnabled(false);
-    const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
+    const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
     setIsPaymentOpen(true);
@@ -626,12 +726,12 @@ const POS = () => {
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
-  const ensureCashSessionOpen = async (postAction: () => void) => {
+  const ensureCashSessionOpen = async (postAction: () => Promise<void> | void) => {
     try {
       const current = await getCurrentCashSession();
       setCashSnapshot(current);
       if (current.open) {
-        postAction();
+        await postAction();
         return;
       }
       requestOpenSession(postAction);
@@ -642,7 +742,7 @@ const POS = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    await ensureCashSessionOpen(proceedToCheckout);
+    await ensureCashSessionOpen(() => proceedToCheckout());
   };
 
   const getPendingSelectionValidation = () => {
@@ -934,6 +1034,7 @@ const POS = () => {
 
   const finalizePaidSale = () => {
     setIsPaymentOpen(false);
+    setActiveOrder(null);
     setCart([]);
     setSelectedDiscount(null);
     setCheckoutDraft(null);
@@ -943,6 +1044,21 @@ const POS = () => {
     setParts([]);
     setActivePartId(null);
     setKitchenPromptOrderId(null);
+  };
+
+  const scheduleReload = () => {
+    window.setTimeout(() => window.location.reload(), 250);
+  };
+
+  const triggerPdfDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 500);
   };
 
   const handleKitchenChoice = async (shouldSend: boolean) => {
@@ -962,19 +1078,37 @@ const POS = () => {
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
-      if (postSalePrintChoice && lastPaymentId) {
+      if (lastPaymentId && postSalePrintChoice) {
         const printResult = await printPaymentTicket(lastPaymentId);
-        if (!printResult.printed && printResult.printError) {
+        if (printResult.pdfBlob) {
+          triggerPdfDownload(printResult.pdfBlob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
+          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+        } else if (!printResult.printed && printResult.receiptPdfUrl) {
+          const anchor = document.createElement("a");
+          anchor.href = printResult.receiptPdfUrl;
+          anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
+          anchor.target = "_blank";
+          anchor.rel = "noopener";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+        } else if (!printResult.printed && printResult.printError) {
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
+        }
+        if (printResult.drawerError) {
+          toast.warning(printResult.drawerError);
         }
       }
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
+      scheduleReload();
     } catch (error) {
       console.error("Failed to update send_to_kitchen", error);
       toast.error("No se pudo enviar a cocina. La venta se guardó. Puedes reenviar luego.");
       setIsKitchenPromptOpen(false);
       finalizePaidSale();
+      scheduleReload();
     } finally {
       setIsSubmittingKitchenChoice(false);
     }
@@ -990,7 +1124,8 @@ const POS = () => {
     const tipValue = toNumber(tipAmount);
     const totalDue = totalDueCents / 100;
     const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
-    const paymentAmountForApi = splitEnabled ? expectedPaymentCents / 100 : remainingOrderAmount;
+    const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
+    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
 
     if (!amountReceived || amountReceived <= 0) {
       toast.error("Ingresa un monto válido");
@@ -1002,6 +1137,10 @@ const POS = () => {
     }
     if (splitEnabled && !splitValidation.isValid) {
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
+      return;
+    }
+    if (paymentMethod === "card" && !cardType) {
+      toast.error("Selecciona débito o crédito para tarjeta");
       return;
     }
     if (amountReceived < totalDue) {
@@ -1017,47 +1156,12 @@ const POS = () => {
     try {
       setIsProcessingPayment(true);
       let order = activeOrder;
-      if (!order) {
-        if (createdOrderId) {
-          order = await getOrderById(createdOrderId);
-          setCreatedOrderNumber(order.orderNumber ?? null);
-        } else {
-          order = await createOrder({
-            serviceType: checkoutDraft.serviceType,
-            source: "pos",
-            channel: "pos",
-            sendToKitchen: checkoutDraft.serviceType === "KIOSK",
-            priceChangePin: checkoutDraft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
-            customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
-            dteDocumentType,
-            ivaExempt,
-            discountId: selectedDiscount?.id,
-            discountMode: selectedDiscount ? "manual" : undefined,
-            items: checkoutDraft.items.map((item) => ({
-              type: item.isCustom ? "manual" : "menu",
-              productId: item.productId,
-              productName: item.name,
-              price: item.basePrice,
-              unitPriceOverride: item.unitPriceOverride ?? null,
-              quantity: item.quantity,
-              isCustom: Boolean(item.isCustom),
-              customCode: item.customCode,
-              assignedName: item.assignedName,
-              modifiers: item.modifiers,
-            })),
-          });
-          const createdId =
-            (order as Order | undefined)?.id ??
-            (order as unknown as { order_id?: number }).order_id ??
-            (order as unknown as { pk?: number }).pk;
-          if (!createdId) {
-            throw new Error("createOrder did not return an id");
-          }
-          setCreatedOrderId(createdId);
-          setCreatedOrderNumber((order as Order | undefined)?.orderNumber ?? null);
-        }
+      if (!order && createdOrderId) {
+        order = await getOrderById(createdOrderId);
+        setCreatedOrderNumber(order.orderNumber ?? null);
         setActiveOrder(order);
       }
+      if (!order) throw new Error("No active order for checkout");
       const orderId =
         (order as Order | undefined)?.id ??
         (order as unknown as { order_id?: number }).order_id ??
@@ -1070,7 +1174,7 @@ const POS = () => {
       const latestRemaining = Math.max(0, toNumber(latestOrder.remaining));
       const amountForApi =
         splitEnabled
-          ? paymentAmountForApi
+          ? Math.min(paymentAmountForApi, latestRemaining)
           : paymentMethod === "cash"
             ? latestRemaining
             : Math.min(paymentAmountForApi, latestRemaining);
@@ -1078,12 +1182,14 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        cardType: paymentMethod === "card" ? cardType : undefined,
+        cardType: paymentMethod === "card" ? (cardType ?? undefined) : undefined,
         amount: amountForApi,
+        amountApplied: amountForApi,
         cashReceived: amountReceived,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
+        splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
       });
       setLastPaymentId(paymentResult.id);
       const refreshed = await getOrderById(orderId);
@@ -1098,22 +1204,16 @@ const POS = () => {
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
       setPaymentReference("");
-      const shouldOpenDrawer = isCashPaymentSelected(paymentMethod, selectedPaymentMethodCode);
-      console.debug("payment success -> opening drawer", { shouldOpenDrawer, paymentMethod, selectedPaymentMethodCode });
-      if (shouldOpenDrawer) {
-        void triggerDrawerOpen({ showSuccessToast: false }).catch(() => {
-          toast.error("No se pudo abrir la gaveta");
-        });
-      }
       if (refreshed.paymentStatus === "paid") {
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {
           toast.success("Pago y factura registrados. Enviado a cocina.");
           finalizePaidSale();
         } else {
+          const hasKitchenItems = Boolean(refreshed.requiresKitchen);
           toast.success("Pago y factura registrados.");
           setKitchenPromptOrderId(orderId);
-          setPostSaleKitchenChoice(true);
+          setPostSaleKitchenChoice(hasKitchenItems);
           setPostSalePrintChoice(true);
           setIsKitchenPromptOpen(true);
         }
@@ -1309,33 +1409,44 @@ const POS = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      
-      <div className="pt-20 px-2 lg:px-4 pb-4">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:h-[calc(100vh-6rem)]">
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
+      <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           {/* Products Section */}
-          <div className="lg:col-span-2 flex flex-col gap-4 h-auto lg:overflow-hidden">
+          <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="h-12 w-12 shrink-0 rounded-full"
+                    onClick={() => navigate("/")}
+                    aria-label="Menú principal"
+                    title="Menú principal"
+                  >
+                    <LayoutGrid className="h-5 w-5" />
+                  </Button>
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Buscar productos..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10"
+                    className="h-12 pl-10 text-base"
                   />
+                  </div>
                 </div>
                 
-                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                <div className="flex flex-wrap gap-2.5 pb-1">
                   {["Todos", ...categories.filter((cat) => !cat.isHidden && !cat.name.toUpperCase().includes("SIN CATEGORÍA")).map((cat) => cat.name)].map((cat) => (
                     <Badge
                       key={cat}
                       variant={selectedCategory === cat ? "default" : "outline"}
                       className={cn(
-                        "cursor-pointer transition-all whitespace-nowrap rounded-full px-4 py-2 text-sm min-h-10 inline-flex items-center",
+                        "inline-flex min-h-14 cursor-pointer items-center whitespace-nowrap rounded-full px-5 py-2 text-base transition-all",
                         selectedCategory === cat && "bg-primary text-primary-foreground"
                       )}
                       onClick={() => setSelectedCategory(cat)}
@@ -1348,39 +1459,41 @@ const POS = () => {
             </Card>
 
             {/* Products Grid */}
-            <div className="lg:flex-1 lg:overflow-y-auto pb-4 lg:pb-0">
-                <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
-                  {filteredProducts.map((product) => (
+            <div className="flex-1 overflow-y-auto pb-4">
+                <div className="grid items-start grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                  {filteredProducts.map((product) => {
+                    const productPricing = resolveEffectiveUnitPrice(
+                      product,
+                      serviceType,
+                      new Date(),
+                      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+                    );
+                    return (
                     <Card
                       key={product.id}
-                    className="p-3 cursor-pointer hover-lift"
+                    className="cursor-pointer p-4 hover-lift"
                     onClick={() => handleProductClick(product)}
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-                    {product.isSpecialPriceActiveNow && (
+                    {productPricing.display.showOfferBadge && (
                       <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
                     )}
                     <div className="space-y-0.5">
-                      {product.isSpecialPriceActiveNow && (
+                      {productPricing.display.showOfferBadge && (
                         <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
                       )}
-                      <p className="text-base font-bold text-secondary">${(product.effectivePrice ?? product.price).toFixed(2)}</p>
+                      <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
                     </div>
-                    {product.modifierGroups && product.modifierGroups.length > 0 && (
-                      <Badge variant="secondary" className="mt-1 text-xs">
-                        <span className="md:hidden">Custom</span>
-                        <span className="hidden md:inline">Customizable</span>
-                      </Badge>
-                    )}
                   </Card>
-                ))}
+                );
+                })}
               </div>
             </div>
           </div>
 
           {/* Cart Section */}
-          <Card className="flex flex-col overflow-hidden">
-            <div className="p-4 border-b">
+          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[320px]">
+            <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                   <div />
@@ -1447,11 +1560,31 @@ const POS = () => {
                         <TooltipContent>Transacciones de caja</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Refrescar"
+                            aria-label="Refrescar"
+                            className="h-11 w-11 rounded-xl"
+                            onClick={() => window.location.reload()}
+                          >
+                            <RefreshCw className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Refrescar</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </div>
               </div>
 
-              <div className="flex gap-2 overflow-x-auto pb-1">
+            </div>
+
+            <div className="flex-none border-b px-4 py-3">
+              <div className="flex flex-wrap gap-2">
                 {serviceTypes.length > 0 ? (
                   serviceTypes.map((type) => (
                     <Button
@@ -1459,7 +1592,7 @@ const POS = () => {
                       variant={serviceType === type.key ? "default" : "outline"}
                       size="sm"
                       onClick={() => setServiceType(type.key)}
-                      className="min-w-fit whitespace-nowrap"
+                      className="min-h-14 min-w-fit whitespace-nowrap px-4 text-base"
                     >
                       {type.label}
                     </Button>
@@ -1472,7 +1605,7 @@ const POS = () => {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
+            <div ref={cartItemsScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
               {cart.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                   <ShoppingCart className="h-16 w-16 mb-3 opacity-50" />
@@ -1509,7 +1642,7 @@ const POS = () => {
                         </div>
                         <div className="flex items-center gap-1">
                           {!item.isCustom && (
-                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-8 w-8" title="Cambiar precio para esta venta">
+                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-10 w-10" title="Cambiar precio para esta venta">
                               <PencilLine className="h-4 w-4" />
                             </Button>
                           )}
@@ -1517,7 +1650,7 @@ const POS = () => {
                             variant="ghost"
                             size="icon"
                             onClick={() => removeItem(item.id)}
-                            className="h-7 w-7 text-danger"
+                            className="h-10 w-10 text-danger"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1530,7 +1663,7 @@ const POS = () => {
                             variant="outline"
                             size="icon"
                             onClick={() => updateQuantity(item.id, -1)}
-                            className="h-7 w-7"
+                            className="h-10 w-10"
                           >
                             <Minus className="h-3 w-3" />
                           </Button>
@@ -1539,7 +1672,7 @@ const POS = () => {
                             variant="outline"
                             size="icon"
                             onClick={() => updateQuantity(item.id, 1)}
-                            className="h-7 w-7"
+                            className="h-10 w-10"
                           >
                             <Plus className="h-3 w-3" />
                           </Button>
@@ -1548,11 +1681,12 @@ const POS = () => {
                       </div>
                     </Card>
                   ))}
+                  <div ref={cartEndRef} />
                 </div>
               )}
             </div>
 
-            <div className="p-4 border-t space-y-3">
+            <div className="z-10 flex-none border-t bg-background p-4 space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal (productos)</span>
@@ -1579,7 +1713,7 @@ const POS = () => {
               <div className="grid grid-cols-1 gap-3">
                 <Button
                   variant="default"
-                  className="w-full font-bold"
+                  className="h-14 w-full text-base font-bold"
                   size="lg"
                   disabled={cart.length === 0 || isProcessingPayment}
                   onClick={handleCheckout}
@@ -1588,7 +1722,7 @@ const POS = () => {
                 </Button>
                 <Button
                   variant="outline"
-                  className="w-full"
+                  className="h-14 w-full text-base"
                   onClick={() => {
                     setCart([]);
                     setSelectedDiscount(null);
@@ -1696,6 +1830,8 @@ const POS = () => {
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
                   <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
                   <div>Transferencia: {formatMoney(cashSnapshot.summary.methods.transfer)}</div>
+                  <div>Pedidos Ya: {formatMoney(cashSnapshot.summary.methods.pedidosYa)}</div>
+                  <div>PayPal: {formatMoney(cashSnapshot.summary.methods.payPal)}</div>
                   <div>Pagos/gastos: -{formatMoney(cashSnapshot.summary.totalCashOut)}</div>
                   <div className="font-semibold text-foreground">Esperado en caja: {formatMoney(cashSnapshot.summary.expectedCashInDrawer)}</div>
                 </div>
@@ -1738,7 +1874,7 @@ const POS = () => {
 
             <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
               {cashTransactions.length === 0 ? (
-                <div className="text-muted-foreground">Sin pagos registrados.</div>
+                <div className="text-muted-foreground">Sin gastos registrados.</div>
               ) : (
                 cashTransactions.map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
@@ -1816,7 +1952,7 @@ const POS = () => {
                 <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
                   <div className="rounded-lg border bg-muted/30 p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(checkoutDraft.total)}</div>
+                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -1828,22 +1964,33 @@ const POS = () => {
                     </div>
                     <div className="rounded-md border">
                       <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
-                        {checkoutDraft.items.map((item) => (
+                        {(activeOrder?.items?.length ? activeOrder.items : checkoutDraft.items.map((item) => ({
+                          id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
+                          productName: item.name,
+                          quantity: item.quantity,
+                          unitPriceBeforeDiscount: getItemUnitTotal(item),
+                          unitPriceFinal: getItemUnitTotal(item),
+                          discountAmount: 0,
+                          lineTotalFinal: getItemUnitTotal(item) * item.quantity,
+                          lineTotalDiscount: 0,
+                        }))).map((item) => (
                           <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                             <div className="min-w-0">
-                              <div className="truncate font-medium">{item.name}</div>
+                              <div className="truncate font-medium">{item.productName}</div>
                               <div className="text-xs text-muted-foreground">
-                                {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
-                                  <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                                {(item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? 0) > (item.unitPriceFinal ?? 0) && (
+                                  <span className="mr-1 line-through">{formatMoney(item.unitPriceBeforeDiscount ?? 0)}</span>
                                 )}
-                                {formatMoney(toNumber(getItemUnitTotal(item)))} c/u
+                                {formatMoney(item.unitPriceFinal ?? item.unitPriceBeforeDiscount ?? 0)} c/u
                               </div>
-                              {item.appliedSpecialPriceRuleName && (
-                                <div className="text-[11px] text-emerald-600">Oferta aplicada</div>
+                              {(item.discountAmount ?? 0) > 0 && (
+                                <div className="text-[11px] text-emerald-600">
+                                  Descuento {formatMoney(item.discountAmount ?? 0)}
+                                </div>
                               )}
                             </div>
                             <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
-                            <div className="text-right font-semibold">{formatMoney(toNumber(getItemUnitTotal(item)) * toNumber(item.quantity))}</div>
+                            <div className="text-right font-semibold">{formatMoney(item.lineTotalFinal ?? ((item.unitPriceFinal ?? 0) * item.quantity))}</div>
                           </div>
                         ))}
                       </div>
@@ -1853,165 +2000,199 @@ const POS = () => {
                   <div className="rounded-md border p-3 text-sm">
                     <div className="mb-2 font-semibold">Resumen</div>
                     <div className="space-y-1 text-muted-foreground">
-                      <div className="flex justify-between"><span>Subtotal (productos)</span><span>{formatMoney(checkoutDraft.subtotal)}</span></div>
+                      <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
+                      {checkoutSummaryDiscount > 0 && <div className="flex justify-between text-emerald-600"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>}
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutDraft.total)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Tipo DTE</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                      <Button type="button" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                      <Button type="button" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Cliente</Label>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="flex-1 justify-start"
-                        onClick={() => {
-                          setIsCustomerPickerOpen(true);
-                          setCustomerSearch("");
-                        }}
-                      >
-                        {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-12"
-                        onClick={() => {
-                          setCustomerFormErrors({});
-                          setCustomerServerErrors({});
-                          setActivitySearch("");
-                          setIsCustomerCreateOpen(true);
-                          void preloadCustomerFormFromDTE(dteDocumentType);
-                        }}
-                      >
-                        Administrar clientes
-                      </Button>
-                    </div>
-                  </div>
-                  {selectedCustomer && selectedCustomer.clientType !== dteDocumentType && <p className="text-xs text-destructive">Tipo DTE no coincide con cliente seleccionado ({selectedCustomer.clientType}).</p>}
-                  <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
-                  <SplitPanel
-                    enabled={splitEnabled}
-                    onEnabledChange={setSplitEnabled}
-                    totalCents={checkoutTotalCents}
-                    parts={parts}
-                    onPartsChange={setParts}
-                    activePartId={activePartId}
-                    onActivePartIdChange={setActivePartId}
-                  />
-
-                  {splitEnabled && activeSplitPart && (
+                  {splitEnabled && activeSplitPart ? (
                     <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
                       Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="space-y-3">
-                    <Label>Método</Label>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {[
-                        { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
-                        { code: "card_debit", label: "Tarjeta Débito", method: "card" as PaymentMethod },
-                        { code: "card_credit", label: "Tarjeta Crédito", method: "card" as PaymentMethod },
-                        { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
-                        { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
-                        { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
-                      ].map((option) => (
-                        <Button
-                          key={option.code}
-                          type="button"
-                          variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
-                          className="h-12"
-                          onClick={() => {
-                            setSelectedPaymentMethodCode(option.code);
-                            setPaymentMethod(option.method);
-                          }}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                    </div>
-                    {paymentMethod === "card" && (
-                      <div className="space-y-2">
-                        <Label>Tipo de tarjeta</Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button type="button" variant={cardType === "debit" ? "default" : "outline"} onClick={() => setCardType("debit")}>Débito</Button>
-                          <Button type="button" variant={cardType === "credit" ? "default" : "outline"} onClick={() => setCardType("credit")}>Crédito</Button>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Se enviará a Hacienda como Tarjeta {cardType === "debit" ? "Débito (CAT-017: 02)" : "Crédito (CAT-017: 03)"}.
-                        </p>
-                      </div>
-                    )}
-                    {(paymentMethod === "card" || selectedPaymentMethodCode === "transfer" || selectedPaymentMethodCode === "pedidos_ya" || selectedPaymentMethodCode === "paypal") && (
-                      <div className="space-y-2">
-                        <Label>
-                          {selectedPaymentMethodCode === "pedidos_ya"
-                            ? "Código de pedido / referencia (opcional)"
-                            : selectedPaymentMethodCode === "paypal"
-                              ? "ID de transacción (opcional)"
-                              : paymentMethod === "card"
-                                ? "Voucher / Autorización (opcional)"
-                                : "Referencia (opcional)"}
-                        </Label>
-                        <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Opcional" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label>Monto recibido</Label>
-                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Propina</Label>
-                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border p-3 text-center text-lg font-semibold">
-                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-                    {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-                  </div>
-
-                  {activeTenderField && (
-                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
-                      {DENOMINATION_CENTS.map((value) => (
-                        <Button key={value} type="button" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                          {formatMoney(value / 100)}
-                        </Button>
-                      ))}
-                      <Button type="button" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                      <Button type="button" variant="outline" onClick={backspaceTenderField}>←</Button>
-                      <Button type="button" variant="outline" className="col-span-2" onClick={setExactTenderAmount}>Exacto</Button>
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    <Button variant="outline" className="flex-1" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="flex-1" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
-                      {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
+                      Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                    </Button>
+                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                      Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
-                  {isPaid && <Button variant="outline" className="w-full" onClick={handlePrintReceipt}>Imprimir recibo</Button>}
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="h-14 flex-1 text-base" onClick={() => { setIsPaymentOpen(false); setIsPaymentMethodOpen(true); }} disabled={splitEnabled && !splitValidation.isValid}>
+                      Continuar al pago
+                    </Button>
+                  </div>
                 </div>
               </>
             ) : (
               <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPaymentMethodOpen} onOpenChange={setIsPaymentMethodOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Pago</DialogTitle>
+            <DialogDescription>{splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-xl border bg-muted/30 p-4 text-center">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Total a pagar</div>
+              <div className="text-4xl font-extrabold text-secondary">{formatMoney(expectedPaymentCents / 100)}</div>
+            </div>
+            <Label>Método</Label>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {[
+                { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
+                { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
+                { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
+                { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
+                { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
+              ].map((option) => (
+                <Button
+                  key={option.code}
+                  type="button"
+                  variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                  className="h-14 text-base"
+                  onClick={() => {
+                    setPaymentMethod(option.method);
+                    if (option.code === "card") {
+                      setSelectedPaymentMethodCode("card_credit");
+                      setCardType(null);
+                    } else {
+                      setSelectedPaymentMethodCode(option.code);
+                      setCardType(null);
+                    }
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            {paymentMethod === "card" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
+                <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
+              </div>
+            ) : null}
+            <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Monto recibido</Label>
+                <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+              </div>
+              <div className="space-y-2">
+                <Label>Propina</Label>
+                <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+              </div>
+            </div>
+            <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+              {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+              {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+              {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+            </div>
+            {activeTenderField ? (
+              <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                {DENOMINATION_CENTS.map((value) => (
+                  <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                    {formatMoney(value / 100)}
+                  </Button>
+                ))}
+                <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
+                <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
+              </div>
+            ) : null}
+            <div className="flex gap-2">
+              <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
+                {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCustomerDteOpen} onOpenChange={setIsCustomerDteOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Cliente / DTE</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Tipo DTE</Label>
+              <div className="grid grid-cols-3 gap-2">
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Cliente</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 flex-1 justify-start text-base"
+                  onClick={() => {
+                    setIsCustomerPickerOpen(true);
+                    setCustomerSearch("");
+                  }}
+                >
+                  {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 text-base"
+                  onClick={() => {
+                    setCustomerFormErrors({});
+                    setCustomerServerErrors({});
+                    setActivitySearch("");
+                    setIsCustomerCreateOpen(true);
+                    void preloadCustomerFormFromDTE(dteDocumentType);
+                  }}
+                >
+                  Administrar
+                </Button>
+              </div>
+            </div>
+            {dteDocumentType === "CCF" ? (
+              <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+            ) : null}
+            <div className="flex gap-2">
+              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => setIsCustomerDteOpen(false)}>Aceptar</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Dividir cuenta</DialogTitle>
+          </DialogHeader>
+          <SplitPanel
+            enabled={splitEnabled}
+            onEnabledChange={setSplitEnabled}
+            totalCents={checkoutTotalCents}
+            parts={parts}
+            onPartsChange={setParts}
+            activePartId={activePartId}
+            onActivePartIdChange={setActivePartId}
+          />
+          <div className="flex gap-2">
+            <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cerrar</Button>
+            <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aceptar</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -2227,11 +2408,11 @@ const POS = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
-              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(Boolean(value))} />
+              <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
-              <span>Imprimir ticket</span>
-              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(Boolean(value))} />
+              <span>{printerAvailable ? "Imprimir ticket" : "Descargar ticket"}</span>
+              <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
           </div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2251,6 +2432,7 @@ const POS = () => {
               onClick={() => {
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
+                scheduleReload();
               }}
             >
               Omitir

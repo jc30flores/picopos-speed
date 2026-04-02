@@ -95,7 +95,7 @@ class DTECoreTests(TestCase):
             is_custom=True,
         )
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "A" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "A" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Nombre histórico")
         self.assertEqual(first["precioUni"], 4.25)
@@ -116,11 +116,74 @@ class DTECoreTests(TestCase):
             is_custom=False,
         )
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "B" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "B" * 36, "00")
         first = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_build_payload_cf_sets_discount_summary_from_item_discounts(self):
+        category = Category.objects.create(name="DESCUENTOS")
+        product = Product.objects.create(name="Con descuento", description="", price=Decimal("5.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Item descontado",
+            price_snapshot=Decimal("5.00"),
+            quantity=2,
+            discount_amount=Decimal("1.50"),
+            snapshot_sku_or_code="DISC-1",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000201", "H" * 36, "00")
+        linea = payload["dte"]["cuerpoDocumento"][0]
+        resumen = payload["dte"]["resumen"]
+
+        self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
+        self.assertEqual(resumen["totalGravada"], 8.5)
+        self.assertEqual(resumen["subTotalVentas"], 10.0)
+        self.assertEqual(resumen["subTotal"], 8.5)
+        self.assertEqual(resumen["descuGravada"], 1.5)
+        self.assertEqual(resumen["totalDescu"], 1.5)
+
+    def test_build_payload_cf_with_special_price_and_global_discount_is_consistent(self):
+        category = Category.objects.create(name="MIX")
+        p1 = Product.objects.create(name="Coke", description="", price=Decimal("1.49"), category=category, available=True)
+        p2 = Product.objects.create(name="Shrimp Tampico Burrito", description="", price=Decimal("9.99"), category=category, available=True)
+        p3 = Product.objects.create(name="Grilled Chicken Burrito", description="", price=Decimal("6.99"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=p1, product_name_snapshot="Coke", price_snapshot=Decimal("1.49"), quantity=1, discount_amount=Decimal("0.74"))
+        OrderItem.objects.create(order=self.order, product=p2, product_name_snapshot="Shrimp Tampico Burrito", price_snapshot=Decimal("9.99"), quantity=1, discount_amount=Decimal("5.00"))
+        OrderItem.objects.create(order=self.order, product=p3, product_name_snapshot="Grilled Chicken Burrito", price_snapshot=Decimal("5.00"), quantity=1, discount_amount=Decimal("2.50"))
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000203", "J" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        for linea in cuerpo:
+            self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
+        descuentos_linea = sum(float(linea["montoDescu"]) for linea in cuerpo)
+        self.assertEqual(round(descuentos_linea, 2), round(float(resumen["totalDescu"]), 2))
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"]), 2))
+
+    def test_build_payload_cf_without_discounts_keeps_subtotals_equal(self):
+        category = Category.objects.create(name="SIN-DESC")
+        product = Product.objects.create(name="Sin descuento", description="", price=Decimal("4.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Item normal",
+            price_snapshot=Decimal("4.00"),
+            quantity=2,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="NODISC-1",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000202", "I" * 36, "00")
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(resumen["subTotalVentas"], 8.0)
+        self.assertEqual(resumen["subTotal"], 8.0)
+        self.assertEqual(resumen["totalDescu"], 0)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
@@ -134,7 +197,7 @@ class DTECoreTests(TestCase):
             is_consumer_final=True,
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000010", "D" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000010", "D" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertIsNone(receptor["tipoDocumento"])
         self.assertIsNone(receptor["numDocumento"])
@@ -153,7 +216,7 @@ class DTECoreTests(TestCase):
             correo="cliente@correo.com",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000011", "E" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000011", "E" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertEqual(receptor["tipoDocumento"], "13")
         self.assertEqual(receptor["numDocumento"], "01234567-8")
@@ -170,7 +233,7 @@ class DTECoreTests(TestCase):
             correo="realcliente@correo.com",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000111", "G" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000111", "G" * 36, "01")
         receptor = payload["dte"]["receptor"]
         self.assertEqual(receptor["correo"], "realcliente@correo.com")
 
@@ -186,7 +249,7 @@ class DTECoreTests(TestCase):
             telefono="",
         )
         self.order.save(update_fields=["customer"])
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000012", "F" * 36, "01")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000012", "F" * 36, "01")
         receptor = payload["dte"]["receptor"]
 
         def _assert_no_empty_strings(value):
@@ -213,7 +276,7 @@ class DTECoreTests(TestCase):
             snapshot_sku_or_code="JSON-1",
             is_custom=True,
         )
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000099", "C" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000099", "C" * 36, "00")
         serialized = json.dumps(payload, ensure_ascii=False)
 
         first = payload["dte"]["cuerpoDocumento"][0]
@@ -303,7 +366,7 @@ class DTECoreTests(TestCase):
     @patch("apps.dte.client.requests.Session.post")
     def test_client_blocks_send_on_emisor_nit_mismatch(self, mock_post, mock_build_url):
         DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="12171409901063", is_active=True)
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000001", "A" * 36, "00")
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000001", "A" * 36, "00")
         payload["dte"]["emisor"]["nit"] = "00000000000000"
         mock_build_url.return_value = "https://example.test/api/v1/dte/factura"
 
@@ -331,7 +394,7 @@ class DTEResendEndpointTests(TestCase):
             branch=branch,
             dte_type="CF_01",
             status=DTERecord.STATUS_PENDING,
-            control_number="DTE-01-S001P001-000000000000001",
+            control_number="DTE-01-X001X001-000000000000001",
             generation_code="A" * 36,
             codigo_generacion="A" * 36,
             send_attempts=0,

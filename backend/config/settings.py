@@ -1,30 +1,24 @@
 from pathlib import Path
 import logging
 import os
-
 try:
     from dotenv import load_dotenv
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover - fallback for minimal runtime envs
     load_dotenv = None
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-def _load_env_file(base_dir: Path) -> None:
-    env_path = base_dir / ".env"
-    if load_dotenv is not None:
-        load_dotenv(env_path, override=True)
-        return
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text().splitlines():
+env_path = BASE_DIR / ".env"
+if load_dotenv is not None:
+    load_dotenv(dotenv_path=env_path, override=True)
+elif env_path.exists():
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         os.environ[key.strip()] = value.strip()
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-_load_env_file(BASE_DIR)
+print("ENV LOADED FROM:", env_path)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -44,7 +38,7 @@ def _env_int(name: str, default: int | None = None) -> int | None:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "centro-pdg.cuskatech.com"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "pico-de-gallo-pos.cuskatech.com"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -161,7 +155,7 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
-    "https://centro-pdg.cuskatech.com",
+    "https://pico-de-gallo-pos.cuskatech.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -170,7 +164,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
     "http://localhost:9102",
-    "https://centro-pdg.cuskatech.com",
+    "https://pico-de-gallo-pos.cuskatech.com",
 ]
 
 USE_X_FORWARDED_HOST = True

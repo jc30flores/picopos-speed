@@ -227,7 +227,12 @@ class CashTransactionListCreateView(APIView):
             _, session = _get_open_session_for_request(request)
         if not session:
             return Response([], status=status.HTTP_200_OK)
-        items = CashTransaction.objects.filter(session=session).order_by("-created_at")
+        items = CashTransaction.objects.filter(
+            session=session,
+            type__in=["cash_out", "expense", "payout"],
+            payment__isnull=True,
+            refund__isnull=True,
+        ).order_by("-created_at")
         if start_at:
             items = items.filter(created_at__gte=start_at)
         if end_at:

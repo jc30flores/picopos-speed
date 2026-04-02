@@ -1,3 +1,4 @@
+import { fromCents, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 
 export type Category = {
@@ -146,6 +147,7 @@ export type ServiceType = {
   label: string;
   isActive?: boolean;
   sortOrder?: number;
+  disposablesEnabled?: boolean;
 };
 
 
@@ -190,6 +192,16 @@ export type OrderItem = {
   quantity: number;
   modifiers: string[];
   price: number;
+  unitPriceList?: number | null;
+  unitPriceSpecial?: number | null;
+  unitPriceBeforeDiscount?: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  unitPriceFinal?: number;
+  lineTotalBeforeDiscount?: number;
+  lineTotalDiscount?: number;
+  lineTotalFinal?: number;
+  pricingMetadata?: Record<string, unknown> | null;
   unitPriceOverride?: number | null;
   assignedName?: string;
 };
@@ -212,11 +224,17 @@ export type Order = {
   financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
   remaining: number;
+  amountDueCents?: number;
+  remainingCents?: number;
   refundTotal: number;
   netPaid: number;
   discountSnapshot?: Record<string, unknown> | null;
   requiresKitchen?: boolean;
   sendToKitchen?: boolean;
+  subtotalBeforeDiscounts?: number;
+  subtotalAfterDiscounts?: number;
+  taxTotal?: number;
+  totalPayable?: number;
 };
 
 export type EmployeeStats = {
@@ -293,7 +311,7 @@ export type CashSessionSnapshot = {
     expectedCashInDrawer: number;
     countedCash: number;
     overShortCash: number;
-    methods: { cash: number; card: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
+    methods: { cash: number; card: number; cardDebit: number; cardCredit: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
 };
 
@@ -1348,40 +1366,42 @@ export const getActiveDiscounts = async (params?: {
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
   const response = await request("/core/service-types/");
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>>(response);
   return data.map((item) => ({
     id: item.id,
     key: item.key,
     label: item.label,
     isActive: item.is_active,
     sortOrder: item.sort_order ?? 0,
+    disposablesEnabled: item.disposables_enabled === true,
   }));
 };
 
 export const listOrderTypes = async (): Promise<ServiceType[]> => {
   const response = await request('/core/order-types/');
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>>(response);
-  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0 }));
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>>(response);
+  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0, disposablesEnabled: item.disposables_enabled === true }));
 };
 
-export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number }): Promise<ServiceType> => {
+export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled?: boolean }): Promise<ServiceType> => {
   const response = await request('/core/order-types/', {
     method: 'POST',
-    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder }),
+    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder, disposables_enabled: payload.disposablesEnabled === true }),
   });
-  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
-  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true };
 };
 
-export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number }>): Promise<ServiceType> => {
+export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled: boolean }>): Promise<ServiceType> => {
   const body: Record<string, unknown> = {};
   if (payload.key !== undefined) body.key = payload.key;
   if (payload.label !== undefined) body.label = payload.label;
   if (payload.isActive !== undefined) body.is_active = payload.isActive;
   if (payload.sortOrder !== undefined) body.sort_order = payload.sortOrder;
+  if (payload.disposablesEnabled !== undefined) body.disposables_enabled = payload.disposablesEnabled;
   const response = await request(`/core/order-types/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
-  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number }>(response);
-  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0 };
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true };
 };
 
 export const deleteOrderType = async (id: number): Promise<void> => {
@@ -1537,17 +1557,33 @@ const mapOrder = (order: {
     is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
+    unit_price_list?: string | null;
+    unit_price_special?: string | null;
+    unit_price_before_discount?: string;
+    discount_amount?: string;
+    discount_percent?: string;
+    unit_price_final?: string;
+    line_total_before_discount?: string;
+    line_total_discount?: string;
+    line_total_final?: string;
+    pricing_metadata?: Record<string, unknown> | null;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
   financial_status: Order["financialStatus"];
   total_paid: string;
   remaining: string;
+  amount_due_cents?: number;
+  remaining_cents?: number;
   refund_total: string;
   net_paid: string;
   discount_snapshot?: Record<string, unknown> | null;
   requires_kitchen?: boolean;
   send_to_kitchen?: boolean;
+  subtotal_before_discounts?: string;
+  subtotal_after_discounts?: string;
+  tax_total?: string;
+  total_payable?: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1567,6 +1603,16 @@ const mapOrder = (order: {
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      unitPriceList: item.unit_price_list != null ? Number(item.unit_price_list) : null,
+      unitPriceSpecial: item.unit_price_special != null ? Number(item.unit_price_special) : null,
+      unitPriceBeforeDiscount: Number(item.unit_price_before_discount ?? item.price_snapshot),
+      discountAmount: Number(item.discount_amount ?? 0),
+      discountPercent: Number(item.discount_percent ?? 0),
+      unitPriceFinal: Number(item.unit_price_final ?? item.price_snapshot),
+      lineTotalBeforeDiscount: Number(item.line_total_before_discount ?? Number(item.price_snapshot) * item.quantity),
+      lineTotalDiscount: Number(item.line_total_discount ?? 0),
+      lineTotalFinal: Number(item.line_total_final ?? Number(item.price_snapshot) * item.quantity),
+      pricingMetadata: item.pricing_metadata ?? null,
       unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
     })),
@@ -1584,11 +1630,17 @@ const mapOrder = (order: {
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
     remaining: Number(order.remaining ?? 0),
+    amountDueCents: Number(order.amount_due_cents ?? 0),
+    remainingCents: Number(order.remaining_cents ?? 0),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
     requiresKitchen: Boolean(order.requires_kitchen),
     sendToKitchen: Boolean(order.send_to_kitchen),
+    subtotalBeforeDiscounts: Number(order.subtotal_before_discounts ?? order.total),
+    subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
+    taxTotal: Number(order.tax_total ?? 0),
+    totalPayable: Number(order.total_payable ?? order.total),
   };
 };
 
@@ -1960,7 +2012,7 @@ export const getSalesReport = async (filters?: {
       netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
-        card: Number((Number(data.aggregates.payment_methods?.card_debit ?? 0) + Number(data.aggregates.payment_methods?.card_credit ?? 0)).toFixed(2)),
+        card: fromCents(toCents(data.aggregates.payment_methods?.card_debit ?? 0) + toCents(data.aggregates.payment_methods?.card_credit ?? 0)),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
@@ -2109,6 +2161,14 @@ export const updateDiscount = async (discountId: number, payload: Discount): Pro
     stackable: Boolean(data.stackable),
     bxgyConfig: data.bxgy_config ?? undefined,
   };
+};
+
+export const deleteDiscount = async (discountId: number): Promise<void> => {
+  const response = await request(`/menu/discounts/${discountId}/`, { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    const body = await response.text().catch(() => "");
+    throw new Error(body || "No se pudo eliminar el descuento");
+  }
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -2572,14 +2632,17 @@ export const createPayment = async (payload: {
   paymentMethodCode?: string;
   cardType?: "debit" | "credit";
   amount: number;
+  amountApplied?: number;
   cashReceived?: number;
   tipAmount?: number;
   reference?: string;
+  splitPart?: number;
 }): Promise<Payment> => {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
   }
-  const amountStr = Number(payload.amount || 0).toFixed(2);
+  const amountApplied = payload.amountApplied ?? payload.amount;
+  const amountStr = Number(amountApplied || 0).toFixed(2);
   const cashReceivedStr = payload.cashReceived == null ? undefined : Number(payload.cashReceived || 0).toFixed(2);
   const tipAmountStr = Number(payload.tipAmount ?? 0).toFixed(2);
   const response = await request("/payments/", {
@@ -2594,6 +2657,7 @@ export const createPayment = async (payload: {
       tip_amount: tipAmountStr,
       card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
+      split_part: payload.splitPart ?? null,
     }),
   });
   const data = await handleJson<{
@@ -2629,10 +2693,57 @@ export const createPayment = async (payload: {
   };
 };
 
-export const printPaymentTicket = async (paymentId: number): Promise<{ printed: boolean; printError: string | null }> => {
+export const printPaymentTicket = async (
+  paymentId: number
+): Promise<{
+  printed: boolean;
+  printError: string | null;
+  receiptPdfUrl?: string | null;
+  drawerOpened?: boolean;
+  drawerError?: string | null;
+  pdfBlob?: Blob | null;
+  pdfFilename?: string | null;
+}> => {
   const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
-  const data = await handleJson<{ printed: boolean; print_error?: string | null }>(response);
-  return { printed: Boolean(data.printed), printError: data.print_error ?? null };
+  const contentType = response.headers.get("content-type") || "";
+  if (response.ok && contentType.includes("application/pdf")) {
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    const printErrorHeader = response.headers.get("X-Print-Error");
+    const drawerOpenedHeader = response.headers.get("X-Drawer-Opened");
+    const drawerErrorHeader = response.headers.get("X-Drawer-Error");
+    return {
+      printed: false,
+      printError: printErrorHeader || null,
+      receiptPdfUrl: null,
+      drawerOpened: drawerOpenedHeader === "1",
+      drawerError: drawerErrorHeader || null,
+      pdfBlob: await response.blob(),
+      pdfFilename: filenameMatch?.[1] ?? `ticket_pago_${paymentId}.pdf`,
+    };
+  }
+  const data = await handleJson<{
+    printed: boolean;
+    print_error?: string | null;
+    receipt_pdf_url?: string | null;
+    drawer_opened?: boolean;
+    drawer_error?: string | null;
+  }>(response);
+  return {
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+    receiptPdfUrl: data.receipt_pdf_url ?? null,
+    drawerOpened: Boolean(data.drawer_opened),
+    drawerError: data.drawer_error ?? null,
+    pdfBlob: null,
+    pdfFilename: null,
+  };
+};
+
+export const getPrintingStatus = async (): Promise<{ available: boolean; queue: string }> => {
+  const response = await request("/printing/status/");
+  const data = await handleJson<{ available: boolean; queue: string }>(response);
+  return { available: Boolean(data.available), queue: data.queue || "star_tsp100" };
 };
 
 
@@ -3022,12 +3133,9 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
-        card: Number(
-          (
-            Number(data.summary?.totals_by_method?.card_debit ?? 0) +
-            Number(data.summary?.totals_by_method?.card_credit ?? 0)
-          ).toFixed(2)
-        ),
+        card: fromCents(toCents(data.summary?.totals_by_method?.card_debit ?? 0) + toCents(data.summary?.totals_by_method?.card_credit ?? 0)),
+        cardDebit: Number(data.summary?.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(data.summary?.totals_by_method?.card_credit ?? 0),
         transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),
@@ -3111,12 +3219,14 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
-        cash: Number(row.summary_snapshot?.methods?.CASH?.total ?? 0),
-        card: Number(row.summary_snapshot?.methods?.CARD?.total ?? 0),
-        transfer: Number(row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(row.summary_snapshot?.cash_in_total ?? 0),
+        cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
+        cardDebit: Number(row.summary_snapshot?.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(row.summary_snapshot?.totals_by_method?.card_credit ?? 0),
+        card: fromCents(toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0) + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)),
+        transfer: Number(row.summary_snapshot?.totals_by_method?.transfer ?? row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(row.summary_snapshot?.totals_by_method?.pedidos_ya ?? row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(row.summary_snapshot?.totals_by_method?.paypal ?? row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(row.summary_snapshot?.total_cash_sales ?? row.summary_snapshot?.cash_in_total ?? 0),
       },
     },
   }));
@@ -3134,12 +3244,14 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       countedCash: Number(data.summary.counted_cash ?? 0),
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
-        cash: Number(data.summary.methods?.CASH?.total ?? 0),
-        card: Number(data.summary.methods?.CARD?.total ?? 0),
-        transfer: Number(data.summary.methods?.TRANSFER?.total ?? 0),
-        pedidosYa: Number(data.summary.methods?.PEDIDOS_YA?.total ?? 0),
-        payPal: Number(data.summary.methods?.PAYPAL?.total ?? 0),
-        cashIn: Number(data.summary.cash_in_total ?? 0),
+        cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
+        cardDebit: Number(data.summary.totals_by_method?.card_debit ?? 0),
+        cardCredit: Number(data.summary.totals_by_method?.card_credit ?? 0),
+        card: fromCents(toCents(data.summary.totals_by_method?.card_debit ?? 0) + toCents(data.summary.totals_by_method?.card_credit ?? 0)),
+        transfer: Number(data.summary.totals_by_method?.transfer ?? data.summary.methods?.TRANSFER?.total ?? 0),
+        pedidosYa: Number(data.summary.totals_by_method?.pedidos_ya ?? data.summary.methods?.PEDIDOS_YA?.total ?? 0),
+        payPal: Number(data.summary.totals_by_method?.paypal ?? data.summary.methods?.PAYPAL?.total ?? 0),
+        cashIn: Number(data.summary.total_cash_sales ?? data.summary.cash_in_total ?? 0),
       },
     },
     transactions: (data.transactions || []).map((tx: any) => ({

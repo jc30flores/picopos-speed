@@ -35,6 +35,7 @@ class ServiceType(models.Model):
     label = models.CharField(max_length=64)
     is_active = models.BooleanField(default=True)
     sort_order = models.IntegerField(default=0)
+    disposables_enabled = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["sort_order", "label"]

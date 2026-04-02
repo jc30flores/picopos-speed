@@ -7,11 +7,13 @@ from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
+from apps.core.service_types import normalize_service_type
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
 from apps.menu.utils.pricing import resolve_effective_price
 from django.conf import settings
 from apps.core.audit import log_audit
+from apps.core.money import to_cents
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -22,6 +24,15 @@ class OrderItemModifierSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     applied_modifiers = OrderItemModifierSerializer(many=True, read_only=True)
+    unit_price_list = serializers.SerializerMethodField()
+    unit_price_special = serializers.SerializerMethodField()
+    unit_price_before_discount = serializers.SerializerMethodField()
+    discount_percent = serializers.SerializerMethodField()
+    unit_price_final = serializers.SerializerMethodField()
+    line_total_before_discount = serializers.SerializerMethodField()
+    line_total_discount = serializers.SerializerMethodField()
+    line_total_final = serializers.SerializerMethodField()
+    pricing_metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -38,7 +49,62 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "assigned_name",
             "applied_special_price_rule_id",
             "applied_modifiers",
+            "unit_price_list",
+            "unit_price_special",
+            "unit_price_before_discount",
+            "discount_percent",
+            "unit_price_final",
+            "line_total_before_discount",
+            "line_total_discount",
+            "line_total_final",
+            "pricing_metadata",
         ]
+
+    def _modifier_total(self, obj: OrderItem) -> Decimal:
+        return sum((Decimal(mod.modifier_price_snapshot or 0) for mod in obj.applied_modifiers.all()), Decimal("0.00"))
+
+    def _unit_before_discount(self, obj: OrderItem) -> Decimal:
+        return (Decimal(obj.price_snapshot or 0) + self._modifier_total(obj)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_list(self, obj: OrderItem):
+        if obj.product_id and obj.product:
+            return Decimal(obj.product.price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return Decimal(obj.price_snapshot or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_special(self, obj: OrderItem):
+        if obj.applied_special_price_rule_id:
+            return Decimal(obj.price_snapshot or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return None
+
+    def get_unit_price_before_discount(self, obj: OrderItem):
+        return self._unit_before_discount(obj)
+
+    def get_discount_percent(self, obj: OrderItem):
+        unit_before = self._unit_before_discount(obj)
+        if unit_before <= 0:
+            return Decimal("0.00")
+        unit_discount = (Decimal(obj.discount_amount or 0) / Decimal(obj.quantity or 1)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return ((unit_discount / unit_before) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_final(self, obj: OrderItem):
+        unit_before = self._unit_before_discount(obj)
+        unit_discount = (Decimal(obj.discount_amount or 0) / Decimal(obj.quantity or 1)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return max(unit_before - unit_discount, Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_before_discount(self, obj: OrderItem):
+        return (self._unit_before_discount(obj) * Decimal(obj.quantity or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_discount(self, obj: OrderItem):
+        return Decimal(obj.discount_amount or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_final(self, obj: OrderItem):
+        return max(self.get_line_total_before_discount(obj) - self.get_line_total_discount(obj), Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_pricing_metadata(self, obj: OrderItem):
+        return {
+            "special_price_rule_id": obj.applied_special_price_rule_id,
+            "special_price_rule_name": getattr(obj.applied_special_price_rule, "name", None) if obj.applied_special_price_rule_id else None,
+        }
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -47,10 +113,16 @@ class OrderSerializer(serializers.ModelSerializer):
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
+    amount_due_cents = serializers.IntegerField(read_only=True)
+    remaining_cents = serializers.SerializerMethodField()
     financial_status = serializers.CharField(read_only=True)
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     net_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     fees = serializers.SerializerMethodField()
+    subtotal_before_discounts = serializers.SerializerMethodField()
+    subtotal_after_discounts = serializers.SerializerMethodField()
+    tax_total = serializers.SerializerMethodField()
+    total_payable = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -74,6 +146,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "financial_status",
             "total_paid",
             "remaining",
+            "amount_due_cents",
+            "remaining_cents",
             "refund_total",
             "net_paid",
             "service_type",
@@ -85,6 +159,10 @@ class OrderSerializer(serializers.ModelSerializer):
             "channel",
             "requires_kitchen",
             "fees",
+            "subtotal_before_discounts",
+            "subtotal_after_discounts",
+            "tax_total",
+            "total_payable",
         ]
 
     def get_service_type(self, obj: Order):
@@ -115,20 +193,34 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
 
     def get_total_paid(self, obj: Order):
-        total = Payment.objects.filter(order=obj).aggregate(
-            total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            )
-        )["total"] or Decimal("0")
+        total = Payment.objects.filter(order=obj).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0")
         return total
 
     def get_remaining(self, obj: Order):
         total_paid = self.get_total_paid(obj)
-        remaining = (obj.total - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        due = Decimal(obj.amount_due_cents or to_cents(obj.total)) / Decimal("100")
+        remaining = (due - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return remaining
+
+    def get_remaining_cents(self, obj: Order):
+        return max(to_cents(self.get_remaining(obj)), 0)
+
+    def get_subtotal_before_discounts(self, obj: Order):
+        total = Decimal("0.00")
+        for item in obj.items.all():
+            modifiers_total = sum((Decimal(mod.modifier_price_snapshot or 0) for mod in item.applied_modifiers.all()), Decimal("0.00"))
+            unit_before = Decimal(item.price_snapshot or 0) + modifiers_total
+            total += unit_before * Decimal(item.quantity or 0)
+        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_subtotal_after_discounts(self, obj: Order):
+        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_tax_total(self, obj: Order):
+        return Decimal(obj.tax or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_total_payable(self, obj: Order):
+        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):
@@ -287,10 +379,11 @@ class OrderCreateSerializer(serializers.Serializer):
         if service_type_id is not None:
             service_type = ServiceType.objects.filter(id=service_type_id).first()
         if service_type is None and service_type_key:
-            normalized_key = service_type_key.strip().upper().replace("-", "_")
-            service_type = ServiceType.objects.filter(key__iexact=normalized_key).first()
-            if service_type is None:
-                service_type = ServiceType.objects.filter(key__iexact=service_type_key.strip()).first()
+            normalized_key = normalize_service_type(service_type_key, default="")
+            for candidate in ServiceType.objects.filter(is_active=True):
+                if normalize_service_type(candidate.key, default="") == normalized_key:
+                    service_type = candidate
+                    break
         if service_type is None:
             raise serializers.ValidationError("Service type is required")
         service_type_key = service_type.key
@@ -376,7 +469,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     modifier_price_snapshot=modifier_data["price"],
                 )
 
-            if product and channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and service_type_key in (product.disposable_apply_to or []):
+            if product and channel == "pos" and Decimal(product.disposable_fee or 0) > 0 and bool(getattr(service_type, "disposables_enabled", False)):
                 fee_total = (Decimal(product.disposable_fee) * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 disposable_total += fee_total
                 OrderFee.objects.create(
@@ -456,6 +549,7 @@ class OrderCreateSerializer(serializers.Serializer):
             order.total = (total - exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         else:
             order.iva_exempt_discount = Decimal("0.00")
+        order.amount_due_cents = to_cents(order.total)
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
         order.send_to_kitchen = order.requires_kitchen and (is_kiosk_service or requested_send_to_kitchen)
         if order.send_to_kitchen and order.status == "preparing":
@@ -464,7 +558,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 defaults={"service_type": service_type, "status": "preparing"},
             )
-        order.save(update_fields=["subtotal", "tax", "total", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
+        order.save(update_fields=["subtotal", "tax", "total", "amount_due_cents", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
 
         breakdown_by_discount = {}
         for entry in discount_result["applied_breakdown"]:

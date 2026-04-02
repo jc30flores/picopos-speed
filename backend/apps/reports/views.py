@@ -6,70 +6,17 @@ from rest_framework import generics
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from apps.core.models import ServiceType
 from apps.core.permissions import IsCashierOrManagerOrAdmin
+from apps.core.service_types import SERVICE_TYPE_LABELS, normalize_service_type
 from apps.payments.models import Payment, Refund
+from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
 from apps.reports.serializers import SalesReportSerializer
 
 MONEY_Q = Decimal("0.01")
 
-PAYMENT_METHOD_LABELS = {
-    "cash": "Efectivo",
-    "card_debit": "Tarjeta Débito",
-    "card_credit": "Tarjeta Crédito",
-    "transfer": "Transferencia",
-    "pedidos_ya": "Pedidos Ya",
-    "paypal": "PayPal",
-}
-
-SERVICE_TYPE_LABELS = {
-    "dine_in": "DINE IN",
-    "takeout": "TAKEOUT",
-    "pedidos_ya": "PEDIDOS YA",
-    "online": "ONLINE",
-    "kiosk": "KIOSK",
-}
-
-SERVICE_TYPE_ALIASES = {
-    "mesa": "dine_in",
-    "dine-in": "dine_in",
-    "dinein": "dine_in",
-    "dine_in": "dine_in",
-    "en_local": "dine_in",
-    "para_llevar": "takeout",
-    "takeout": "takeout",
-    "pedidos_ya": "pedidos_ya",
-    "delivery": "pedidos_ya",
-    "online": "online",
-    "kiosk": "kiosk",
-}
-
-
-
 def q2(value: Decimal | None) -> Decimal:
     return (value or Decimal("0")).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
-
-
-
-def payment_code(payment: Payment) -> str:
-    code = str(payment.payment_method.code if payment.payment_method_id else "").strip().lower()
-    method = str(payment.method or "").strip().lower()
-    card_type = str(payment.card_type or "").strip().lower()
-    if code:
-        if code in {"card", "credit_card", "debit_card"}:
-            return "card_debit" if card_type == "debit" else "card_credit"
-        return code
-    if method == "cash":
-        return "cash"
-    if method == "card":
-        return "card_debit" if card_type == "debit" else "card_credit"
-    return "transfer"
-
-
-
-def service_type_code(value: str | None) -> str:
-    normalized = str(value or "").strip().lower()
-    return SERVICE_TYPE_ALIASES.get(normalized, normalized or "dine_in")
-
 
 class SalesReportListView(generics.ListAPIView):
     serializer_class = SalesReportSerializer
@@ -95,7 +42,7 @@ class SalesReportListView(generics.ListAPIView):
 
         search = (self.request.query_params.get("q") or self.request.query_params.get("search") or "").strip()
         payment_method = (self.request.query_params.get("payment_method") or "").strip().lower()
-        service_type = service_type_code(self.request.query_params.get("service_type")) if self.request.query_params.get("service_type") else ""
+        service_type = normalize_service_type(self.request.query_params.get("service_type")) if self.request.query_params.get("service_type") else ""
         status = self.request.query_params.get("status")
 
         if payment_method:
@@ -114,9 +61,13 @@ class SalesReportListView(generics.ListAPIView):
                 queryset = queryset.filter(q)
 
         if service_type:
-            queryset = queryset.filter(order__service_type__key__in=[
-                k for k, v in SERVICE_TYPE_ALIASES.items() if v == service_type
-            ])
+            matching_service_type_ids = [
+                service.id
+                for service in ServiceType.objects.only("id", "key", "label")
+                if normalize_service_type(service.key, default="") == service_type
+                or normalize_service_type(service.label, default="") == service_type
+            ]
+            queryset = queryset.filter(order__service_type_id__in=matching_service_type_ids)
         if status:
             queryset = queryset.filter(order__status=status)
         if search:
@@ -132,8 +83,8 @@ class SalesReportListView(generics.ListAPIView):
         rows = []
         for payment in queryset:
             order = payment.order
-            pm_code = payment_code(payment)
-            st_code = service_type_code(order.service_type.key if order.service_type_id else None)
+            pm_code = payment_code_from_payment(payment)
+            st_code = normalize_service_type(order.service_type.key if order.service_type_id else None)
             rows.append(
                 {
                     "order_id": order.id,

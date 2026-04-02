@@ -610,7 +610,7 @@ class DiscountListCreateView(generics.ListCreateAPIView):
         log_audit(self.request, "menu.discount.create", "Discount", discount.id, {"name": discount.name})
 
 
-class DiscountDetailView(generics.RetrieveUpdateAPIView):
+class DiscountDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = DiscountSerializer
     queryset = Discount.objects.prefetch_related("targets").all()
 
@@ -622,6 +622,12 @@ class DiscountDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         discount = serializer.save()
         log_audit(self.request, "menu.discount.update", "Discount", discount.id, {"name": discount.name})
+
+    def perform_destroy(self, instance):
+        discount_id = instance.id
+        discount_name = instance.name
+        instance.delete()
+        log_audit(self.request, "menu.discount.delete", "Discount", discount_id, {"name": discount_name})
 
 
 class ActiveDiscountListView(APIView):

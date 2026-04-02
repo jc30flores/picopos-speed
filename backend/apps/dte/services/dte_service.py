@@ -222,20 +222,24 @@ def _number_to_words_es_usd(amount: Decimal) -> str:
     return f"{txt} DOLARES CON {centavos:02d} CENTAVOS"
 
 
-def get_mh_payment_info(order) -> tuple[str, str | None]:
-    payment = order.payments.select_related("payment_method").order_by("-id").first()
-    if not payment:
-        return "01", None
-
-    method_code = str(payment.payment_method.code if payment.payment_method_id else payment.method or "").strip()
-    reference = (payment.reference or "").strip() or None
-    code, label_es = get_cat017_code_and_label(payment)
-
-    if code == "99":
-        fallback_reference = reference or label_es
-        logger.warning("dte.payment_method_unknown method=%s payment_id=%s", method_code, getattr(payment, "id", None))
-        return code, fallback_reference
-    return code, reference
+def get_mh_payment_info(order) -> list[dict]:
+    payments = order.payments.select_related("payment_method").order_by("id")
+    if not payments.exists():
+        return [{"codigo": "01", "montoPago": json_number(money(order.total)), "referencia": None, "plazo": None, "periodo": None}]
+    grouped: dict[tuple[str, str | None], Decimal] = {}
+    for payment in payments:
+        method_code = str(payment.payment_method.code if payment.payment_method_id else payment.method or "").strip()
+        reference = (payment.reference or "").strip() or None
+        code, label_es = get_cat017_code_and_label(payment)
+        if code == "99":
+            reference = reference or label_es
+            logger.warning("dte.payment_method_unknown method=%s payment_id=%s", method_code, getattr(payment, "id", None))
+        key = (code, reference)
+        grouped[key] = grouped.get(key, Decimal("0")) + money(payment.amount_applied if payment.amount_applied is not None else payment.amount)
+    return [
+        {"codigo": code, "montoPago": json_number(money(amount)), "referencia": reference, "plazo": None, "periodo": None}
+        for (code, reference), amount in grouped.items()
+    ]
 
 
 def build_payload_cf(order, control_number: str, generation_code: str, ambiente: str) -> dict:
@@ -264,9 +268,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         effective_unit_price = money(item.unit_price)
-        line_total = money(effective_unit_price * to_decimal(item.quantity or 0))
-        line_discount = money(min(line_total, money(item.discount_amount)))
-        net_line_total = _q2(line_total - line_discount)
+        line_total_original = money(effective_unit_price * to_decimal(item.quantity or 0))
+        line_discount = money(min(line_total_original, money(item.discount_amount)))
+        net_line_total = _q2(line_total_original - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
@@ -325,7 +329,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
-    total_pagar = _q2(total_exenta if order.iva_exempt else total_gravada)
+    subtotal_final = _q2(total_gravada + total_exenta)
+    subtotal_ventas = _q2(subtotal_final + total_descuento)
+    total_pagar = subtotal_final
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -334,10 +340,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "codActividad": emisor.get("codActividad") or "56101",
         "descActividad": emisor.get("descActividad") or "Restaurantes y puestos de comidas",
         "tipoEstablecimiento": emisor.get("tipoEstablecimiento") or "02",
-        "codEstableMH": emisor.get("codEstableMH") or "S001",
-        "codEstable": emisor.get("codEstable") or "S001",
-        "codPuntoVentaMH": emisor.get("codPuntoVentaMH") or "P001",
-        "codPuntoVenta": emisor.get("codPuntoVenta") or "P001",
+        "codEstableMH": emisor.get("codEstableMH") or "X001",
+        "codEstable": emisor.get("codEstable") or "X001",
+        "codPuntoVentaMH": emisor.get("codPuntoVentaMH") or "X001",
+        "codPuntoVenta": emisor.get("codPuntoVenta") or "X001",
         "telefono": emisor.get("telefono") or "00000000",
         "correo": emisor.get("correo") or "facturas@example.com",
         "direccion": {
@@ -394,15 +400,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         receptor["correo"] = _none_if_blank(emisor_payload.get("correo"))
     validate_receptor_payload(receptor)
 
-    payment_code, payment_reference = get_mh_payment_info(order)
+    pagos = get_mh_payment_info(order)
     resumen = {
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
-        "subTotalVentas": json_number(money(total_pagar)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
-        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(total_pagar)),
+        "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
+        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
         "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
-        "pagos": [{"codigo": payment_code, "montoPago": json_number(money(total_pagar)), "referencia": payment_reference, "plazo": None, "periodo": None}],
+        "pagos": pagos,
         "numPagoElectronico": None,
     }
 

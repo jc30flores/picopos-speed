@@ -51,19 +51,19 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "cod_estable_mh",
-                    models.CharField(blank=True, default="S001", max_length=10),
+                    models.CharField(blank=True, default="X001", max_length=10),
                 ),
                 (
                     "cod_estable",
-                    models.CharField(blank=True, default="S001", max_length=10),
+                    models.CharField(blank=True, default="X001", max_length=10),
                 ),
                 (
                     "cod_punto_venta_mh",
-                    models.CharField(blank=True, default="P001", max_length=10),
+                    models.CharField(blank=True, default="X001", max_length=10),
                 ),
                 (
                     "cod_punto_venta",
-                    models.CharField(blank=True, default="P001", max_length=10),
+                    models.CharField(blank=True, default="X001", max_length=10),
                 ),
                 (
                     "direccion_departamento",

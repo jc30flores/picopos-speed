@@ -7,7 +7,7 @@ from apps.core.models import ActivityCatalog, Customer, FeatureFlag, GeoDepartme
 class ServiceTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceType
-        fields = ["id", "key", "label", "is_active", "sort_order"]
+        fields = ["id", "key", "label", "is_active", "sort_order", "disposables_enabled"]
 
     def validate_key(self, value: str) -> str:
         normalized = re.sub(r"[^A-Z0-9_]+", "_", (value or "").upper()).strip("_")

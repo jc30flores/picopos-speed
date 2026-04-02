@@ -22,6 +22,7 @@ export const OrderTypesTab = () => {
   const [keyValue, setKeyValue] = useState("");
   const [sortOrder, setSortOrder] = useState("0");
   const [isActive, setIsActive] = useState(true);
+  const [disposablesEnabled, setDisposablesEnabled] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const load = async () => {
@@ -48,6 +49,7 @@ export const OrderTypesTab = () => {
     setKeyValue("");
     setSortOrder("0");
     setIsActive(true);
+    setDisposablesEnabled(false);
     setIsOpen(true);
   };
 
@@ -57,6 +59,7 @@ export const OrderTypesTab = () => {
     setKeyValue(item.key);
     setSortOrder(String(item.sortOrder ?? 0));
     setIsActive(item.isActive !== false);
+    setDisposablesEnabled(item.disposablesEnabled === true);
     setIsOpen(true);
   };
 
@@ -75,6 +78,7 @@ export const OrderTypesTab = () => {
           key,
           sortOrder: Number(sortOrder || 0),
           isActive,
+          disposablesEnabled,
         });
       } else {
         await createOrderType({
@@ -82,6 +86,7 @@ export const OrderTypesTab = () => {
           key,
           sortOrder: Number(sortOrder || 0),
           isActive,
+          disposablesEnabled,
         });
       }
       setIsOpen(false);
@@ -122,7 +127,7 @@ export const OrderTypesTab = () => {
           <div key={item.id} className="rounded-xl border p-3 flex items-center justify-between gap-3">
             <div>
               <p className="font-semibold">{item.label}</p>
-              <p className="text-xs text-muted-foreground">{item.key} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Inactivo"}</p>
+              <p className="text-xs text-muted-foreground">{item.key} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Inactivo"} · Desechables: {item.disposablesEnabled ? "ON" : "OFF"}</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => openEdit(item)}>Editar</Button>
@@ -153,6 +158,10 @@ export const OrderTypesTab = () => {
             <div className="flex items-center justify-between">
               <Label>Activo</Label>
               <Switch checked={isActive} onCheckedChange={setIsActive} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>Aplicar desechables</Label>
+              <Switch checked={disposablesEnabled} onCheckedChange={setDisposablesEnabled} />
             </div>
             <Button onClick={onSave} disabled={isSaving} className="w-full">{isSaving ? "Guardando..." : "Guardar"}</Button>
           </div>

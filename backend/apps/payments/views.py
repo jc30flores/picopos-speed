@@ -2,6 +2,8 @@ from decimal import Decimal
 import logging
 import threading
 from django.db import transaction
+from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,12 +15,12 @@ from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.printing.services.renderers import render_customer_ticket
-from apps.printing.services.usb_printer import USBPrinterService
+from apps.printing.services.system_printer import SystemPrinterService
 from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order
-from apps.cashier.services import CashDrawerService
+from apps.core.money import to_cents, from_cents
 
 
 logger = logging.getLogger(__name__)
@@ -131,8 +133,42 @@ class PaymentListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        order = serializer.validated_data["order"]
+        order = order.__class__.objects.select_for_update().get(pk=order.pk)
+        existing_applied_cents = sum(
+            to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
+            for p in Payment.objects.select_for_update().filter(order=order)
+        )
+        due_cents = to_cents(order.total)
+        order.amount_due_cents = due_cents
+        remaining_cents = max(due_cents - existing_applied_cents, 0)
+        requested_applied_cents = to_cents(serializer.validated_data.get("amount"))
+        tip_cents = to_cents(serializer.validated_data.get("tip_amount"))
+        if remaining_cents <= 0:
+            return Response({"detail": "Order is already paid"}, status=status.HTTP_400_BAD_REQUEST)
+        if requested_applied_cents > remaining_cents + 1:
+            return Response({"detail": "Payment exceeds remaining balance"}, status=status.HTTP_400_BAD_REQUEST)
+        applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents
+        method = str(serializer.validated_data.get("method") or "").strip().lower()
+        cash_received = serializer.validated_data.get("cash_received")
+        received_cents = to_cents(cash_received) if method == "cash" and cash_received is not None else applied_cents + tip_cents
+        if method == "cash" and received_cents < applied_cents + tip_cents:
+            return Response({"detail": "Cash received must cover amount + tip"}, status=status.HTTP_400_BAD_REQUEST)
+        change_cents = max(received_cents - (applied_cents + tip_cents), 0)
+        if order.financial_locked_at is None:
+            order.financial_locked_at = timezone.now()
+            order.save(update_fields=["amount_due_cents", "financial_locked_at", "updated_at"])
         payment = serializer.save(
             cash_session=_get_open_session(request.user),
+            amount=from_cents(applied_cents),
+            amount_applied=from_cents(applied_cents),
+            amount_received=from_cents(received_cents),
+            change_amount=from_cents(change_cents),
+            amount_applied_cents=applied_cents,
+            amount_received_cents=received_cents,
+            change_cents=change_cents,
+            tip_cents=tip_cents,
+            cash_received=from_cents(received_cents) if method == "cash" else None,
         )
         _create_transaction_for_payment(payment, request.user)
         logger.info(
@@ -143,8 +179,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             payment.method,
         )
         payment.order.recalculate_financials()
-        total_paid = payment.order.net_paid + payment.order.refund_total
-        remaining = (payment.order.total - total_paid).quantize(Decimal("0.01"))
+        total_paid_cents = sum(
+            to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
+            for p in Payment.objects.filter(order=payment.order)
+        )
+        remaining_cents = max((payment.order.amount_due_cents or to_cents(payment.order.total)) - total_paid_cents, 0)
+        remaining = from_cents(remaining_cents)
         log_audit(
             request,
             "payment.create",
@@ -216,14 +256,6 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 except Exception:
                     _enqueue_dte_async()
             transaction.on_commit(_after_commit_dte)
-            if payment.method == "cash":
-                try:
-                    drawer_result = CashDrawerService().open_drawer()
-                    print_result["drawer_opened"] = bool(drawer_result.success)
-                    if not drawer_result.success:
-                        print_result["drawer_error"] = drawer_result.message or drawer_result.error
-                except Exception as drawer_exc:  # noqa: BLE001
-                    print_result["drawer_error"] = str(drawer_exc)
         else:
             log_audit(
                 request,
@@ -337,13 +369,66 @@ class PaymentPrintTicketView(APIView):
         payment = Payment.objects.select_related("order").filter(pk=pk).first()
         if not payment:
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+        context = {
+            "order_id": payment.order_id,
+            "payment_id": payment.id,
+            "user_id": getattr(request.user, "id", None),
+            "endpoint": "payments.print-ticket",
+        }
         try:
             exists = PrintJob.objects.filter(order=payment.order, type="customer", meta__event="payment.paid").exists()
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
             payload = render_customer_ticket(payment.order)
-            printed, print_error = USBPrinterService().print_receipt(payload)
-            return Response({"printed": bool(printed), "print_error": print_error}, status=status.HTTP_200_OK)
+            printer = SystemPrinterService()
+            print_result = printer.print_with_pdf_fallback(
+                payload.get("text", ""),
+                order_id=payment.order_id,
+                payment_id=payment.id,
+                context=context,
+                endpoint="payments.print-ticket",
+            )
+
+            drawer_opened = False
+            drawer_error = None
+            should_open_drawer = payment.method == "cash" and bool(print_result["printed"])
+            if should_open_drawer:
+                drawer_opened, drawer_error = printer.open_cash_drawer(context=context, endpoint="payments.print-ticket.drawer")
+            elif payment.method == "cash" and not print_result["printed"]:
+                drawer_error = "No se pudo abrir la gaveta: impresora no detectada."
+            job = PrintJob.objects.filter(order=payment.order, type="customer").order_by("-created_at").first()
+            if job:
+                if print_result["receipt_pdf_path"]:
+                    job.content_pdf_path = str(print_result["receipt_pdf_path"])
+                if print_result["printed"]:
+                    job.status = "printed"
+                else:
+                    job.status = "failed"
+                    job.error_message = print_result["print_error"] or ""
+                job.save(update_fields=["status", "content_pdf_path", "error_message"])
+
+            if print_result["receipt_pdf_path"]:
+                with open(print_result["receipt_pdf_path"], "rb") as fh:
+                    pdf_bytes = fh.read()
+                response = HttpResponse(pdf_bytes, content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="ticket_{payment.order_id}_{payment.id}.pdf"'
+                response["X-Printed"] = "0"
+                response["X-Print-Error"] = str(print_result["print_error"] or "")
+                response["X-Drawer-Opened"] = "1" if drawer_opened else "0"
+                response["X-Drawer-Error"] = str(drawer_error or "")
+                response["X-Ticket-Fallback"] = "1"
+                return response
+
+            return Response(
+                {
+                    "printed": bool(print_result["printed"]),
+                    "print_error": print_result["print_error"],
+                    "receipt_pdf_url": print_result["receipt_pdf_url"],
+                    "drawer_opened": bool(drawer_opened),
+                    "drawer_error": drawer_error,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
-            return Response({"printed": False, "print_error": str(exc)}, status=status.HTTP_200_OK)
+            return Response({"printed": False, "print_error": str(exc), "drawer_opened": False, "drawer_error": None}, status=status.HTTP_200_OK)

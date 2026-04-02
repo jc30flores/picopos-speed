@@ -50,6 +50,7 @@ import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
 import { useAuth } from "@/context/useAuth";
+import { fromCents, toCents } from "@/lib/money";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
@@ -194,22 +195,9 @@ export const SalesHistoryTab = () => {
     void loadSales(debouncedSearchQuery);
   }, [dateFrom, dateTo, serviceType, paymentMethod, debouncedSearchQuery, restrictedRole]);
 
-  const filteredSales = restrictedRole
-    ? sales
-    : sales.filter((sale) => {
-    const matchesSearch =
-      sale.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.controlNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sale.cashier.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesService =
-      serviceType === "all" ||
-      sale.serviceType.toLowerCase().replace(" ", "-") === serviceType;
-    const matchesPayment = true;
-    return matchesSearch && matchesService && matchesPayment;
-  });
+  const filteredSales = sales;
 
-  const totalSales = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
+  const totalSales = fromCents(filteredSales.reduce((sum, sale) => sum + toCents(sale.total), 0));
 
   const getStatusBadge = (status: Sale["status"]) => {
     const variants: Record<Sale["status"], "default" | "destructive" | "secondary"> = {
@@ -345,7 +333,7 @@ export const SalesHistoryTab = () => {
 
       {/* Filters Section */}
       <Card>
-        <CardContent className="pt-6 space-y-4">
+        <CardContent className="space-y-4 pt-6 md:pt-7">
           {!restrictedRole ? (
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
@@ -362,7 +350,7 @@ export const SalesHistoryTab = () => {
                     key={range.value}
                     variant={timeRange === range.value ? "default" : "outline"}
                     onClick={() => setTimeRange(range.value as TimeRange)}
-                    className="rounded-full"
+                    className="h-12 rounded-full px-5 text-base"
                   >
                     {range.label}
                   </Button>
@@ -384,7 +372,7 @@ export const SalesHistoryTab = () => {
                   <Button
                     variant="outline"
                     className={cn(
-                      "w-full justify-start text-left font-normal",
+                      "h-12 w-full justify-start text-left text-base font-normal",
                       !startDate && "text-muted-foreground"
                     )}
                   >
@@ -416,7 +404,7 @@ export const SalesHistoryTab = () => {
                   <Button
                     variant="outline"
                     className={cn(
-                      "w-full justify-start text-left font-normal",
+                      "h-12 w-full justify-start text-left text-base font-normal",
                       !endDate && "text-muted-foreground"
                     )}
                   >
@@ -447,7 +435,7 @@ export const SalesHistoryTab = () => {
                 value={serviceType}
                 onValueChange={(value) => setServiceType(value as ServiceTypeFilter)}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-12 text-base">
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -470,7 +458,7 @@ export const SalesHistoryTab = () => {
                   setPaymentMethod(value as PaymentMethodFilter)
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-12 text-base">
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -525,13 +513,13 @@ export const SalesHistoryTab = () => {
               </p>
             ) : null}
           </div>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
             <Download className="h-4 w-4 mr-2" />
             Exportar
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border overflow-auto max-h-[70vh]">
+          <div className="max-h-[70vh] overflow-auto rounded-xl border">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
@@ -580,6 +568,7 @@ export const SalesHistoryTab = () => {
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-11 rounded-xl px-4"
                             onClick={() => openRefundDialog(sale)}
                             disabled={sale.financialStatus === "voided" || sale.netPaid <= 0}
                           >
@@ -588,6 +577,7 @@ export const SalesHistoryTab = () => {
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-11 rounded-xl px-4"
                             onClick={() => openVoidDialog(sale)}
                             disabled={sale.financialStatus === "voided" || sale.netPaid > 0}
                           >

@@ -29,9 +29,22 @@ def _normalize_ambiente(raw_value: str | None) -> str:
     return "01"
 
 
+def _validate_ambiente_or_raise(raw_value: str | None, normalized: str) -> None:
+    if normalized not in {"00", "01"}:
+        raise DTEPreflightError(f"Ambiente inválido para DTE: {normalized}")
+    raw = (raw_value or "").strip()
+    if raw and normalized not in raw and raw.upper() not in {"PROD", "PRODUCCION", "PRODUCTION", "TEST", "CERT", "CERTIFICACION", "DEV", "00", "01"}:
+        raise DTEPreflightError(f"Valor de ambiente no reconocido: {raw}")
+
+
 def _ambiente() -> str:
     raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
-    return _normalize_ambiente(raw)
+    normalized = _normalize_ambiente(raw)
+    requires_prod = str(os.environ.get("DTE_REQUIRE_AMBIENTE_01", "")).strip().lower() in {"1", "true", "yes"}
+    if requires_prod and normalized != "01":
+        normalized = "01"
+    _validate_ambiente_or_raise(raw, normalized)
+    return normalized
 
 
 def transmit_sale_dte(
@@ -142,6 +155,16 @@ def transmit_sale_dte(
             parsed.get("firma") or "-",
             parsed.get("recibido_at") or "-",
         )
+        if parsed.get("status") in {DTERecord.STATUS_REJECTED}:
+            DTE_LOGGER.error(
+                "[DTE] rejection order=%s payment=%s code=%s message=%s ambiente=%s resumen=%s",
+                sale_id,
+                payment_id,
+                parsed.get("error_code") or "",
+                parsed.get("error_message") or "",
+                ambiente,
+                (payload.get("dte", {}).get("resumen", {}) if isinstance(payload, dict) else {}),
+            )
     prebuilt_record.status = parsed["status"]
     prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
     prebuilt_record.response_payload = response if isinstance(response, dict) else {}

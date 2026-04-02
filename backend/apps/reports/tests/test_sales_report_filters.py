@@ -17,7 +17,7 @@ class SalesReportFiltersTests(TestCase):
         UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
         self.client.force_authenticate(self.user)
         self.branch = Branch.objects.create(name="Main", code="MAIN")
-        self.service_dine = ServiceType.objects.create(key="dine_in", label="Dine In")
+        self.service_dine = ServiceType.objects.create(key="dine-in", label="DINE IN")
         self.service_takeout = ServiceType.objects.create(key="takeout", label="Takeout")
 
         self.pm_cash = PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True)
@@ -59,3 +59,7 @@ class SalesReportFiltersTests(TestCase):
         self.assertEqual(len(dine_cash.data["results"]), 1)
         self.assertEqual(dine_cash.data["results"][0]["service_type_code"], "dine_in")
         self.assertEqual(dine_cash.data["results"][0]["payment_method_code"], "cash")
+
+        dine_label = self.client.get(f"/api/reports/sales/?{base_qs}&service_type=DINE IN")
+        self.assertEqual(dine_label.status_code, 200)
+        self.assertEqual(len(dine_label.data["results"]), 1)

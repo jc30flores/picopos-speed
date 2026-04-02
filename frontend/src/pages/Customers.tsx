@@ -1,4 +1,3 @@
-import { Navigation } from "@/components/Navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,6 +21,7 @@ import {
   updateCustomer,
 } from "@/lib/api";
 import { toast } from "sonner";
+import { PageLayout } from "@/components/layout/PageLayout";
 
 type ClientType = "CF" | "CCF" | "SX";
 type FormState = Partial<Customer> & { fullName: string; clientType: ClientType };
@@ -311,14 +311,16 @@ export default function CustomersPage() {
   const canWrite = !selectedId || isEditing;
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      <main className="container mx-auto space-y-4 px-4 py-24">
+    <PageLayout
+      title="Clientes"
+      subtitle="Captura veloz de clientes para DTE."
+      maxWidthClassName="max-w-[1600px]"
+    >
+      <main className="space-y-4">
         <Card className="p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="flex-1">
-              <h1 className="text-xl font-semibold">Clientes</h1>
-              <p className="text-sm text-muted-foreground">Captura veloz de clientes para DTE.</p>
+              <h2 className="text-base font-semibold text-muted-foreground">Gestión</h2>
             </div>
             <div className="flex w-full gap-2 md:w-auto md:min-w-[420px]">
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente" />
@@ -535,6 +537,6 @@ export default function CustomersPage() {
           </Card>
         </div>
       </main>
-    </div>
+    </PageLayout>
   );
 }

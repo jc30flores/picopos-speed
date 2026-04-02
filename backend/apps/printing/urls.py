@@ -2,6 +2,7 @@ from django.urls import path
 from apps.printing import views
 
 urlpatterns = [
+    path("status/", views.PrintingStatusView.as_view(), name="print-status"),
     path("jobs/", views.PrintJobListCreateView.as_view(), name="print-jobs"),
     path("jobs/refund/", views.RefundPrintJobCreateView.as_view(), name="print-jobs-refund"),
     path("jobs/<int:pk>/", views.PrintJobDetailView.as_view(), name="print-job-detail"),
