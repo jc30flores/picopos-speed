@@ -329,8 +329,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
-    subtotal_ventas = _q2(total_gravada + total_exenta)
-    total_pagar = subtotal_ventas
+    subtotal_final = _q2(total_gravada + total_exenta)
+    subtotal_ventas = _q2(subtotal_final + total_descuento)
+    total_pagar = subtotal_final
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -403,7 +404,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     resumen = {
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
         "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
-        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(total_pagar)),
+        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
         "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,

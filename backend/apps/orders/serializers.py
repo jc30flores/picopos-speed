@@ -24,6 +24,15 @@ class OrderItemModifierSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     applied_modifiers = OrderItemModifierSerializer(many=True, read_only=True)
+    unit_price_list = serializers.SerializerMethodField()
+    unit_price_special = serializers.SerializerMethodField()
+    unit_price_before_discount = serializers.SerializerMethodField()
+    discount_percent = serializers.SerializerMethodField()
+    unit_price_final = serializers.SerializerMethodField()
+    line_total_before_discount = serializers.SerializerMethodField()
+    line_total_discount = serializers.SerializerMethodField()
+    line_total_final = serializers.SerializerMethodField()
+    pricing_metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -40,7 +49,62 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "assigned_name",
             "applied_special_price_rule_id",
             "applied_modifiers",
+            "unit_price_list",
+            "unit_price_special",
+            "unit_price_before_discount",
+            "discount_percent",
+            "unit_price_final",
+            "line_total_before_discount",
+            "line_total_discount",
+            "line_total_final",
+            "pricing_metadata",
         ]
+
+    def _modifier_total(self, obj: OrderItem) -> Decimal:
+        return sum((Decimal(mod.modifier_price_snapshot or 0) for mod in obj.applied_modifiers.all()), Decimal("0.00"))
+
+    def _unit_before_discount(self, obj: OrderItem) -> Decimal:
+        return (Decimal(obj.price_snapshot or 0) + self._modifier_total(obj)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_list(self, obj: OrderItem):
+        if obj.product_id and obj.product:
+            return Decimal(obj.product.price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return Decimal(obj.price_snapshot or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_special(self, obj: OrderItem):
+        if obj.applied_special_price_rule_id:
+            return Decimal(obj.price_snapshot or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return None
+
+    def get_unit_price_before_discount(self, obj: OrderItem):
+        return self._unit_before_discount(obj)
+
+    def get_discount_percent(self, obj: OrderItem):
+        unit_before = self._unit_before_discount(obj)
+        if unit_before <= 0:
+            return Decimal("0.00")
+        unit_discount = (Decimal(obj.discount_amount or 0) / Decimal(obj.quantity or 1)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return ((unit_discount / unit_before) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_unit_price_final(self, obj: OrderItem):
+        unit_before = self._unit_before_discount(obj)
+        unit_discount = (Decimal(obj.discount_amount or 0) / Decimal(obj.quantity or 1)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return max(unit_before - unit_discount, Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_before_discount(self, obj: OrderItem):
+        return (self._unit_before_discount(obj) * Decimal(obj.quantity or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_discount(self, obj: OrderItem):
+        return Decimal(obj.discount_amount or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_line_total_final(self, obj: OrderItem):
+        return max(self.get_line_total_before_discount(obj) - self.get_line_total_discount(obj), Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_pricing_metadata(self, obj: OrderItem):
+        return {
+            "special_price_rule_id": obj.applied_special_price_rule_id,
+            "special_price_rule_name": getattr(obj.applied_special_price_rule, "name", None) if obj.applied_special_price_rule_id else None,
+        }
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -55,6 +119,10 @@ class OrderSerializer(serializers.ModelSerializer):
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     net_paid = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     fees = serializers.SerializerMethodField()
+    subtotal_before_discounts = serializers.SerializerMethodField()
+    subtotal_after_discounts = serializers.SerializerMethodField()
+    tax_total = serializers.SerializerMethodField()
+    total_payable = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -91,6 +159,10 @@ class OrderSerializer(serializers.ModelSerializer):
             "channel",
             "requires_kitchen",
             "fees",
+            "subtotal_before_discounts",
+            "subtotal_after_discounts",
+            "tax_total",
+            "total_payable",
         ]
 
     def get_service_type(self, obj: Order):
@@ -132,6 +204,23 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_remaining_cents(self, obj: Order):
         return max(to_cents(self.get_remaining(obj)), 0)
+
+    def get_subtotal_before_discounts(self, obj: Order):
+        total = Decimal("0.00")
+        for item in obj.items.all():
+            modifiers_total = sum((Decimal(mod.modifier_price_snapshot or 0) for mod in item.applied_modifiers.all()), Decimal("0.00"))
+            unit_before = Decimal(item.price_snapshot or 0) + modifiers_total
+            total += unit_before * Decimal(item.quantity or 0)
+        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_subtotal_after_discounts(self, obj: Order):
+        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_tax_total(self, obj: Order):
+        return Decimal(obj.tax or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_total_payable(self, obj: Order):
+        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):

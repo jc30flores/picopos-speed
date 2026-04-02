@@ -140,9 +140,30 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
 
         self.assertEqual(resumen["totalGravada"], 8.5)
-        self.assertEqual(resumen["subTotalVentas"], 8.5)
+        self.assertEqual(resumen["subTotalVentas"], 10.0)
+        self.assertEqual(resumen["subTotal"], 8.5)
         self.assertEqual(resumen["descuGravada"], 1.5)
         self.assertEqual(resumen["totalDescu"], 1.5)
+
+    def test_build_payload_cf_without_discounts_keeps_subtotals_equal(self):
+        category = Category.objects.create(name="SIN-DESC")
+        product = Product.objects.create(name="Sin descuento", description="", price=Decimal("4.00"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Item normal",
+            price_snapshot=Decimal("4.00"),
+            quantity=2,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="NODISC-1",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000202", "I" * 36, "00")
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(resumen["subTotalVentas"], 8.0)
+        self.assertEqual(resumen["subTotal"], 8.0)
+        self.assertEqual(resumen["totalDescu"], 0)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(

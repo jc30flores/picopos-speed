@@ -580,6 +580,9 @@ const POS = () => {
   const checkoutDisposableTotal = checkoutDraft
     ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType)
     : 0;
+  const checkoutSummarySubtotalBefore = activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
+  const checkoutSummaryDiscount = activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount;
+  const checkoutSummaryTotal = activeOrder?.totalPayable ?? paymentTotal;
   const filteredDiscounts = availableDiscounts.filter((discount) =>
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
@@ -1850,22 +1853,33 @@ const POS = () => {
                     </div>
                     <div className="rounded-md border">
                       <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
-                        {checkoutDraft.items.map((item) => (
+                        {(activeOrder?.items?.length ? activeOrder.items : checkoutDraft.items.map((item) => ({
+                          id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
+                          productName: item.name,
+                          quantity: item.quantity,
+                          unitPriceBeforeDiscount: getItemUnitTotal(item),
+                          unitPriceFinal: getItemUnitTotal(item),
+                          discountAmount: 0,
+                          lineTotalFinal: getItemUnitTotal(item) * item.quantity,
+                          lineTotalDiscount: 0,
+                        }))).map((item) => (
                           <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
                             <div className="min-w-0">
-                              <div className="truncate font-medium">{item.name}</div>
+                              <div className="truncate font-medium">{item.productName}</div>
                               <div className="text-xs text-muted-foreground">
-                                {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
-                                  <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
+                                {(item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? 0) > (item.unitPriceFinal ?? 0) && (
+                                  <span className="mr-1 line-through">{formatMoney(item.unitPriceBeforeDiscount ?? 0)}</span>
                                 )}
-                                {formatMoney(toNumber(getItemUnitTotal(item)))} c/u
+                                {formatMoney(item.unitPriceFinal ?? item.unitPriceBeforeDiscount ?? 0)} c/u
                               </div>
-                              {item.appliedSpecialPriceRuleName && (
-                                <div className="text-[11px] text-emerald-600">Oferta aplicada</div>
+                              {(item.discountAmount ?? 0) > 0 && (
+                                <div className="text-[11px] text-emerald-600">
+                                  Descuento {formatMoney(item.discountAmount ?? 0)}
+                                </div>
                               )}
                             </div>
                             <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
-                            <div className="text-right font-semibold">{formatMoney(toNumber(getItemUnitTotal(item)) * toNumber(item.quantity))}</div>
+                            <div className="text-right font-semibold">{formatMoney(item.lineTotalFinal ?? ((item.unitPriceFinal ?? 0) * item.quantity))}</div>
                           </div>
                         ))}
                       </div>
@@ -1875,9 +1889,10 @@ const POS = () => {
                   <div className="rounded-md border p-3 text-sm">
                     <div className="mb-2 font-semibold">Resumen</div>
                     <div className="space-y-1 text-muted-foreground">
-                      <div className="flex justify-between"><span>Subtotal (productos)</span><span>{formatMoney(checkoutDraft.subtotal)}</span></div>
+                      <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
+                      {checkoutSummaryDiscount > 0 && <div className="flex justify-between text-emerald-600"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>}
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(paymentTotal)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
                     </div>
                   </div>
 

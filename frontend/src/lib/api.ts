@@ -191,6 +191,16 @@ export type OrderItem = {
   quantity: number;
   modifiers: string[];
   price: number;
+  unitPriceList?: number | null;
+  unitPriceSpecial?: number | null;
+  unitPriceBeforeDiscount?: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  unitPriceFinal?: number;
+  lineTotalBeforeDiscount?: number;
+  lineTotalDiscount?: number;
+  lineTotalFinal?: number;
+  pricingMetadata?: Record<string, unknown> | null;
   unitPriceOverride?: number | null;
   assignedName?: string;
 };
@@ -220,6 +230,10 @@ export type Order = {
   discountSnapshot?: Record<string, unknown> | null;
   requiresKitchen?: boolean;
   sendToKitchen?: boolean;
+  subtotalBeforeDiscounts?: number;
+  subtotalAfterDiscounts?: number;
+  taxTotal?: number;
+  totalPayable?: number;
 };
 
 export type EmployeeStats = {
@@ -1540,6 +1554,16 @@ const mapOrder = (order: {
     is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
+    unit_price_list?: string | null;
+    unit_price_special?: string | null;
+    unit_price_before_discount?: string;
+    discount_amount?: string;
+    discount_percent?: string;
+    unit_price_final?: string;
+    line_total_before_discount?: string;
+    line_total_discount?: string;
+    line_total_final?: string;
+    pricing_metadata?: Record<string, unknown> | null;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
@@ -1553,6 +1577,10 @@ const mapOrder = (order: {
   discount_snapshot?: Record<string, unknown> | null;
   requires_kitchen?: boolean;
   send_to_kitchen?: boolean;
+  subtotal_before_discounts?: string;
+  subtotal_after_discounts?: string;
+  tax_total?: string;
+  total_payable?: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1572,6 +1600,16 @@ const mapOrder = (order: {
         ? item.applied_modifiers.map((modifier) => modifier.modifier_name_snapshot)
         : [],
       price: Number(item.price_snapshot),
+      unitPriceList: item.unit_price_list != null ? Number(item.unit_price_list) : null,
+      unitPriceSpecial: item.unit_price_special != null ? Number(item.unit_price_special) : null,
+      unitPriceBeforeDiscount: Number(item.unit_price_before_discount ?? item.price_snapshot),
+      discountAmount: Number(item.discount_amount ?? 0),
+      discountPercent: Number(item.discount_percent ?? 0),
+      unitPriceFinal: Number(item.unit_price_final ?? item.price_snapshot),
+      lineTotalBeforeDiscount: Number(item.line_total_before_discount ?? Number(item.price_snapshot) * item.quantity),
+      lineTotalDiscount: Number(item.line_total_discount ?? 0),
+      lineTotalFinal: Number(item.line_total_final ?? Number(item.price_snapshot) * item.quantity),
+      pricingMetadata: item.pricing_metadata ?? null,
       unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
     })),
@@ -1596,6 +1634,10 @@ const mapOrder = (order: {
     discountSnapshot: order.discount_snapshot ?? null,
     requiresKitchen: Boolean(order.requires_kitchen),
     sendToKitchen: Boolean(order.send_to_kitchen),
+    subtotalBeforeDiscounts: Number(order.subtotal_before_discounts ?? order.total),
+    subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
+    taxTotal: Number(order.tax_total ?? 0),
+    totalPayable: Number(order.total_payable ?? order.total),
   };
 };
 

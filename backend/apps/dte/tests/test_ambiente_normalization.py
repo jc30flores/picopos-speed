@@ -1,6 +1,7 @@
 from django.test import SimpleTestCase
 import os
 
+from apps.dte.services.dte_service import DTEPreflightError
 from apps.dte.services.orchestrator import _normalize_ambiente, _ambiente
 
 
@@ -22,6 +23,18 @@ class AmbienteNormalizationTests(SimpleTestCase):
                 os.environ.pop("DTE_REQUIRE_AMBIENTE_01", None)
             else:
                 os.environ["DTE_REQUIRE_AMBIENTE_01"] = previous
+            if previous_env is None:
+                os.environ.pop("DTE_AMBIENTE", None)
+            else:
+                os.environ["DTE_AMBIENTE"] = previous_env
+
+    def test_invalid_environment_value_raises_preflight(self):
+        previous_env = os.environ.get("DTE_AMBIENTE")
+        try:
+            os.environ["DTE_AMBIENTE"] = "INVALID_ENV"
+            with self.assertRaises(DTEPreflightError):
+                _ambiente()
+        finally:
             if previous_env is None:
                 os.environ.pop("DTE_AMBIENTE", None)
             else:
