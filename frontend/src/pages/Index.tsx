@@ -1411,7 +1411,7 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,60fr)_minmax(320px,40fr)]">
+        <div className="grid h-full min-h-0 grid-cols-[minmax(0,60fr)_minmax(340px,40fr)] gap-4 overflow-hidden">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
@@ -1686,7 +1686,7 @@ const POS = () => {
               )}
             </div>
 
-            <div className="sticky bottom-0 z-10 flex-none border-t bg-background p-4 space-y-3">
+            <div className="z-10 flex-none border-t bg-background p-4 space-y-3">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Subtotal (productos)</span>
