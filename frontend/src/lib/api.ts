@@ -358,6 +358,7 @@ export type PrintJob = {
 };
 
 export type SalesReportRow = {
+  paymentId: number;
   orderId: number;
   orderNumber: number;
   serviceType: Order["serviceType"] | string;
@@ -369,6 +370,7 @@ export type SalesReportRow = {
   controlNumber: string;
   paymentMethodCode: string;
   paymentMethodLabel: string;
+  financialStatus: Order["financialStatus"];
 };
 
 export type SalesReportAggregates = {
@@ -566,7 +568,8 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
       isHidden: Boolean(item.is_hidden),
       position: Number(item.position ?? 0),
     }))
-    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
+    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"))
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.id - b.id);
 };
 
 export const getFeatureFlags = async (): Promise<FeatureFlag[]> => {
@@ -1961,6 +1964,7 @@ export const getSalesReport = async (filters?: {
   const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
     results: Array<{
+      payment_id: number;
       order_id: number;
       order_number: number;
       service_type_code: string;
@@ -1972,6 +1976,7 @@ export const getSalesReport = async (filters?: {
       control_number?: string;
       payment_method_code?: string;
       payment_method_label?: string;
+      financial_status?: Order["financialStatus"];
     }>;
     aggregates: {
       count_orders: number;
@@ -2006,6 +2011,7 @@ export const getSalesReport = async (filters?: {
   }>(response);
   return {
     rows: data.results.map((row) => ({
+      paymentId: row.payment_id,
       orderId: row.order_id,
       orderNumber: row.order_number,
       serviceType: row.service_type_code,
@@ -2017,6 +2023,7 @@ export const getSalesReport = async (filters?: {
       controlNumber: String(row.control_number ?? ""),
       paymentMethodCode: String(row.payment_method_code ?? ""),
       paymentMethodLabel: String(row.payment_method_label ?? ""),
+      financialStatus: row.financial_status ?? "paid",
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,
@@ -2045,6 +2052,24 @@ export const getSalesReport = async (filters?: {
         transfer: Number(data.aggregates.refunds_by_method?.transfer ?? 0),
       },
     },
+  };
+};
+
+export const changeInternalPaymentMethod = async (
+  paymentId: number,
+  payload: { paymentMethodCode: string; reason?: string }
+): Promise<{ paymentMethodCode: string; paymentMethodName: string }> => {
+  const response = await request(`/payments/${paymentId}/internal-payment-method/`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      payment_method_code: payload.paymentMethodCode,
+      reason: payload.reason ?? "",
+    }),
+  });
+  const data = await handleJson<{ payment_method_code: string; payment_method_name: string }>(response);
+  return {
+    paymentMethodCode: data.payment_method_code,
+    paymentMethodName: data.payment_method_name,
   };
 };
 

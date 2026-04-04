@@ -27,13 +27,16 @@ import {
 import { CalendarIcon, Search, Download, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  changeInternalPaymentMethod,
   createRefund,
   createRefundPrintJob,
+  getPaymentMethods,
   getPrintJob,
   getSalesReport,
   markPrintJobPrinted,
   voidOrder,
   PaymentMethod,
+  PaymentMethodOption,
   PrintJob,
   SalesReportRow,
 } from "@/lib/api";
@@ -58,6 +61,7 @@ type PaymentMethodFilter = "all" | "cash" | "card_debit" | "card_credit" | "tran
 
 interface Sale {
   id: string;
+  paymentId: number;
   date: Date;
   orderNumber: string;
   controlNumber: string;
@@ -65,6 +69,7 @@ interface Sale {
   serviceType: string;
   channel: string;
   paymentMethod: string;
+  paymentMethodCode: string;
   items: number;
   subtotal: number;
   tax: number;
@@ -114,6 +119,12 @@ export const SalesHistoryTab = () => {
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [refundIdForReprint, setRefundIdForReprint] = useState<number | null>(null);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+  const [isMethodChangeOpen, setIsMethodChangeOpen] = useState(false);
+  const [paymentMethodOptions, setPaymentMethodOptions] = useState<PaymentMethodOption[]>([]);
+  const [selectedMethodCode, setSelectedMethodCode] = useState("");
+  const [methodChangeReason, setMethodChangeReason] = useState("");
+  const [isChangingMethod, setIsChangingMethod] = useState(false);
+  const canChangePaymentMethod = user?.role === "admin" || user?.role === "manager" || Boolean(user?.isSuperuser);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
   const dateTo = endDate ? getLocalDateSV(endDate) : undefined;
@@ -167,6 +178,7 @@ export const SalesHistoryTab = () => {
         if (currentRequest !== requestSequence.current) return;
         const mapped = report.rows.map((row) => ({
           id: String(row.orderId),
+          paymentId: row.paymentId,
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
           controlNumber: row.controlNumber || "-",
@@ -174,13 +186,14 @@ export const SalesHistoryTab = () => {
           serviceType: row.serviceTypeLabel ?? serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
           paymentMethod: row.paymentMethodLabel || "-",
+          paymentMethodCode: row.paymentMethodCode || "",
           items: 0,
           subtotal: 0,
           tax: 0,
           total: row.total,
           cashier: "Auto",
           status: mapStatus(row.status, row.financialStatus),
-          financialStatus: "paid",
+          financialStatus: row.financialStatus,
           refundTotal: 0,
           netPaid: row.total,
         }));
@@ -194,6 +207,13 @@ export const SalesHistoryTab = () => {
   useEffect(() => {
     void loadSales(debouncedSearchQuery);
   }, [dateFrom, dateTo, serviceType, paymentMethod, debouncedSearchQuery, restrictedRole]);
+
+  useEffect(() => {
+    if (!canChangePaymentMethod) return;
+    getPaymentMethods()
+      .then(setPaymentMethodOptions)
+      .catch((error) => console.error("Failed to load payment methods", error));
+  }, [canChangePaymentMethod]);
 
   const filteredSales = sales;
 
@@ -225,6 +245,36 @@ export const SalesHistoryTab = () => {
     setSelectedSale(sale);
     setVoidReason("");
     setIsVoidOpen(true);
+  };
+
+  const openMethodChangeDialog = (sale: Sale) => {
+    setSelectedSale(sale);
+    setSelectedMethodCode(sale.paymentMethodCode || "");
+    setMethodChangeReason("");
+    setIsMethodChangeOpen(true);
+  };
+
+  const handlePaymentMethodChange = async () => {
+    if (!selectedSale) return;
+    if (!selectedMethodCode) {
+      toast.error("Selecciona un método de pago");
+      return;
+    }
+    try {
+      setIsChangingMethod(true);
+      await changeInternalPaymentMethod(selectedSale.paymentId, {
+        paymentMethodCode: selectedMethodCode,
+        reason: methodChangeReason.trim(),
+      });
+      toast.success("Método actualizado");
+      setIsMethodChangeOpen(false);
+      await loadSales(debouncedSearchQuery);
+    } catch (error) {
+      console.error("Failed to update payment method", error);
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar el método");
+    } finally {
+      setIsChangingMethod(false);
+    }
   };
 
   const handleRefundSubmit = async () => {
@@ -583,6 +633,17 @@ export const SalesHistoryTab = () => {
                           >
                             Anular
                           </Button>
+                          {canChangePaymentMethod ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="min-h-11 rounded-xl px-4"
+                              onClick={() => openMethodChangeDialog(sale)}
+                              disabled={sale.financialStatus === "voided" || sale.status === "reembolsado"}
+                            >
+                              Cambiar método
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -704,6 +765,60 @@ export const SalesHistoryTab = () => {
                 </Button>
                 <Button className="flex-1" onClick={handleVoidSubmit} disabled={isSubmittingVoid}>
                   {isSubmittingVoid ? "Procesando..." : "Confirmar"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No hay orden seleccionada.</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isMethodChangeOpen} onOpenChange={setIsMethodChangeOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cambiar método de pago</DialogTitle>
+            <DialogDescription>
+              Esto solo corrige registros internos y cierres de caja; NO cambia el DTE enviado a Hacienda.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedSale ? (
+            <div className="space-y-4">
+              <div className="rounded-md border p-3 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span>Pedido</span>
+                  <span>{selectedSale.orderNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Método actual</span>
+                  <span>{selectedSale.paymentMethod}</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Nuevo método</Label>
+                <Select value={selectedMethodCode} onValueChange={setSelectedMethodCode}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar método" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentMethodOptions.map((method) => (
+                      <SelectItem key={method.id} value={method.code}>
+                        {method.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Motivo de cambio (opcional)</Label>
+                <Input value={methodChangeReason} onChange={(event) => setMethodChangeReason(event.target.value)} maxLength={240} />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setIsMethodChangeOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button className="flex-1" onClick={handlePaymentMethodChange} disabled={isChangingMethod}>
+                  {isChangingMethod ? "Guardando..." : "Confirmar"}
                 </Button>
               </div>
             </div>

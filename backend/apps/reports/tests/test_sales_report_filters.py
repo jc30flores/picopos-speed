@@ -63,3 +63,34 @@ class SalesReportFiltersTests(TestCase):
         dine_label = self.client.get(f"/api/reports/sales/?{base_qs}&service_type=DINE IN")
         self.assertEqual(dine_label.status_code, 200)
         self.assertEqual(len(dine_label.data["results"]), 1)
+
+    def test_report_uses_reporting_payment_method_override(self):
+        order = Order.objects.create(
+            order_number=3,
+            branch=self.branch,
+            service_type=self.service_dine,
+            status="delivered",
+            customer_name="Cliente 3",
+            subtotal="10.00",
+            tax="1.30",
+            total="11.30",
+            payment_status="paid",
+            financial_status="paid",
+            net_paid="11.30",
+        )
+        OrderInvoice.objects.create(order=order, numero_control="DTE-3")
+        Payment.objects.create(
+            order=order,
+            method="cash",
+            payment_method=self.pm_cash,
+            reporting_payment_method=self.pm_paypal,
+            amount="11.30",
+            tip_amount="0.00",
+            received_by=self.user,
+        )
+
+        base_qs = f"date_from={date.today().isoformat()}&date_to={date.today().isoformat()}"
+        response = self.client.get(f"/api/reports/sales/?{base_qs}&payment_method=paypal")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["payment_method_code"], "paypal")

@@ -34,7 +34,8 @@ def normalize_payment_method_code(value: str | None) -> str:
 
 
 def payment_code_from_payment(payment: Payment) -> str:
-    code = normalize_payment_method_code(payment.payment_method.code if payment.payment_method_id else "")
+    effective_method = payment.reporting_payment_method if payment.reporting_payment_method_id else payment.payment_method
+    code = normalize_payment_method_code(effective_method.code if effective_method else "")
     method = str(payment.method or "").strip().lower()
     card_type = str(payment.card_type or "").strip().lower()
     if code:

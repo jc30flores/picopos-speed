@@ -35,7 +35,7 @@ class SalesReportListView(generics.ListAPIView):
 
         start = f"{from_date.isoformat()} 00:00:00"
         end = f"{to_date.isoformat()} 23:59:59.999999"
-        queryset = Payment.objects.select_related("order", "order__service_type", "order__invoice", "payment_method").filter(
+        queryset = Payment.objects.select_related("order", "order__service_type", "order__invoice", "payment_method", "reporting_payment_method").filter(
             created_at__gte=start,
             created_at__lte=end,
         )
@@ -47,17 +47,26 @@ class SalesReportListView(generics.ListAPIView):
 
         if payment_method:
             if payment_method == "card_debit":
-                queryset = queryset.filter(Q(payment_method__code__iexact="card_debit") | Q(payment_method__code__iexact="card", card_type="debit"))
+                queryset = queryset.filter(
+                    Q(reporting_payment_method__code__iexact="card_debit")
+                    | Q(reporting_payment_method__code__iexact="card", card_type="debit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card_debit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card", card_type="debit")
+                )
             elif payment_method == "card_credit":
                 queryset = queryset.filter(
-                    Q(payment_method__code__iexact="card_credit")
-                    | Q(payment_method__code__iexact="card", card_type="credit")
-                    | Q(payment_method__isnull=True, method="card", card_type="credit")
+                    Q(reporting_payment_method__code__iexact="card_credit")
+                    | Q(reporting_payment_method__code__iexact="card", card_type="credit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card_credit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card", card_type="credit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__isnull=True, method="card", card_type="credit")
                 )
             else:
-                q = Q(payment_method__code__iexact=payment_method)
+                q = Q(reporting_payment_method__code__iexact=payment_method) | Q(
+                    reporting_payment_method__isnull=True, payment_method__code__iexact=payment_method
+                )
                 if payment_method == "cash":
-                    q = q | Q(payment_method__isnull=True, method="cash")
+                    q = q | Q(reporting_payment_method__isnull=True, payment_method__isnull=True, method="cash")
                 queryset = queryset.filter(q)
 
         if service_type:
@@ -87,6 +96,7 @@ class SalesReportListView(generics.ListAPIView):
             st_code = normalize_service_type(order.service_type.key if order.service_type_id else None)
             rows.append(
                 {
+                    "payment_id": payment.id,
                     "order_id": order.id,
                     "order_number": order.order_number,
                     "created_at": payment.created_at,
@@ -97,6 +107,7 @@ class SalesReportListView(generics.ListAPIView):
                     "payment_method_label": PAYMENT_METHOD_LABELS.get(pm_code, pm_code),
                     "total_amount": f"{q2(payment.amount + (payment.tip_amount or Decimal('0'))):.2f}",
                     "status": order.status,
+                    "financial_status": order.financial_status,
                     "control_number": order.invoice.numero_control if hasattr(order, "invoice") else "",
                 }
             )

@@ -10,13 +10,18 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
 from apps.cashier.models import CashSession, CashTransaction
-from apps.payments.models import Payment, Refund, PaymentMethod
+from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.printing.services.renderers import render_customer_ticket
 from apps.printing.services.system_printer import SystemPrinterService
-from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
+from apps.payments.serializers import (
+    PaymentSerializer,
+    RefundSerializer,
+    PaymentMethodSerializer,
+    InternalPaymentMethodChangeSerializer,
+)
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order
@@ -123,11 +128,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
-        queryset = Payment.objects.select_related("order", "received_by")
+        queryset = Payment.objects.select_related("order", "received_by", "payment_method", "reporting_payment_method")
         order_id = self.request.query_params.get("order_id")
         if order_id:
             queryset = queryset.filter(order_id=order_id)
         return queryset
+
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -278,6 +284,70 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             data["dte_outbox_id"] = dte_meta["dte_outbox_id"]
             data["dte_last_error"] = dte_meta["dte_last_error"]
         return Response(data, status=status.HTTP_201_CREATED)
+
+
+class PaymentInternalMethodUpdateView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def patch(self, request, pk: int):
+        payment = (
+            Payment.objects.select_related("order", "payment_method", "reporting_payment_method")
+            .filter(pk=pk)
+            .first()
+        )
+        if not payment:
+            return Response({"detail": "Pago no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        order = payment.order
+        if order.financial_status in {"voided", "refunded_partial", "refunded_full"} or order.refunds.exists():
+            return Response(
+                {"detail": "No se puede corregir método en órdenes anuladas o con reembolso."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = InternalPaymentMethodChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_method: PaymentMethod = serializer.context["new_method"]
+        reason = (serializer.validated_data.get("reason") or "").strip()
+        previous_method = payment.reporting_payment_method or payment.payment_method
+        if previous_method and previous_method.id == new_method.id:
+            return Response({"detail": "El método seleccionado ya está aplicado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment.reporting_payment_method = new_method
+        payment.save(update_fields=["reporting_payment_method"])
+
+        PaymentMethodChangeLog.objects.create(
+            payment=payment,
+            old_payment_method=previous_method,
+            new_payment_method=new_method,
+            changed_by=request.user,
+            reason=reason,
+        )
+
+        log_audit(
+            request,
+            "payment.internal_method.change",
+            "Payment",
+            payment.id,
+            {
+                "order_id": payment.order_id,
+                "old_method": previous_method.code if previous_method else None,
+                "new_method": new_method.code,
+                "reason": reason,
+            },
+        )
+
+        return Response(
+            {
+                "id": payment.id,
+                "order_id": payment.order_id,
+                "payment_method_code": new_method.code,
+                "payment_method_name": new_method.name,
+                "detail": "Método de pago interno actualizado.",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class RefundListCreateView(generics.ListCreateAPIView):

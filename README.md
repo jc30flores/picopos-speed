@@ -113,6 +113,7 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 
 - `GET /api/payments/?order_id=`
 - `POST /api/payments/`
+- `PATCH /api/payments/{id}/internal-payment-method/` (corrige método para reportes/caja sin alterar DTE)
 
 ### Manual discounts in POS
 
