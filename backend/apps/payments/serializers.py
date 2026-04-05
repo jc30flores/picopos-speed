@@ -202,3 +202,18 @@ class RefundSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Refund exceeds original payment amount")
 
         return attrs
+
+
+class InternalPaymentMethodChangeSerializer(serializers.Serializer):
+    payment_method_code = serializers.CharField()
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=240)
+
+    def validate_payment_method_code(self, value: str) -> str:
+        code = normalize_payment_method_code(value)
+        if not code:
+            raise serializers.ValidationError("Seleccione un método válido.")
+        method = PaymentMethod.objects.filter(code__iexact=code, is_active=True).first()
+        if not method:
+            raise serializers.ValidationError("Método de pago no válido o inactivo.")
+        self.context["new_method"] = method
+        return code

@@ -358,6 +358,7 @@ export type PrintJob = {
 };
 
 export type SalesReportRow = {
+  paymentId: number;
   orderId: number;
   orderNumber: number;
   serviceType: Order["serviceType"] | string;
@@ -369,6 +370,7 @@ export type SalesReportRow = {
   controlNumber: string;
   paymentMethodCode: string;
   paymentMethodLabel: string;
+  financialStatus: Order["financialStatus"];
 };
 
 export type SalesReportAggregates = {
@@ -418,6 +420,8 @@ export type AuthUser = {
   username: string;
   email: string;
   role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
+  isSuperuser: boolean;
+  isStaff: boolean;
 };
 
 const buildApiUrl = (path: string) => {
@@ -495,7 +499,12 @@ export const login = async (payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
@@ -503,7 +512,12 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const logout = async (): Promise<void> => {
@@ -516,7 +530,12 @@ export const logout = async (): Promise<void> => {
 
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
-  return handleJson<AuthUser>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  return {
+    ...raw,
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+  };
 };
 
 export const verifyPrivilegedPin = async (pin: string): Promise<{ ok: boolean; role: "ADMIN" | "GERENTE"; userId: number }> => {
@@ -538,6 +557,8 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
   const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  // NOTE: backend ordering by `position` is the source of truth for categories.
+  // Do not re-sort on the client; preserve API order exactly.
   return data
     .map((item) => ({
       id: item.id,
@@ -1861,6 +1882,22 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
   return mapOrder(data);
 };
 
+export const updateOrderCustomerDte = async (
+  orderId: number,
+  payload: { customerId: number; dteDocumentType: "CF" | "CCF" | "SX"; ivaExempt?: boolean }
+): Promise<Order> => {
+  const response = await request(`/orders/${orderId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customer_id: payload.customerId,
+      dte_document_type: payload.dteDocumentType,
+      iva_exempt: Boolean(payload.ivaExempt),
+    }),
+  });
+  const data = await handleJson<Parameters<typeof mapOrder>[0]>(response);
+  return mapOrder(data);
+};
+
 export const getCustomerOrders = async (
   signal?: AbortSignal,
   params?: { branchId?: number | string; serviceType?: string }
@@ -1944,6 +1981,7 @@ export const getSalesReport = async (filters?: {
   const response = await request(`/reports/sales/${query ? `?${query}` : ""}`);
   const data = await handleJson<{
     results: Array<{
+      payment_id: number;
       order_id: number;
       order_number: number;
       service_type_code: string;
@@ -1955,6 +1993,7 @@ export const getSalesReport = async (filters?: {
       control_number?: string;
       payment_method_code?: string;
       payment_method_label?: string;
+      financial_status?: Order["financialStatus"];
     }>;
     aggregates: {
       count_orders: number;
@@ -1989,6 +2028,7 @@ export const getSalesReport = async (filters?: {
   }>(response);
   return {
     rows: data.results.map((row) => ({
+      paymentId: row.payment_id,
       orderId: row.order_id,
       orderNumber: row.order_number,
       serviceType: row.service_type_code,
@@ -2000,6 +2040,7 @@ export const getSalesReport = async (filters?: {
       controlNumber: String(row.control_number ?? ""),
       paymentMethodCode: String(row.payment_method_code ?? ""),
       paymentMethodLabel: String(row.payment_method_label ?? ""),
+      financialStatus: row.financial_status ?? "paid",
     })),
     aggregates: {
       countOrders: data.aggregates.count_orders,
@@ -2028,6 +2069,24 @@ export const getSalesReport = async (filters?: {
         transfer: Number(data.aggregates.refunds_by_method?.transfer ?? 0),
       },
     },
+  };
+};
+
+export const changeInternalPaymentMethod = async (
+  paymentId: number,
+  payload: { paymentMethodCode: string; reason?: string }
+): Promise<{ paymentMethodCode: string; paymentMethodName: string }> => {
+  const response = await request(`/payments/${paymentId}/internal-payment-method/`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      payment_method_code: payload.paymentMethodCode,
+      reason: payload.reason ?? "",
+    }),
+  });
+  const data = await handleJson<{ payment_method_code: string; payment_method_name: string }>(response);
+  return {
+    paymentMethodCode: data.payment_method_code,
+    paymentMethodName: data.payment_method_name,
   };
 };
 
@@ -2906,6 +2965,21 @@ export const voidOrder = async (orderId: number, reason: string): Promise<{ orde
   };
 };
 
+export const refundSaleRecord = async (
+  paymentId: number,
+  payload?: { reason?: string }
+): Promise<{ order: Order; action: "invalidate" | "credit_note" }> => {
+  const response = await request(`/payments/${paymentId}/record-refund/`, {
+    method: "POST",
+    body: JSON.stringify({ reason: payload?.reason ?? "" }),
+  });
+  const data = await handleJson<{
+    order: Parameters<typeof mapOrder>[0];
+    action: "invalidate" | "credit_note";
+  }>(response);
+  return { order: mapOrder(data.order), action: data.action };
+};
+
 export const createPrintJob = async (payload: {
   orderId: number;
   type: "kitchen" | "customer";
@@ -3081,7 +3155,7 @@ export const reorderProducts = async (payload: { categoryId?: number | null; ord
 export const reorderCategories = async (orderedIds: number[]): Promise<Category[]> => {
   const response = await request("/menu/categories/reorder/", {
     method: "PATCH",
-    body: JSON.stringify({ ordered_ids: orderedIds }),
+    body: JSON.stringify({ orderedIds }),
   });
   const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data.map((item) => ({

@@ -117,6 +117,21 @@ class AdminMenuOpsTests(TestCase):
         names = [item["name"] for item in ordered.data]
         self.assertEqual(names, ["POSTRES", "COMIDA", "BEBIDAS"])
 
+    def test_reorder_categories_accepts_camel_case_payload(self):
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+        c3 = Category.objects.create(name="POSTRES", position=2)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"orderedIds": [c2.id, c3.id, self.category.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        ordered = self.client.get("/api/menu/categories/")
+        names = [item["name"] for item in ordered.data]
+        self.assertEqual(names, ["BEBIDAS", "POSTRES", "COMIDA"])
+
     def test_reorder_categories_with_duplicates_returns_400(self):
         c2 = Category.objects.create(name="BEBIDAS", position=1)
 
@@ -128,6 +143,42 @@ class AdminMenuOpsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("duplicados", str(response.data).lower())
+
+    def test_reorder_categories_with_empty_payload_returns_400(self):
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": []},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("vacío", str(response.data).lower())
+
+    def test_reorder_categories_ignores_hidden_system_category(self):
+        Category.objects.create(name="SIN CATEGORÍA", position=99, is_hidden=True)
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [c2.id, self.category.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_create_duplicate_category_returns_400_and_keeps_original_position(self):
+        original = Category.objects.create(name="POSTRES", position=7)
+
+        response = self.client.post(
+            "/api/menu/categories/",
+            {"name": "Postres"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("name", response.data)
+        original.refresh_from_db()
+        self.assertEqual(original.position, 7)
 
 
     def test_reorder_products_within_category_persists_order(self):

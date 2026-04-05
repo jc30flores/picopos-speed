@@ -10,16 +10,23 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
 from apps.cashier.models import CashSession, CashTransaction
-from apps.payments.models import Payment, Refund, PaymentMethod
+from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.printing.services.renderers import render_customer_ticket
 from apps.printing.services.system_printer import SystemPrinterService
-from apps.payments.serializers import PaymentSerializer, RefundSerializer, PaymentMethodSerializer
+from apps.payments.serializers import (
+    PaymentSerializer,
+    RefundSerializer,
+    PaymentMethodSerializer,
+    InternalPaymentMethodChangeSerializer,
+)
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
-from apps.dte.services.dte_service import send_dte_for_order
+from apps.dte.services.dte_service import send_dte_for_order, invalidate_dte_for_order, send_dte_for_credit_note
+from apps.dte.services.availability import resolve_issued_at
+from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
 
 
@@ -123,11 +130,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get_queryset(self):
-        queryset = Payment.objects.select_related("order", "received_by")
+        queryset = Payment.objects.select_related("order", "received_by", "payment_method", "reporting_payment_method")
         order_id = self.request.query_params.get("order_id")
         if order_id:
             queryset = queryset.filter(order_id=order_id)
         return queryset
+
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -278,6 +286,157 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             data["dte_outbox_id"] = dte_meta["dte_outbox_id"]
             data["dte_last_error"] = dte_meta["dte_last_error"]
         return Response(data, status=status.HTTP_201_CREATED)
+
+
+class PaymentInternalMethodUpdateView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def patch(self, request, pk: int):
+        payment = (
+            Payment.objects.select_related("order", "payment_method", "reporting_payment_method")
+            .filter(pk=pk)
+            .first()
+        )
+        if not payment:
+            return Response({"detail": "Pago no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        order = payment.order
+        if order.financial_status in {"voided", "refunded_partial", "refunded_full"} or order.refunds.exists():
+            return Response(
+                {"detail": "No se puede corregir método en órdenes anuladas o con reembolso."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = InternalPaymentMethodChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_method: PaymentMethod = serializer.context["new_method"]
+        reason = (serializer.validated_data.get("reason") or "").strip()
+        previous_method = payment.reporting_payment_method or payment.payment_method
+        if previous_method and previous_method.id == new_method.id:
+            return Response({"detail": "El método seleccionado ya está aplicado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment.reporting_payment_method = new_method
+        payment.save(update_fields=["reporting_payment_method"])
+
+        PaymentMethodChangeLog.objects.create(
+            payment=payment,
+            old_payment_method=previous_method,
+            new_payment_method=new_method,
+            changed_by=request.user,
+            reason=reason,
+        )
+
+        log_audit(
+            request,
+            "payment.internal_method.change",
+            "Payment",
+            payment.id,
+            {
+                "order_id": payment.order_id,
+                "old_method": previous_method.code if previous_method else None,
+                "new_method": new_method.code,
+                "reason": reason,
+            },
+        )
+
+        return Response(
+            {
+                "id": payment.id,
+                "order_id": payment.order_id,
+                "payment_method_code": new_method.code,
+                "payment_method_name": new_method.name,
+                "detail": "Método de pago interno actualizado.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PaymentRecordRefundView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        payment = Payment.objects.select_related("order", "payment_method", "reporting_payment_method").filter(pk=pk).first()
+        if not payment:
+            return Response({"detail": "Pago no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        order = payment.order
+        if order.financial_status in {"voided", "refunded_partial", "refunded_full"}:
+            return Response({"detail": "La venta ya fue anulada o reembolsada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = (request.data.get("reason") or "").strip() or "Reembolso desde registros"
+        record = DTERecord.objects.filter(order=order, status=DTERecord.STATUS_ACCEPTED).order_by("-created_at").first()
+        if not record:
+            return Response({"detail": "No existe DTE aceptado para esta venta."}, status=status.HTTP_400_BAD_REQUEST)
+
+        dte_type = (record.dte_type or "").upper()
+        issued_at = resolve_issued_at(record)
+        should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
+
+        if should_credit_note:
+            note = CreditNote.objects.create(
+                order=order,
+                original_dte_record=record,
+                motivo=reason,
+                total=record.total_amount,
+                dte_numero_control=record.control_number,
+                dte_codigo_generacion=record.codigo_generacion,
+                items=[],
+                status=DTERecord.STATUS_PENDING,
+            )
+            send_dte_for_credit_note(note)
+            dte_action = {"action": "credit_note", "credit_note_id": note.id}
+        else:
+            invalidation = DTEInvalidation.objects.create(
+                order=order,
+                dte_record=record,
+                motivo=reason,
+                tipo_anulacion="total",
+                status=DTERecord.STATUS_PENDING,
+            )
+            result = invalidate_dte_for_order(order, motivo=reason, responsable_dui="", solicitante_dui="")
+            if not result.get("success"):
+                return Response({"detail": result.get("error") or "No se pudo invalidar DTE."}, status=status.HTTP_400_BAD_REQUEST)
+            record.status = DTERecord.STATUS_INVALIDATED
+            record.save(update_fields=["status", "updated_at"])
+            invalidation.status = DTERecord.STATUS_INVALIDATED
+            invalidation.save(update_fields=["status", "updated_at"])
+            dte_action = {"action": "invalidate", "invalidation_id": invalidation.id}
+
+        effective_method = payment.reporting_payment_method or payment.payment_method
+        refund = Refund.objects.create(
+            order=order,
+            payment_method=effective_method,
+            original_payment=payment,
+            cash_session=_get_open_session_for_branch(order.branch_id),
+            method=payment.method if payment.method in {"cash", "card", "transfer"} else "transfer",
+            amount=payment.amount,
+            tip_refunded=payment.tip_amount or Decimal("0"),
+            reason=reason,
+            approved_by=request.user,
+            created_by=request.user,
+        )
+        order.recalculate_financials()
+        if _refund_is_cash(method=refund.method, payment_method=refund.payment_method, original_payment=payment) and refund.cash_session:
+            _create_cash_out_for_refund(refund, request.user)
+
+        log_audit(
+            request,
+            "payment.record_refund",
+            "Refund",
+            refund.id,
+            {"payment_id": payment.id, "order_id": order.id, "reason": reason, **dte_action},
+        )
+        return Response(
+            {
+                "detail": "Venta reembolsada correctamente.",
+                "refund_id": refund.id,
+                "order": OrderSerializer(order, context={"request": request}).data,
+                **dte_action,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class RefundListCreateView(generics.ListCreateAPIView):

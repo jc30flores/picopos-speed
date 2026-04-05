@@ -36,6 +36,7 @@ import {
   setOrderSendToKitchen,
   getPaymentMethods,
   getOrderById,
+  updateOrderCustomerDte,
   createPrintJob,
   markPrintJobPrinted,
   getActiveTaxConfig,
@@ -1044,6 +1045,12 @@ const POS = () => {
     setParts([]);
     setActivePartId(null);
     setKitchenPromptOrderId(null);
+    setDteDocumentType("CF");
+    if (defaultConsumerCustomer) {
+      setSelectedCustomerId(String(defaultConsumerCustomer.id));
+    } else {
+      setSelectedCustomerId("");
+    }
   };
 
   const scheduleReload = () => {
@@ -1248,6 +1255,26 @@ const POS = () => {
     });
   }, [customersByDte, normalizedCustomerSearch]);
   const visibleCustomers = filteredCustomers.slice(0, 4);
+  const handleAcceptCustomerDte = async () => {
+    if (!selectedCustomerId) {
+      toast.error("Selecciona un cliente");
+      return;
+    }
+    if (activeOrder) {
+      try {
+        const updatedOrder = await updateOrderCustomerDte(activeOrder.id, {
+          customerId: Number(selectedCustomerId),
+          dteDocumentType,
+          ivaExempt,
+        });
+        setActiveOrder(updatedOrder);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo actualizar cliente en la orden");
+        return;
+      }
+    }
+    setIsCustomerDteOpen(false);
+  };
   const filteredActivities = useMemo(() => {
     const term = activitySearch.trim().toLowerCase();
     if (!term) return activities.slice(0, 30);
@@ -1411,7 +1438,7 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[3fr_2fr]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
@@ -1476,7 +1503,9 @@ const POS = () => {
                   >
                     <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
                     {productPricing.display.showOfferBadge && (
-                      <Badge className="mb-1 bg-emerald-600 text-white">OFERTA</Badge>
+                      <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                        {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                      </Badge>
                     )}
                     <div className="space-y-0.5">
                       {productPricing.display.showOfferBadge && (
@@ -1630,6 +1659,9 @@ const POS = () => {
                           )}
                           {item.appliedSpecialPriceRuleName && (
                             <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                          )}
+                          {!item.appliedSpecialPriceRuleName && item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
+                            <p className="text-[11px] text-emerald-600/90">OFERTA</p>
                           )}
                           {item.unitPriceOverride != null && (
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
@@ -2170,7 +2202,7 @@ const POS = () => {
             ) : null}
             <div className="flex gap-2">
               <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => setIsCustomerDteOpen(false)}>Aceptar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
             </div>
           </div>
         </DialogContent>

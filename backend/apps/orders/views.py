@@ -8,7 +8,7 @@ from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework import status
 from apps.orders.models import Order
-from apps.orders.serializers import OrderSerializer, OrderCreateSerializer
+from apps.orders.serializers import OrderSerializer, OrderCreateSerializer, OrderCustomerUpdateSerializer
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from apps.core.audit import log_audit
@@ -91,17 +91,26 @@ class ValidatePricePinView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class OrderDetailView(generics.RetrieveAPIView):
+class OrderDetailView(generics.RetrieveUpdateAPIView):
     queryset = Order.objects.all()
-    serializer_class = OrderSerializer
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        order = serializer.save()
-        output = OrderSerializer(order, context={"request": request}).data
-        return Response(output, status=status.HTTP_201_CREATED)
+    def get_serializer_class(self):
+        if self.request.method in {"PATCH", "PUT"}:
+            return OrderCustomerUpdateSerializer
+        return OrderSerializer
+
+    def patch(self, request, *args, **kwargs):
+        response = super().patch(request, *args, **kwargs)
+        order = self.get_object()
+        log_audit(
+            request,
+            "order.customer.update",
+            "Order",
+            order.id,
+            {"customer_id": order.customer_id, "dte_document_type": order.dte_document_type},
+        )
+        return response
 
 
 class ActiveOrderListView(generics.ListAPIView):

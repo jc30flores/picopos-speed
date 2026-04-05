@@ -108,7 +108,7 @@ def calculate_shift_summary(session: CashSession) -> dict:
 
     totals_by_method = {code: Decimal("0") for code in PAYMENT_METHOD_CODES}
     non_cash_sales = []
-    for payment in payments.select_related("payment_method", "order"):
+    for payment in payments.select_related("payment_method", "reporting_payment_method", "order"):
         code = payment_code_from_payment(payment)
         total = _q2((payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0")))
         if code in totals_by_method:

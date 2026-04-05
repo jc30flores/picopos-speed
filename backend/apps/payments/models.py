@@ -27,6 +27,13 @@ class Payment(models.Model):
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="payments")
     payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, null=True, blank=True, related_name="payments")
+    reporting_payment_method = models.ForeignKey(
+        PaymentMethod,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="payments_reporting_override",
+    )
     method = models.CharField(max_length=20, choices=METHOD_CHOICES)
     card_type = models.CharField(max_length=10, blank=True, default="")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -114,3 +121,34 @@ class Refund(models.Model):
 
     def __str__(self) -> str:
         return f"Refund {self.order_id} {self.method} {self.amount}"
+
+
+class PaymentMethodChangeLog(models.Model):
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="method_change_logs")
+    old_payment_method = models.ForeignKey(
+        PaymentMethod,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="old_payment_method_changes",
+    )
+    new_payment_method = models.ForeignKey(
+        PaymentMethod,
+        on_delete=models.PROTECT,
+        related_name="new_payment_method_changes",
+    )
+    reason = models.CharField(max_length=240, blank=True, default="")
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_method_changes",
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-changed_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"Payment#{self.payment_id} {self.old_payment_method_id}->{self.new_payment_method_id}"

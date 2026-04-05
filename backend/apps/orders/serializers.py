@@ -615,3 +615,34 @@ class OrderCreateSerializer(serializers.Serializer):
                 )
 
         return order
+
+
+class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
+    customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.filter(is_deleted=False), required=False, allow_null=True)
+
+    class Meta:
+        model = Order
+        fields = ["customer_id", "dte_document_type", "iva_exempt"]
+
+    def validate(self, attrs):
+        customer = attrs.get("customer_id", self.instance.customer)
+        dte_document_type = attrs.get("dte_document_type", self.instance.dte_document_type)
+        if customer is None:
+            raise serializers.ValidationError({"customer_id": "Cliente requerido"})
+        if dte_document_type == "CCF" and customer.client_type != "CCF":
+            raise serializers.ValidationError({"dte_document_type": "Cliente debe ser CCF para emitir CCF."})
+        if dte_document_type == "SX" and customer.client_type != "SX":
+            raise serializers.ValidationError({"dte_document_type": "Cliente debe ser SX para emitir SX."})
+        return attrs
+
+    def update(self, instance: Order, validated_data):
+        customer = validated_data.get("customer_id")
+        if customer is not None:
+            instance.customer = customer
+            instance.customer_name = customer.name
+        if "dte_document_type" in validated_data:
+            instance.dte_document_type = validated_data["dte_document_type"]
+        if "iva_exempt" in validated_data:
+            instance.iva_exempt = bool(validated_data["iva_exempt"])
+        instance.save(update_fields=["customer", "customer_name", "dte_document_type", "iva_exempt", "updated_at"])
+        return instance
