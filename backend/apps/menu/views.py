@@ -76,6 +76,8 @@ class CategoryListCreateView(generics.ListCreateAPIView):
             normalized = query.strip().upper()
             if normalized:
                 queryset = queryset.filter(name__icontains=normalized)
+        # NOTE: `Category.position` is the DB source of truth for category ordering.
+        # Every consumer (Menu/POS/Kiosk) must render the order returned by this queryset.
         return queryset.order_by("position", "id")
 
     def get_permissions(self):
@@ -88,39 +90,32 @@ class CategoryListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         name = serializer.validated_data["name"]
         next_position = (Category.objects.aggregate(max_position=models.Max("position")).get("max_position") or -1) + 1
-        category, created = Category.objects.get_or_create(name=name, defaults={"is_active": True, "position": next_position})
-
-        update_fields = []
-        if not category.is_active:
-            category.is_active = True
-            update_fields.append("is_active")
-        if category.position != next_position:
-            category.position = next_position
-            update_fields.append("position")
-        if update_fields:
-            category.save(update_fields=update_fields)
+        existing = Category.objects.filter(name=name).first()
+        if existing:
+            return Response({"name": ["Ya existe una categoría con ese nombre."]}, status=status.HTTP_400_BAD_REQUEST)
+        category = Category.objects.create(name=name, is_active=True, position=next_position)
 
         image_file = request.FILES.get("image")
         if image_file:
             category.image = image_file
             category.save(update_fields=["image", "image_path"])
 
-        if created:
-            log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
+        log_audit(self.request, "menu.category.create", "Category", category.id, {"name": category.name})
         response_serializer = self.get_serializer(category)
-        return Response(
-            response_serializer.data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
 class CategoryReorderView(APIView):
     permission_classes = [IsAdminOrManager]
 
     def patch(self, request):
-        ordered_ids = request.data.get("ordered_ids") or []
-        if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
+        raw_ordered_ids = request.data.get("orderedIds", request.data.get("ordered_ids")) or []
+        if not isinstance(raw_ordered_ids, list):
             return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ordered_ids = [int(item) for item in raw_ordered_ids]
+        except (TypeError, ValueError):
+            return Response({"detail": "ordered_ids debe contener solo IDs numéricos."}, status=status.HTTP_400_BAD_REQUEST)
         if len(set(ordered_ids)) != len(ordered_ids):
             return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -143,6 +138,9 @@ class CategoryReorderView(APIView):
             many=True,
         )
         return Response(serialized.data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        return self.patch(request)
 
 
 class ProductListCreateView(generics.ListCreateAPIView):

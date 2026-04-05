@@ -557,6 +557,8 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
   const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  // NOTE: backend ordering by `position` is the source of truth for categories.
+  // Do not re-sort on the client; preserve API order exactly.
   return data
     .map((item) => ({
       id: item.id,
@@ -568,8 +570,7 @@ export const getCategories = async (query?: string): Promise<Category[]> => {
       isHidden: Boolean(item.is_hidden),
       position: Number(item.position ?? 0),
     }))
-    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"))
-    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.id - b.id);
+    .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
 
 export const getFeatureFlags = async (): Promise<FeatureFlag[]> => {
@@ -3154,7 +3155,7 @@ export const reorderProducts = async (payload: { categoryId?: number | null; ord
 export const reorderCategories = async (orderedIds: number[]): Promise<Category[]> => {
   const response = await request("/menu/categories/reorder/", {
     method: "PATCH",
-    body: JSON.stringify({ ordered_ids: orderedIds }),
+    body: JSON.stringify({ orderedIds }),
   });
   const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
   return data.map((item) => ({
