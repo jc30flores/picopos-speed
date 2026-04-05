@@ -112,6 +112,8 @@ class CategoryReorderView(APIView):
         raw_ordered_ids = request.data.get("orderedIds", request.data.get("ordered_ids")) or []
         if not isinstance(raw_ordered_ids, list):
             return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
+        if not raw_ordered_ids:
+            return Response({"detail": "ordered_ids no puede venir vacío."}, status=status.HTTP_400_BAD_REQUEST)
         try:
             ordered_ids = [int(item) for item in raw_ordered_ids]
         except (TypeError, ValueError):
@@ -119,12 +121,13 @@ class CategoryReorderView(APIView):
         if len(set(ordered_ids)) != len(ordered_ids):
             return Response({"detail": "ordered_ids contiene IDs duplicados."}, status=status.HTTP_400_BAD_REQUEST)
 
-        expected_ids = list(
+        reorderable_ids = list(
             Category.objects.filter(is_active=True, is_hidden=False)
+            .exclude(name__icontains="SIN CATEGORÍA")
             .order_by("position", "id")
             .values_list("id", flat=True)
         )
-        if sorted(expected_ids) != sorted(ordered_ids):
+        if sorted(reorderable_ids) != sorted(ordered_ids):
             return Response({"detail": "ordered_ids debe incluir todas las categorías activas visibles."}, status=status.HTTP_400_BAD_REQUEST)
 
         categories = {category.id: category for category in Category.objects.filter(id__in=ordered_ids)}

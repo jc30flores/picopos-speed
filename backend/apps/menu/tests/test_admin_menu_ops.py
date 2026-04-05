@@ -144,6 +144,28 @@ class AdminMenuOpsTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("duplicados", str(response.data).lower())
 
+    def test_reorder_categories_with_empty_payload_returns_400(self):
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": []},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("vacío", str(response.data).lower())
+
+    def test_reorder_categories_ignores_hidden_system_category(self):
+        Category.objects.create(name="SIN CATEGORÍA", position=99, is_hidden=True)
+        c2 = Category.objects.create(name="BEBIDAS", position=1)
+
+        response = self.client.patch(
+            "/api/menu/categories/reorder/",
+            {"ordered_ids": [c2.id, self.category.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
     def test_create_duplicate_category_returns_400_and_keeps_original_position(self):
         original = Category.objects.create(name="POSTRES", position=7)
 
