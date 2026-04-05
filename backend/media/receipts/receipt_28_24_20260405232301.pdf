@@ -1,0 +1,20 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 1757 >> stream
+BT /F1 10 Tf 24 760 Td (            Pico de Gallo POS             ) Tj T* (            Sucursal Principal            ) Tj T* (------------------------------------------) Tj T* (               RESTAURANTE                ) Tj T* (Atendido por: admin                       ) Tj T* (Orden #127                                ) Tj T* (2026-04-05 17:22                          ) Tj T* (------------------------------------------) Tj T* (CANT DESCRIPCION           P.UNIT     TOTAL) Tj T* (------------------------------------------) Tj T* (1   Grilled Chicken        $6.99     $6.99) Tj T* (    Burrito                               ) Tj T* (1   Shrimp Tampico         $9.99     $9.99) Tj T* (    Burrito                               ) Tj T* (------------------------------------------) Tj T* (Subtotal:                           $16.98) Tj T* (IVA:                                 $1.95) Tj T* (Total:                              $16.98) Tj T* (------------------------------------------) Tj T* (Metodo de pago: Efectivo                  ) Tj T* (Monto pagado: $16.98                      ) Tj T* (------------------------------------------) Tj T* (Datos DTE                                 ) Tj T* (No. Control: DTE-01-M001P001-0000000000000) Tj T* (Codigo Gen: D67BA6D6-CCCB-4D91-B33E-DC42B8) Tj T* (Fecha DTE: 2026-04-05                     ) Tj T* (QR Hacienda:                              ) Tj T* (https://admin.factura.gob.sv/consultaPubli) Tj T* (ca?ambiente=00&codGen=D67BA6D6-CCCB-4D91- ) Tj T* (B33E-DC42B832BC86&fechaEmi=2026-04-05     ) Tj T* (------------------------------------------) Tj T* (          Gracias por su visita           ) Tj T* (              Order No: 127               ) Tj T* (             2026-04-05 17:22             ) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000002050 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+2118
+%%EOF
