@@ -1881,6 +1881,22 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
   return mapOrder(data);
 };
 
+export const updateOrderCustomerDte = async (
+  orderId: number,
+  payload: { customerId: number; dteDocumentType: "CF" | "CCF" | "SX"; ivaExempt?: boolean }
+): Promise<Order> => {
+  const response = await request(`/orders/${orderId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customer_id: payload.customerId,
+      dte_document_type: payload.dteDocumentType,
+      iva_exempt: Boolean(payload.ivaExempt),
+    }),
+  });
+  const data = await handleJson<Parameters<typeof mapOrder>[0]>(response);
+  return mapOrder(data);
+};
+
 export const getCustomerOrders = async (
   signal?: AbortSignal,
   params?: { branchId?: number | string; serviceType?: string }
@@ -2946,6 +2962,21 @@ export const voidOrder = async (orderId: number, reason: string): Promise<{ orde
     order: mapOrder(data.order),
     printJobId: data.print_job_id,
   };
+};
+
+export const refundSaleRecord = async (
+  paymentId: number,
+  payload?: { reason?: string }
+): Promise<{ order: Order; action: "invalidate" | "credit_note" }> => {
+  const response = await request(`/payments/${paymentId}/record-refund/`, {
+    method: "POST",
+    body: JSON.stringify({ reason: payload?.reason ?? "" }),
+  });
+  const data = await handleJson<{
+    order: Parameters<typeof mapOrder>[0];
+    action: "invalidate" | "credit_note";
+  }>(response);
+  return { order: mapOrder(data.order), action: data.action };
 };
 
 export const createPrintJob = async (payload: {

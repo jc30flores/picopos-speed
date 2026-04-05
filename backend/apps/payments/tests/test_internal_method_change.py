@@ -1,12 +1,16 @@
 from decimal import Decimal
+from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
+from apps.dte.models import DTERecord
 from apps.orders.models import Order
-from apps.payments.models import Payment, PaymentMethod, PaymentMethodChangeLog
+from apps.payments.models import Payment, PaymentMethod, PaymentMethodChangeLog, Refund
 from apps.users.models import UserProfile
 
 
@@ -69,3 +73,56 @@ class PaymentInternalMethodChangeTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    @patch("apps.payments.views.invalidate_dte_for_order")
+    def test_record_refund_cf_invalidates_and_creates_internal_refund(self, mock_invalidate):
+        mock_invalidate.return_value = {"success": True}
+        payment = self._create_paid_payment()
+        DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-TEST-1",
+            total_amount=Decimal("10.00"),
+        )
+        self.client.force_authenticate(self.manager)
+
+        response = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "Error en método"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["action"], "invalidate")
+        self.assertTrue(Refund.objects.filter(original_payment=payment).exists())
+        payment.order.refresh_from_db()
+        self.assertIn(payment.order.financial_status, {"refunded_partial", "refunded_full"})
+
+    @patch("apps.payments.views.send_dte_for_credit_note")
+    def test_record_refund_ccf_after_24h_creates_credit_note(self, mock_send_credit):
+        payment = self._create_paid_payment()
+        record = DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CCF_03",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-TEST-2",
+            total_amount=Decimal("10.00"),
+        )
+        old_ts = timezone.now() - timedelta(hours=25)
+        record.recibido_at = old_ts
+        record.save(update_fields=["recibido_at"])
+        self.client.force_authenticate(self.manager)
+
+        response = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "CCF fuera de ventana"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["action"], "credit_note")
+        mock_send_credit.assert_called_once()

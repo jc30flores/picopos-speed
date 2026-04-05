@@ -36,6 +36,7 @@ import {
   setOrderSendToKitchen,
   getPaymentMethods,
   getOrderById,
+  updateOrderCustomerDte,
   createPrintJob,
   markPrintJobPrinted,
   getActiveTaxConfig,
@@ -1044,6 +1045,12 @@ const POS = () => {
     setParts([]);
     setActivePartId(null);
     setKitchenPromptOrderId(null);
+    setDteDocumentType("CF");
+    if (defaultConsumerCustomer) {
+      setSelectedCustomerId(String(defaultConsumerCustomer.id));
+    } else {
+      setSelectedCustomerId("");
+    }
   };
 
   const scheduleReload = () => {
@@ -1248,6 +1255,26 @@ const POS = () => {
     });
   }, [customersByDte, normalizedCustomerSearch]);
   const visibleCustomers = filteredCustomers.slice(0, 4);
+  const handleAcceptCustomerDte = async () => {
+    if (!selectedCustomerId) {
+      toast.error("Selecciona un cliente");
+      return;
+    }
+    if (activeOrder) {
+      try {
+        const updatedOrder = await updateOrderCustomerDte(activeOrder.id, {
+          customerId: Number(selectedCustomerId),
+          dteDocumentType,
+          ivaExempt,
+        });
+        setActiveOrder(updatedOrder);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo actualizar cliente en la orden");
+        return;
+      }
+    }
+    setIsCustomerDteOpen(false);
+  };
   const filteredActivities = useMemo(() => {
     const term = activitySearch.trim().toLowerCase();
     if (!term) return activities.slice(0, 30);
@@ -2175,7 +2202,7 @@ const POS = () => {
             ) : null}
             <div className="flex gap-2">
               <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => setIsCustomerDteOpen(false)}>Aceptar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
             </div>
           </div>
         </DialogContent>
