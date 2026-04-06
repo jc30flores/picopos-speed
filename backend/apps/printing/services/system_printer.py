@@ -132,8 +132,6 @@ class SystemPrinterService:
         result = build_receipt_pdf_from_text(
             text=ticket_text,
             filename=filename,
-            page_width_mm=80.0,
-            max_chars_per_line=42,
             font_size=9.0,
             line_height=11.0,
         )

@@ -607,7 +607,7 @@ class PaymentTicketPDFView(APIView):
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
         payload = render_customer_ticket(payment.order)
         filename = f"ticket_{payment.order_id}_{payment.id}.pdf"
-        result = build_receipt_pdf_from_text(text=payload.get("text", ""), filename=filename, page_width_mm=80.0, max_chars_per_line=42)
+        result = build_receipt_pdf_from_text(text=payload.get("text", ""), filename=filename)
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
         return response

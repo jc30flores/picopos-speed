@@ -136,6 +136,12 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 - `POST /api/printing/jobs/{id}/mark-printed/`
 - `POST /api/printing/jobs/refund/`
 
+### Ticket PDF paper size (`.env`)
+
+- Configura `PRINTER_SIZE=<mm>` para el ancho de papel térmico de los PDFs tipo ticket.
+- Acepta enteros o decimales (ejemplos: `80`, `75`, `100`).
+- Si el valor está vacío o es inválido, el backend usa `80` mm por defecto.
+
 Example: create employee
 
 ```sh

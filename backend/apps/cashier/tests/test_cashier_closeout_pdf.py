@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -13,6 +14,13 @@ from apps.users.models import UserProfile
 
 
 class CashierCloseoutPdfTests(TestCase):
+    @staticmethod
+    def _extract_media_box_width(pdf_bytes: bytes) -> float:
+        match = re.search(rb"/MediaBox\s*\[\s*0\s+0\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*\]", pdf_bytes)
+        if not match:
+            raise AssertionError("No se encontró MediaBox en el PDF.")
+        return float(match.group(1))
+
     def setUp(self):
         user = get_user_model().objects.create_user(username="cash_pdf", password="pw")
         UserProfile.objects.create(user=user, role="cashier", is_active=True)
@@ -61,6 +69,18 @@ class CashierCloseoutPdfTests(TestCase):
         pdf_bytes = build_end_of_day_ticket_pdf(session.id)
         self.assertGreater(len(pdf_bytes), 100)
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    @override_settings(PRINTER_SIZE=80)
+    def test_closeout_ticket_pdf_uses_printer_size_width_80mm(self):
+        session = CashSession.objects.create(
+            register=self.register,
+            opened_by=self.user,
+            opening_cash="10.00",
+            status="closed",
+        )
+        pdf_bytes = build_end_of_day_ticket_pdf(session.id)
+        width = self._extract_media_box_width(pdf_bytes)
+        self.assertAlmostEqual(width, 80 * 72 / 25.4, delta=1.0)
 
     def test_fallback_pdf_uses_text_leading_and_expands_media_box_for_long_reports(self):
         long_text = "\n".join([f"Linea {idx:03d}" for idx in range(180)])

@@ -358,7 +358,7 @@ class OrderReceiptPDFView(generics.GenericAPIView):
                 f"Consulta publica: {build_hacienda_consulta_publica_url(fecha_dte, record.codigo_generacion)}",
             ]
 
-        result = build_receipt_pdf(lines=lines, filename=filename, page_width_mm=80.0, max_chars_per_line=42)
+        result = build_receipt_pdf(lines=lines, filename=filename)
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
         return response

@@ -1,6 +1,7 @@
+import re
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
@@ -11,6 +12,13 @@ from apps.users.models import UserProfile
 
 
 class OrderPaymentFlowTests(TestCase):
+    @staticmethod
+    def _extract_media_box_width(pdf_bytes: bytes) -> float:
+        match = re.search(rb"/MediaBox\s*\[\s*0\s+0\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*\]", pdf_bytes)
+        if not match:
+            raise AssertionError("No se encontró MediaBox en el PDF.")
+        return float(match.group(1))
+
     def setUp(self):
         self.client = APIClient()
         user_model = get_user_model()
@@ -153,3 +161,36 @@ class OrderPaymentFlowTests(TestCase):
         self.assertEqual(pdf_response["Content-Type"], "application/pdf")
         self.assertIn(b"%PDF", pdf_response.content[:10])
         self.assertIn(b"ORDEN", pdf_response.content.upper())
+
+    @override_settings(PRINTER_SIZE=80)
+    def test_payment_ticket_pdf_respects_printer_size_width_80mm(self):
+        order = Order.objects.create(
+            order_number=104,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            customer=self.customer,
+            customer_name=self.customer.name,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=self.product,
+            product_name_snapshot=self.product.name,
+            price_snapshot=self.product.price,
+            quantity=1,
+        )
+        payment_response = self.client.post(
+            "/api/payments/",
+            {"order": order.id, "method": "cash", "amount": "10.00", "tip_amount": "0.00"},
+            format="json",
+        )
+        self.assertEqual(payment_response.status_code, 201)
+        payment_id = payment_response.json()["id"]
+        pdf_response = self.client.get(f"/api/payments/{payment_id}/ticket.pdf", HTTP_ACCEPT="text/html")
+        self.assertEqual(pdf_response.status_code, 200)
+        width = self._extract_media_box_width(pdf_response.content)
+        self.assertAlmostEqual(width, 80 * 72 / 25.4, delta=1.0)

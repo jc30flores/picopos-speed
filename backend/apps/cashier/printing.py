@@ -348,11 +348,11 @@ def print_ticket_text(text: str) -> tuple[bool, str | None]:
 
 
 def _fallback_pdf_bytes(text: str) -> bytes:
-    return build_receipt_pdf_from_text(text=text, filename="fallback.pdf", page_width_mm=80.0, max_chars_per_line=42).pdf_bytes
+    return build_receipt_pdf_from_text(text=text, filename="fallback.pdf").pdf_bytes
 
 
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
     text = build_end_of_day_ticket(session_id)
     filename = f"cierre_caja_{session.id}.pdf"
-    return build_receipt_pdf_from_text(text=text, filename=filename, page_width_mm=80.0, max_chars_per_line=42).pdf_bytes
+    return build_receipt_pdf_from_text(text=text, filename=filename).pdf_bytes
