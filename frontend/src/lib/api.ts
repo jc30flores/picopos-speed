@@ -1,5 +1,6 @@
 import { fromCents, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
+const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
 
 export type Category = {
   id: number;
@@ -455,10 +456,29 @@ const buildApiUrl = (path: string) => {
   return `${base}${normalizedPath}`;
 };
 
+const authDebugLog = (...args: unknown[]) => {
+  if (!AUTH_DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.info("[auth-debug]", ...args);
+};
+
 const getCsrfToken = () => {
   const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
 };
+
+const buildEmptyAttendanceState = (): AttendanceState => ({
+  employee: { id: 0, name: "—", role: "worker" },
+  date: new Date().toISOString().slice(0, 10),
+  clockIn: null,
+  breakStart: null,
+  breakEnd: null,
+  clockOut: null,
+  canClockIn: false,
+  canBreakStart: false,
+  canBreakEnd: false,
+  canClockOut: false,
+});
 
 const request = async (path: string, options: RequestInit = {}) => {
   const method = options.method ?? "GET";
@@ -478,16 +498,23 @@ const request = async (path: string, options: RequestInit = {}) => {
     }
   }
 
-  const response = await fetch(buildApiUrl(path), {
-    credentials: "include",
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(buildApiUrl(path), {
+      credentials: "include",
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    authDebugLog("network_error", { path, method, error: error instanceof Error ? error.message : String(error) });
+    throw new Error("NETWORK_ERROR");
+  }
   const authBypassUnauthorizedEvent = new Set([
     "/auth/csrf",
     "/auth/login",
     "/auth/pin-login",
     "/auth/logout",
+    "/auth/me",
   ]);
   if ((response.status === 401 || response.status === 403) && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
@@ -550,6 +577,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     method: "POST",
     body: JSON.stringify({ pin: String(payload.pin) }),
   });
+  authDebugLog("pin_login.response", { status: response.status, ok: response.ok });
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
@@ -561,6 +589,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     throw new Error(detail || `PIN_LOGIN_ERROR_${response.status}`);
   }
   const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
+  authDebugLog("pin_login.payload_keys", Object.keys(raw ?? {}));
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
@@ -571,7 +600,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
 
 export const logout = async (): Promise<void> => {
   const response = await request("/auth/logout/", { method: "POST" });
-  if (!response.ok && response.status !== 204) {
+  if (!response.ok && response.status !== 204 && response.status !== 401 && response.status !== 403) {
     const message = await response.text();
     throw new Error(message || "Logout failed");
   }
@@ -580,6 +609,7 @@ export const logout = async (): Promise<void> => {
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
   const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
+  authDebugLog("me.response", { status: response.status, user: raw?.username, role: raw?.role });
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
@@ -2855,26 +2885,23 @@ const mapAttendanceState = (data: {
 
 export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
   const response = await request("/employees/attendance/today/");
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();
+  }
   const data = await handleJson<any>(response);
   if (data?.attendance) {
     return mapAttendanceState(data.attendance);
   }
-  return mapAttendanceState({
-    employee: { id: 0, name: "—", role: "worker" },
-    date: new Date().toISOString().slice(0, 10),
-    clock_in: null,
-    break_start: null,
-    break_end: null,
-    clock_out: null,
-    can_clock_in: false,
-    can_break_start: false,
-    can_break_end: false,
-    can_clock_out: false,
-  });
+  return buildEmptyAttendanceState();
 };
 
 const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
   const response = await request(path, { method: "POST" });
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();
+  }
   const data = await handleJson<any>(response);
   return mapAttendanceState(data);
 };
@@ -2898,6 +2925,10 @@ export const getMyAttendanceHistory = async (filters?: { start?: string; end?: s
   if (filters?.start) params.set("start", filters.start);
   if (filters?.end) params.set("end", filters.end);
   const response = await request(`/employees/me/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return [];
+  }
   const data = await handleJson<any>(response);
   const rows = Array.isArray(data) ? data : (data?.rows ?? []);
   return mapAttendanceHistoryRows(rows);

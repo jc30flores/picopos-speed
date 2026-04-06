@@ -26,19 +26,31 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const payload = identifier.includes("@")
       ? { email: identifier, password }
       : { username: identifier, password };
-    const current = await loginRequest(payload);
-    setUser(current);
+    await loginRequest(payload);
+    const verified = await me();
+    setUser(verified);
+    return verified;
   }, []);
 
   const loginWithPin = useCallback(async ({ pin }: { pin: string }) => {
     await getCSRF();
-    const current = await pinLogin({ pin });
-    setUser(current);
+    await pinLogin({ pin });
+    try {
+      const verified = await me();
+      setUser(verified);
+      return verified;
+    } catch {
+      throw new Error("SESSION_VERIFY_FAILED");
+    }
   }, []);
 
   const logout = useCallback(async () => {
-    await getCSRF();
-    await logoutRequest();
+    try {
+      await getCSRF();
+      await logoutRequest();
+    } catch {
+      // Logout must be idempotent on client side to avoid retry loops.
+    }
     Object.keys(localStorage)
       .filter((key) => key.startsWith("pos_draft_"))
       .forEach((key) => localStorage.removeItem(key));

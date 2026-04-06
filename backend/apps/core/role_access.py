@@ -3,11 +3,8 @@ from __future__ import annotations
 import re
 
 AUTH_ALLOWED_PREFIXES = (
-    "/api/auth/csrf/",
-    "/api/auth/login/",
-    "/api/auth/pin-login/",
-    "/api/auth/logout/",
-    "/api/auth/me/",
+    "/api/auth/",
+    "/api/auth",
 )
 
 ROLE_ALLOWED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {

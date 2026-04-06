@@ -45,6 +45,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.environ.get(name, "")
+    if not value:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
@@ -163,29 +170,33 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOWED_ORIGINS = [
+_default_cors_allowed_origins = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
     "https://pico-de-gallo-pos.cuskatech.com",
 ]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_default_cors_allowed_origins + _env_list("CORS_ALLOWED_ORIGINS")))
 
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = [
+_default_csrf_trusted_origins = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
     "http://localhost:9102",
     "https://pico-de-gallo-pos.cuskatech.com",
 ]
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(_default_csrf_trusted_origins + _env_list("CSRF_TRUSTED_ORIGINS")))
 
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE", default=not DEBUG)
 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 
 PRINT_WIDTH = 42
 PRINT_DRIVER = "dummy"
