@@ -622,11 +622,16 @@ const POS = () => {
   };
 
   const canonicalDueCents = activeOrder
-    ? (
-      (activeOrder.remainingCents > 0 || activeOrder.remaining <= 0)
-        ? activeOrder.remainingCents
-        : toCents(activeOrder.remaining)
-    )
+    ? (() => {
+      const hasItems = activeOrder.items.length > 0;
+      const remainingFromCents = Number.isFinite(activeOrder.remainingCents) ? Math.max(activeOrder.remainingCents ?? 0, 0) : 0;
+      const remainingFromDecimal = Math.max(toCents(activeOrder.remaining), 0);
+      const payableFallback = Math.max(toCents(activeOrder.totalPayable ?? activeOrder.total), 0);
+      if (remainingFromCents > 0) return remainingFromCents;
+      if (remainingFromDecimal > 0) return remainingFromDecimal;
+      if (hasItems && activeOrder.paymentStatus !== "paid") return payableFallback;
+      return 0;
+    })()
     : toCents(checkoutDraft?.total ?? 0);
   const paymentTotal = canonicalDueCents / 100;
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";

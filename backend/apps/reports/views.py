@@ -42,8 +42,8 @@ def _shift_months(d, months: int):
 
 
 def _parse_report_dates(request):
-    start_raw = request.query_params.get("start")
-    end_raw = request.query_params.get("end")
+    start_raw = request.query_params.get("start") or request.query_params.get("date_from")
+    end_raw = request.query_params.get("end") or request.query_params.get("date_to")
     if not start_raw or not end_raw:
         raise ValidationError({"detail": "start y end son obligatorios (YYYY-MM-DD)."})
 
@@ -117,12 +117,22 @@ def _payment_method_code_expression():
     )
 
 
+def _parse_csv_values(raw_value: str | None):
+    if not raw_value:
+        return []
+    return [value.strip() for value in str(raw_value).split(",") if value.strip()]
+
+
 def _apply_common_filters(queryset, request):
     category_ids = _parse_csv_ids(request.query_params.get("category_ids"), "category_ids")
     product_ids = _parse_csv_ids(request.query_params.get("product_ids"), "product_ids")
     modifier_ids = _parse_csv_ids(request.query_params.get("modifier_ids"), "modifier_ids")
-    order_type = normalize_service_type(request.query_params.get("order_type")) if request.query_params.get("order_type") else ""
-    payment_method = (request.query_params.get("payment_method") or "").strip().lower()
+    order_types = _parse_csv_values(request.query_params.get("service_types") or request.query_params.get("order_types"))
+    if request.query_params.get("order_type"):
+        order_types.append(request.query_params.get("order_type"))
+    payment_methods = _parse_csv_values(request.query_params.get("payment_methods"))
+    if request.query_params.get("payment_method"):
+        payment_methods.append(request.query_params.get("payment_method"))
 
     if category_ids:
         queryset = queryset.filter(order__items__product__category_id__in=category_ids)
@@ -130,16 +140,18 @@ def _apply_common_filters(queryset, request):
         queryset = queryset.filter(order__items__product_id__in=product_ids)
     if modifier_ids:
         queryset = queryset.filter(order__items__applied_modifiers__id__in=modifier_ids)
-    if order_type:
+    normalized_order_types = {normalize_service_type(value) for value in order_types if value}
+    if normalized_order_types:
         matching_service_type_ids = [
             service.id
             for service in ServiceType.objects.only("id", "key", "label")
-            if normalize_service_type(service.key, default="") == order_type
-            or normalize_service_type(service.label, default="") == order_type
+            if normalize_service_type(service.key, default="") in normalized_order_types
+            or normalize_service_type(service.label, default="") in normalized_order_types
         ]
         queryset = queryset.filter(order__service_type_id__in=matching_service_type_ids)
-    if payment_method:
-        queryset = queryset.annotate(_payment_code=_payment_method_code_expression()).filter(_payment_code=payment_method)
+    normalized_payment_methods = {value.strip().lower() for value in payment_methods if value}
+    if normalized_payment_methods:
+        queryset = queryset.annotate(_payment_code=_payment_method_code_expression()).filter(_payment_code__in=normalized_payment_methods)
     return queryset.distinct()
 
 
@@ -220,6 +232,7 @@ class SalesReportListView(generics.ListAPIView):
                 | Q(order__customer_name__icontains=search)
                 | Q(order__invoice__numero_control__icontains=search)
             )
+        queryset = _apply_common_filters(queryset, self.request)
         return queryset.order_by("-created_at")
 
     def list(self, request, *args, **kwargs):
@@ -318,13 +331,25 @@ class SalesTimeseriesView(generics.GenericAPIView):
         return [{"key": row["bucket"].isoformat(), "total": f"{q2(row['total']):.2f}", "count": int(row["count"] or 0)} for row in rows]
 
     def get(self, request, *args, **kwargs):
+        """
+        Query params supported:
+        - start|date_from (YYYY-MM-DD)
+        - end|date_to (YYYY-MM-DD)
+        - group_by|granularity: hour|day|week|month|year (also accepts hours)
+        - compare|compare_with: none|previous_period|previous_year|previous_week
+        - optional filters: category_ids, product_ids, modifier_ids, service_types/order_type, payment_methods/payment_method
+        """
         start_date, end_date = _parse_report_dates(request)
-        group_by = (request.query_params.get("group_by") or "day").strip().lower()
+        granularity = (request.query_params.get("group_by") or request.query_params.get("granularity") or "day").strip().lower()
+        group_by = "hour" if granularity == "hours" else granularity
         if group_by not in self.GROUP_MAP:
             raise ValidationError({"group_by": "Debe ser uno de: hour, day, week, month, year."})
-        compare_mode = (request.query_params.get("compare") or "none").strip().lower()
+        compare_mode = (request.query_params.get("compare") or request.query_params.get("compare_with") or "none").strip().lower()
+        if compare_mode == "previous_week":
+            compare_mode = "previous_period"
+            group_by = "week" if group_by in {"day", "week"} else group_by
         if compare_mode not in {"none", "previous_period", "previous_year"}:
-            raise ValidationError({"compare": "Debe ser none, previous_period o previous_year."})
+            raise ValidationError({"compare": "Debe ser none, previous_period, previous_week o previous_year."})
 
         start_dt, end_dt = _range_to_datetimes(start_date, end_date)
         base_qs = Payment.objects.select_related("order", "order__service_type", "payment_method", "reporting_payment_method").filter(
@@ -474,13 +499,24 @@ class SalesBreakdownView(generics.GenericAPIView):
         return self._serialize_items([{"id": row["id"], "name": row["modifier_name_snapshot"] or "Modificador", "total": row["total"], "count": row["count"]} for row in rows])
 
     def get(self, request, *args, **kwargs):
+        """
+        Query params supported:
+        - start|date_from, end|date_to
+        - dimension: category|product|order_type|payment_method|modifier
+        - compare|compare_with: none|previous_period|previous_year|previous_week
+        - optional filters: category_ids, product_ids, modifier_ids, service_types/order_type, payment_methods/payment_method
+        """
         start_date, end_date = _parse_report_dates(request)
         dimension = (request.query_params.get("dimension") or "").strip().lower()
+        if dimension == "service_type":
+            dimension = "order_type"
         if dimension not in self.DIMENSIONS:
             raise ValidationError({"dimension": "Debe ser uno de: category, product, order_type, payment_method, modifier."})
-        compare_mode = (request.query_params.get("compare") or "none").strip().lower()
+        compare_mode = (request.query_params.get("compare") or request.query_params.get("compare_with") or "none").strip().lower()
+        if compare_mode == "previous_week":
+            compare_mode = "previous_period"
         if compare_mode not in {"none", "previous_period", "previous_year"}:
-            raise ValidationError({"compare": "Debe ser none, previous_period o previous_year."})
+            raise ValidationError({"compare": "Debe ser none, previous_period, previous_week o previous_year."})
 
         start_dt, end_dt = _range_to_datetimes(start_date, end_date)
         base_qs = Payment.objects.select_related("order", "order__service_type", "payment_method", "reporting_payment_method").filter(

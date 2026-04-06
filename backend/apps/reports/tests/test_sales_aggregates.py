@@ -98,6 +98,15 @@ class SalesAggregatesTests(TestCase):
             self.assertIn("series", response.data)
             self.assertGreaterEqual(len(response.data["series"]), 1)
 
+    def test_sales_timeseries_accepts_date_from_and_granularity_alias(self):
+        now = timezone.now().replace(minute=0, second=0, microsecond=0)
+        self._create_sale(order_number=90, created_at=now, service_type=self.service_dine, payment_method=self.pm_cash, amount="12.00")
+        response = self.client.get(
+            f"/api/reports/sales-timeseries/?date_from={now.date().isoformat()}&date_to={now.date().isoformat()}&granularity=hours&compare_with=none"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["kpis"]["total"], "12.00")
+
     def test_sales_timeseries_compare_previous_period_single_day_uses_minus_7_days(self):
         target_day = date(2026, 4, 5)
         target_dt = timezone.make_aware(datetime.combine(target_day, datetime.min.time()).replace(hour=12))

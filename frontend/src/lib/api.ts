@@ -2131,19 +2131,59 @@ export const getSalesTimeseries = async (filters: {
   compareWith?: ReportsComparisonMode;
   compareDateFrom?: string;
   compareDateTo?: string;
+  categoryIds?: string[];
+  productIds?: string[];
+  modifierIds?: string[];
+  serviceTypes?: string[];
+  paymentMethods?: string[];
 }): Promise<SalesTimeseriesResponse> => {
   const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
     date_from: filters.dateFrom,
     date_to: filters.dateTo,
     granularity: filters.granularity,
+    group_by: filters.granularity === "hours" ? "hour" : filters.granularity,
     compare_with: filters.compareWith ?? "none",
+    compare: filters.compareWith ?? "none",
   });
+  if (filters.categoryIds?.length) params.set("category_ids", filters.categoryIds.join(","));
+  if (filters.productIds?.length) params.set("product_ids", filters.productIds.join(","));
+  if (filters.modifierIds?.length) params.set("modifier_ids", filters.modifierIds.join(","));
+  if (filters.serviceTypes?.length) params.set("service_types", filters.serviceTypes.join(","));
+  if (filters.paymentMethods?.length) params.set("payment_methods", filters.paymentMethods.join(","));
   if (filters.compareDateFrom) params.set("compare_date_from", filters.compareDateFrom);
   if (filters.compareDateTo) params.set("compare_date_to", filters.compareDateTo);
 
   const response = await request(`/reports/sales-timeseries/?${params.toString()}`);
   if (response.ok) {
-    return handleJson<SalesTimeseriesResponse>(response);
+    const payload = await handleJson<{
+      series?: Array<{ key: string; total: string | number }>;
+      compare?: { series?: Array<{ key: string; total: string | number }> } | null;
+      kpis?: { total?: string | number; count?: number; avg_ticket?: string | number };
+      compare_kpis?: { total?: string | number; count?: number; avg_ticket?: string | number };
+    }>(response);
+    const comparisonMap = new Map((payload.compare?.series ?? []).map((point) => [point.key, Number(point.total ?? 0)]));
+    const points = (payload.series ?? []).map((point) => ({
+      bucket: point.key,
+      currentTotal: Number(point.total ?? 0),
+      comparisonTotal: comparisonMap.get(point.key) ?? 0,
+    }));
+    return {
+      points,
+      current: {
+        totalSales: Number(payload.kpis?.total ?? 0),
+        transactions: Number(payload.kpis?.count ?? 0),
+        avgTicket: Number(payload.kpis?.avg_ticket ?? 0),
+      },
+      comparison: payload.compare
+        ? {
+          totalSales: Number(payload.compare_kpis?.total ?? 0),
+          transactions: Number(payload.compare_kpis?.count ?? 0),
+          avgTicket: Number(payload.compare_kpis?.avg_ticket ?? 0),
+        }
+        : null,
+    };
   }
 
   const currentReport = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
@@ -2184,15 +2224,37 @@ export const getSalesBreakdown = async (filters: {
   dateFrom: string;
   dateTo: string;
   dimension: SalesBreakdownDimension;
+  compareWith?: ReportsComparisonMode;
+  categoryIds?: string[];
+  productIds?: string[];
+  modifierIds?: string[];
+  serviceTypes?: string[];
+  paymentMethods?: string[];
 }): Promise<SalesBreakdownRow[]> => {
   const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
     date_from: filters.dateFrom,
     date_to: filters.dateTo,
-    dimension: filters.dimension,
+    dimension: filters.dimension === "service_type" ? "order_type" : filters.dimension,
+    compare: filters.compareWith ?? "none",
+    compare_with: filters.compareWith ?? "none",
   });
+  if (filters.categoryIds?.length) params.set("category_ids", filters.categoryIds.join(","));
+  if (filters.productIds?.length) params.set("product_ids", filters.productIds.join(","));
+  if (filters.modifierIds?.length) params.set("modifier_ids", filters.modifierIds.join(","));
+  if (filters.serviceTypes?.length) params.set("service_types", filters.serviceTypes.join(","));
+  if (filters.paymentMethods?.length) params.set("payment_methods", filters.paymentMethods.join(","));
   const response = await request(`/reports/sales-breakdown/?${params.toString()}`);
   if (response.ok) {
-    return handleJson<SalesBreakdownRow[]>(response);
+    const payload = await handleJson<{ items?: Array<{ id: string | number; name: string; total: string | number; pct: number; count: number }> }>(response);
+    return (payload.items ?? []).map((item) => ({
+      key: String(item.id),
+      label: item.name,
+      total: Number(item.total ?? 0),
+      percentage: Number(item.pct ?? 0) * 100,
+      transactions: Number(item.count ?? 0),
+    }));
   }
 
   const report = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });

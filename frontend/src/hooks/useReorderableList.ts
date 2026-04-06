@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const toOrderKey = <T,>(items: T[], getId: (item: T) => number | string): string =>
   items.map((item) => String(getId(item))).join("|");
@@ -6,6 +6,7 @@ const toOrderKey = <T,>(items: T[], getId: (item: T) => number | string): string
 export const useReorderableList = <T,>(items: T[], getId: (item: T) => number | string) => {
   const [originalItems, setOriginalItems] = useState<T[]>(items);
   const [currentItems, setCurrentItems] = useState<T[]>(items);
+  const lastSyncedKeyRef = useRef(toOrderKey(items, getId));
 
   const isDirty = useMemo(
     () => toOrderKey(originalItems, getId) !== toOrderKey(currentItems, getId),
@@ -13,20 +14,13 @@ export const useReorderableList = <T,>(items: T[], getId: (item: T) => number | 
   );
 
   useEffect(() => {
-    if (isDirty) return;
     const incomingKey = toOrderKey(items, getId);
-    const originalKey = toOrderKey(originalItems, getId);
-    const currentKey = toOrderKey(currentItems, getId);
-    if (incomingKey === currentKey && incomingKey === originalKey) {
-      const sameRefs = items.length === currentItems.length && items.every((item, index) => item === currentItems[index]);
-      if (sameRefs) return;
-      setOriginalItems(items);
-      setCurrentItems(items);
-      return;
-    }
+    if (incomingKey === lastSyncedKeyRef.current) return;
+    if (isDirty) return;
+    lastSyncedKeyRef.current = incomingKey;
     setOriginalItems(items);
     setCurrentItems(items);
-  }, [currentItems, getId, isDirty, items, originalItems]);
+  }, [getId, isDirty, items]);
 
   const moveById = useCallback(
     (activeId: number | string, targetId: number | string) => {
@@ -50,7 +44,8 @@ export const useReorderableList = <T,>(items: T[], getId: (item: T) => number | 
 
   const markSaved = useCallback(() => {
     setOriginalItems(currentItems);
-  }, [currentItems]);
+    lastSyncedKeyRef.current = toOrderKey(currentItems, getId);
+  }, [currentItems, getId]);
 
   return {
     currentItems,

@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -25,8 +24,7 @@ import {
   getSalesTimeseries,
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
-
-type GraphType = "line" | "bar";
+import { useServiceTypes } from "@/hooks/useServiceTypes";
 
 const toISODate = (date: Date) => date.toISOString().slice(0, 10);
 const shiftDays = (date: Date, days: number) => {
@@ -88,7 +86,6 @@ export const RegistrosReportesTab = () => {
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
   const [granularity, setGranularity] = useState<ReportsGranularity>("hours");
-  const [graphType, setGraphType] = useState<GraphType>("line");
   const [compareWith, setCompareWith] = useState<ReportsComparisonMode>("none");
   const [breakdownTab, setBreakdownTab] = useState<SalesBreakdownDimension>("service_type");
 
@@ -106,13 +103,10 @@ export const RegistrosReportesTab = () => {
   const [series, setSeries] = useState<SalesTimeseriesResponse | null>(null);
   const [breakdownRows, setBreakdownRows] = useState<SalesBreakdownRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [debouncedFilters, setDebouncedFilters] = useState("");
+  const { activeServiceTypes } = useServiceTypes();
 
-  const serviceTypeOptions = [
-    { id: "MESA", label: "Mesa" },
-    { id: "PARA_LLEVAR", label: "Para llevar" },
-    { id: "KIOSK", label: "Kiosk" },
-    { id: "PEDIDOS_YA", label: "Pedidos Ya" },
-  ];
+  const serviceTypeOptions = activeServiceTypes.map((item) => ({ id: item.key, label: item.label }));
 
   useEffect(() => {
     Promise.all([getCategories(), getProducts(), getModifierGroups(), getPaymentMethods()])
@@ -144,8 +138,23 @@ export const RegistrosReportesTab = () => {
           compareWith,
           compareDateFrom: comparison.compareFrom,
           compareDateTo: comparison.compareTo,
+          categoryIds: selectedCategories,
+          productIds: selectedProducts,
+          modifierIds: selectedModifiers,
+          serviceTypes: selectedServiceTypes,
+          paymentMethods: selectedPaymentMethods,
         }),
-        getSalesBreakdown({ dateFrom, dateTo, dimension: breakdownTab }),
+        getSalesBreakdown({
+          dateFrom,
+          dateTo,
+          dimension: breakdownTab,
+          compareWith,
+          categoryIds: selectedCategories,
+          productIds: selectedProducts,
+          modifierIds: selectedModifiers,
+          serviceTypes: selectedServiceTypes,
+          paymentMethods: selectedPaymentMethods,
+        }),
       ]);
       setSeries(timeseries);
       setBreakdownRows(breakdown);
@@ -155,8 +164,26 @@ export const RegistrosReportesTab = () => {
   };
 
   useEffect(() => {
+    const next = JSON.stringify({
+      dateFrom,
+      dateTo,
+      granularity,
+      compareWith,
+      breakdownTab,
+      selectedCategories,
+      selectedProducts,
+      selectedServiceTypes,
+      selectedPaymentMethods,
+      selectedModifiers,
+    });
+    const timeout = window.setTimeout(() => setDebouncedFilters(next), 300);
+    return () => window.clearTimeout(timeout);
+  }, [breakdownTab, compareWith, dateFrom, dateTo, granularity, selectedCategories, selectedModifiers, selectedPaymentMethods, selectedProducts, selectedServiceTypes]);
+
+  useEffect(() => {
+    if (!debouncedFilters) return;
     load().catch(() => undefined);
-  }, [breakdownTab]);
+  }, [debouncedFilters]);
 
   const currentKpis = series?.current ?? { totalSales: 0, transactions: 0, avgTicket: 0 };
   const comparisonKpis = series?.comparison ?? null;
@@ -180,13 +207,6 @@ export const RegistrosReportesTab = () => {
               <SelectItem value="year">Año</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={graphType} onValueChange={(value) => setGraphType(value as GraphType)}>
-            <SelectTrigger className="h-12"><SelectValue placeholder="Tipo de gráfica" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="line">Línea</SelectItem>
-              <SelectItem value="bar">Barra</SelectItem>
-            </SelectContent>
-          </Select>
           <Select value={compareWith} onValueChange={(value) => setCompareWith(value as ReportsComparisonMode)}>
             <SelectTrigger className="h-12"><SelectValue placeholder="Comparar con" /></SelectTrigger>
             <SelectContent>
@@ -195,9 +215,6 @@ export const RegistrosReportesTab = () => {
               <SelectItem value="previous_year">Mismo periodo año anterior</SelectItem>
             </SelectContent>
           </Select>
-        </div>
-        <div className="mt-3 flex justify-end">
-          <Button onClick={() => void load()} disabled={isLoading}>{isLoading ? "Cargando..." : "Aplicar filtros"}</Button>
         </div>
       </Card>
 
@@ -212,7 +229,7 @@ export const RegistrosReportesTab = () => {
               <MultiSelect title="Métodos de pago" options={paymentMethods} selected={selectedPaymentMethods} onToggle={(id) => toggle(selectedPaymentMethods, setSelectedPaymentMethods, id)} />
               <MultiSelect title="Modificadores" options={modifierOptions} selected={selectedModifiers} onToggle={(id) => toggle(selectedModifiers, setSelectedModifiers, id)} />
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">UI preparada para enviar filtros multi-select al backend de agregados.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Los filtros se aplican automáticamente (300ms debounce).</p>
           </AccordionContent>
         </AccordionItem>
       </Accordion>
@@ -234,26 +251,20 @@ export const RegistrosReportesTab = () => {
         </CardHeader>
         <CardContent className="h-80">
           <ResponsiveContainer width="100%" height="100%">
-            {graphType === "line" ? (
-              <LineChart data={series?.points ?? []}>
+            {series?.points?.length ? (
+              <AreaChart data={series.points}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="bucket" />
-                <YAxis />
-                <Tooltip />
+                <YAxis tickFormatter={(value) => formatMoney(Number(value))} />
+                <Tooltip formatter={(value: number | string) => formatMoney(Number(value || 0))} />
                 <Legend />
-                <Line dataKey="currentTotal" name="Actual" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                <Area dataKey="currentTotal" name="Actual" stroke="hsl(var(--primary))" fill="hsl(var(--primary) / 0.2)" strokeWidth={2} />
                 <Line dataKey="comparisonTotal" name="Comparación" stroke="hsl(var(--secondary))" strokeWidth={2} dot={false} />
-              </LineChart>
+              </AreaChart>
             ) : (
-              <BarChart data={series?.points ?? []}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="bucket" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="currentTotal" name="Actual" fill="hsl(var(--primary))" />
-                <Bar dataKey="comparisonTotal" name="Comparación" fill="hsl(var(--secondary))" />
-              </BarChart>
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                {isLoading ? "Cargando datos..." : "Sin datos para el rango seleccionado"}
+              </div>
             )}
           </ResponsiveContainer>
         </CardContent>
