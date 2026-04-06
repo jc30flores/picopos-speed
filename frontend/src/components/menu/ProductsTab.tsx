@@ -254,16 +254,6 @@ export const ProductsTab = () => {
   };
 
 
-  const syncVisibleCategoryPositions = useCallback((orderedVisibleCategories: Category[]) => {
-    setCategories((prev) => {
-      const byId = new Map(prev.map((category) => [category.id, category]));
-      orderedVisibleCategories.forEach((category, index) => {
-        byId.set(category.id, { ...category, position: index });
-      });
-      return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    });
-  }, []);
-
   const handleCategoryDragEnter = (targetCategoryId: number) => {
     if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
     categoryReorder.moveById(draggingCategoryId, targetCategoryId);
@@ -290,17 +280,6 @@ export const ProductsTab = () => {
     }
   };
 
-
-  const syncCategoryProducts = useCallback((orderedCategoryProducts: Product[]) => {
-    setProducts((prev) => {
-      const byId = new Map(prev.map((product) => [product.id, product]));
-      orderedCategoryProducts.forEach((product, index) => {
-        byId.set(product.id, { ...product, sortOrder: index });
-      });
-      return Array.from(byId.values());
-    });
-  }, []);
-
   const handleProductDragEnter = (targetProductId: number) => {
     if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !canReorderProducts) return;
     productReorder.moveById(draggingProductId, targetProductId);
@@ -326,15 +305,6 @@ export const ProductsTab = () => {
       setDragOverProductId(null);
     }
   };
-
-  useEffect(() => {
-    syncVisibleCategoryPositions(categoryReorder.currentItems);
-  }, [categoryReorder.currentItems, syncVisibleCategoryPositions]);
-
-  useEffect(() => {
-    if (!selectedCategoryId) return;
-    syncCategoryProducts(productReorder.currentItems);
-  }, [productReorder.currentItems, selectedCategoryId, syncCategoryProducts]);
 
   const displayProducts = useMemo(() => {
     if (!canReorderProducts || !selectedCategoryId) return filteredProducts;
@@ -617,7 +587,7 @@ export const ProductsTab = () => {
               <Button onClick={handleCreateCategory}>Crear</Button>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {visibleCategories.map((category) => (
+              {categoryReorder.currentItems.map((category) => (
                 <div
                   key={category.id}
                   className={cn(
