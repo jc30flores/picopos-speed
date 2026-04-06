@@ -78,6 +78,7 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/useAuth";
 
 interface CartItem {
   id: string;
@@ -170,6 +171,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 const POS = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -573,6 +575,14 @@ const POS = () => {
     setPriceEditorItemId(itemId);
     setPinInput("");
     setValidatedPin("");
+    const isPrivileged = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+    const activeItem = cart.find((item) => item.id === itemId);
+    setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+    if (isPrivileged) {
+      setValidatedPin("BYPASS");
+      setIsPriceModalOpen(true);
+      return;
+    }
     setIsPinModalOpen(true);
   };
 
@@ -2753,16 +2763,16 @@ const POS = () => {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Código de acceso</DialogTitle>
-            <DialogDescription>Ingresa el PIN de 4 dígitos para autorizar cambio de precio.</DialogDescription>
+            <DialogDescription>Ingresa el PIN de 6 dígitos para autorizar cambio de precio.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 4 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
+            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 6 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
             <div className="grid grid-cols-3 gap-2">
               {[1,2,3,4,5,6,7,8,9].map((n) => (
                 <Button key={n} variant="outline" className="h-12" onClick={async () => {
-                  const next = `${pinInput}${n}`.slice(0, 4);
+                  const next = `${pinInput}${n}`.slice(0, 6);
                   setPinInput(next);
-                  if (next.length === 4) {
+                  if (next.length === 6) {
                     try {
                       await validateOrderPricePin(next);
                       setValidatedPin(next);
@@ -2779,9 +2789,9 @@ const POS = () => {
               ))}
               <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
               <Button variant="outline" className="h-12" onClick={async () => {
-                const next = `${pinInput}0`.slice(0, 4);
+                const next = `${pinInput}0`.slice(0, 6);
                 setPinInput(next);
-                if (next.length === 4) {
+                if (next.length === 6) {
                   try {
                     await validateOrderPricePin(next);
                     setValidatedPin(next);

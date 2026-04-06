@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from apps.users.models import UserProfile
-from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format
+from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format, user_matches_pin
 
 logger = logging.getLogger(__name__)
 
@@ -178,3 +178,31 @@ def verify_privileged_pin_view(request):
         if user and user.check_password(pin):
             return Response({"ok": True, "role": profile.role.upper(), "user_id": user.id}, status=status.HTTP_200_OK)
     return Response({"ok": False, "detail": "invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+@api_view(["POST"])
+def authorize_price_change_view(request):
+    pin = str(request.data.get("pin") or "").strip()
+    client_ip = request.META.get("REMOTE_ADDR", "unknown")
+
+    def _invalid():
+        logger.warning(
+            "auth.authorize_price_change.failed user_id=%s ip=%s",
+            getattr(request.user, "id", None),
+            client_ip,
+        )
+        return Response({"ok": False, "detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if not is_valid_pin_format(pin):
+        return _invalid()
+
+    privileged_profiles = UserProfile.objects.select_related("user").filter(
+        is_active=True,
+        role__in=["admin", "manager"],
+        user__is_active=True,
+    )
+    for profile in privileged_profiles:
+        user = profile.user
+        if user and user_matches_pin(user, pin):
+            return Response({"ok": True, "role": profile.role.upper()}, status=status.HTTP_200_OK)
+    return _invalid()

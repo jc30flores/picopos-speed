@@ -1796,13 +1796,15 @@ export const createOrder = async (payload: {
 };
 
 export const validateOrderPricePin = async (pin: string): Promise<void> => {
-  const response = await request("/orders/validate-price-pin/", {
+  const response = await request("/auth/authorize-price-change/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pin }),
   });
-  if (response.status === 204) return;
-  await handleJson(response);
+  const data = await handleJson<{ ok?: boolean; detail?: string }>(response);
+  if (!data?.ok) {
+    throw new Error("Código inválido");
+  }
 };
 
 export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {

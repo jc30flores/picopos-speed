@@ -26,7 +26,8 @@ from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
 from apps.dte.services.payment_methods import get_cat017_code_and_label
 from apps.core.branch_profile import get_branch_profile
 from apps.printing.receipt_pdf import build_receipt_pdf
-from django.conf import settings
+from apps.users.models import UserProfile
+from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
 
 logger = logging.getLogger(__name__)
@@ -87,11 +88,21 @@ class ValidatePricePinView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def post(self, request, *args, **kwargs):
-        configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
         pin = str(request.data.get("pin", "") or "").strip()
-        if not configured_pin or pin != configured_pin:
-            return Response({"detail": "Código incorrecto"}, status=status.HTTP_403_FORBIDDEN)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        if not is_valid_pin_format(pin):
+            return Response({"detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        privileged_profiles = UserProfile.objects.select_related("user").filter(
+            is_active=True,
+            role__in=["admin", "manager"],
+            user__is_active=True,
+        )
+        for profile in privileged_profiles:
+            if profile.user and user_matches_pin(profile.user, pin):
+                return Response(status=status.HTTP_204_NO_CONTENT)
+
+        logger.warning("orders.validate_price_pin.failed user_id=%s", getattr(request.user, "id", None))
+        return Response({"detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class OrderDetailView(generics.RetrieveUpdateAPIView):
