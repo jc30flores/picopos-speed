@@ -28,6 +28,7 @@ import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2 } from "luc
 import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
+  dteDeliverByOrder,
   refundSaleRecord,
   getPaymentMethods,
   getSalesReport,
@@ -108,6 +109,7 @@ export const SalesHistoryTab = () => {
   const [selectedMethodCode, setSelectedMethodCode] = useState("");
   const [methodChangeReason, setMethodChangeReason] = useState("");
   const [isChangingMethod, setIsChangingMethod] = useState(false);
+  const [sendingByOrderId, setSendingByOrderId] = useState<number | null>(null);
   const canChangePaymentMethod = user?.role === "admin" || user?.role === "manager" || Boolean(user?.isSuperuser);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
@@ -270,6 +272,20 @@ export const SalesHistoryTab = () => {
       toast.error("No se pudo registrar el reembolso");
     } finally {
       setIsSubmittingRefund(false);
+    }
+  };
+
+  const handleSendDteToCustomer = async (sale: Sale) => {
+    setSendingByOrderId(Number(sale.id));
+    try {
+      const result = await dteDeliverByOrder(Number(sale.id), ["whatsapp", "email"]);
+      const wa = result.channels?.whatsapp;
+      const email = result.channels?.email;
+      toast.success(`WhatsApp: ${wa?.message || "sin respuesta"} | Correo: ${email?.message || "sin respuesta"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo enviar DTE");
+    } finally {
+      setSendingByOrderId(null);
     }
   };
 
@@ -548,10 +564,11 @@ export const SalesHistoryTab = () => {
                             className="h-9 rounded-lg px-3"
                             title="Enviar DTE a Cliente"
                             aria-label="Enviar DTE a Cliente"
-                            onClick={() => toast.info("Próximamente")}
+                            onClick={() => void handleSendDteToCustomer(sale)}
+                            disabled={sendingByOrderId === Number(sale.id)}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            Enviar DTE a Cliente
+                            {sendingByOrderId === Number(sale.id) ? "Enviando..." : "Enviar DTE a Cliente"}
                           </Button>
                         </div>
                       </TableCell>

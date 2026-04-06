@@ -3920,6 +3920,38 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
   return { message: payload.message ?? "WhatsApp enviado", record: payload.record };
 };
 
+export const dteDeliver = async (
+  id: number,
+  channels: Array<"whatsapp" | "email">
+): Promise<{ message: string; channels: Record<string, { success: boolean; message: string }>; record?: DTERecord }> => {
+  const res = await request(`/dte/issued/${id}/deliver/`, {
+    method: "POST",
+    body: JSON.stringify({ channels }),
+  });
+  const payload = await handleJson<any>(res);
+  return {
+    message: payload.message ?? "Envío completado",
+    channels: payload.channels ?? {},
+    record: payload.record,
+  };
+};
+
+export const dteDeliverByOrder = async (
+  orderId: number,
+  channels: Array<"whatsapp" | "email">
+): Promise<{ message: string; channels: Record<string, { success: boolean; message: string }>; record?: DTERecord }> => {
+  const res = await request(`/dte/orders/${orderId}/deliver/`, {
+    method: "POST",
+    body: JSON.stringify({ channels }),
+  });
+  const payload = await handleJson<any>(res);
+  return {
+    message: payload.message ?? "Envío completado",
+    channels: payload.channels ?? {},
+    record: payload.record,
+  };
+};
+
 export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",

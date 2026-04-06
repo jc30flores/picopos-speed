@@ -6,13 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
+  dteDeliver,
   dteCreateCreditNote,
   dteInvalidate,
   dteIssuedDetail,
   dteIssuedList,
   dteResend,
-  dteSendEmail,
-  dteSendWhatsapp,
   type DTERecord,
 } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -161,14 +160,16 @@ export default function DTEPage() {
         toast({ title: "Hacienda", description: result.message });
       }
       if (action === "email") {
-        const result = await dteSendEmail(row.id);
+        const result = await dteDeliver(row.id, ["email"]);
         patchRow(result.record);
-        toast({ title: "Correo", description: result.message });
+        const channel = result.channels?.email;
+        toast({ title: "Correo", description: channel?.message || result.message });
       }
       if (action === "whatsapp") {
-        const result = await dteSendWhatsapp(row.id);
+        const result = await dteDeliver(row.id, ["whatsapp"]);
         patchRow(result.record);
-        toast({ title: "WhatsApp", description: result.message });
+        const channel = result.channels?.whatsapp;
+        toast({ title: "WhatsApp", description: channel?.message || result.message });
       }
       if (action === "credit_note") {
         if (!window.confirm("¿Crear nota de crédito para este DTE?")) return;
@@ -178,7 +179,9 @@ export default function DTEPage() {
       }
       if (action === "invalidate") {
         if (!window.confirm("¿Invalidar este DTE? Esta acción no se puede deshacer.")) return;
-        const result = await dteInvalidate(row.id, "Invalidación desde panel DTE");
+        const motivo = window.prompt("Motivo de invalidación", "Invalidación desde panel DTE")?.trim() || "";
+        if (!motivo) return;
+        const result = await dteInvalidate(row.id, motivo);
         patchRow(result.record);
         toast({ title: "Invalidación", description: result.message });
       }
