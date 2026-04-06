@@ -5,6 +5,7 @@ from pathlib import Path
 from textwrap import wrap
 from django.conf import settings
 from django.utils import timezone
+from apps.core.branch_profile import get_branch_profile
 from apps.dte.models import DTERecord
 from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
 from apps.dte.services.payment_methods import get_cat017_code_and_label
@@ -61,6 +62,7 @@ def _logo_path() -> Path:
 
 
 def build_receipt_context(order: Order) -> dict:
+    branch_profile = get_branch_profile(getattr(order, "branch_id", None))
     payments = list(order.payments.select_related("payment_method", "received_by").order_by("-id"))
     main_payment = payments[0] if payments else None
     amount_paid = sum((p.amount + p.tip_amount for p in payments), Decimal("0")).quantize(Decimal("0.01"))
@@ -101,9 +103,9 @@ def build_receipt_context(order: Order) -> dict:
 
     public_url = build_hacienda_consulta_publica_url(fecha_dte, codigo_generacion)
     return {
-        "restaurant_name": order.branch.name if order.branch else "Pico de Gallo",
-        "tagline": "Pico de Gallo POS",
-        "address": getattr(order.branch, "address", "") or "",
+        "restaurant_name": branch_profile.get("branch_name") or (order.branch.name if order.branch else "Pico de Gallo"),
+        "tagline": branch_profile.get("emisor_nombre") or "Pico de Gallo POS",
+        "address": branch_profile.get("direccion_complemento") or "",
         "phone": getattr(order.branch, "phone", "") or "",
         "service_type_label": _service_type_label(order),
         "cashier_name": cashier_name,

@@ -3,6 +3,18 @@ import App from "./App.tsx";
 import { AuthProvider } from "./context/AuthProvider";
 import "./index.css";
 
+const THEME_STORAGE_KEY = "theme";
+const applyInitialTheme = () => {
+  if (typeof window === "undefined") return;
+  const persisted = localStorage.getItem(THEME_STORAGE_KEY);
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const theme = persisted === "dark" || persisted === "light" ? persisted : (prefersDark ? "dark" : "light");
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.style.colorScheme = theme;
+};
+
+applyInitialTheme();
+
 createRoot(document.getElementById("root")!).render(
   <AuthProvider>
     <App />

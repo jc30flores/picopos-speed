@@ -1,4 +1,5 @@
 from datetime import date
+import warnings
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -94,3 +95,13 @@ class SalesReportFiltersTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data["results"]), 1)
         self.assertEqual(response.data["results"][0]["payment_method_code"], "paypal")
+
+    def test_sales_report_date_range_does_not_emit_naive_datetime_warning(self):
+        self._make_payment(order_number=10, service_type=self.service_dine, payment_method=self.pm_cash, method="cash")
+        base_qs = f"date_from={date.today().isoformat()}&date_to={date.today().isoformat()}"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            response = self.client.get(f"/api/reports/sales/?{base_qs}")
+        self.assertEqual(response.status_code, 200)
+        warning_messages = [str(item.message) for item in caught]
+        self.assertFalse(any("naive datetime" in message.lower() for message in warning_messages))

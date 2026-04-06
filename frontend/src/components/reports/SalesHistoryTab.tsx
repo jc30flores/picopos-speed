@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download, X, RotateCcw, Mail, Send, Repeat2 } from "lucide-react";
+import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
@@ -545,22 +545,13 @@ export const SalesHistoryTab = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-9 w-9 rounded-lg p-0"
-                            title="Enviar por correo"
-                            aria-label="Enviar por correo"
+                            className="h-9 rounded-lg px-3"
+                            title="Enviar DTE a Cliente"
+                            aria-label="Enviar DTE a Cliente"
                             onClick={() => toast.info("Próximamente")}
                           >
-                            <Mail className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-9 w-9 rounded-lg p-0"
-                            title="Enviar por WhatsApp"
-                            aria-label="Enviar por WhatsApp"
-                            onClick={() => toast.info("Próximamente")}
-                          >
-                            <Send className="h-4 w-4" />
+                            <Send className="mr-2 h-4 w-4" />
+                            Enviar DTE a Cliente
                           </Button>
                         </div>
                       </TableCell>

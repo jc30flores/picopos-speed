@@ -35,6 +35,16 @@ def _env_int(name: str, default: int | None = None) -> int | None:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
@@ -70,6 +80,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.core.middleware.RolePathAccessMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -205,6 +216,7 @@ RECEIPT_PRINTER_USB_PRODUCT_ID = _env_int("RECEIPT_PRINTER_USB_PRODUCT_ID", PRIN
 RECEIPT_PRINTER_USB_INTERFACE = _env_int("RECEIPT_PRINTER_USB_INTERFACE", PRINTER_USB_INTERFACE or CASH_DRAWER_USB_INTERFACE)
 RECEIPT_PRINTER_USB_OUT_ENDPOINT = _env_int("RECEIPT_PRINTER_USB_OUT_ENDPOINT", PRINTER_USB_OUT_ENDPOINT or CASH_DRAWER_USB_OUT_ENDPOINT)
 RECEIPT_PRINTER_CUT_ENABLED = _env_bool("RECEIPT_PRINTER_CUT_ENABLED", default=True)
+PRINTER_SIZE = _env_float("PRINTER_SIZE", 80.0)
 
 MH_AMBIENTE = os.environ.get("MH_AMBIENTE", "").strip()
 DTE_BASE_URL = os.environ.get("DTE_BASE_URL", "").strip()
@@ -218,6 +230,10 @@ DTE_DEBUG = _env_bool("DTE_DEBUG", default=False)
 DTE_USER_AGENT = os.environ.get("DTE_USER_AGENT", "PicoPOS-DTE/1.0").strip() or "PicoPOS-DTE/1.0"
 DTE_HEALTH_ENDPOINT = os.environ.get("DTE_HEALTH_ENDPOINT", "/health").strip() or "/health"
 DTE_HEALTH_TIMEOUT_SECONDS = _env_int("DTE_HEALTH_TIMEOUT_SECONDS", 5) or 5
+BRANCH_ID = _env_int("BRANCH_ID")
+POS_BRANCH_ID = _env_int("POS_BRANCH_ID")
+DEFAULT_BRANCH_ID = _env_int("DEFAULT_BRANCH_ID")
+ACTIVE_BRANCH_CODE = os.environ.get("ACTIVE_BRANCH_CODE", "").strip()
 DTE_MONITOR_INTERVAL_SECONDS = _env_int("DTE_MONITOR_INTERVAL_SECONDS", 10) or 10
 DTE_MONITOR_MAX_BACKOFF_SECONDS = _env_int("DTE_MONITOR_MAX_BACKOFF_SECONDS", 30) or 30
 DTE_MONITOR_ENABLED = _env_bool("DTE_MONITOR_ENABLED", default=True)

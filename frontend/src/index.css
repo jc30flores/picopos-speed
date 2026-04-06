@@ -23,28 +23,28 @@ All colors MUST be HSL.
     --primary-light: 209 34% 24%;
     --primary-foreground: 0 0% 98%;
 
-    /* Fresh Green - Accent & Success States */
-    --secondary: 142 71% 45%;
-    --secondary-light: 164 76% 85%;
+    /* Elegant Green - Accent & Success States */
+    --secondary: 152 62% 34%;
+    --secondary-light: 151 54% 90%;
     --secondary-foreground: 0 0% 100%;
 
     /* Neutral Grays */
     --muted: 220 9% 92%;
     --muted-foreground: 215 14% 34%;
 
-    --accent: 164 76% 85%;
-    --accent-foreground: 209 61% 16%;
+    --accent: 151 54% 90%;
+    --accent-foreground: 153 58% 22%;
 
     /* Status Colors */
-    --success: 142 71% 45%;
+    --success: 152 62% 34%;
     --warning: 38 92% 50%;
     --danger: 0 84% 60%;
     --info: 199 89% 48%;
 
     /* KDS Status Colors */
-    --status-new: 142 71% 45%;
+    --status-new: 152 62% 34%;
     --status-preparing: 38 92% 50%;
-    --status-ready: 142 71% 45%;
+    --status-ready: 152 62% 34%;
     --status-late: 0 84% 60%;
 
     --destructive: 0 84% 60%;
@@ -52,13 +52,13 @@ All colors MUST be HSL.
 
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 209 61% 16%;
+    --ring: 152 62% 34%;
 
     --radius: 0.75rem;
 
     /* Gradients */
     --gradient-primary: linear-gradient(135deg, hsl(209, 61%, 16%), hsl(209, 34%, 24%));
-    --gradient-accent: linear-gradient(135deg, hsl(142, 71%, 45%), hsl(164, 76%, 65%));
+    --gradient-accent: linear-gradient(135deg, hsl(152, 62%, 34%), hsl(157, 48%, 42%));
     --gradient-subtle: linear-gradient(180deg, hsl(0, 0%, 100%), hsl(220, 9%, 98%));
 
     /* Shadows */
@@ -84,28 +84,28 @@ All colors MUST be HSL.
     --popover: 222 47% 8%;
     --popover-foreground: 0 0% 98%;
 
-    --primary: 164 76% 85%;
-    --primary-light: 142 71% 45%;
-    --primary-foreground: 209 61% 16%;
+    --primary: 152 62% 42%;
+    --primary-light: 152 58% 36%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 142 71% 45%;
-    --secondary-light: 164 76% 65%;
+    --secondary: 152 62% 42%;
+    --secondary-light: 152 54% 24%;
     --secondary-foreground: 222 47% 5%;
 
     --muted: 217 33% 17%;
     --muted-foreground: 215 20% 65%;
 
-    --accent: 209 34% 24%;
+    --accent: 153 38% 20%;
     --accent-foreground: 0 0% 98%;
 
-    --success: 142 71% 45%;
+    --success: 152 62% 42%;
     --warning: 38 92% 50%;
     --danger: 0 84% 60%;
     --info: 199 89% 48%;
 
-    --status-new: 142 71% 45%;
+    --status-new: 152 62% 42%;
     --status-preparing: 38 92% 50%;
-    --status-ready: 142 71% 45%;
+    --status-ready: 152 62% 42%;
     --status-late: 0 84% 60%;
 
     --destructive: 0 84% 60%;
@@ -113,10 +113,10 @@ All colors MUST be HSL.
 
     --border: 217 33% 17%;
     --input: 217 33% 17%;
-    --ring: 164 76% 85%;
+    --ring: 154 48% 78%;
 
     --gradient-primary: linear-gradient(135deg, hsl(209, 61%, 16%), hsl(209, 34%, 30%));
-    --gradient-accent: linear-gradient(135deg, hsl(142, 71%, 45%), hsl(164, 76%, 65%));
+    --gradient-accent: linear-gradient(135deg, hsl(152, 62%, 42%), hsl(156, 48%, 36%));
     --gradient-subtle: linear-gradient(180deg, hsl(222, 47%, 8%), hsl(222, 47%, 5%));
 
     --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);

@@ -6,7 +6,9 @@ from rest_framework.test import APIClient
 
 from apps.core.models import Branch
 from apps.users.models import UserProfile
-from apps.cashier.models import CashSession
+from apps.cashier.models import CashSession, Register
+from apps.cashier.printing import build_end_of_day_ticket_pdf
+from apps.dte.models import DTEBranchConfig
 
 
 class CashierFlowTests(TestCase):
@@ -89,6 +91,46 @@ class CashierFlowTests(TestCase):
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
+        self.assertEqual(pdf['Content-Disposition'], f'attachment; filename="cierre_caja_{session_id}.pdf"')
+        self.assertIn(b"CIERRE DE CAJA", pdf.content)
+        self.assertIn(b"ESPERADO", pdf.content)
+        self.assertIn(b"CONTADO", pdf.content)
+        self.assertIn(b"DIFERENCIA", pdf.content)
+
+    def test_ticket_pdf_ignores_accept_header_html_and_returns_pdf(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
+        session_id = close.data['session']['id']
+        pdf = self.client.get(
+            f'/api/cashier/sessions/{session_id}/ticket.pdf',
+            HTTP_ACCEPT='text/html',
+        )
+        self.assertEqual(pdf.status_code, 200)
+        self.assertEqual(pdf['Content-Type'], 'application/pdf')
+        self.assertTrue(pdf.content.startswith(b'%PDF'))
+
+    @override_settings(BRANCH_ID=999999)
+    def test_ticket_pdf_endpoint_falls_back_and_returns_valid_pdf_headers(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '100.00'}, format='json')
+        session_id = close.data['session']['id']
+        pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(pdf.status_code, 200)
+        self.assertEqual(pdf['Content-Type'], 'application/pdf')
+        self.assertTrue(pdf.content.startswith(b'%PDF'))
+
+    def test_ticket_pdf_uses_branch_from_env_when_available(self):
+        branch_monaco = Branch.objects.create(name='Plaza Monaco', code='PLAZA_MONACO')
+        DTEBranchConfig.objects.create(branch=branch_monaco, is_active=True, direccion_complemento='Avenida Monaco, San Salvador')
+        register = Register.objects.create(name='CAJA M', station_name='POS M', branch=branch_monaco, is_active=True)
+        session = CashSession.objects.create(register=register, opened_by=get_user_model().objects.get(username='cash'), status='closed', opening_cash='10.00')
+        with override_settings(BRANCH_ID=branch_monaco.id):
+            pdf_bytes = build_end_of_day_ticket_pdf(session.id)
+        pdf_upper = pdf_bytes.upper()
+        self.assertIn(b"PLAZA MONACO", pdf_upper)
+        self.assertIn(b"AVENIDA MONACO", pdf_upper)
+        for label in [b"EFECTIVO", b"T. DEBITO", b"T. CREDITO", b"TRANSFERENCIA", b"PAYPAL", b"PEDIDOS YA"]:
+            self.assertIn(label, pdf_upper)
 
     def test_close_without_open_session_returns_400(self):
         close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')

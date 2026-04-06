@@ -11,9 +11,10 @@ from apps.core.service_types import normalize_service_type
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
 from apps.menu.utils.pricing import resolve_effective_price
-from django.conf import settings
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
+from apps.users.models import UserProfile
+from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
 
 class OrderItemModifierSerializer(serializers.ModelSerializer):
@@ -414,11 +415,30 @@ class OrderCreateSerializer(serializers.Serializer):
 
         override_requested = any(item.get("unit_price_override") is not None for item in items_data)
         if override_requested:
-            configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
-            if not configured_pin:
-                raise serializers.ValidationError({"price_change_pin": "Configuración CODE_CHANGE_PRICE no disponible."})
-            if not price_change_pin or price_change_pin != configured_pin:
-                raise PermissionDenied("Código incorrecto")
+            request_user = getattr(self.context.get("request"), "user", None)
+            request_profile = (
+                UserProfile.objects.filter(user=request_user).first()
+                if request_user and getattr(request_user, "is_authenticated", False)
+                else None
+            )
+            is_requester_privileged = bool(
+                request_user
+                and getattr(request_user, "is_authenticated", False)
+                and (
+                    getattr(request_user, "is_superuser", False)
+                    or (request_profile and request_profile.role in {"admin", "manager"})
+                )
+            )
+            if not is_requester_privileged:
+                if not is_valid_pin_format(price_change_pin):
+                    raise PermissionDenied("Código inválido")
+                privileged_profiles = UserProfile.objects.select_related("user").filter(
+                    is_active=True,
+                    role__in=["admin", "manager"],
+                    user__is_active=True,
+                )
+                if not any(user_matches_pin(profile.user, price_change_pin) for profile in privileged_profiles):
+                    raise PermissionDenied("Código inválido")
 
         for item_data in items_data:
             item_data = dict(item_data)

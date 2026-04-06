@@ -6,9 +6,11 @@ from apps.core.models import Branch
 class Employee(models.Model):
     ROLE_CHOICES = [
         ("cashier", "Cashier"),
-        ("kitchen", "Kitchen"),
+        ("kitchen", "Cocina"),
         ("manager", "Manager"),
         ("admin", "Admin"),
+        ("kiosk", "Kiosk"),
+        ("worker", "Worker"),
     ]
     STATUS_CHOICES = [
         ("active", "Active"),
@@ -42,11 +44,16 @@ class Employee(models.Model):
 class AttendanceRecord(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="attendance_records")
     date = models.DateField()
+    clock_in = models.DateTimeField(null=True, blank=True)
+    break_start = models.DateTimeField(null=True, blank=True)
+    break_end = models.DateTimeField(null=True, blank=True)
+    clock_out = models.DateTimeField(null=True, blank=True)
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
     minutes_late = models.IntegerField(default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-date"]

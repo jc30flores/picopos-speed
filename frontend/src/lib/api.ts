@@ -401,6 +401,30 @@ export type SalesReportAggregates = {
   };
 };
 
+export type ReportsGranularity = "hours" | "week" | "month" | "year";
+export type ReportsComparisonMode = "none" | "previous_period" | "previous_year";
+
+export type SalesTimeseriesPoint = {
+  bucket: string;
+  currentTotal: number;
+  comparisonTotal: number;
+};
+
+export type SalesTimeseriesResponse = {
+  points: SalesTimeseriesPoint[];
+  current: { totalSales: number; transactions: number; avgTicket: number };
+  comparison?: { totalSales: number; transactions: number; avgTicket: number } | null;
+};
+
+export type SalesBreakdownDimension = "category" | "product" | "service_type" | "payment_method" | "modifier";
+export type SalesBreakdownRow = {
+  key: string;
+  label: string;
+  total: number;
+  percentage: number;
+  transactions: number;
+};
+
 export type Refund = {
   id: number;
   orderId: number;
@@ -419,9 +443,10 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
+  role: "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant";
   isSuperuser: boolean;
   isStaff: boolean;
+  redirectTo?: string;
 };
 
 const buildApiUrl = (path: string) => {
@@ -439,6 +464,8 @@ const request = async (path: string, options: RequestInit = {}) => {
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers || {});
   const isFormData = options.body instanceof FormData;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const normalizedPathKey = normalizedPath.endsWith("/") ? normalizedPath.slice(0, -1) : normalizedPath;
 
   if (!isFormData && !headers.has("Content-Type") && method !== "GET") {
     headers.set("Content-Type", "application/json");
@@ -451,11 +478,21 @@ const request = async (path: string, options: RequestInit = {}) => {
     }
   }
 
-  return fetch(buildApiUrl(path), {
+  const response = await fetch(buildApiUrl(path), {
     credentials: "include",
     ...options,
     headers,
   });
+  const authBypassUnauthorizedEvent = new Set([
+    "/auth/csrf",
+    "/auth/login",
+    "/auth/pin-login",
+    "/auth/logout",
+  ]);
+  if ((response.status === 401 || response.status === 403) && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+  }
+  return response;
 };
 
 const handleJson = async <T>(response: Response): Promise<T> => {
@@ -499,24 +536,36 @@ export const login = async (payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
 export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
   const response = await request("/auth/pin-login/", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ pin: String(payload.pin) }),
   });
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
+    const detail = body?.detail ? String(body.detail) : "";
+    if (response.status === 401) throw new Error("PIN_INVALID");
+    if (response.status === 409) throw new Error("PIN_DUPLICATE");
+    if (response.status === 429) throw new Error(detail || "PIN_THROTTLED");
+    if (response.status === 403) throw new Error("PIN_FORBIDDEN");
+    throw new Error(detail || `PIN_LOGIN_ERROR_${response.status}`);
+  }
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
@@ -530,11 +579,12 @@ export const logout = async (): Promise<void> => {
 
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
@@ -1651,8 +1701,14 @@ const mapOrder = (order: {
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
     remaining: Number(order.remaining ?? 0),
-    amountDueCents: Number(order.amount_due_cents ?? 0),
-    remainingCents: Number(order.remaining_cents ?? 0),
+    amountDueCents:
+      order.amount_due_cents !== undefined && order.amount_due_cents !== null
+        ? Number(order.amount_due_cents)
+        : toCents(Number(order.total_payable ?? order.total ?? 0)),
+    remainingCents:
+      order.remaining_cents !== undefined && order.remaining_cents !== null
+        ? Number(order.remaining_cents)
+        : toCents(Number(order.remaining ?? 0)),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
@@ -1766,13 +1822,15 @@ export const createOrder = async (payload: {
 };
 
 export const validateOrderPricePin = async (pin: string): Promise<void> => {
-  const response = await request("/orders/validate-price-pin/", {
+  const response = await request("/auth/authorize-price-change/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pin }),
   });
-  if (response.status === 204) return;
-  await handleJson(response);
+  const data = await handleJson<{ ok?: boolean; detail?: string }>(response);
+  if (!data?.ok) {
+    throw new Error("Código inválido");
+  }
 };
 
 export const getActiveOrders = async (params?: { branchId?: number | string; serviceType?: string }): Promise<Order[]> => {
@@ -2072,6 +2130,190 @@ export const getSalesReport = async (filters?: {
   };
 };
 
+const bucketDate = (date: Date, granularity: ReportsGranularity): string => {
+  if (granularity === "hours") return date.getHours().toString().padStart(2, "0") + ":00";
+  if (granularity === "week") {
+    const day = date.toLocaleDateString("es-SV", { weekday: "short" });
+    return day.charAt(0).toUpperCase() + day.slice(1);
+  }
+  if (granularity === "month") return `${date.getDate().toString().padStart(2, "0")}/${(date.getMonth() + 1).toString().padStart(2, "0")}`;
+  return date.toLocaleDateString("es-SV", { month: "short", year: "2-digit" });
+};
+
+const buildSeries = (rows: SalesReportRow[], granularity: ReportsGranularity): Map<string, { total: number; tx: number }> => {
+  const map = new Map<string, { total: number; tx: number }>();
+  for (const row of rows) {
+    const bucket = bucketDate(row.createdAt, granularity);
+    const current = map.get(bucket) ?? { total: 0, tx: 0 };
+    current.total += row.total;
+    current.tx += 1;
+    map.set(bucket, current);
+  }
+  return map;
+};
+
+export const getSalesTimeseries = async (filters: {
+  dateFrom: string;
+  dateTo: string;
+  granularity: ReportsGranularity;
+  compareWith?: ReportsComparisonMode;
+  compareDateFrom?: string;
+  compareDateTo?: string;
+  categoryIds?: string[];
+  productIds?: string[];
+  modifierIds?: string[];
+  serviceTypes?: string[];
+  paymentMethods?: string[];
+  signal?: AbortSignal;
+}): Promise<SalesTimeseriesResponse> => {
+  const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    granularity: filters.granularity,
+    group_by: filters.granularity === "hours" ? "hour" : filters.granularity,
+    compare_with: filters.compareWith ?? "none",
+    compare: filters.compareWith ?? "none",
+  });
+  if (filters.categoryIds?.length) params.set("category_ids", filters.categoryIds.join(","));
+  if (filters.productIds?.length) params.set("product_ids", filters.productIds.join(","));
+  if (filters.modifierIds?.length) params.set("modifier_ids", filters.modifierIds.join(","));
+  if (filters.serviceTypes?.length) params.set("service_types", filters.serviceTypes.join(","));
+  if (filters.paymentMethods?.length) params.set("payment_methods", filters.paymentMethods.join(","));
+  if (filters.compareDateFrom) params.set("compare_date_from", filters.compareDateFrom);
+  if (filters.compareDateTo) params.set("compare_date_to", filters.compareDateTo);
+
+  const response = await request(`/reports/sales-timeseries/?${params.toString()}`, { signal: filters.signal });
+  if (response.ok) {
+    const payload = await handleJson<{
+      series?: Array<{ key: string; total: string | number }>;
+      compare?: { series?: Array<{ key: string; total: string | number }> } | null;
+      kpis?: { total?: string | number; count?: number; avg_ticket?: string | number };
+      compare_kpis?: { total?: string | number; count?: number; avg_ticket?: string | number };
+    }>(response);
+    const comparisonMap = new Map((payload.compare?.series ?? []).map((point) => [point.key, Number(point.total ?? 0)]));
+    const points = (payload.series ?? []).map((point) => ({
+      bucket: point.key,
+      currentTotal: Number(point.total ?? 0),
+      comparisonTotal: comparisonMap.get(point.key) ?? 0,
+    }));
+    return {
+      points,
+      current: {
+        totalSales: Number(payload.kpis?.total ?? 0),
+        transactions: Number(payload.kpis?.count ?? 0),
+        avgTicket: Number(payload.kpis?.avg_ticket ?? 0),
+      },
+      comparison: payload.compare
+        ? {
+          totalSales: Number(payload.compare_kpis?.total ?? 0),
+          transactions: Number(payload.compare_kpis?.count ?? 0),
+          avgTicket: Number(payload.compare_kpis?.avg_ticket ?? 0),
+        }
+        : null,
+    };
+  }
+
+  const currentReport = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  const comparisonReport =
+    filters.compareWith && filters.compareWith !== "none" && filters.compareDateFrom && filters.compareDateTo
+      ? await getSalesReport({ dateFrom: filters.compareDateFrom, dateTo: filters.compareDateTo })
+      : null;
+
+  const currentSeries = buildSeries(currentReport.rows, filters.granularity);
+  const comparisonSeries = comparisonReport ? buildSeries(comparisonReport.rows, filters.granularity) : new Map<string, { total: number; tx: number }>();
+  const keys = Array.from(new Set([...currentSeries.keys(), ...comparisonSeries.keys()]));
+  const points = keys.map((bucket) => ({
+    bucket,
+    currentTotal: currentSeries.get(bucket)?.total ?? 0,
+    comparisonTotal: comparisonSeries.get(bucket)?.total ?? 0,
+  }));
+  return {
+    points,
+    current: {
+      totalSales: currentReport.aggregates.netTotal || currentReport.aggregates.sumTotal,
+      transactions: currentReport.aggregates.countOrders,
+      avgTicket: currentReport.aggregates.countOrders > 0 ? (currentReport.aggregates.netTotal || currentReport.aggregates.sumTotal) / currentReport.aggregates.countOrders : 0,
+    },
+    comparison: comparisonReport
+      ? {
+          totalSales: comparisonReport.aggregates.netTotal || comparisonReport.aggregates.sumTotal,
+          transactions: comparisonReport.aggregates.countOrders,
+          avgTicket:
+            comparisonReport.aggregates.countOrders > 0
+              ? (comparisonReport.aggregates.netTotal || comparisonReport.aggregates.sumTotal) / comparisonReport.aggregates.countOrders
+              : 0,
+        }
+      : null,
+  };
+};
+
+export const getSalesBreakdown = async (filters: {
+  dateFrom: string;
+  dateTo: string;
+  dimension: SalesBreakdownDimension;
+  compareWith?: ReportsComparisonMode;
+  categoryIds?: string[];
+  productIds?: string[];
+  modifierIds?: string[];
+  serviceTypes?: string[];
+  paymentMethods?: string[];
+  signal?: AbortSignal;
+}): Promise<SalesBreakdownRow[]> => {
+  const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    dimension: filters.dimension === "service_type" ? "order_type" : filters.dimension,
+    compare: filters.compareWith ?? "none",
+    compare_with: filters.compareWith ?? "none",
+  });
+  if (filters.categoryIds?.length) params.set("category_ids", filters.categoryIds.join(","));
+  if (filters.productIds?.length) params.set("product_ids", filters.productIds.join(","));
+  if (filters.modifierIds?.length) params.set("modifier_ids", filters.modifierIds.join(","));
+  if (filters.serviceTypes?.length) params.set("service_types", filters.serviceTypes.join(","));
+  if (filters.paymentMethods?.length) params.set("payment_methods", filters.paymentMethods.join(","));
+  const response = await request(`/reports/sales-breakdown/?${params.toString()}`, { signal: filters.signal });
+  if (response.ok) {
+    const payload = await handleJson<{ items?: Array<{ id: string | number; name: string; total: string | number; pct: number; count: number }> }>(response);
+    return (payload.items ?? []).map((item) => ({
+      key: String(item.id),
+      label: item.name,
+      total: Number(item.total ?? 0),
+      percentage: Number(item.pct ?? 0) * 100,
+      transactions: Number(item.count ?? 0),
+    }));
+  }
+
+  const report = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  const total = report.aggregates.netTotal || report.aggregates.sumTotal || 0;
+  const grouped = new Map<string, SalesBreakdownRow>();
+  for (const row of report.rows) {
+    const key =
+      filters.dimension === "payment_method"
+        ? row.paymentMethodCode || "unknown"
+        : filters.dimension === "service_type"
+          ? row.serviceType || "unknown"
+          : "n/a";
+    const label =
+      filters.dimension === "payment_method"
+        ? row.paymentMethodLabel || "Desconocido"
+        : filters.dimension === "service_type"
+          ? row.serviceTypeLabel || String(row.serviceType || "Desconocido")
+          : "Disponible con endpoint de agregación";
+    const current = grouped.get(key) ?? { key, label, total: 0, percentage: 0, transactions: 0 };
+    current.total += row.total;
+    current.transactions += 1;
+    grouped.set(key, current);
+  }
+  return Array.from(grouped.values())
+    .map((entry) => ({ ...entry, percentage: total > 0 ? (entry.total / total) * 100 : 0 }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+};
+
 export const changeInternalPaymentMethod = async (
   paymentId: number,
   payload: { paymentMethodCode: string; reason?: string }
@@ -2232,9 +2474,11 @@ export const deleteDiscount = async (discountId: number): Promise<void> => {
 
 const ROLE_LABELS: Record<string, string> = {
   cashier: "Cajero",
-  kitchen: "Cocinero",
+  kitchen: "Cocina",
   manager: "Gerente",
   admin: "Administrador",
+  kiosk: "Kiosk",
+  worker: "Worker",
 };
 
 const ROLE_KEYS: Record<string, string> = Object.entries(ROLE_LABELS).reduce(
@@ -2562,6 +2806,109 @@ export const updateAttendance = async (
     }),
   });
   return handleJson(response);
+};
+
+export type AttendanceState = {
+  employee: { id: number; name: string; role: string };
+  date: string;
+  clockIn: string | null;
+  breakStart: string | null;
+  breakEnd: string | null;
+  clockOut: string | null;
+  canClockIn: boolean;
+  canBreakStart: boolean;
+  canBreakEnd: boolean;
+  canClockOut: boolean;
+};
+
+export type AttendanceHistoryRow = {
+  date: string;
+  clockIn: string | null;
+  breakStart: string | null;
+  breakEnd: string | null;
+  clockOut: string | null;
+};
+
+const mapAttendanceState = (data: {
+  employee: { id: number; name: string; role: string };
+  date: string;
+  clock_in: string | null;
+  break_start: string | null;
+  break_end: string | null;
+  clock_out: string | null;
+  can_clock_in: boolean;
+  can_break_start: boolean;
+  can_break_end: boolean;
+  can_clock_out: boolean;
+}): AttendanceState => ({
+  employee: data.employee,
+  date: data.date,
+  clockIn: data.clock_in,
+  breakStart: data.break_start,
+  breakEnd: data.break_end,
+  clockOut: data.clock_out,
+  canClockIn: data.can_clock_in,
+  canBreakStart: data.can_break_start,
+  canBreakEnd: data.can_break_end,
+  canClockOut: data.can_clock_out,
+});
+
+export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
+  const response = await request("/employees/attendance/today/");
+  const data = await handleJson<any>(response);
+  if (data?.attendance) {
+    return mapAttendanceState(data.attendance);
+  }
+  return mapAttendanceState({
+    employee: { id: 0, name: "—", role: "worker" },
+    date: new Date().toISOString().slice(0, 10),
+    clock_in: null,
+    break_start: null,
+    break_end: null,
+    clock_out: null,
+    can_clock_in: false,
+    can_break_start: false,
+    can_break_end: false,
+    can_clock_out: false,
+  });
+};
+
+const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
+  const response = await request(path, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return mapAttendanceState(data);
+};
+
+export const attendanceClockIn = async () => postAttendanceAction("/employees/attendance/clock-in/");
+export const attendanceBreakStart = async () => postAttendanceAction("/employees/attendance/break-start/");
+export const attendanceBreakEnd = async () => postAttendanceAction("/employees/attendance/break-end/");
+export const attendanceClockOut = async () => postAttendanceAction("/employees/attendance/clock-out/");
+
+const mapAttendanceHistoryRows = (rows: Array<any>): AttendanceHistoryRow[] =>
+  rows.map((row) => ({
+    date: row.date,
+    clockIn: row.clock_in,
+    breakStart: row.break_start,
+    breakEnd: row.break_end,
+    clockOut: row.clock_out,
+  }));
+
+export const getMyAttendanceHistory = async (filters?: { start?: string; end?: string }) => {
+  const params = new URLSearchParams();
+  if (filters?.start) params.set("start", filters.start);
+  if (filters?.end) params.set("end", filters.end);
+  const response = await request(`/employees/me/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any>(response);
+  const rows = Array.isArray(data) ? data : (data?.rows ?? []);
+  return mapAttendanceHistoryRows(rows);
+};
+
+export const getEmployeeAttendanceHistory = async (employeeId: string | number, filters?: { start?: string; end?: string }) => {
+  const params = new URLSearchParams();
+  if (filters?.start) params.set("start", filters.start);
+  if (filters?.end) params.set("end", filters.end);
+  const response = await request(`/employees/${employeeId}/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  return mapAttendanceHistoryRows(await handleJson<any[]>(response));
 };
 
 export const getSchedules = async (
@@ -3226,12 +3573,20 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string; printed?: boolean; printError?: string | null }> => {
+export const closeCashSession = async (
+  closingCashCounted: number,
+  notes?: string
+): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
-  return { ticketText: data.ticket_text, printed: Boolean(data.printed), printError: data.print_error ?? null };
+  return {
+    sessionId: Number(data.session?.id ?? 0) || undefined,
+    ticketText: data.ticket_text,
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+  };
 };
 
 export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
@@ -3342,13 +3697,54 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
 
 
 export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
-  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`);
-  if (!response.ok) throw new Error('No se pudo descargar ticket PDF');
+  try {
+    const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
+      headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+    });
+    if (!response.ok) throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/pdf")) {
+      throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    const filename = filenameMatch?.[1] || `cierre_caja_${sessionId}.pdf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error("downloadCashSessionTicketPdf error", error);
+    }
+    throw error instanceof Error ? error : new Error("No se pudo descargar ticket PDF");
+  }
+};
+
+export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void> => {
+  const response = await request(`/payments/${paymentId}/ticket.pdf`, {
+    headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+  });
+  if (!response.ok) {
+    throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("Respuesta inválida al descargar PDF de ticket.");
+  }
   const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] || `ticket_pago_${paymentId}.pdf`;
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
+  const a = document.createElement("a");
   a.href = url;
-  a.download = `cierre_caja_${sessionId}.pdf`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();

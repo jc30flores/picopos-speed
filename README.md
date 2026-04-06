@@ -23,6 +23,11 @@
 4. `python backend/manage.py initdb`
 5. `python backend/manage.py runserver 0.0.0.0:8102`
 
+### POS UX safeguards
+
+- **Draft persistente del POS**: el pedido actual se guarda en `localStorage` con llave `pos_draft_{branchId}_{userId}` y se restaura al volver a `/pos` hasta cobrar/cancelar/cerrar sesión.
+- **Inactividad global**: tras 10 minutos sin interacción se muestra cuenta regresiva de 60s; si llega a 0 se ejecuta logout automático y redirección a `/login`.
+
 ### Core endpoints
 
 - `GET /api/core/tax-config/active/` → active tax rate (IVA 13%)
@@ -135,6 +140,12 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 - `GET /api/printing/jobs/{id}/`
 - `POST /api/printing/jobs/{id}/mark-printed/`
 - `POST /api/printing/jobs/refund/`
+
+### Ticket PDF paper size (`.env`)
+
+- Configura `PRINTER_SIZE=<mm>` para el ancho de papel térmico de los PDFs tipo ticket.
+- Acepta enteros o decimales (ejemplos: `80`, `75`, `100`).
+- Si el valor está vacío o es inválido, el backend usa `80` mm por defecto.
 
 Example: create employee
 

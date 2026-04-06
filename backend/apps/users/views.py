@@ -8,9 +8,16 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from apps.users.models import UserProfile
-from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format
+from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format, user_matches_pin
 
 logger = logging.getLogger(__name__)
+
+
+ROLE_LANDING_ROUTE = {
+    "kitchen": "/kitchen",
+    "kiosk": "/kiosk",
+    "worker": "/",
+}
 
 
 def _get_or_create_profile(user):
@@ -19,6 +26,18 @@ def _get_or_create_profile(user):
         defaults={"role": "admin" if user.is_superuser else "cashier", "is_active": True},
     )
     return profile
+
+
+def _build_auth_payload(user, role: str):
+    return {
+        "id": user.id,
+        "username": user.get_username(),
+        "email": user.email,
+        "role": role,
+        "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),
+        "is_superuser": bool(user.is_superuser),
+        "is_staff": bool(user.is_staff),
+    }
 
 
 @api_view(["GET"])
@@ -61,16 +80,7 @@ def login_view(request):
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
 
         login(request, user)
-        return Response(
-            {
-                "id": user.id,
-                "username": user.get_username(),
-                "email": user.email,
-                "role": profile.role,
-                "is_superuser": bool(user.is_superuser),
-                "is_staff": bool(user.is_staff),
-            }
-        )
+        return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.login.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -81,7 +91,11 @@ def login_view(request):
 def pin_login_view(request):
     try:
         pin = str(request.data.get("pin") or "").strip()
+        pin_len = len(pin)
+        leading_zero = bool(pin.startswith("0"))
+        logger.info("auth.pin_login.attempt pin_len=%s leading_zero=%s ip=%s", pin_len, leading_zero, request.META.get("REMOTE_ADDR", "unknown"))
         if not is_valid_pin_format(pin):
+            logger.warning("auth.pin_login.invalid_format pin_len=%s leading_zero=%s", pin_len, leading_zero)
             return Response(
                 {"detail": "El PIN debe tener exactamente 6 dígitos numéricos."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -99,8 +113,10 @@ def pin_login_view(request):
         matches = find_active_users_matching_pin(pin)
         if not matches:
             cache.set(throttle_key, attempts + 1, timeout=30)
+            logger.warning("auth.pin_login.no_match pin_len=%s leading_zero=%s attempts=%s", pin_len, leading_zero, attempts + 1)
             return Response({"detail": "PIN incorrecto"}, status=status.HTTP_401_UNAUTHORIZED)
         if len(matches) > 1:
+            logger.warning("auth.pin_login.duplicate pin_len=%s leading_zero=%s matches=%s", pin_len, leading_zero, len(matches))
             return Response(
                 {"detail": "PIN duplicado. Cambie el PIN de uno de los usuarios."},
                 status=status.HTTP_409_CONFLICT,
@@ -110,20 +126,13 @@ def pin_login_view(request):
 
         profile = _get_or_create_profile(user)
         if not profile.is_active:
+            logger.warning("auth.pin_login.inactive_user user_id=%s", user.id)
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
 
         cache.delete(throttle_key)
         login(request, user)
-        return Response(
-            {
-                "id": user.id,
-                "username": user.get_username(),
-                "email": user.email,
-                "role": profile.role,
-                "is_superuser": bool(user.is_superuser),
-                "is_staff": bool(user.is_staff),
-            }
-        )
+        logger.info("auth.pin_login.success user_id=%s role=%s", user.id, profile.role)
+        return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.pin_login.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -147,16 +156,7 @@ def me_view(request):
         profile = _get_or_create_profile(request.user)
         if not profile.is_active:
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
-        return Response(
-            {
-                "id": request.user.id,
-                "username": request.user.get_username(),
-                "email": request.user.email,
-                "role": profile.role,
-                "is_superuser": bool(request.user.is_superuser),
-                "is_staff": bool(request.user.is_staff),
-            }
-        )
+        return Response(_build_auth_payload(request.user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.me.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -178,3 +178,31 @@ def verify_privileged_pin_view(request):
         if user and user.check_password(pin):
             return Response({"ok": True, "role": profile.role.upper(), "user_id": user.id}, status=status.HTTP_200_OK)
     return Response({"ok": False, "detail": "invalid"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+@api_view(["POST"])
+def authorize_price_change_view(request):
+    pin = str(request.data.get("pin") or "").strip()
+    client_ip = request.META.get("REMOTE_ADDR", "unknown")
+
+    def _invalid():
+        logger.warning(
+            "auth.authorize_price_change.failed user_id=%s ip=%s",
+            getattr(request.user, "id", None),
+            client_ip,
+        )
+        return Response({"ok": False, "detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if not is_valid_pin_format(pin):
+        return _invalid()
+
+    privileged_profiles = UserProfile.objects.select_related("user").filter(
+        is_active=True,
+        role__in=["admin", "manager"],
+        user__is_active=True,
+    )
+    for profile in privileged_profiles:
+        user = profile.user
+        if user and user_matches_pin(user, pin):
+            return Response({"ok": True, "role": profile.role.upper()}, status=status.HTTP_200_OK)
+    return _invalid()

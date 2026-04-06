@@ -53,6 +53,7 @@ export const ModifierGroupFormDialog = ({
   const [groupImage, setGroupImage] = useState("");
   const [groupImageFile, setGroupImageFile] = useState<File | null>(null);
   const [options, setOptions] = useState<ModifierOption[]>([]);
+  const [baselineOptionOrder, setBaselineOptionOrder] = useState<string[]>([]);
   const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -75,6 +76,7 @@ export const ModifierGroupFormDialog = ({
           imageFile: null,
         }))
       );
+      setBaselineOptionOrder(editingGroup.modifiers.map((m) => String(m.id)));
     } else {
       setName("");
       setRequired(false);
@@ -83,8 +85,11 @@ export const ModifierGroupFormDialog = ({
       setGroupImage("");
       setGroupImageFile(null);
       setOptions([]);
+      setBaselineOptionOrder([]);
     }
   }, [editingGroup, open]);
+
+  const isOrderDirty = baselineOptionOrder.join("|") !== options.map((option) => option.id).join("|");
 
   const addOption = () => {
     setOptions([
@@ -174,38 +179,33 @@ export const ModifierGroupFormDialog = ({
     }
   };
 
-  const handleDropOption = async (targetOptionId: string) => {
+  const handleDragEnterOption = (targetOptionId: string) => {
     if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
-    const current = [...options];
-    const from = current.findIndex((opt) => opt.id === draggingOptionId);
-    const to = current.findIndex((opt) => opt.id === targetOptionId);
-    if (from < 0 || to < 0) return;
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-    const previous = [...options];
-    setOptions(current);
-    if (!editingGroup) return;
-    const orderedIds = current.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
+    setOptions((prev) => {
+      const current = [...prev];
+      const from = current.findIndex((opt) => opt.id === draggingOptionId);
+      const to = current.findIndex((opt) => opt.id === targetOptionId);
+      if (from < 0 || to < 0) return prev;
+      const [moved] = current.splice(from, 1);
+      current.splice(to, 0, moved);
+      return current;
+    });
+  };
+
+  const handleSaveOrder = async () => {
+    if (!editingGroup || isSavingOrder || !isOrderDirty) return;
+    const orderedIds = options.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
     setIsSavingOrder(true);
     try {
       await reorderModifierGroupOptions(editingGroup.id, orderedIds);
+      setBaselineOptionOrder(options.map((opt) => opt.id));
+      toast.success("Orden guardado");
     } catch {
-      setOptions(previous);
+      toast.error("No se pudo guardar el orden");
     } finally {
       setIsSavingOrder(false);
       setDraggingOptionId(null);
     }
-  };
-
-  const handleDragEnterOption = (targetOptionId: string) => {
-    if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
-    const current = [...options];
-    const from = current.findIndex((opt) => opt.id === draggingOptionId);
-    const to = current.findIndex((opt) => opt.id === targetOptionId);
-    if (from < 0 || to < 0) return;
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-    setOptions(current);
   };
 
   return (
@@ -263,7 +263,7 @@ export const ModifierGroupFormDialog = ({
                     className={`p-4 transition-all ${draggingOptionId === option.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                     onDragOver={(event) => event.preventDefault()}
                     onDragEnter={() => handleDragEnterOption(option.id)}
-                    onDrop={() => handleDropOption(option.id)}
+                    onDrop={() => setDraggingOptionId(null)}
                   >
                     <div className="flex gap-3">
                       <button
@@ -313,6 +313,19 @@ export const ModifierGroupFormDialog = ({
                     </div>
                   </Card>
                 ))}
+              </div>
+            )}
+            {editingGroup && isOrderDirty && (
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setOptions((prev) => {
+                  const byId = new Map(prev.map((option) => [option.id, option]));
+                  return baselineOptionOrder.map((id) => byId.get(id)).filter((option): option is ModifierOption => Boolean(option));
+                })} disabled={isSavingOrder}>
+                  Deshacer cambios
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>
+                  {isSavingOrder ? "Guardando..." : "Guardar orden"}
+                </Button>
               </div>
             )}
           </div>

@@ -31,14 +31,17 @@ export const ProductModifiersModal = ({
   const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [assignedGroupVisibility, setAssignedGroupVisibility] = useState<Record<number, boolean>>({});
+  const [baselineGroupOrder, setBaselineGroupOrder] = useState<number[]>([]);
 
   useEffect(() => {
     if (!selectedProduct) {
       setAssignedGroups([]);
+      setBaselineGroupOrder([]);
       setAssignedGroupVisibility({});
       return;
     }
     setAssignedGroups(selectedProduct.modifierGroups ?? []);
+    setBaselineGroupOrder(selectedProduct.modifierGroups ?? []);
     const visibility = (selectedProduct.modifierGroupLinks ?? []).reduce<Record<number, boolean>>((acc, link) => {
       acc[link.groupId] = Boolean(link.showInPos);
       return acc;
@@ -126,38 +129,35 @@ export const ProductModifiersModal = ({
     }
   };
 
-  const handleDropGroup = async (targetGroupId: number) => {
-    if (!selectedProduct || draggingGroupId === null || draggingGroupId === targetGroupId) return;
-    const current = [...assignedGroups];
-    const from = current.indexOf(draggingGroupId);
-    const to = current.indexOf(targetGroupId);
-    if (from < 0 || to < 0) return;
-    current.splice(from, 1);
-    current.splice(to, 0, draggingGroupId);
-    const previous = [...assignedGroups];
-    setAssignedGroups(current);
+  const handleDragEnterGroup = (targetGroupId: number) => {
+    if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
+    setAssignedGroups((prev) => {
+      const current = [...prev];
+      const from = current.indexOf(draggingGroupId);
+      const to = current.indexOf(targetGroupId);
+      if (from < 0 || to < 0) return prev;
+      current.splice(from, 1);
+      current.splice(to, 0, draggingGroupId);
+      return current;
+    });
+  };
+
+  const isOrderDirty = baselineGroupOrder.join("|") !== assignedGroups.join("|");
+
+  const handleSaveOrder = async () => {
+    if (!selectedProduct || isSavingOrder || !isOrderDirty) return;
     setIsSavingOrder(true);
     try {
-      await reorderProductModifierGroups(selectedProduct.id, current);
+      await reorderProductModifierGroups(selectedProduct.id, assignedGroups);
+      setBaselineGroupOrder(assignedGroups);
       await onUpdated(selectedProduct.id);
+      toast.success("Orden guardado");
     } catch {
-      setAssignedGroups(previous);
       toast.error("No se pudo guardar el orden");
     } finally {
       setIsSavingOrder(false);
       setDraggingGroupId(null);
     }
-  };
-
-  const handleDragEnterGroup = (targetGroupId: number) => {
-    if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
-    const current = [...assignedGroups];
-    const from = current.indexOf(draggingGroupId);
-    const to = current.indexOf(targetGroupId);
-    if (from < 0 || to < 0) return;
-    current.splice(from, 1);
-    current.splice(to, 0, draggingGroupId);
-    setAssignedGroups(current);
   };
 
   return (
@@ -202,7 +202,7 @@ export const ProductModifiersModal = ({
                         className={`flex items-center justify-between gap-2 rounded-lg border p-3 transition-all ${draggingGroupId === group.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                         onDragOver={(event) => event.preventDefault()}
                         onDragEnter={() => handleDragEnterGroup(group.id)}
-                        onDrop={() => handleDropGroup(group.id)}
+                        onDrop={() => setDraggingGroupId(null)}
                       >
                         <button
                           type="button"
@@ -234,6 +234,16 @@ export const ProductModifiersModal = ({
                         </Button>
                       </div>
                     ))}
+                  </div>
+                )}
+                {isOrderDirty && (
+                  <div className="flex items-center justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setAssignedGroups(baselineGroupOrder)} disabled={isSavingOrder}>
+                      Deshacer cambios
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>
+                      {isSavingOrder ? "Guardando..." : "Guardar orden"}
+                    </Button>
                   </div>
                 )}
               </Card>

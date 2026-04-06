@@ -306,3 +306,44 @@ class ScheduleSerializer(serializers.ModelSerializer):
             if overlaps.exists():
                 raise serializers.ValidationError("Schedule overlaps with an existing entry")
         return attrs
+
+
+class AttendanceStateSerializer(serializers.Serializer):
+    employee = serializers.DictField()
+    date = serializers.DateField()
+    clock_in = serializers.DateTimeField(allow_null=True)
+    break_start = serializers.DateTimeField(allow_null=True)
+    break_end = serializers.DateTimeField(allow_null=True)
+    clock_out = serializers.DateTimeField(allow_null=True)
+    can_clock_in = serializers.BooleanField()
+    can_break_start = serializers.BooleanField()
+    can_break_end = serializers.BooleanField()
+    can_clock_out = serializers.BooleanField()
+
+
+class AttendanceHistoryRowSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    clock_in = serializers.DateTimeField(allow_null=True)
+    break_start = serializers.DateTimeField(allow_null=True)
+    break_end = serializers.DateTimeField(allow_null=True)
+    clock_out = serializers.DateTimeField(allow_null=True)
+
+
+def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict:
+    clock_in = record.clock_in or record.check_in
+    clock_out = record.clock_out or record.check_out
+    break_start = record.break_start
+    break_end = record.break_end
+    break_active = bool(break_start and not break_end)
+    return {
+        "employee": {"id": employee.id, "name": employee.full_name, "role": employee.role},
+        "date": record.date,
+        "clock_in": clock_in,
+        "break_start": break_start,
+        "break_end": break_end,
+        "clock_out": clock_out,
+        "can_clock_in": clock_in is None and clock_out is None,
+        "can_break_start": bool(clock_in and not break_start and not clock_out),
+        "can_break_end": bool(break_active and not clock_out),
+        "can_clock_out": bool(clock_in and not clock_out and not break_active),
+    }

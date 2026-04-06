@@ -14,6 +14,7 @@ import { ProductFormDialog } from "./ProductFormDialog";
 import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { useReorderableList } from "@/hooks/useReorderableList";
 
 interface InlineStatusToggleProps {
   product: Product;
@@ -84,10 +85,10 @@ export const ProductsTab = () => {
   const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
   const [removeEditingCategoryImage, setRemoveEditingCategoryImage] = useState(false);
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
+  const [dragOverCategoryId, setDragOverCategoryId] = useState<number | null>(null);
   const [isSavingCategoryOrder, setIsSavingCategoryOrder] = useState(false);
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
   const [dragOverProductId, setDragOverProductId] = useState<number | null>(null);
-  const [dragOverCategoryId, setDragOverCategoryId] = useState<number | null>(null);
   const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
 
   const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
@@ -136,6 +137,24 @@ export const ProductsTab = () => {
     : searchQuery.trim()
       ? "Limpia la búsqueda para ordenar productos."
       : null;
+
+  const categoryReorder = useReorderableList(visibleCategories, (category) => category.id);
+
+  const selectedCategoryId = useMemo(
+    () =>
+      selectedCategory === "Todos"
+        ? null
+        : categories.find((category) => category.name === selectedCategory)?.id ?? null,
+    [categories, selectedCategory]
+  );
+  const categoryProducts = useMemo(() => {
+    if (!selectedCategoryId) return [];
+    return products.filter((product) => {
+      const category = categories.find((candidate) => candidate.name === product.category);
+      return category?.id === selectedCategoryId;
+    });
+  }, [categories, products, selectedCategoryId]);
+  const productReorder = useReorderableList(categoryProducts, (product) => product.id);
 
   const handleNewProduct = () => {
     setEditingProduct(null);
@@ -237,58 +256,22 @@ export const ProductsTab = () => {
 
   const handleCategoryDragEnter = (targetCategoryId: number) => {
     if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
-
-    const current = [...visibleCategories];
-    const from = current.findIndex((category) => category.id === draggingCategoryId);
-    const to = current.findIndex((category) => category.id === targetCategoryId);
-    if (from < 0 || to < 0) return;
-
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
+    categoryReorder.moveById(draggingCategoryId, targetCategoryId);
     setDragOverCategoryId(targetCategoryId);
-
-    setCategories((prev) => {
-      const byId = new Map(prev.map((category) => [category.id, category]));
-      current.forEach((category, index) => {
-        byId.set(category.id, { ...category, position: index });
-      });
-      return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    });
   };
 
-  const handleCategoryDrop = async (targetCategoryId: number) => {
-    if (draggingCategoryId === null || draggingCategoryId === targetCategoryId || isSavingCategoryOrder) return;
-
-    const current = [...visibleCategories];
-    const from = current.findIndex((category) => category.id === draggingCategoryId);
-    const to = current.findIndex((category) => category.id === targetCategoryId);
-    if (from < 0 || to < 0) return;
-
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-
-    const previous = [...visibleCategories];
-    setCategories((prev) => {
-      const byId = new Map(prev.map((category) => [category.id, category]));
-      const reorderedVisible = current.map((category, index) => ({ ...category, position: index }));
-      reorderedVisible.forEach((category) => byId.set(category.id, category));
-      return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    });
-
+  const handleSaveCategoryOrder = async () => {
+    if (isSavingCategoryOrder || !categoryReorder.isDirty) return;
     setIsSavingCategoryOrder(true);
     try {
-      const ordered = await reorderCategories(current.map((category) => category.id));
+      const ordered = await reorderCategories(categoryReorder.currentItems.map((category) => category.id));
       setCategories((prev) => {
         const hidden = prev.filter((category) => category.isHidden || category.name.toUpperCase().includes("SIN CATEGORÍA"));
         return [...ordered, ...hidden];
       });
+      categoryReorder.markSaved();
       toast.success("Orden de categorías guardado");
     } catch (error) {
-      setCategories((prev) => {
-        const byId = new Map(prev.map((category) => [category.id, category]));
-        previous.forEach((category, index) => byId.set(category.id, { ...category, position: index }));
-        return Array.from(byId.values()).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-      });
       toast.error(error instanceof Error ? error.message : "No se pudo guardar el orden de categorías");
     } finally {
       setIsSavingCategoryOrder(false);
@@ -297,62 +280,24 @@ export const ProductsTab = () => {
     }
   };
 
-
   const handleProductDragEnter = (targetProductId: number) => {
     if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !canReorderProducts) return;
-
-    const current = [...filteredProducts];
-    const from = current.findIndex((product) => product.id === draggingProductId);
-    const to = current.findIndex((product) => product.id === targetProductId);
-    if (from < 0 || to < 0) return;
-
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
+    productReorder.moveById(draggingProductId, targetProductId);
     setDragOverProductId(targetProductId);
-
-    setProducts((prev) => {
-      const byId = new Map(prev.map((product) => [product.id, product]));
-      current.forEach((product, index) => {
-        byId.set(product.id, { ...product, sortOrder: index });
-      });
-      return Array.from(byId.values());
-    });
   };
 
-  const handleProductDrop = async (targetProductId: number) => {
-    if (draggingProductId === null || draggingProductId === targetProductId || isSavingProductOrder || !canReorderProducts) return;
-
-    const current = [...filteredProducts];
-    const from = current.findIndex((product) => product.id === draggingProductId);
-    const to = current.findIndex((product) => product.id === targetProductId);
-    if (from < 0 || to < 0) return;
-
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-
-    const previousProducts = [...products];
-    const currentCategoryId = selectedCategory === "Todos"
-      ? null
-      : categories.find((category) => category.name === selectedCategory)?.id ?? null;
-
-    setProducts((prev) => {
-      const byId = new Map(prev.map((product) => [product.id, product]));
-      current.forEach((product, index) => {
-        byId.set(product.id, { ...product, sortOrder: index });
-      });
-      return Array.from(byId.values());
-    });
-
+  const handleSaveProductOrder = async () => {
+    if (isSavingProductOrder || !canReorderProducts || !productReorder.isDirty || !selectedCategoryId) return;
     setIsSavingProductOrder(true);
     try {
       await reorderProducts({
-        categoryId: currentCategoryId,
-        orderedIds: current.map((product) => product.id),
+        categoryId: selectedCategoryId,
+        orderedIds: productReorder.currentItems.map((product) => product.id),
       });
+      productReorder.markSaved();
       toast.success("Orden de productos guardado");
       await loadMenuData();
     } catch (error) {
-      setProducts(previousProducts);
       toast.error(error instanceof Error ? error.message : "No se pudo guardar el orden de productos");
     } finally {
       setIsSavingProductOrder(false);
@@ -360,6 +305,13 @@ export const ProductsTab = () => {
       setDragOverProductId(null);
     }
   };
+
+  const displayProducts = useMemo(() => {
+    if (!canReorderProducts || !selectedCategoryId) return filteredProducts;
+    const orderedIds = new Set(productReorder.currentItems.map((product) => product.id));
+    const outsideCategory = filteredProducts.filter((product) => !orderedIds.has(product.id));
+    return [...productReorder.currentItems, ...outsideCategory];
+  }, [canReorderProducts, filteredProducts, productReorder.currentItems, selectedCategoryId]);
 
 
   return (
@@ -441,7 +393,7 @@ export const ProductsTab = () => {
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Cargando productos...</TableCell>
                   </TableRow>
-                ) : filteredProducts.map((product) => (
+                ) : displayProducts.map((product) => (
                   <TableRow
                     key={product.id}
                     className={cn(
@@ -454,11 +406,7 @@ export const ProductsTab = () => {
                       event.preventDefault();
                     }}
                     onDragEnter={() => handleProductDragEnter(product.id)}
-                    onDrop={() => {
-                      handleProductDrop(product.id).catch((error) => {
-                        console.error("Error dropping product", error);
-                      });
-                    }}
+                    onDrop={() => setDragOverProductId(product.id)}
                   >
                     <TableCell>
                       <button
@@ -538,6 +486,24 @@ export const ProductsTab = () => {
               </TableBody>
             </Table>
           </div>
+          {canReorderProducts && productReorder.isDirty && (
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  productReorder.reset();
+                  setDraggingProductId(null);
+                  setDragOverProductId(null);
+                }}
+                disabled={isSavingProductOrder}
+              >
+                Deshacer cambios
+              </Button>
+              <Button variant="outline" onClick={() => void handleSaveProductOrder()} disabled={isSavingProductOrder}>
+                {isSavingProductOrder ? "Guardando..." : "Guardar orden"}
+              </Button>
+            </div>
+          )}
         </Card>
       </div>
 
@@ -621,7 +587,7 @@ export const ProductsTab = () => {
               <Button onClick={handleCreateCategory}>Crear</Button>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {visibleCategories.map((category) => (
+              {categoryReorder.currentItems.map((category) => (
                 <div
                   key={category.id}
                   className={cn(
@@ -636,11 +602,7 @@ export const ProductsTab = () => {
                     }
                   }}
                   onDragEnter={() => handleCategoryDragEnter(category.id)}
-                  onDrop={() => {
-                    handleCategoryDrop(category.id).catch((error) => {
-                      console.error("Error dropping category", error);
-                    });
-                  }}
+                  onDrop={() => setDragOverCategoryId(category.id)}
                 >
                   {editingCategoryId === category.id ? (
                     <div className="flex w-full flex-col gap-2">
@@ -688,6 +650,28 @@ export const ProductsTab = () => {
                 </div>
               ))}
             </div>
+            {categoryReorder.isDirty && (
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    categoryReorder.reset();
+                    setDraggingCategoryId(null);
+                    setDragOverCategoryId(null);
+                  }}
+                  disabled={isSavingCategoryOrder}
+                >
+                  Deshacer cambios
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void handleSaveCategoryOrder()}
+                  disabled={isSavingCategoryOrder}
+                >
+                  {isSavingCategoryOrder ? "Guardando..." : "Guardar orden"}
+                </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

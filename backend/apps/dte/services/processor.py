@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.orders.models import Order, OrderInvoice
 from apps.dte.models import DTERecord
+from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.dte_factory import build_payload
 from apps.dte.services.dte_numbers import next_control_number
 from apps.dte.services.dte_parser import parse_hacienda_response
@@ -14,6 +15,7 @@ from apps.dte.services.dte_sender import send_payload
 
 def transmit_invoice_dte(order_id: int, source: str = "normal_send") -> DTERecord:
     order = Order.objects.select_related("branch", "service_type").prefetch_related("items__applied_modifiers").get(id=order_id)
+    active_branch = get_active_branch()
 
     accepted = DTERecord.objects.filter(order=order, dte_type="CF", status="aceptado").first()
     if accepted:
@@ -29,7 +31,7 @@ def transmit_invoice_dte(order_id: int, source: str = "normal_send") -> DTERecor
     with transaction.atomic():
         record = DTERecord.objects.create(
             order=order,
-            branch=order.branch,
+            branch=active_branch,
             dte_type="CF",
             status="enviando",
             control_number=control_number,

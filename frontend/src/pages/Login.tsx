@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/useAuth";
 import { toast } from "sonner";
 import { PinKeypad } from "@/components/auth/PinKeypad";
+import { ClockSV } from "@/components/ClockSV";
+import { getLandingRouteForRole } from "@/lib/roleAccess";
 
 const PIN_LENGTH = 6;
 
@@ -31,17 +33,21 @@ const Login = () => {
     }
     setLoading(true);
     try {
-      await loginWithPin({ pin: value });
+      const session = await loginWithPin({ pin: value });
       toast.success("Sesión iniciada");
-      navigate("/");
+      navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      if (message.includes("duplicado")) {
+      if (message.includes("PIN_DUPLICATE") || message.includes("duplicado")) {
         toast.error("PIN duplicado, contacte al administrador");
-      } else if (message.includes("servidor") || message.includes("Internal")) {
-        toast.error("Error del servidor");
-      } else {
+      } else if (message.includes("PIN_INVALID")) {
         toast.error("PIN incorrecto");
+      } else if (message.includes("PIN_THROTTLED")) {
+        toast.error("Demasiados intentos, espera 30 segundos");
+      } else if (message.includes("PIN_FORBIDDEN") || message.includes("csrf")) {
+        toast.error("Error de sesión/seguridad. Recarga e intenta de nuevo.");
+      } else {
+        toast.error("Error de conexión. Reintenta.");
       }
       setPin("");
     } finally {
@@ -69,9 +75,9 @@ const Login = () => {
 
     setLoading(true);
     try {
-      await login({ identifier, password: numericPassword });
+      const session = await login({ identifier, password: numericPassword });
       toast.success("Sesión iniciada");
-      navigate("/");
+      navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch {
       toast.error("Credenciales inválidas");
     } finally {
@@ -81,8 +87,10 @@ const Login = () => {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <div className="w-full max-w-md space-y-4">
+      <ClockSV className="mx-auto w-full max-w-sm bg-background/50" timeClassName="text-4xl sm:text-5xl" />
       <Card className="w-full max-w-md">
-        <CardHeader>
+        <CardHeader className="text-center">
           <CardTitle>{usePassword ? "Login administrador" : "Ingresa tu PIN"}</CardTitle>
         </CardHeader>
         <CardContent>
@@ -116,7 +124,7 @@ const Login = () => {
                 ))}
               </div>
               <PinKeypad value={pin} onChange={(next) => setPin(sanitizePin(next))} disabled={loading} maxLength={PIN_LENGTH} />
-              <Button className="w-full h-12" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
+              <Button className="w-full h-14 text-base" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
                 {loading ? "Validando..." : "Ingresar"}
               </Button>
             </div>
@@ -130,6 +138,7 @@ const Login = () => {
           </button>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 };

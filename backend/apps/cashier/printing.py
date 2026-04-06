@@ -8,9 +8,12 @@ from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
 
 from apps.cashier.models import CashSession
 from apps.cashier.serializers import calculate_shift_summary
-from apps.core.models import ServiceType
+from apps.core.branch_profile import get_current_branch_id, get_branch_profile
+from apps.core.models import Branch, ServiceType
 from apps.orders.models import AppliedDiscount, Order
-from apps.payments.models import Payment, PaymentMethod, Refund
+from apps.payments.models import Payment, Refund
+from apps.payments.normalization import payment_code_from_payment
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.printing.services.usb_printer import USBPrinterService
 
 TZ_SV = ZoneInfo("America/El_Salvador")
@@ -21,6 +24,14 @@ SEP_HYPHEN = f"{PREFIX}{'-' * INNER_WIDTH}"
 SEP_DOTS = f"{PREFIX}{'.' * 36}"
 SEP_UNDERSCORE = f"{PREFIX}{'_' * 36}"
 SEP_TOTAL = f"{PREFIX}=========="
+PAYMENT_METHOD_REPORT_ORDER = [
+    ("cash", "EFECTIVO"),
+    ("card_debit", "T. DEBITO"),
+    ("card_credit", "T. CREDITO"),
+    ("transfer", "TRANSFERENCIA"),
+    ("paypal", "PAYPAL"),
+    ("pedidos_ya", "PEDIDOS YA"),
+]
 
 
 def _money(value: Decimal | float | int | None) -> str:
@@ -64,31 +75,56 @@ def _get_session_range(session: CashSession):
 
 def _payments_for_session(session: CashSession):
     start_at, end_at = _get_session_range(session)
-    return Payment.objects.filter(created_at__gte=start_at, created_at__lte=end_at)
+    base = Payment.objects.select_related("payment_method", "reporting_payment_method", "order")
+    has_direct_session_rows = base.filter(cash_session=session).exists()
+    if has_direct_session_rows:
+        return base.filter(cash_session=session) | base.filter(
+            cash_session__isnull=True,
+            created_at__gte=start_at,
+            created_at__lte=end_at,
+        )
+    return base.filter(created_at__gte=start_at, created_at__lte=end_at)
+
+
+def _resolve_pdf_branch(session: CashSession):
+    configured_branch_id = get_current_branch_id()
+    if configured_branch_id:
+        branch = Branch.objects.filter(id=configured_branch_id).first()
+        if branch:
+            return branch
+    if getattr(session, "register", None) and session.register.branch_id:
+        branch = Branch.objects.filter(id=session.register.branch_id).first()
+        if branch:
+            return branch
+    return Branch.objects.order_by("id").first()
+
+
+def _resolve_branch_profile(session: CashSession) -> dict[str, str]:
+    resolved_branch = _resolve_pdf_branch(session)
+    resolved_branch_id = getattr(resolved_branch, "id", None)
+    profile = get_branch_profile(resolved_branch_id)
+    if resolved_branch and not profile.get("branch_name"):
+        profile["branch_name"] = resolved_branch.name
+    if resolved_branch and not profile.get("branch_code"):
+        profile["branch_code"] = resolved_branch.code
+    return profile
 
 
 def _payment_rows(payments_qs):
     rows: list[str] = []
     total = Decimal("0")
-    configured = list(PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name"))
-    for method in configured:
-        aggregate = payments_qs.filter(payment_method=method).aggregate(
-            count=Count("id"),
-            total=Sum(
-                ExpressionWrapper(
-                    F("amount") + F("tip_amount"),
-                    output_field=DecimalField(max_digits=10, decimal_places=2),
-                )
-            ),
-        )
-        count = int(aggregate["count"] or 0)
-        amount = Decimal(aggregate["total"] or 0)
-        if count or amount:
-            rows.append(_line_item(method.name.upper(), amount, count))
-            total += amount
-
-    if not rows:
-        rows.append(_line_item("SIN PAGOS", Decimal("0"), 0))
+    totals = {code: {"count": 0, "total": Decimal("0")} for code, _ in PAYMENT_METHOD_REPORT_ORDER}
+    for payment in payments_qs:
+        code = payment_code_from_payment(payment)
+        if code not in totals:
+            continue
+        totals[code]["count"] += 1
+        totals[code]["total"] += (payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0"))
+    for code, label in PAYMENT_METHOD_REPORT_ORDER:
+        amount = Decimal(totals[code]["total"] or 0).quantize(Decimal("0.01"))
+        count = int(totals[code]["count"] or 0)
+        rows.append(_line_item(label, amount, count))
+        total += amount
     return rows, total
 
 
@@ -161,29 +197,21 @@ def _refund_rows(session: CashSession):
     return rows
 
 
-def _report_cash_lines(summary: dict, payments_qs, session: CashSession):
-    def _method_total(code: str, fallback_method: str) -> tuple[int, Decimal]:
-        aggregate = payments_qs.filter(payment_method__code=code).aggregate(
-            count=Count("id"),
-            total=Sum(ExpressionWrapper(F("amount") + F("tip_amount"), output_field=DecimalField(max_digits=10, decimal_places=2))),
-        )
-        count = int(aggregate["count"] or 0)
-        total = Decimal(aggregate["total"] or 0)
-        if count == 0 and total == 0:
-            fallback = payments_qs.filter(payment_method__isnull=True, method=fallback_method).aggregate(
-                count=Count("id"),
-                total=Sum(ExpressionWrapper(F("amount") + F("tip_amount"), output_field=DecimalField(max_digits=10, decimal_places=2))),
-            )
-            return int(fallback["count"] or 0), Decimal(fallback["total"] or 0)
-        return count, total
+def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch: Branch | None = None):
+    payment_map = {code: {"count": 0, "total": Decimal("0")} for code, _ in PAYMENT_METHOD_REPORT_ORDER}
+    for payment in payments_qs:
+        code = payment_code_from_payment(payment)
+        if code not in payment_map:
+            continue
+        payment_map[code]["count"] += 1
+        payment_map[code]["total"] += (payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0"))
 
-    cash_count, cash_total = _method_total("CASH", "cash")
-    card_count, card_total = _method_total("CARD", "card")
-    py_count, py_total = _method_total("PEDIDOS_YA", "transfer")
+    cash_count = payment_map["cash"]["count"]
+    cash_total = payment_map["cash"]["total"]
 
     station_name = session.register.station_name or "POS 1"
     return [
-        session.register.branch.name.upper(),
+        (getattr(branch, "name", None) or session.register.branch.name).upper(),
         SEP_HYPHEN,
         "REPORTE DE CAJA",
         f"ESTACION {station_name} - {session.register.name}",
@@ -196,9 +224,12 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession):
         SEP_DOTS,
         "OTHER TRANSACTIONS SUMMARY",
         "(DOES NOT AFFECT DRAWER COUNT)",
-        _line_item("T. CREDITO", card_total, card_count),
+        _line_item("T. DEBITO", payment_map["card_debit"]["total"], payment_map["card_debit"]["count"]),
+        _line_item("T. CREDITO", payment_map["card_credit"]["total"], payment_map["card_credit"]["count"]),
         "(CC TIPS NOT INCLUDED)",
-        _line_item("PEDIDOS YA", py_total, py_count),
+        _line_item("TRANSFERENCIA", payment_map["transfer"]["total"], payment_map["transfer"]["count"]),
+        _line_item("PAYPAL", payment_map["paypal"]["total"], payment_map["paypal"]["count"]),
+        _line_item("PEDIDOS YA", payment_map["pedidos_ya"]["total"], payment_map["pedidos_ya"]["count"]),
         SEP_DOTS,
         _line_item("Efectivo En Caja", Decimal(summary.get("expected_cash_in_drawer") or 0)),
         f"DRAWER RESET ID {session.id}",
@@ -208,6 +239,8 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession):
 
 def build_end_of_day_ticket(session_id: int) -> str:
     session = CashSession.objects.select_related("register", "register__branch").get(pk=session_id)
+    branch = _resolve_pdf_branch(session)
+    branch_profile = _resolve_branch_profile(session)
     summary = calculate_shift_summary(session)
     ticket_timestamp = _format_dt_sv(session.closed_at or timezone.now())
 
@@ -221,10 +254,11 @@ def build_end_of_day_ticket(session_id: int) -> str:
     item_rows, item_total = _item_subtotals(paid_orders)
     discount_rows, discount_total = _discount_rows(paid_orders)
 
-    addr_1, addr_2, city_dept = _parse_branch_address(session.register.branch.address)
+    addr_1, addr_2, city_dept = _parse_branch_address(branch_profile.get("direccion_complemento", ""))
 
     lines: list[str] = [
-        session.register.branch.name.upper(),
+        (branch_profile.get("emisor_nombre", "Pico de Gallo") or "Pico de Gallo").upper(),
+        (branch_profile.get("branch_name", "") or getattr(branch, "name", "PICO DE GALLO POS") or "PICO DE GALLO POS").upper(),
         addr_1,
         addr_2,
         city_dept,
@@ -303,7 +337,7 @@ def build_end_of_day_ticket(session_id: int) -> str:
         *_refund_rows(session),
         f"End Of Day Log Id {session.id}",
         SEP_UNDERSCORE,
-        *_report_cash_lines(summary, payments, session),
+        *_report_cash_lines(summary, payments, session, branch=branch),
     ]
 
     return "\n".join(lines)
@@ -314,49 +348,11 @@ def print_ticket_text(text: str) -> tuple[bool, str | None]:
 
 
 def _fallback_pdf_bytes(text: str) -> bytes:
-    esc = text.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
-    content = f"BT /F1 10 Tf 40 760 Td ({esc.replace(chr(10), ') Tj T* (')}) Tj ET"
-    objects = []
-    objects.append('1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj')
-    objects.append('2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj')
-    objects.append('3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj')
-    objects.append(f'4 0 obj << /Length {len(content)} >> stream\n{content}\nendstream endobj')
-    objects.append('5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj')
-    pdf = '%PDF-1.4\n'
-    offsets = []
-    for obj in objects:
-        offsets.append(len(pdf.encode('latin-1')))
-        pdf += obj + '\n'
-    xref_offset = len(pdf.encode('latin-1'))
-    pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
-    for off in offsets:
-        pdf += f"{off:010d} 00000 n \n"
-    pdf += f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF"
-    return pdf.encode('latin-1', errors='ignore')
+    return build_receipt_pdf_from_text(text=text, filename="fallback.pdf").pdf_bytes
 
 
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
+    session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
     text = build_end_of_day_ticket(session_id)
-    try:
-        from io import BytesIO
-        from reportlab.lib.units import mm
-        from reportlab.pdfgen import canvas
-
-        lines = text.split("\n")
-        page_width = 80 * mm
-        left_margin = 4 * mm
-        top_margin = 4 * mm
-        line_height = 4.2 * mm
-        page_height = max((len(lines) * line_height) + (top_margin * 2), 40 * mm)
-
-        buf = BytesIO()
-        c = canvas.Canvas(buf, pagesize=(page_width, page_height))
-        c.setFont("Courier", 8.5)
-        y = page_height - top_margin
-        for line in lines:
-            c.drawString(left_margin, y, line)
-            y -= line_height
-        c.save()
-        return buf.getvalue()
-    except Exception:
-        return _fallback_pdf_bytes(text)
+    filename = f"cierre_caja_{session.id}.pdf"
+    return build_receipt_pdf_from_text(text=text, filename=filename).pdf_bytes

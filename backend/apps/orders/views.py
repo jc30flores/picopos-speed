@@ -23,7 +23,11 @@ from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.payments.models import Payment
 from apps.dte.models import DTERecord
 from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
-from django.conf import settings
+from apps.dte.services.payment_methods import get_cat017_code_and_label
+from apps.core.branch_profile import get_branch_profile
+from apps.printing.receipt_pdf import build_receipt_pdf
+from apps.users.models import UserProfile
+from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
 
 logger = logging.getLogger(__name__)
@@ -84,11 +88,21 @@ class ValidatePricePinView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def post(self, request, *args, **kwargs):
-        configured_pin = (getattr(settings, "CODE_CHANGE_PRICE", "") or "").strip()
         pin = str(request.data.get("pin", "") or "").strip()
-        if not configured_pin or pin != configured_pin:
-            return Response({"detail": "Código incorrecto"}, status=status.HTTP_403_FORBIDDEN)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        if not is_valid_pin_format(pin):
+            return Response({"detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        privileged_profiles = UserProfile.objects.select_related("user").filter(
+            is_active=True,
+            role__in=["admin", "manager"],
+            user__is_active=True,
+        )
+        for profile in privileged_profiles:
+            if profile.user and user_matches_pin(profile.user, pin):
+                return Response(status=status.HTTP_204_NO_CONTENT)
+
+        logger.warning("orders.validate_price_pin.failed user_id=%s", getattr(request.user, "id", None))
+        return Response({"detail": "Código inválido"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class OrderDetailView(generics.RetrieveUpdateAPIView):
@@ -101,8 +115,13 @@ class OrderDetailView(generics.RetrieveUpdateAPIView):
         return OrderSerializer
 
     def patch(self, request, *args, **kwargs):
-        response = super().patch(request, *args, **kwargs)
-        order = self.get_object()
+        partial = kwargs.pop("partial", True)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        order = serializer.instance
+        output = OrderSerializer(order, context={"request": request}).data
         log_audit(
             request,
             "order.customer.update",
@@ -110,7 +129,7 @@ class OrderDetailView(generics.RetrieveUpdateAPIView):
             order.id,
             {"customer_id": order.customer_id, "dte_document_type": order.dte_document_type},
         )
-        return response
+        return Response(output, status=status.HTTP_200_OK)
 
 
 class ActiveOrderListView(generics.ListAPIView):
@@ -280,19 +299,29 @@ class OrderReceiptPDFView(generics.GenericAPIView):
     queryset = Order.objects.all()
     permission_classes = [IsAuthenticatedAndActive]
 
+    def perform_content_negotiation(self, request, force=False):
+        renderer = self.get_renderers()[0]
+        return renderer, renderer.media_type
+
     def get(self, request, *args, **kwargs):
         order = self.get_object()
-        response = HttpResponse(content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="receipt_order_{order.id}.pdf"'
-
+        main_payment = order.payments.select_related("payment_method").order_by("-id").first()
+        payment_id = getattr(main_payment, "id", None)
+        filename = f"ticket_{order.id}_{payment_id or 'na'}.pdf"
         record = DTERecord.objects.filter(order=order).order_by("-id").first()
         snapshot = getattr(getattr(order, "invoice", None), "sale_snapshot", {}) or {}
         snapshot_items = snapshot.get("items") if isinstance(snapshot, dict) else None
+        branch_profile = get_branch_profile(getattr(order, "branch_id", None))
+        _, payment_label = get_cat017_code_and_label(main_payment)
         lines = [
-            "Pico de Gallo - Recibo de Venta",
+            branch_profile.get("emisor_nombre", "Pico de Gallo"),
+            f"Sucursal: {branch_profile.get('branch_name') or getattr(order.branch, 'name', '-')}",
+            f"Dirección: {branch_profile.get('direccion_complemento') or '(Dirección no configurada)'}",
+            "",
+            "Recibo de Venta",
             f"Orden: {order.order_number}",
-            f"Sucursal: {order.branch.name}",
             f"Fecha: {order.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Cliente: {order.customer_name or getattr(getattr(order, 'customer', None), 'name', 'Consumidor Final')}",
             "",
             "Items",
         ]
@@ -310,7 +339,10 @@ class OrderReceiptPDFView(generics.GenericAPIView):
             "",
             f"Desechables: ${order.disposable_total}",
             f"Subtotal: ${order.subtotal}",
+            f"Impuestos: ${order.tax}",
+            f"Descuentos: ${order.discount_total}",
             f"Total: ${order.total}",
+            f"Método pago: {payment_label}",
             "",
             "Datos DTE",
             f"No. Control: {record.control_number if record else '-'}",
@@ -326,33 +358,7 @@ class OrderReceiptPDFView(generics.GenericAPIView):
                 f"Consulta publica: {build_hacienda_consulta_publica_url(fecha_dte, record.codigo_generacion)}",
             ]
 
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.pdfgen import canvas
-
-            pdf = canvas.Canvas(response, pagesize=A4)
-            y = 800
-            for line in lines:
-                pdf.drawString(40, y, line)
-                y -= 14
-                if y < 60:
-                    pdf.showPage()
-                    y = 800
-            pdf.showPage()
-            pdf.save()
-            return response
-        except Exception:
-            content = "\n".join(lines).replace("(", "[").replace(")", "]")
-            blob = (
-                "%PDF-1.1\n"
-                "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-                "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
-                "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
-                f"4 0 obj<</Length {len(content)+60}>>stream\n"
-                f"BT /F1 10 Tf 40 800 Td ({content}) Tj ET\n"
-                "endstream endobj\n"
-                "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
-                "trailer<</Size 6/Root 1 0 R>>\n%%EOF"
-            )
-            response.write(blob.encode("latin-1", errors="ignore"))
-            return response
+        result = build_receipt_pdf(lines=lines, filename=filename)
+        response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+        return response

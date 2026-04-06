@@ -8,7 +8,9 @@ class UserProfile(models.Model):
         ("admin", "Admin"),
         ("manager", "Manager"),
         ("cashier", "Cashier"),
-        ("kitchen", "Kitchen"),
+        ("kitchen", "Cocina"),
+        ("kiosk", "Kiosk"),
+        ("worker", "Worker"),
         ("accountant", "Contador"),
     ]
 

@@ -1,0 +1,20 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 1808 >> stream
+BT /F1 10 Tf 24 760 Td (            Pico de Gallo POS             ) Tj T* (               Plaza Monaco               ) Tj T* (------------------------------------------) Tj T* (               RESTAURANTE                ) Tj T* (Atendido por: admin                       ) Tj T* (Orden #109                                ) Tj T* (2026-04-05 22:46                          ) Tj T* (------------------------------------------) Tj T* (CANT DESCRIPCION           P.UNIT     TOTAL) Tj T* (------------------------------------------) Tj T* (1   Brisket Burrito       $10.99    $10.99) Tj T* (1   Shrimp Tampico         $9.99     $9.99) Tj T* (    Burrito                               ) Tj T* (1   Char-Grilled Pastor    $6.99     $6.99) Tj T* (    Bowl                                  ) Tj T* (------------------------------------------) Tj T* (Subtotal:                           $27.97) Tj T* (IVA:                                 $3.22) Tj T* (Total:                              $27.97) Tj T* (------------------------------------------) Tj T* (Metodo de pago: Efectivo                  ) Tj T* (Monto pagado: $27.97                      ) Tj T* (------------------------------------------) Tj T* (Datos DTE                                 ) Tj T* (No. Control: -                            ) Tj T* (Codigo Gen: F53B3F12-193E-4255-9E77-68F745) Tj T* (Fecha DTE: -                              ) Tj T* (QR Hacienda:                              ) Tj T* (https://admin.factura.gob.sv/consultaPubli) Tj T* (ca?ambiente=00&codGen=F53B3F12-193E-4255- ) Tj T* (9E77-68F745219657&fechaEmi=               ) Tj T* (------------------------------------------) Tj T* (          Gracias por su visita           ) Tj T* (              Order No: 109               ) Tj T* (             2026-04-05 22:46             ) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000002101 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+2169
+%%EOF

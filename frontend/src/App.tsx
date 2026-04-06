@@ -11,12 +11,14 @@ import CustomerDisplay from "./pages/CustomerDisplay";
 import Menu from "./pages/Menu";
 import RegistrosVentas from "./pages/RegistrosVentas";
 import RegistrosCaja from "./pages/RegistrosCaja";
+import RegistrosReportes from "./pages/RegistrosReportes";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import DTEPage from "./pages/DTE";
 import CustomersPage from "./pages/Customers";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { InactivityGuard } from "./components/auth/InactivityGuard";
 
 const queryClient = new QueryClient();
 
@@ -26,12 +28,13 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <InactivityGuard />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route
               path="/"
               element={
-                <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager", "worker", "cashier"]}>
                   <MainMenu />
                 </ProtectedRoute>
               }
@@ -47,7 +50,7 @@ const App = () => (
             <Route
               path="/kiosk"
               element={
-                <ProtectedRoute allowedRoles={["admin"]}>
+                <ProtectedRoute allowedRoles={["admin", "kiosk"]}>
                   <Kiosk />
                 </ProtectedRoute>
               }
@@ -73,7 +76,7 @@ const App = () => (
             <Route
               path="/registros/ventas"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager", "cashier"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager"]}>
                   <RegistrosVentas />
                 </ProtectedRoute>
               }
@@ -81,8 +84,16 @@ const App = () => (
             <Route
               path="/registros/caja"
               element={
-                <ProtectedRoute allowedRoles={["admin"]}>
+                <ProtectedRoute allowedRoles={["admin"]} deniedRedirectTo="/registros/ventas" deniedMessage="Acceso restringido">
                   <RegistrosCaja />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/registros/reportes"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]} deniedRedirectTo="/registros/ventas" deniedMessage="Acceso restringido">
+                  <RegistrosReportes />
                 </ProtectedRoute>
               }
             />

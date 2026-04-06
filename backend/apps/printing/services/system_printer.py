@@ -6,10 +6,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 
 from django.conf import settings
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +17,6 @@ logger = logging.getLogger(__name__)
 STAR_QUEUE = "star_tsp100"
 DRAWER_RAW_COMMAND = r"""printf '\x1b\x07\x0b\x19\x07' | lp -d star_tsp100 -o raw"""
 DRAWER_RAW_BYTES = bytes((0x1B, 0x07, 0x0B, 0x19, 0x07))
-RECEIPT_PAGE_WIDTH_MM = 80
-RECEIPT_LEFT_MARGIN_MM = 4
-RECEIPT_TOP_BOTTOM_MARGIN_MM = 4
-RECEIPT_LINE_HEIGHT_MM = 4.2
-RECEIPT_MIN_HEIGHT_MM = 40
-
 @dataclass
 class CommandResult:
     ok: bool
@@ -135,58 +129,17 @@ class SystemPrinterService:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         filename = f"receipt_{order_id}_{payment_id or 'na'}_{ts}.pdf"
         filepath = receipts_dir / filename
-
-        lines = (ticket_text or "").splitlines() or [""]
-        try:
-            from reportlab.lib.units import mm
-            from reportlab.pdfgen import canvas
-
-            page_width = RECEIPT_PAGE_WIDTH_MM * mm
-            left_margin = RECEIPT_LEFT_MARGIN_MM * mm
-            top_bottom_margin = RECEIPT_TOP_BOTTOM_MARGIN_MM * mm
-            line_height = RECEIPT_LINE_HEIGHT_MM * mm
-            min_height = RECEIPT_MIN_HEIGHT_MM * mm
-            page_height = max((len(lines) * line_height) + (top_bottom_margin * 2), min_height)
-
-            buf = BytesIO()
-            pdf = canvas.Canvas(buf, pagesize=(page_width, page_height))
-            pdf.setFont("Courier", 8.5)
-            text_obj = pdf.beginText(left_margin, page_height - top_bottom_margin)
-            for line in lines:
-                text_obj.textLine(line)
-            pdf.drawText(text_obj)
-            pdf.save()
-            filepath.write_bytes(buf.getvalue())
-        except Exception:
-            filepath.write_bytes(self._fallback_pdf_bytes(lines))
+        result = build_receipt_pdf_from_text(
+            text=ticket_text,
+            filename=filename,
+            font_size=9.0,
+            line_height=11.0,
+        )
+        filepath.write_bytes(result.pdf_bytes)
 
         media_url = str(settings.MEDIA_URL).rstrip("/")
         url = f"{media_url}/receipts/{filename}"
         return str(filepath), url
-
-    def _fallback_pdf_bytes(self, lines: list[str]) -> bytes:
-        escaped_lines = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
-        joined = "\\n".join(escaped_lines)
-        content_lines = joined.replace("\\n", ") Tj T* (")
-        content = f"BT /F1 10 Tf 24 760 Td ({content_lines}) Tj ET"
-        objects = [
-            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
-            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
-            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj",
-            f"4 0 obj << /Length {len(content)} >> stream\n{content}\nendstream endobj",
-            "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj",
-        ]
-        pdf = "%PDF-1.4\n"
-        offsets: list[int] = []
-        for obj in objects:
-            offsets.append(len(pdf.encode("latin-1")))
-            pdf += obj + "\n"
-        xref_offset = len(pdf.encode("latin-1"))
-        pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
-        for off in offsets:
-            pdf += f"{off:010d} 00000 n \n"
-        pdf += f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF"
-        return pdf.encode("latin-1", errors="ignore")
 
     def print_with_pdf_fallback(
         self,

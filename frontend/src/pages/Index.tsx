@@ -6,9 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { calculateCartTotals, formatMoney, toCents, toNumber } from "@/lib/money";
+import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
+import { calculatePosPricing } from "@/lib/posPricing";
 import { SplitPanel } from "@/components/pos/SplitPanel";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
 import {
@@ -55,6 +56,8 @@ import {
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
+  downloadCashSessionTicketPdf,
+  downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
   printPaymentTicket,
@@ -76,6 +79,8 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/useAuth";
+import { ClockSV } from "@/components/ClockSV";
 
 interface CartItem {
   id: string;
@@ -113,44 +118,6 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
-const getOrderDisposableTotal = (
-  items: CartItem[],
-  products: Product[],
-  serviceType: string,
-  serviceTypes: Array<{ key: string; disposablesEnabled?: boolean }>
-) =>
-  items.reduce((sum, item) => {
-    const product = products.find((candidate) => candidate.id === item.productId);
-    if (!product) return sum;
-    const selectedOrderType = serviceTypes.find((type) => type.key === serviceType);
-    const fee = product.disposableFee ?? 0;
-    if (fee <= 0 || selectedOrderType?.disposablesEnabled !== true) return sum;
-    return sum + fee * item.quantity;
-  }, 0);
-
-const getEligibleLineTotalForDiscount = (item: CartItem, discount: Discount, products: Product[]): number => {
-  if (discount.appliesTo === "order") return getItemUnitTotal(item) * item.quantity;
-  if (!item.productId) return 0;
-  const product = products.find((candidate) => candidate.id === item.productId);
-  if (!product) return 0;
-  if (discount.appliesTo === "products") {
-    return (discount.targetProductIds ?? []).includes(product.id) ? getItemUnitTotal(item) * item.quantity : 0;
-  }
-  if (discount.appliesTo === "categories") {
-    return (discount.targetCategoryIds ?? []).includes(product.categoryId) ? getItemUnitTotal(item) * item.quantity : 0;
-  }
-  return 0;
-};
-
-const calculateManualDiscountAmount = (cart: CartItem[], discount: Discount | null, products: Product[]): number => {
-  if (!discount) return 0;
-  const eligible = cart.reduce((sum, item) => sum + getEligibleLineTotalForDiscount(item, discount, products), 0);
-  if (eligible <= 0) return 0;
-  if (discount.type === "percent") return Math.min(eligible, (eligible * discount.value) / 100);
-  if (discount.type === "fixed") return Math.min(eligible, discount.value);
-  return 0;
-};
-
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
@@ -168,6 +135,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 const POS = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -254,6 +222,17 @@ const POS = () => {
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
   const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
   const [printerAvailable, setPrinterAvailable] = useState(true);
+  const [fallbackPdfModal, setFallbackPdfModal] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    onDownload: null | (() => Promise<void>);
+  }>({
+    open: false,
+    title: "",
+    message: "",
+    onDownload: null,
+  });
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -288,28 +267,27 @@ const POS = () => {
   const [validatedPin, setValidatedPin] = useState<string>("");
   const [newPriceInput, setNewPriceInput] = useState("");
   const privilegedGuard = usePrivilegedActionGuard();
+  const draftRestoreDoneRef = useRef(false);
+  const draftPersistTimeoutRef = useRef<number | null>(null);
+  const selectedBranchId = Number(localStorage.getItem("selected_branch_id") || "0") || 0;
+  const posDraftStorageKey = useMemo(
+    () => `pos_draft_${selectedBranchId}_${user?.id ?? "anon"}`,
+    [selectedBranchId, user?.id]
+  );
 
-  const {
-    itemsGross,
-    subtotal,
-    discountAmount,
-    cartDisposableTotal,
-    total,
-  } = useMemo(() => {
-    const computedItemsGross = calculateCartTotals(
-      cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
-      taxRate
-    ).total;
-    const computedDiscountAmount = calculateManualDiscountAmount(cart, selectedDiscount, products);
-    const computedDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
-    return {
-      itemsGross: computedItemsGross,
-      subtotal: computedItemsGross,
-      discountAmount: computedDiscountAmount,
-      cartDisposableTotal: computedDisposableTotal,
-      total: Math.max(computedItemsGross - computedDiscountAmount, 0) + computedDisposableTotal,
-    };
-  }, [cart, products, selectedDiscount, serviceType, serviceTypes, taxRate]);
+  const cartPricing = useMemo(
+    () =>
+      calculatePosPricing({
+        items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+        products,
+        serviceType,
+        serviceTypes,
+        selectedDiscount,
+        availableDiscounts,
+      }),
+    [availableDiscounts, cart, products, selectedDiscount, serviceType, serviceTypes]
+  );
+  const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
 
   const loadMenuData = async () => {
     const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
@@ -337,6 +315,56 @@ const POS = () => {
       setServiceType(serviceTypes[0].key);
     }
   }, [serviceTypes, serviceType]);
+
+  useEffect(() => {
+    if (!serviceTypes.length || draftRestoreDoneRef.current) return;
+    const raw = localStorage.getItem(posDraftStorageKey);
+    draftRestoreDoneRef.current = true;
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        cart?: CartItem[];
+        serviceType?: string;
+        selectedCustomerId?: string;
+        selectedDiscount?: Discount | null;
+        dteDocumentType?: "CF" | "CCF" | "SX";
+        ivaExempt?: boolean;
+      };
+      if (Array.isArray(parsed.cart)) setCart(parsed.cart);
+      if (parsed.serviceType && serviceTypes.some((type) => type.key === parsed.serviceType)) setServiceType(parsed.serviceType);
+      if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
+      if (parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
+      if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
+      if (typeof parsed.ivaExempt === "boolean") setIvaExempt(parsed.ivaExempt);
+    } catch (error) {
+      console.error("Failed to restore POS draft", error);
+    }
+  }, [posDraftStorageKey, serviceTypes]);
+
+  useEffect(() => {
+    if (!draftRestoreDoneRef.current) return;
+    if (draftPersistTimeoutRef.current) window.clearTimeout(draftPersistTimeoutRef.current);
+    draftPersistTimeoutRef.current = window.setTimeout(() => {
+      if (cart.length === 0 && !selectedDiscount && !selectedCustomerId) {
+        localStorage.removeItem(posDraftStorageKey);
+        return;
+      }
+      localStorage.setItem(
+        posDraftStorageKey,
+        JSON.stringify({
+          cart,
+          serviceType,
+          selectedCustomerId,
+          selectedDiscount,
+          dteDocumentType,
+          ivaExempt,
+        })
+      );
+    }, 250);
+    return () => {
+      if (draftPersistTimeoutRef.current) window.clearTimeout(draftPersistTimeoutRef.current);
+    };
+  }, [cart, dteDocumentType, ivaExempt, posDraftStorageKey, selectedCustomerId, selectedDiscount, serviceType]);
 
   useEffect(() => {
     if (!serviceTypes.length || !serviceType) return;
@@ -477,16 +505,19 @@ const POS = () => {
 
   const openCheckoutFromItems = (items: CartItem[]) => {
     if (items.length === 0) return;
-    const draftItemsGross = calculateCartTotals(
-      items.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
-      taxRate
-    ).total;
-    const draftDisposable = getOrderDisposableTotal(items, products, serviceType, serviceTypes);
-    const draftTotal = draftItemsGross + draftDisposable;
+    const draftPricing = calculatePosPricing({
+      items: items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+      products,
+      serviceType,
+      serviceTypes,
+      selectedDiscount,
+      availableDiscounts,
+    });
+    const draftTotal = draftPricing.total;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...items],
-      subtotal: draftItemsGross,
+      subtotal: draftPricing.subtotal,
       tax: draftTaxIncluded,
       total: draftTotal,
       taxRate,
@@ -560,6 +591,14 @@ const POS = () => {
     setPriceEditorItemId(itemId);
     setPinInput("");
     setValidatedPin("");
+    const isPrivileged = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+    const activeItem = cart.find((item) => item.id === itemId);
+    setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+    if (isPrivileged) {
+      setValidatedPin("BYPASS");
+      setIsPriceModalOpen(true);
+      return;
+    }
     setIsPinModalOpen(true);
   };
 
@@ -621,7 +660,18 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const canonicalDueCents = activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? checkoutDraft?.total ?? 0);
+  const canonicalDueCents = activeOrder
+    ? (() => {
+      const hasItems = activeOrder.items.length > 0;
+      const remainingFromCents = Number.isFinite(activeOrder.remainingCents) ? Math.max(activeOrder.remainingCents ?? 0, 0) : 0;
+      const remainingFromDecimal = Math.max(toCents(activeOrder.remaining), 0);
+      const payableFallback = Math.max(toCents(activeOrder.totalPayable ?? activeOrder.total), 0);
+      if (remainingFromCents > 0) return remainingFromCents;
+      if (remainingFromDecimal > 0) return remainingFromDecimal;
+      if (hasItems && activeOrder.paymentStatus !== "paid") return payableFallback;
+      return 0;
+    })()
+    : toCents(checkoutDraft?.total ?? 0);
   const paymentTotal = canonicalDueCents / 100;
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
@@ -639,12 +689,29 @@ const POS = () => {
   const remainingTotal = Math.max(totalDueCents - paymentAmountCents, 0) / 100;
   const changeTotal = Math.max(changeCents, 0) / 100;
   const isExactPayment = Math.abs(changeCents) <= 1;
-  const checkoutDisposableTotal = checkoutDraft
-    ? getOrderDisposableTotal(checkoutDraft.items, products, checkoutDraft.serviceType, serviceTypes)
-    : 0;
+  const checkoutDraftPricing = useMemo(
+    () =>
+      checkoutDraft
+        ? calculatePosPricing({
+            items: checkoutDraft.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+              unitTotal: getItemUnitTotal(item),
+            })),
+            products,
+            serviceType: checkoutDraft.serviceType,
+            serviceTypes,
+            selectedDiscount,
+            availableDiscounts,
+          })
+        : null,
+    [availableDiscounts, checkoutDraft, products, selectedDiscount, serviceTypes]
+  );
+  const checkoutDisposableTotal = checkoutDraftPricing?.disposableTotal ?? 0;
   const checkoutSummarySubtotalBefore = activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
   const checkoutSummaryDiscount = activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount;
   const checkoutSummaryTotal = activeOrder?.totalPayable ?? paymentTotal;
+  const checkoutDiscountLines = checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
   const filteredDiscounts = availableDiscounts.filter((discount) =>
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
@@ -652,17 +719,19 @@ const POS = () => {
   const proceedToCheckout = async () => {
     if (cart.length === 0) return;
 
-    const draftItemsGross = calculateCartTotals(
-      cart.map((item) => ({ ...item, price: getItemUnitTotal(item) })),
-      taxRate
-    ).total;
-    const draftDisposableTotal = getOrderDisposableTotal(cart, products, serviceType, serviceTypes);
-    const draftDiscount = calculateManualDiscountAmount(cart, selectedDiscount, products);
-    const draftTotal = Math.max(draftItemsGross - draftDiscount, 0) + draftDisposableTotal;
+    const draftPricing = calculatePosPricing({
+      items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+      products,
+      serviceType,
+      serviceTypes,
+      selectedDiscount,
+      availableDiscounts,
+    });
+    const draftTotal = draftPricing.total;
     const draftTaxIncluded = draftTotal - draftTotal / (1 + taxRate);
     const draft = {
       items: [...cart],
-      subtotal: draftItemsGross,
+      subtotal: draftPricing.subtotal,
       tax: draftTaxIncluded,
       total: draftTotal,
       taxRate,
@@ -929,7 +998,16 @@ const POS = () => {
       if (closeResp.printed) {
         toast.success("Caja cerrada. Ticket impreso");
       } else {
-        toast.success(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
+        setFallbackPdfModal({
+          open: true,
+          title: "Caja cerrada",
+          message: "No se pudo imprimir. Puedes descargar el PDF del cierre.",
+          onDownload: async () => {
+            if (!closeResp.sessionId) throw new Error("No se encontró la sesión cerrada.");
+            await downloadCashSessionTicketPdf(closeResp.sessionId);
+          },
+        });
+        toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
       
@@ -1033,6 +1111,10 @@ const POS = () => {
     setShouldResetTenderOnFirstTap(false);
   };
 
+  const clearPersistedDraft = () => {
+    localStorage.removeItem(posDraftStorageKey);
+  };
+
   const finalizePaidSale = () => {
     setIsPaymentOpen(false);
     setActiveOrder(null);
@@ -1051,10 +1133,13 @@ const POS = () => {
     } else {
       setSelectedCustomerId("");
     }
+    clearPersistedDraft();
   };
 
   const scheduleReload = () => {
-    window.setTimeout(() => window.location.reload(), 250);
+    window.setTimeout(() => {
+      loadCashData().catch(() => undefined);
+    }, 250);
   };
 
   const triggerPdfDownload = (blob: Blob, filename: string) => {
@@ -1088,19 +1173,34 @@ const POS = () => {
       if (lastPaymentId && postSalePrintChoice) {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (printResult.pdfBlob) {
-          triggerPdfDownload(printResult.pdfBlob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
-          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
+            },
+          });
+          toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.receiptPdfUrl) {
-          const anchor = document.createElement("a");
-          anchor.href = printResult.receiptPdfUrl;
-          anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
-          anchor.target = "_blank";
-          anchor.rel = "noopener";
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
-          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              await downloadPaymentTicketPdf(lastPaymentId);
+            },
+          });
+          toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.printError) {
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              await downloadPaymentTicketPdf(lastPaymentId);
+            },
+          });
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
         if (printResult.drawerError) {
@@ -1267,7 +1367,31 @@ const POS = () => {
           dteDocumentType,
           ivaExempt,
         });
-        setActiveOrder(updatedOrder);
+        setActiveOrder((previousOrder) => {
+          if (!previousOrder || previousOrder.id !== updatedOrder.id) return updatedOrder;
+          const fallbackRemaining = previousOrder.remaining > 0 ? previousOrder.remaining : 0;
+          const fallbackRemainingCents = previousOrder.remainingCents > 0 ? previousOrder.remainingCents : toCents(fallbackRemaining);
+          const nextRemaining = updatedOrder.remaining > 0 ? updatedOrder.remaining : fallbackRemaining;
+          const nextRemainingCents =
+            updatedOrder.remainingCents > 0 || nextRemaining <= 0
+              ? updatedOrder.remainingCents
+              : fallbackRemainingCents;
+          return {
+            ...previousOrder,
+            ...updatedOrder,
+            remaining: nextRemaining,
+            remainingCents: nextRemainingCents,
+            total: updatedOrder.total > 0 ? updatedOrder.total : previousOrder.total,
+            subtotalBeforeDiscounts:
+              (updatedOrder.subtotalBeforeDiscounts ?? 0) > 0
+                ? updatedOrder.subtotalBeforeDiscounts
+                : previousOrder.subtotalBeforeDiscounts,
+            totalPayable:
+              (updatedOrder.totalPayable ?? 0) > 0
+                ? updatedOrder.totalPayable
+                : previousOrder.totalPayable,
+          };
+        });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "No se pudo actualizar cliente en la orden");
         return;
@@ -1438,7 +1562,7 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[3fr_2fr]">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
@@ -1521,11 +1645,11 @@ const POS = () => {
           </div>
 
           {/* Cart Section */}
-          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[320px]">
+          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[360px]">
             <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
-                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                  <div />
+                <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
+                  <ClockSV className="px-3 py-2" timeClassName="text-base sm:text-lg" />
                   <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
                   <div className="flex items-center justify-end gap-2">
                     <TooltipProvider delayDuration={120}>
@@ -1598,7 +1722,7 @@ const POS = () => {
                             title="Refrescar"
                             aria-label="Refrescar"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => window.location.reload()}
+                            onClick={() => scheduleReload()}
                           >
                             <RefreshCw className="h-5 w-5" />
                           </Button>
@@ -1730,12 +1854,12 @@ const POS = () => {
                     <span>{formatMoney(cartDisposableTotal)}</span>
                   </div>
                 )}
-                {selectedDiscount && discountAmount > 0 && (
-                  <div className="flex justify-between text-emerald-600">
-                    <span>Descuento ({selectedDiscount.name})</span>
-                    <span>-{formatMoney(discountAmount)}</span>
+                {cartPricing.discountLines.map((line) => (
+                  <div key={`${line.source}-${line.id}`} className="flex justify-between text-emerald-600">
+                    <span>Descuento ({line.name})</span>
+                    <span>-{formatMoney(line.amount)}</span>
                   </div>
-                )}
+                ))}
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
                   <span className="text-secondary">{formatMoney(total)}</span>
@@ -1758,6 +1882,7 @@ const POS = () => {
                   onClick={() => {
                     setCart([]);
                     setSelectedDiscount(null);
+                    clearPersistedDraft();
                   }}
                 >
                   Cancelar
@@ -2033,7 +2158,16 @@ const POS = () => {
                     <div className="mb-2 font-semibold">Resumen</div>
                     <div className="space-y-1 text-muted-foreground">
                       <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
-                      {checkoutSummaryDiscount > 0 && <div className="flex justify-between text-emerald-600"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>}
+                      {checkoutDiscountLines.length > 0
+                        ? checkoutDiscountLines.map((line) => (
+                            <div key={`checkout-${line.source}-${line.id}`} className="flex justify-between text-emerald-600">
+                              <span>Descuento ({line.name})</span>
+                              <span>-{formatMoney(line.amount)}</span>
+                            </div>
+                          ))
+                        : checkoutSummaryDiscount > 0
+                          ? <div className="flex justify-between text-emerald-600"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
+                          : null}
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
                       <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
                     </div>
@@ -2473,6 +2607,45 @@ const POS = () => {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={fallbackPdfModal.open}
+        onOpenChange={(open) =>
+          setFallbackPdfModal((prev) => ({
+            ...prev,
+            open,
+          }))
+        }
+      >
+        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">{fallbackPdfModal.title}</DialogTitle>
+            <DialogDescription className="text-base">{fallbackPdfModal.message}</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Button
+              type="button"
+              className="h-12"
+              onClick={() => {
+                if (!fallbackPdfModal.onDownload) return;
+                void fallbackPdfModal.onDownload()
+                  .then(() => setFallbackPdfModal((prev) => ({ ...prev, open: false })))
+                  .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo descargar PDF"));
+              }}
+            >
+              Descargar PDF
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-12"
+              onClick={() => setFallbackPdfModal((prev) => ({ ...prev, open: false }))}
+            >
+              Cerrar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <PrivilegePinModal
         open={Boolean(privilegedGuard.pendingAction)}
         onCancel={() => privilegedGuard.setPendingAction(null)}
@@ -2640,16 +2813,16 @@ const POS = () => {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Código de acceso</DialogTitle>
-            <DialogDescription>Ingresa el PIN de 4 dígitos para autorizar cambio de precio.</DialogDescription>
+            <DialogDescription>Ingresa el PIN de 6 dígitos para autorizar cambio de precio.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 4 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
+            <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 6 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
             <div className="grid grid-cols-3 gap-2">
               {[1,2,3,4,5,6,7,8,9].map((n) => (
                 <Button key={n} variant="outline" className="h-12" onClick={async () => {
-                  const next = `${pinInput}${n}`.slice(0, 4);
+                  const next = `${pinInput}${n}`.slice(0, 6);
                   setPinInput(next);
-                  if (next.length === 4) {
+                  if (next.length === 6) {
                     try {
                       await validateOrderPricePin(next);
                       setValidatedPin(next);
@@ -2666,9 +2839,9 @@ const POS = () => {
               ))}
               <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
               <Button variant="outline" className="h-12" onClick={async () => {
-                const next = `${pinInput}0`.slice(0, 4);
+                const next = `${pinInput}0`.slice(0, 6);
                 setPinInput(next);
-                if (next.length === 4) {
+                if (next.length === 6) {
                   try {
                     await validateOrderPricePin(next);
                     setValidatedPin(next);

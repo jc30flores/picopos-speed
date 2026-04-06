@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.test.utils import override_settings
 from rest_framework.test import APIClient
 from rest_framework.exceptions import PermissionDenied
 
@@ -19,6 +18,9 @@ class OrderCustomItemSnapshotTests(TestCase):
         self.service_type = ServiceType.objects.create(key="para-llevar", label="Para llevar")
         self.category = Category.objects.create(name="BEBIDAS")
         self.product = Product.objects.create(name="Soda", description="", price=Decimal("1.50"), category=self.category, available=True)
+        user_model = get_user_model()
+        self.admin_user = user_model.objects.create_user(username="admin_price_override", password="246810", is_active=True)
+        UserProfile.objects.create(user=self.admin_user, role="admin", is_active=True)
 
     def test_create_order_with_manual_item_persists_snapshot_fields(self):
         serializer = OrderCreateSerializer(
@@ -119,7 +121,6 @@ class OrderCustomItemSnapshotTests(TestCase):
         self.assertEqual(item.price_snapshot, Decimal("1.50"))
         self.assertEqual(item.quantity, 2)
 
-    @override_settings(CODE_CHANGE_PRICE="2468")
     def test_order_rejects_override_without_pin(self):
         serializer = OrderCreateSerializer(
             data={
@@ -136,17 +137,16 @@ class OrderCustomItemSnapshotTests(TestCase):
             }
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        with self.assertRaisesMessage(PermissionDenied, "Código incorrecto"):
+        with self.assertRaisesMessage(PermissionDenied, "Código inválido"):
             serializer.save()
 
-    @override_settings(CODE_CHANGE_PRICE="2468")
     def test_order_accepts_override_with_pin(self):
         serializer = OrderCreateSerializer(
             data={
                 "branch_id": self.branch.id,
                 "service_type_key": self.service_type.key,
                 "channel": "pos",
-                "price_change_pin": "2468",
+                "price_change_pin": "246810",
                 "items": [
                     {
                         "product_id": self.product.id,
@@ -169,12 +169,12 @@ class ValidatePricePinEndpointTests(TestCase):
         UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
         self.client.force_authenticate(self.user)
 
-    @override_settings(CODE_CHANGE_PRICE="1357")
     def test_validate_price_pin_rejects_invalid_pin(self):
-        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "0000"}, format="json")
-        self.assertEqual(response.status_code, 403)
+        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "000000"}, format="json")
+        self.assertEqual(response.status_code, 401)
 
-    @override_settings(CODE_CHANGE_PRICE="1357")
     def test_validate_price_pin_accepts_valid_pin(self):
-        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "1357"}, format="json")
+        admin = get_user_model().objects.create_user(username="manager_pin_validate", password="135790")
+        UserProfile.objects.create(user=admin, role="manager", is_active=True)
+        response = self.client.post("/api/orders/validate-price-pin/", {"pin": "135790"}, format="json")
         self.assertEqual(response.status_code, 204)

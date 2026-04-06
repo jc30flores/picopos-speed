@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from apps.dte.services.active_branch import get_active_branch
 from apps.orders.models import Order
 
 
@@ -10,13 +11,14 @@ def _as_str(value: Decimal) -> str:
 
 
 def build_dte_payload(order: Order, numero_control: str, codigo_generacion: str, doc_type: str = "CF") -> dict:
+    active_branch = get_active_branch()
     return {
         "identificacion": {
             "tipoDte": doc_type,
             "numeroControl": numero_control,
             "codigoGeneracion": codigo_generacion,
         },
-        "emisor": {"sucursal": order.branch.name, "codigo": order.branch.code},
+        "emisor": {"sucursal": active_branch.name, "codigo": active_branch.code},
         "receptor": {"nombre": order.customer_name or "Consumidor Final", "nit": ""},
         "cuerpoDocumento": [
             {

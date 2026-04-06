@@ -15,9 +15,11 @@ import { PinKeypad } from "@/components/auth/PinKeypad";
 
 const ROLE_OPTIONS = [
   { value: "cashier", label: "Cajero" },
-  { value: "kitchen", label: "Cocinero" },
+  { value: "kitchen", label: "Cocina" },
   { value: "manager", label: "Gerente" },
   { value: "admin", label: "Administrador" },
+  { value: "kiosk", label: "Kiosk" },
+  { value: "worker", label: "Worker" },
 ];
 
 const ROLE_KEY_BY_LABEL = ROLE_OPTIONS.reduce((acc, option) => {

@@ -13,15 +13,18 @@ import { EmployeesTable } from "./EmployeesTable";
 import { EmployeeFormDialog, EmployeeFormData } from "./EmployeeFormDialog";
 import { EmployeeProfileSheet } from "./EmployeeProfileSheet";
 import { Employee } from "@/types/employee";
-import { createEmployee, getEmployees, updateEmployee } from "@/lib/api";
+import { createEmployee, getEmployeeAttendanceHistory, getEmployees, updateEmployee, type AttendanceHistoryRow } from "@/lib/api";
 import { toast } from "sonner";
+import { AttendanceRecordsModal } from "@/components/attendance/AttendanceRecordsModal";
 
 const ROLE_OPTIONS = [
   { value: "all", label: "Todos" },
   { value: "cashier", label: "Cajero" },
-  { value: "kitchen", label: "Cocinero" },
+  { value: "kitchen", label: "Cocina" },
   { value: "manager", label: "Gerente" },
   { value: "admin", label: "Administrador" },
+  { value: "kiosk", label: "Kiosk" },
+  { value: "worker", label: "Worker" },
 ];
 
 export const EmployeesTab = () => {
@@ -34,6 +37,10 @@ export const EmployeesTab = () => {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [attendanceOpen, setAttendanceOpen] = useState(false);
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceHistoryRow[]>([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceEmployee, setAttendanceEmployee] = useState<Employee | null>(null);
 
   const loadEmployees = async () => {
     try {
@@ -132,6 +139,37 @@ export const EmployeesTab = () => {
     }
   };
 
+  const loadAttendance = async (filters: { start?: string; end?: string } = {}) => {
+    if (!attendanceEmployee) return;
+    setAttendanceLoading(true);
+    try {
+      const rows = await getEmployeeAttendanceHistory(attendanceEmployee.id, filters);
+      setAttendanceRows(rows);
+    } catch (error) {
+      console.error("Failed to load attendance history", error);
+      toast.error("No se pudo cargar asistencia");
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  const handleOpenAttendance = (employee: Employee) => {
+    setAttendanceEmployee(employee);
+    setAttendanceOpen(true);
+    void (async () => {
+      setAttendanceLoading(true);
+      try {
+        const rows = await getEmployeeAttendanceHistory(employee.id);
+        setAttendanceRows(rows);
+      } catch (error) {
+        console.error("Failed to load attendance history", error);
+        toast.error("No se pudo cargar asistencia");
+      } finally {
+        setAttendanceLoading(false);
+      }
+    })();
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
@@ -181,6 +219,7 @@ export const EmployeesTab = () => {
         onToggleStatus={handleDeleteEmployee}
         onResetPassword={handleResetPassword}
         onViewProfile={handleOpenProfile}
+        onViewAttendance={handleOpenAttendance}
       />
 
       <EmployeeFormDialog
@@ -194,6 +233,13 @@ export const EmployeesTab = () => {
         open={isProfileOpen}
         onOpenChange={setIsProfileOpen}
         employee={selectedEmployee}
+      />
+      <AttendanceRecordsModal
+        open={attendanceOpen}
+        onOpenChange={setAttendanceOpen}
+        rows={attendanceRows}
+        loading={attendanceLoading}
+        onApplyFilters={loadAttendance}
       />
     </div>
   );

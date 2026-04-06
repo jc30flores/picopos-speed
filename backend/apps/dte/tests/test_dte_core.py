@@ -3,8 +3,9 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
+from rest_framework.exceptions import ValidationError
 
 from apps.core.models import Branch, ServiceType
 from apps.core.models import Customer
@@ -22,13 +23,14 @@ from apps.dte.services.dte_service import (
     to_decimal,
 )
 from apps.dte.services.orchestrator import transmit_sale_dte
-from apps.dte.services.emisor import get_emisor_nit
+from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
 from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
 
+@override_settings(ACTIVE_BRANCH_CODE="MAIN")
 class DTECoreTests(TestCase):
     def setUp(self):
         self.branch = Branch.objects.create(name="Main", code="MAIN")
@@ -41,6 +43,7 @@ class DTECoreTests(TestCase):
             tax=Decimal("0.00"),
             total=Decimal("10.00"),
         )
+        self.branch_monaco = Branch.objects.create(name="Plaza Monaco", code="PLAZA_MONACO")
 
     def test_counter_is_incremental(self):
         first = next_control_number(self.order)
@@ -71,6 +74,77 @@ class DTECoreTests(TestCase):
     def test_get_emisor_nit_uses_branch_config(self):
         DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="1217-140990-106-3", is_active=True)
         self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    def test_get_emisor_nit_falls_back_to_branch_nit(self):
+        self.branch.nit = "1217-140990-106-3"
+        self.branch.save(update_fields=["nit"])
+        self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    def test_get_emisor_nit_invalid_value_reports_source(self):
+        self.branch.nit = "048143931"
+        self.branch.save(update_fields=["nit"])
+        with self.assertRaisesMessage(ValidationError, "Branch.nit"):
+            get_emisor_nit(self.branch)
+
+    @override_settings(DTE_EMISOR_NIT="1217-140990-106-3")
+    def test_get_emisor_nit_ignores_invalid_branch_config_and_uses_env(self):
+        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="048143931", is_active=True)
+        self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    @override_settings(ACTIVE_BRANCH_CODE="MAIN")
+    def test_emisor_config_uses_active_branch_code_main(self):
+        DTEBranchConfig.objects.create(
+            branch=self.branch,
+            emisor_nit="1217-140990-106-3",
+            emisor_nombre_comercial="Sucursal Main",
+            direccion_complemento="Dirección Main",
+            cod_estable="M001",
+            cod_punto_venta="P001",
+            is_active=True,
+        )
+        DTEBranchConfig.objects.create(
+            branch=self.branch_monaco,
+            emisor_nit="1217-140990-106-3",
+            emisor_nombre_comercial="Sucursal Monaco",
+            direccion_complemento="Dirección Monaco",
+            cod_estable="M002",
+            cod_punto_venta="P002",
+            is_active=True,
+        )
+        cfg = get_emisor_config(self.branch_monaco)
+        self.assertEqual(cfg["nombreComercial"], "Sucursal Main")
+        self.assertEqual(cfg["complemento"], "Dirección Main")
+        self.assertEqual(cfg["codEstable"], "M001")
+        self.assertEqual(cfg["codPuntoVenta"], "P001")
+
+    @override_settings(ACTIVE_BRANCH_CODE="PLAZA_MONACO")
+    def test_emisor_config_uses_active_branch_code_monaco_without_changing_order(self):
+        DTEBranchConfig.objects.create(
+            branch=self.branch,
+            emisor_nit="1217-140990-106-3",
+            emisor_nombre_comercial="Sucursal Main",
+            direccion_complemento="Dirección Main",
+            cod_estable="M001",
+            cod_punto_venta="P001",
+            is_active=True,
+        )
+        DTEBranchConfig.objects.create(
+            branch=self.branch_monaco,
+            emisor_nit="1217-140990-106-3",
+            emisor_nombre_comercial="Sucursal Monaco",
+            direccion_complemento="Dirección Monaco",
+            cod_estable="M002",
+            cod_punto_venta="P002",
+            is_active=True,
+        )
+        original_order_branch_id = self.order.branch_id
+        cfg = get_emisor_config(self.branch)
+        self.assertEqual(cfg["nombreComercial"], "Sucursal Monaco")
+        self.assertEqual(cfg["complemento"], "Dirección Monaco")
+        self.assertEqual(cfg["codEstable"], "M002")
+        self.assertEqual(cfg["codPuntoVenta"], "P002")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.branch_id, original_order_branch_id)
 
     def test_build_payload_cf_uses_order_item_snapshots(self):
         DTEBranchConfig.objects.create(
