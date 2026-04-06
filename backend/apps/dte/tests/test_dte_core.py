@@ -14,6 +14,7 @@ from apps.dte.models import DTEBranchConfig, DTEControlCounter, DTERecord
 from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import (
     DTEPreflightError,
+    _validate_dte_totals,
     assert_no_string_numbers,
     build_payload_cf,
     get_mh_payment_info,
@@ -216,10 +217,34 @@ class DTECoreTests(TestCase):
 
         self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
         self.assertEqual(resumen["totalGravada"], 8.5)
-        self.assertEqual(resumen["subTotalVentas"], 10.0)
+        self.assertEqual(resumen["subTotalVentas"], 8.5)
         self.assertEqual(resumen["subTotal"], 8.5)
-        self.assertEqual(resumen["descuGravada"], 1.5)
+        self.assertEqual(resumen["descuGravada"], 0)
         self.assertEqual(resumen["totalDescu"], 1.5)
+
+    def test_build_payload_cf_single_item_discount_keeps_subtotalventas_consistent(self):
+        category = Category.objects.create(name="DESCUENTO-UNITARIO")
+        product = Product.objects.create(name="Item 4.25", description="", price=Decimal("4.25"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Item ejemplo",
+            price_snapshot=Decimal("4.25"),
+            quantity=1,
+            discount_amount=Decimal("2.13"),
+            snapshot_sku_or_code="DISC-EXAMPLE",
+            is_custom=False,
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000205", "K" * 36, "00")
+        linea = payload["dte"]["cuerpoDocumento"][0]
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(linea["ventaGravada"], 2.12)
+        self.assertEqual(resumen["totalGravada"], 2.12)
+        self.assertEqual(resumen["subTotalVentas"], 2.12)
+        self.assertEqual(resumen["descuGravada"], 0)
+        self.assertEqual(resumen["totalDescu"], 2.13)
+        self.assertEqual(resumen["subTotal"], 2.12)
 
     def test_build_payload_cf_with_special_price_and_global_discount_is_consistent(self):
         category = Category.objects.create(name="MIX")
@@ -238,6 +263,27 @@ class DTECoreTests(TestCase):
         descuentos_linea = sum(float(linea["montoDescu"]) for linea in cuerpo)
         self.assertEqual(round(descuentos_linea, 2), round(float(resumen["totalDescu"]), 2))
         self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"]), 2))
+
+    def test_validate_dte_totals_with_global_discount_example(self):
+        dte = {
+            "cuerpoDocumento": [
+                {"montoDescu": 25.0},
+                {"montoDescu": 15.0},
+                {"montoDescu": 5.0},
+            ],
+            "resumen": {
+                "totalNoSuj": 0.0,
+                "totalExenta": 35.0,
+                "totalGravada": 610.0,
+                "subTotalVentas": 645.0,
+                "descuNoSuj": 0.0,
+                "descuExenta": 3.5,
+                "descuGravada": 61.0,
+                "totalDescu": 109.5,
+                "subTotal": 580.5,
+            },
+        }
+        _validate_dte_totals(dte)
 
     def test_build_payload_cf_without_discounts_keeps_subtotals_equal(self):
         category = Category.objects.create(name="SIN-DESC")
