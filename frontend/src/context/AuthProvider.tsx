@@ -39,6 +39,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const logout = useCallback(async () => {
     await getCSRF();
     await logoutRequest();
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("pos_draft_"))
+      .forEach((key) => localStorage.removeItem(key));
     setUser(null);
   }, []);
 

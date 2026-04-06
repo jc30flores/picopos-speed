@@ -475,11 +475,15 @@ const request = async (path: string, options: RequestInit = {}) => {
     }
   }
 
-  return fetch(buildApiUrl(path), {
+  const response = await fetch(buildApiUrl(path), {
     credentials: "include",
     ...options,
     headers,
   });
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+  }
+  return response;
 };
 
 const handleJson = async <T>(response: Response): Promise<T> => {

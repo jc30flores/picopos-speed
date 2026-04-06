@@ -4,6 +4,7 @@ import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, Shopping
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
+import { ClockSV } from "@/components/ClockSV";
 
 const MainMenu = () => {
   const navigate = useNavigate();
@@ -39,6 +40,9 @@ const MainMenu = () => {
         <div className="space-y-1 text-center">
           <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Centro de Control</p>
           <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Pico de Gallo POS</h1>
+          <div className="mx-auto mt-4 max-w-md">
+            <ClockSV className="bg-background/50" timeClassName="text-5xl sm:text-6xl" />
+          </div>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {cards.map((card) => (

@@ -18,6 +18,7 @@ import Login from "./pages/Login";
 import DTEPage from "./pages/DTE";
 import CustomersPage from "./pages/Customers";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { InactivityGuard } from "./components/auth/InactivityGuard";
 
 const queryClient = new QueryClient();
 
@@ -27,6 +28,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <InactivityGuard />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route
