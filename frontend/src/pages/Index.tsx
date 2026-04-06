@@ -158,7 +158,8 @@ const POS = () => {
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
   const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
-  const postOpenSessionActionRef = useRef<(() => void) | null>(null);
+  const postOpenSessionActionRef = useRef<(() => Promise<void>) | null>(null);
+  const openSessionResolverRef = useRef<((opened: boolean) => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
@@ -793,30 +794,46 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const requestOpenSession = (postAction?: () => void) => {
+  const requestOpenSession = (postAction?: () => Promise<void>, resolver?: (opened: boolean) => void) => {
     postOpenSessionActionRef.current = postAction ?? null;
+    openSessionResolverRef.current = resolver ?? null;
     setOpenSessionAmount("0.00");
     setIsOpenSessionModalOpen(true);
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
-  const ensureCashSessionOpen = async (postAction: () => Promise<void> | void) => {
+  const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
     try {
       const current = await getCurrentCashSession();
       setCashSnapshot(current);
       if (current.open) {
         await postAction();
-        return;
+        return true;
       }
-      requestOpenSession(postAction);
+      return await new Promise<boolean>((resolve) => {
+        requestOpenSession(postAction, resolve);
+      });
     } catch {
-      requestOpenSession(postAction);
+      return await new Promise<boolean>((resolve) => {
+        requestOpenSession(postAction, resolve);
+      });
     }
   };
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    await ensureCashSessionOpen(() => proceedToCheckout());
+    try {
+      await ensureCashSessionOpen(async () => {
+        await proceedToCheckout();
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/caja no aperturada|cash session|required/i.test(message)) {
+        requestOpenSession();
+        return;
+      }
+      toast.error(message || "No se pudo continuar al cobro");
+    }
   };
 
   const getPendingSelectionValidation = () => {
@@ -1005,15 +1022,31 @@ const POS = () => {
   }, [checkoutTotalCents, isPaymentOpen, checkoutDraft, parts.length]);
 
   const handleOpenCashSession = async () => {
+    if (isSavingCashAction) return;
     setIsSavingCashAction(true);
     try {
       await openCashSession(Number(openSessionAmount || 0));
+      const current = await getCurrentCashSession();
+      setCashSnapshot(current);
+      if (!current.open) {
+        toast.error("No se pudo confirmar apertura de caja.");
+        openSessionResolverRef.current?.(false);
+        return;
+      }
       await loadCashData();
-      toast.success("Caja aperturada");
-      setIsOpenSessionModalOpen(false);
       const action = postOpenSessionActionRef.current;
       postOpenSessionActionRef.current = null;
-      action?.();
+      setIsOpenSessionModalOpen(false);
+      if (action) {
+        try {
+          await action();
+        } catch (actionError) {
+          const message = actionError instanceof Error ? actionError.message : "Error en checkout";
+          toast.error(message);
+        }
+      }
+      openSessionResolverRef.current?.(true);
+      toast.success("Caja aperturada");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error desconocido";
       if (message.includes("409") || message.toLowerCase().includes("abierta")) {
@@ -1024,7 +1057,15 @@ const POS = () => {
             setIsOpenSessionModalOpen(false);
             const action = postOpenSessionActionRef.current;
             postOpenSessionActionRef.current = null;
-            action?.();
+            if (action) {
+              try {
+                await action();
+              } catch (actionError) {
+                const actionMessage = actionError instanceof Error ? actionError.message : "Error en checkout";
+                toast.error(actionMessage);
+              }
+            }
+            openSessionResolverRef.current?.(true);
             toast.success("Caja ya estaba aperturada");
             return;
           }
@@ -1032,8 +1073,10 @@ const POS = () => {
           // fallback to generic error below
         }
       }
+      openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
     } finally {
+      openSessionResolverRef.current = null;
       setIsSavingCashAction(false);
     }
   };
