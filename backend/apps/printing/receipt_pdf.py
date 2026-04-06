@@ -29,7 +29,7 @@ def mm_to_points(mm_value: float) -> float:
 
 
 def get_printer_size_mm() -> float:
-    value = getattr(settings, "PRINTER_SIZE_MM", getattr(settings, "PRINTER_SIZE", 80.0))
+    value = getattr(settings, "PRINTER_SIZE", getattr(settings, "PRINTER_SIZE_MM", 80.0))
     try:
         parsed = float(value)
         return parsed if parsed > 0 else 80.0
@@ -81,6 +81,9 @@ def _normalize_lines(lines: list[str] | tuple[str, ...], *, max_chars_per_line: 
     out: list[str] = []
     for raw_line in lines:
         line = sanitize_receipt_text(raw_line).strip("\n")
+        if line.strip() and set(line.strip()) <= {"-", "_"}:
+            out.append(line.strip()[:max_chars_per_line])
+            continue
         wrapped = wrap(
             line,
             width=max_chars_per_line,
@@ -192,10 +195,10 @@ def build_receipt_pdf(
             + logo_draw_height
             + logo_padding_bottom
             + (len(centered) * line_height)
-            + (len(clean_lines) * line_height)
             + qr_padding_top
             + qr_title_height
             + qr_size
+            + (len(clean_lines) * line_height)
             + margin_y,
         )
 
@@ -217,17 +220,6 @@ def build_receipt_pdf(
             x_line = max(margin_x, (page_width_pt - text_width) / 2.0)
             pdf.drawString(x_line, y, line)
 
-        for line in clean_lines:
-            normalized = line.strip()
-            if normalized and set(normalized) <= {"-", "_"} and len(normalized) >= 3:
-                y -= line_height * 0.6
-                pdf.setLineWidth(0.7)
-                pdf.line(margin_x, y, page_width_pt - margin_x, y)
-                y -= line_height * 0.4
-                continue
-            y -= line_height
-            pdf.drawString(margin_x, y, line)
-
         if qr_value and qr_size > 0:
             y -= qr_padding_top
             if qr_title:
@@ -243,6 +235,18 @@ def build_receipt_pdf(
             drawing = Drawing(qr_size, qr_size, transform=[qr_size / qr_w, 0, 0, qr_size / qr_h, 0, 0])
             drawing.add(qr_widget)
             renderPDF.draw(drawing, pdf, (page_width_pt - qr_size) / 2.0, y)
+            y -= line_height * 0.5
+
+        for line in clean_lines:
+            normalized = line.strip()
+            if normalized and set(normalized) <= {"-", "_"} and len(normalized) >= 3:
+                y -= line_height * 0.6
+                pdf.setLineWidth(0.7)
+                pdf.line(margin_x, y, page_width_pt - margin_x, y)
+                y -= line_height * 0.4
+                continue
+            y -= line_height
+            pdf.drawString(margin_x, y, line)
 
         pdf.save()
         pdf_bytes = stream.getvalue()
