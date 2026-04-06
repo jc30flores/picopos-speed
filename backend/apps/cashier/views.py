@@ -6,6 +6,7 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.renderers import BaseRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -26,6 +27,16 @@ from apps.printing.models import PrintJob
 from apps.cashier.services import CashDrawerService
 
 logger = logging.getLogger(__name__)
+
+
+class PdfRenderer(BaseRenderer):
+    media_type = "application/pdf"
+    format = "pdf"
+    charset = None
+    render_style = "binary"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 
 def _get_open_session_for_register(register):
@@ -344,6 +355,7 @@ class CashSessionDetailView(APIView):
 
 class CashSessionTicketPDFView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
+    renderer_classes = [PdfRenderer]
 
     def get(self, request, pk: int):
         session = CashSession.objects.filter(pk=pk).first()

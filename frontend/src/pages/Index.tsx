@@ -1065,7 +1065,9 @@ const POS = () => {
   };
 
   const scheduleReload = () => {
-    window.setTimeout(() => window.location.reload(), 250);
+    window.setTimeout(() => {
+      loadCashData().catch(() => undefined);
+    }, 250);
   };
 
   const triggerPdfDownload = (blob: Blob, filename: string) => {
@@ -1633,7 +1635,7 @@ const POS = () => {
                             title="Refrescar"
                             aria-label="Refrescar"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => window.location.reload()}
+                            onClick={() => scheduleReload()}
                           >
                             <RefreshCw className="h-5 w-5" />
                           </Button>

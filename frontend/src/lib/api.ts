@@ -3554,23 +3554,33 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
 
 
 export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
-  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
-    headers: { Accept: "application/pdf" },
-  });
-  if (!response.ok) throw new Error('No se pudo descargar ticket PDF');
-  const contentType = response.headers.get("content-type") || "";
-  if (!contentType.includes("application/pdf")) {
-    throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+  try {
+    const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
+      headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+    });
+    if (!response.ok) throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/pdf")) {
+      throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    const filename = filenameMatch?.[1] || `cierre_caja_${sessionId}.pdf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error("downloadCashSessionTicketPdf error", error);
+    }
+    throw error instanceof Error ? error : new Error("No se pudo descargar ticket PDF");
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `cierre_caja_${sessionId}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 };
 export type DTERecord = {
   id: number;
