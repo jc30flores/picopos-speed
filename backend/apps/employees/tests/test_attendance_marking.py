@@ -19,7 +19,8 @@ class AttendanceMarkingTests(TestCase):
     def test_today_flow_and_break_rules(self):
         today = self.client.get("/api/employees/attendance/today/")
         self.assertEqual(today.status_code, 200)
-        self.assertTrue(today.json()["can_clock_in"])
+        self.assertEqual(today.json().get("state"), "NO_RECORD_TODAY")
+        self.assertTrue(today.json()["attendance"]["can_clock_in"])
 
         clock_in = self.client.post("/api/employees/attendance/clock-in/")
         self.assertEqual(clock_in.status_code, 200)
@@ -42,3 +43,14 @@ class AttendanceMarkingTests(TestCase):
         self.assertEqual(clock_out.status_code, 200)
         self.assertFalse(clock_out.json()["can_clock_out"])
         self.assertFalse(clock_out.json()["can_break_start"])
+
+    def test_attendance_endpoints_without_employee_return_200_payload(self):
+        self.employee.delete()
+
+        today = self.client.get("/api/employees/attendance/today/")
+        self.assertEqual(today.status_code, 200)
+        self.assertEqual(today.json(), {"attendance": None, "state": "NO_EMPLOYEE"})
+
+        history = self.client.get("/api/employees/me/attendance/")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json(), {"attendance": None, "rows": [], "state": "NO_EMPLOYEE"})

@@ -180,8 +180,7 @@ class SalesReportListView(generics.ListAPIView):
         if not from_date or not to_date:
             raise ValidationError({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."})
 
-        start = f"{from_date.isoformat()} 00:00:00"
-        end = f"{to_date.isoformat()} 23:59:59.999999"
+        start, end = _range_to_datetimes(from_date, to_date)
         queryset = Payment.objects.select_related("order", "order__service_type", "order__invoice", "payment_method", "reporting_payment_method").filter(
             created_at__gte=start,
             created_at__lte=end,

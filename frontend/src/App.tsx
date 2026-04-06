@@ -34,7 +34,7 @@ const App = () => (
             <Route
               path="/"
               element={
-                <ProtectedRoute allowedRoles={["cashier", "admin", "manager", "worker"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager", "worker"]}>
                   <MainMenu />
                 </ProtectedRoute>
               }
@@ -76,7 +76,7 @@ const App = () => (
             <Route
               path="/registros/ventas"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager", "cashier"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager"]}>
                   <RegistrosVentas />
                 </ProtectedRoute>
               }
@@ -84,7 +84,7 @@ const App = () => (
             <Route
               path="/registros/caja"
               element={
-                <ProtectedRoute allowedRoles={["admin"]}>
+                <ProtectedRoute allowedRoles={["admin"]} deniedRedirectTo="/registros/ventas" deniedMessage="Acceso restringido">
                   <RegistrosCaja />
                 </ProtectedRoute>
               }
@@ -92,7 +92,7 @@ const App = () => (
             <Route
               path="/registros/reportes"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager", "cashier"]}>
+                <ProtectedRoute allowedRoles={["admin"]} deniedRedirectTo="/registros/ventas" deniedMessage="Acceso restringido">
                   <RegistrosReportes />
                 </ProtectedRoute>
               }

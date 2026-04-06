@@ -107,6 +107,10 @@ def _today_record_for_employee(employee: Employee) -> AttendanceRecord:
     record, _ = AttendanceRecord.objects.get_or_create(employee=employee, date=today)
     return record
 
+def _today_record_if_exists(employee: Employee) -> AttendanceRecord | None:
+    today = timezone.localdate()
+    return AttendanceRecord.objects.filter(employee=employee, date=today).first()
+
 
 class AttendanceTodayView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
@@ -114,10 +118,20 @@ class AttendanceTodayView(APIView):
     def get(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
-            return Response({"detail": "Empleado no asociado al usuario."}, status=status.HTTP_400_BAD_REQUEST)
-        record = _today_record_for_employee(employee)
+            return Response({"attendance": None, "state": "NO_EMPLOYEE"}, status=status.HTTP_200_OK)
+        record = _today_record_if_exists(employee)
+        if not record:
+            empty_record = AttendanceRecord(employee=employee, date=timezone.localdate())
+            payload = build_attendance_state(empty_record, employee)
+            return Response(
+                {
+                    "attendance": AttendanceStateSerializer(payload).data,
+                    "state": "NO_RECORD_TODAY",
+                },
+                status=status.HTTP_200_OK,
+            )
         payload = build_attendance_state(record, employee)
-        return Response(AttendanceStateSerializer(payload).data)
+        return Response({"attendance": AttendanceStateSerializer(payload).data, "state": "OK"}, status=status.HTTP_200_OK)
 
 
 class AttendanceActionView(APIView):
@@ -195,7 +209,7 @@ class AttendanceMeHistoryView(APIView):
     def get(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
-            return Response({"detail": "Empleado no asociado al usuario."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"attendance": None, "rows": [], "state": "NO_EMPLOYEE"}, status=status.HTTP_200_OK)
         start = parse_date(request.query_params.get("start") or "")
         end = parse_date(request.query_params.get("end") or "")
         queryset = AttendanceRecord.objects.filter(employee=employee).order_by("-date")
@@ -213,7 +227,14 @@ class AttendanceMeHistoryView(APIView):
             }
             for row in queryset[:200]
         ]
-        return Response(AttendanceHistoryRowSerializer(rows, many=True).data)
+        return Response(
+            {
+                "attendance": {"employee_id": employee.id},
+                "rows": AttendanceHistoryRowSerializer(rows, many=True).data,
+                "state": "OK",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AttendanceEmployeeHistoryView(APIView):

@@ -6,10 +6,12 @@ import { getLandingRouteForRole, isRouteAllowed } from "@/lib/roleAccess";
 
 interface ProtectedRouteProps {
   allowedRoles?: Array<"admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant">;
+  deniedRedirectTo?: string;
+  deniedMessage?: string;
   children: React.ReactElement;
 }
 
-export const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) => {
+export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage = "Sin permisos", children }: ProtectedRouteProps) => {
   const { user, loading } = useAuth();
   const location = useLocation();
   const warnedRef = useRef<string | null>(null);
@@ -23,7 +25,7 @@ export const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) 
     const key = `${user.role}:${location.pathname}`;
     if (warnedRef.current === key) return;
     warnedRef.current = key;
-    toast.error("Sin permisos");
+    toast.error(deniedMessage);
   }, [isBlocked, location.pathname, user]);
 
   if (loading) {
@@ -39,7 +41,7 @@ export const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) 
   }
 
   if (isBlocked) {
-    return <Navigate to={getLandingRouteForRole(user.role, user.isSuperuser)} replace />;
+    return <Navigate to={deniedRedirectTo || getLandingRouteForRole(user.role, user.isSuperuser)} replace />;
   }
 
   return children;

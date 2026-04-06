@@ -2838,7 +2838,21 @@ const mapAttendanceState = (data: {
 export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
   const response = await request("/employees/attendance/today/");
   const data = await handleJson<any>(response);
-  return mapAttendanceState(data);
+  if (data?.attendance) {
+    return mapAttendanceState(data.attendance);
+  }
+  return mapAttendanceState({
+    employee: { id: 0, name: "—", role: "worker" },
+    date: new Date().toISOString().slice(0, 10),
+    clock_in: null,
+    break_start: null,
+    break_end: null,
+    clock_out: null,
+    can_clock_in: false,
+    can_break_start: false,
+    can_break_end: false,
+    can_clock_out: false,
+  });
 };
 
 const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
@@ -2866,7 +2880,9 @@ export const getMyAttendanceHistory = async (filters?: { start?: string; end?: s
   if (filters?.start) params.set("start", filters.start);
   if (filters?.end) params.set("end", filters.end);
   const response = await request(`/employees/me/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
-  return mapAttendanceHistoryRows(await handleJson<any[]>(response));
+  const data = await handleJson<any>(response);
+  const rows = Array.isArray(data) ? data : (data?.rows ?? []);
+  return mapAttendanceHistoryRows(rows);
 };
 
 export const getEmployeeAttendanceHistory = async (employeeId: string | number, filters?: { start?: string; end?: string }) => {
