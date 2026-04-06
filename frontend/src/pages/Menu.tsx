@@ -14,7 +14,7 @@ const Menu = () => {
       maxWidthClassName="max-w-[1600px]"
       title="Menú y Descuentos"
       subtitle="Administra productos, modificadores y descuentos del sistema."
-      actions={<ClockSV showLabel={false} timeClassName="text-2xl sm:text-3xl" className="min-w-[220px]" />}
+      actions={<ClockSV timeClassName="text-2xl sm:text-3xl" className="min-w-[220px]" />}
     >
 
           <PageTabs

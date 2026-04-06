@@ -1649,7 +1649,7 @@ const POS = () => {
             <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-                  <ClockSV showLabel={false} className="px-3 py-2" timeClassName="text-base sm:text-lg" />
+                  <ClockSV className="px-3 py-2" timeClassName="text-base sm:text-lg" />
                   <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
                   <div className="flex items-center justify-end gap-2">
                     <TooltipProvider delayDuration={120}>
