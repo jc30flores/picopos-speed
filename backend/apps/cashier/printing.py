@@ -314,14 +314,36 @@ def print_ticket_text(text: str) -> tuple[bool, str | None]:
 
 
 def _fallback_pdf_bytes(text: str) -> bytes:
-    esc = text.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
-    content = f"BT /F1 10 Tf 40 760 Td ({esc.replace(chr(10), ') Tj T* (')}) Tj ET"
+    lines = text.splitlines() or [""]
+    font_size = 10
+    line_height = 14
+    left_margin = 40
+    top_margin = 32
+    bottom_margin = 32
+    page_width = 612
+    page_height = max(792, top_margin + bottom_margin + (len(lines) * line_height))
+    start_y = page_height - top_margin
+
+    escaped_lines = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
+    content_lines = [
+        "BT",
+        f"/F1 {font_size} Tf",
+        f"{line_height} TL",
+        f"{left_margin} {start_y} Td",
+    ]
+    for idx, line in enumerate(escaped_lines):
+        content_lines.append(f"({line}) Tj")
+        if idx < len(escaped_lines) - 1:
+            content_lines.append("T*")
+    content_lines.append("ET")
+    content = "\n".join(content_lines)
+    content_len = len(content.encode("latin-1", errors="ignore"))
     objects = []
     objects.append('1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj')
     objects.append('2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj')
-    objects.append('3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj')
-    objects.append(f'4 0 obj << /Length {len(content)} >> stream\n{content}\nendstream endobj')
-    objects.append('5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj')
+    objects.append(f'3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj')
+    objects.append(f'4 0 obj << /Length {content_len} >> stream\n{content}\nendstream endobj')
+    objects.append('5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj')
     pdf = '%PDF-1.4\n'
     offsets = []
     for obj in objects:

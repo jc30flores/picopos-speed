@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.cashier.models import CashSession, Register
-from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_ticket_pdf
+from apps.cashier.printing import _fallback_pdf_bytes, build_end_of_day_ticket, build_end_of_day_ticket_pdf
 from apps.core.models import Branch
 from apps.users.models import UserProfile
 
@@ -35,3 +35,11 @@ class CashierCloseoutPdfTests(TestCase):
         pdf_bytes = build_end_of_day_ticket_pdf(session.id)
         self.assertGreater(len(pdf_bytes), 100)
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_fallback_pdf_uses_text_leading_and_expands_media_box_for_long_reports(self):
+        long_text = "\n".join([f"Linea {idx:03d}" for idx in range(180)])
+        pdf_bytes = _fallback_pdf_bytes(long_text)
+        self.assertIn(b" TL", pdf_bytes)
+        self.assertIn(b"T*", pdf_bytes)
+        # 180 lines should force the dynamic page height above default Letter(792)
+        self.assertIn(b"/MediaBox [0 0 612 2584]", pdf_bytes)
