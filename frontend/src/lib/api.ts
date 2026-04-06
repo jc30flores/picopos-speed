@@ -2784,6 +2784,93 @@ export const updateAttendance = async (
   return handleJson(response);
 };
 
+export type AttendanceState = {
+  employee: { id: number; name: string; role: string };
+  date: string;
+  clockIn: string | null;
+  breakStart: string | null;
+  breakEnd: string | null;
+  clockOut: string | null;
+  canClockIn: boolean;
+  canBreakStart: boolean;
+  canBreakEnd: boolean;
+  canClockOut: boolean;
+};
+
+export type AttendanceHistoryRow = {
+  date: string;
+  clockIn: string | null;
+  breakStart: string | null;
+  breakEnd: string | null;
+  clockOut: string | null;
+};
+
+const mapAttendanceState = (data: {
+  employee: { id: number; name: string; role: string };
+  date: string;
+  clock_in: string | null;
+  break_start: string | null;
+  break_end: string | null;
+  clock_out: string | null;
+  can_clock_in: boolean;
+  can_break_start: boolean;
+  can_break_end: boolean;
+  can_clock_out: boolean;
+}): AttendanceState => ({
+  employee: data.employee,
+  date: data.date,
+  clockIn: data.clock_in,
+  breakStart: data.break_start,
+  breakEnd: data.break_end,
+  clockOut: data.clock_out,
+  canClockIn: data.can_clock_in,
+  canBreakStart: data.can_break_start,
+  canBreakEnd: data.can_break_end,
+  canClockOut: data.can_clock_out,
+});
+
+export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
+  const response = await request("/employees/attendance/today/");
+  const data = await handleJson<any>(response);
+  return mapAttendanceState(data);
+};
+
+const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
+  const response = await request(path, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return mapAttendanceState(data);
+};
+
+export const attendanceClockIn = async () => postAttendanceAction("/employees/attendance/clock-in/");
+export const attendanceBreakStart = async () => postAttendanceAction("/employees/attendance/break-start/");
+export const attendanceBreakEnd = async () => postAttendanceAction("/employees/attendance/break-end/");
+export const attendanceClockOut = async () => postAttendanceAction("/employees/attendance/clock-out/");
+
+const mapAttendanceHistoryRows = (rows: Array<any>): AttendanceHistoryRow[] =>
+  rows.map((row) => ({
+    date: row.date,
+    clockIn: row.clock_in,
+    breakStart: row.break_start,
+    breakEnd: row.break_end,
+    clockOut: row.clock_out,
+  }));
+
+export const getMyAttendanceHistory = async (filters?: { start?: string; end?: string }) => {
+  const params = new URLSearchParams();
+  if (filters?.start) params.set("start", filters.start);
+  if (filters?.end) params.set("end", filters.end);
+  const response = await request(`/employees/me/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  return mapAttendanceHistoryRows(await handleJson<any[]>(response));
+};
+
+export const getEmployeeAttendanceHistory = async (employeeId: string | number, filters?: { start?: string; end?: string }) => {
+  const params = new URLSearchParams();
+  if (filters?.start) params.set("start", filters.start);
+  if (filters?.end) params.set("end", filters.end);
+  const response = await request(`/employees/${employeeId}/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  return mapAttendanceHistoryRows(await handleJson<any[]>(response));
+};
+
 export const getSchedules = async (
   employeeId?: string
 ): Promise<Array<import("@/types/employee").Schedule & { employeeId: string; dayOfWeek: number }>> => {

@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Pencil, Power, Eye } from "lucide-react";
+import { KeyRound, Pencil, Power, Eye, Clock3 } from "lucide-react";
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
 
@@ -19,6 +19,7 @@ interface EmployeesTableProps {
   onToggleStatus: (employee: Employee) => void;
   onResetPassword: (employee: Employee, pin: string) => void;
   onViewProfile: (employee: Employee) => void;
+  onViewAttendance: (employee: Employee) => void;
 }
 
 export const EmployeesTable = ({
@@ -28,6 +29,7 @@ export const EmployeesTable = ({
   onToggleStatus,
   onResetPassword,
   onViewProfile,
+  onViewAttendance,
 }: EmployeesTableProps) => {
   const handleToggleStatus = (employee: Employee) => {
     const action = employee.status === "active" ? "desactivar" : "activar";
@@ -91,6 +93,15 @@ export const EmployeesTable = ({
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => onViewAttendance(employee)}
+                      title="Ver asistencia"
+                      className="h-10 w-10"
+                    >
+                      <Clock3 className="h-4 w-4" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

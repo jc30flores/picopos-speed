@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
 import { ClockSV } from "@/components/ClockSV";
+import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 
 const MainMenu = () => {
   const navigate = useNavigate();
@@ -44,6 +45,7 @@ const MainMenu = () => {
             <ClockSV className="bg-background/50" timeClassName="text-5xl sm:text-6xl" />
           </div>
         </div>
+        <AttendancePanel />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {cards.map((card) => (
             <Button key={card.path} className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm" onClick={() => navigate(card.path)}>
@@ -51,12 +53,12 @@ const MainMenu = () => {
               {card.label}
             </Button>
           ))}
-          <Button className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm" variant="outline" onClick={toggleTheme}>
+          <Button className="h-16 justify-start gap-3 rounded-xl px-4 text-base font-medium shadow-sm" variant="outline" onClick={toggleTheme}>
             {theme === "light" ? <Moon className="h-6 w-6" /> : <Sun className="h-6 w-6" />}
             Tema
           </Button>
           <Button
-            className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm"
+            className="h-16 justify-start gap-3 rounded-xl px-4 text-base font-medium shadow-sm"
             variant="destructive"
             onClick={async () => {
               await logout();

@@ -28,7 +28,7 @@ export const PinKeypad = ({
             key={key}
             type="button"
             variant={key === "C" ? "secondary" : "outline"}
-            className="h-14 text-xl active:scale-[0.98]"
+            className="h-16 text-2xl active:scale-[0.98]"
             disabled={disabled}
             onClick={() => {
               if (key === "C") onChange("");

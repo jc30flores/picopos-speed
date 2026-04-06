@@ -85,7 +85,7 @@ const Login = () => {
       <div className="w-full max-w-md space-y-4">
       <ClockSV className="mx-auto w-full max-w-sm bg-background/50" timeClassName="text-4xl sm:text-5xl" />
       <Card className="w-full max-w-md">
-        <CardHeader>
+        <CardHeader className="text-center">
           <CardTitle>{usePassword ? "Login administrador" : "Ingresa tu PIN"}</CardTitle>
         </CardHeader>
         <CardContent>
