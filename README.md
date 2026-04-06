@@ -143,7 +143,8 @@ python backend/manage.py repair_dte_outbox_emisor_nit --fix
 
 ### Ticket PDF paper size (`.env`)
 
-- Configura `PRINTER_SIZE=<mm>` para el ancho de papel térmico de los PDFs tipo ticket.
+- Configura `PRINTER_SIZE_MM=<mm>` para el ancho de papel térmico de los PDFs tipo ticket (valor recomendado).
+- `PRINTER_SIZE` se mantiene como alias legado para compatibilidad.
 - Acepta enteros o decimales (ejemplos: `80`, `75`, `100`).
 - Si el valor está vacío o es inválido, el backend usa `80` mm por defecto.
 

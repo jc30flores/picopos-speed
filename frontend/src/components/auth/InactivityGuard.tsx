@@ -14,6 +14,7 @@ export const InactivityGuard = () => {
   const inactivityTimerRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
   const handlingUnauthorizedRef = useRef(false);
+  const forceLogoutInFlightRef = useRef(false);
 
   const clearTimers = useCallback(() => {
     if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
@@ -23,6 +24,8 @@ export const InactivityGuard = () => {
   }, []);
 
   const forceLogout = useCallback(async () => {
+    if (forceLogoutInFlightRef.current) return;
+    forceLogoutInFlightRef.current = true;
     clearTimers();
     setCountdown(null);
     try {
@@ -31,8 +34,11 @@ export const InactivityGuard = () => {
       // ignore and continue
     }
     localStorage.removeItem("selected_branch_id");
-    navigate("/login", { replace: true });
-  }, [clearTimers, logout, navigate]);
+    if (location.pathname !== "/login") {
+      navigate("/login", { replace: true });
+    }
+    forceLogoutInFlightRef.current = false;
+  }, [clearTimers, location.pathname, logout, navigate]);
 
   const resetInactivityTimer = useCallback(() => {
     if (!user || location.pathname === "/login") return;
@@ -77,18 +83,19 @@ export const InactivityGuard = () => {
 
   useEffect(() => {
     const handleUnauthorized = () => {
-      if (location.pathname === "/login") return;
+      if (location.pathname === "/login" || !user) return;
       if (handlingUnauthorizedRef.current) return;
       handlingUnauthorizedRef.current = true;
       void forceLogout();
     };
     window.addEventListener("auth:unauthorized", handleUnauthorized);
     return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
-  }, [forceLogout, location.pathname]);
+  }, [forceLogout, location.pathname, user]);
 
   useEffect(() => {
     if (!user || location.pathname === "/login") {
       handlingUnauthorizedRef.current = false;
+      forceLogoutInFlightRef.current = false;
     }
   }, [location.pathname, user]);
 

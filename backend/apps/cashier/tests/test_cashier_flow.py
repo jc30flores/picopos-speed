@@ -91,7 +91,7 @@ class CashierFlowTests(TestCase):
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
-        self.assertEqual(pdf['Content-Disposition'], f'attachment; filename="cierre_caja_{session_id}.pdf"')
+        self.assertRegex(pdf['Content-Disposition'], r'attachment; filename=\"end_of_day_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}\\.pdf\"')
         self.assertIn(b"CIERRE DE CAJA", pdf.content)
         self.assertIn(b"ESPERADO", pdf.content)
         self.assertIn(b"CONTADO", pdf.content)

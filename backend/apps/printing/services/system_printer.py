@@ -123,7 +123,14 @@ class SystemPrinterService:
             return True, None
         return False, (result.stderr or result.stdout or "Cash drawer command failed").strip()
 
-    def generate_receipt_pdf(self, ticket_text: str, *, order_id: int, payment_id: int | None = None) -> tuple[str, str]:
+    def generate_receipt_pdf(
+        self,
+        ticket_text: str,
+        *,
+        order_id: int,
+        payment_id: int | None = None,
+        pdf_kwargs: dict | None = None,
+    ) -> tuple[str, str]:
         receipts_dir = Path(settings.MEDIA_ROOT) / "receipts"
         receipts_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -134,6 +141,7 @@ class SystemPrinterService:
             filename=filename,
             font_size=9.0,
             line_height=11.0,
+            **(pdf_kwargs or {}),
         )
         filepath.write_bytes(result.pdf_bytes)
 
@@ -147,6 +155,7 @@ class SystemPrinterService:
         *,
         order_id: int,
         payment_id: int | None = None,
+        pdf_kwargs: dict | None = None,
         context: dict | None = None,
         endpoint: str | None = None,
     ) -> dict:
@@ -158,6 +167,7 @@ class SystemPrinterService:
                 ticket_text,
                 order_id=order_id,
                 payment_id=payment_id,
+                pdf_kwargs=pdf_kwargs,
             )
             logger.warning(
                 "printer.print_failed_fallback_pdf timestamp=%s queue=%s order_id=%s payment_id=%s error=%s pdf_path=%s pdf_url=%s",

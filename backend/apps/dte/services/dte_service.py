@@ -232,6 +232,8 @@ def get_mh_payment_info(order) -> list[dict]:
         method_code = str(payment.payment_method.code if payment.payment_method_id else payment.method or "").strip()
         reference = (payment.reference or "").strip() or None
         code, label_es = get_cat017_code_and_label(payment)
+        if method_code.strip().lower().replace("-", "_") == "pedidos_ya" and code in {"02", "03"}:
+            logger.info("dte.payment_method_mapping pedidos_ya=>card code=%s payment_id=%s", code, getattr(payment, "id", None))
         if code == "99":
             reference = reference or label_es
             logger.warning("dte.payment_method_unknown method=%s payment_id=%s", method_code, getattr(payment, "id", None))

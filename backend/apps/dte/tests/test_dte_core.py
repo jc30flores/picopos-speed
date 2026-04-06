@@ -423,7 +423,7 @@ class DTECoreTests(TestCase):
         self.order.payments.all().delete()
         Payment.objects.create(order=self.order, method="transfer", payment_method=py_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
         code, _ = get_mh_payment_info(self.order)
-        self.assertEqual(code, "05")
+        self.assertEqual(code, "03")
         self.order.payments.all().delete()
         Payment.objects.create(order=self.order, method="transfer", payment_method=pp_method, amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
         code, _ = get_mh_payment_info(self.order)

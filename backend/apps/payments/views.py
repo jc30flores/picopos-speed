@@ -57,6 +57,12 @@ def _refund_is_cash(*, method: str, payment_method: PaymentMethod | None, origin
     return str(original_payment.method or "").strip().lower() == "cash"
 
 
+def _venta_pdf_filename(order, *, include_seconds: bool = False) -> str:
+    ts = timezone.localtime(timezone.now())
+    pattern = "%Y-%m-%d_%H-%M-%S" if include_seconds else "%Y-%m-%d_%H-%M"
+    return f'venta_{order.order_number}_{ts.strftime(pattern)}.pdf'
+
+
 def _get_open_session_for_branch(branch_id: int) -> CashSession | None:
     return (
         CashSession.objects.filter(register__branch_id=branch_id, status="open", closed_at__isnull=True)
@@ -545,6 +551,17 @@ class PaymentPrintTicketView(APIView):
                 payload.get("text", ""),
                 order_id=payment.order_id,
                 payment_id=payment.id,
+                pdf_kwargs={
+                    "logo_path": payload.get("meta", {}).get("logo_path"),
+                    "qr_value": payload.get("meta", {}).get("public_url"),
+                    "qr_title": "QR Hacienda",
+                    "center_lines": [
+                        payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
+                        payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
+                        payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
+                    ],
+                    "suppress_qr_url_lines": True,
+                },
                 context=context,
                 endpoint="payments.print-ticket",
             )
@@ -571,7 +588,7 @@ class PaymentPrintTicketView(APIView):
                 with open(print_result["receipt_pdf_path"], "rb") as fh:
                     pdf_bytes = fh.read()
                 response = HttpResponse(pdf_bytes, content_type="application/pdf")
-                response["Content-Disposition"] = f'attachment; filename="ticket_{payment.order_id}_{payment.id}.pdf"'
+                response["Content-Disposition"] = f'attachment; filename="{_venta_pdf_filename(payment.order)}"'
                 response["X-Printed"] = "0"
                 response["X-Print-Error"] = str(print_result["print_error"] or "")
                 response["X-Drawer-Opened"] = "1" if drawer_opened else "0"
@@ -606,8 +623,20 @@ class PaymentTicketPDFView(APIView):
         if not payment:
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
         payload = render_customer_ticket(payment.order)
-        filename = f"ticket_{payment.order_id}_{payment.id}.pdf"
-        result = build_receipt_pdf_from_text(text=payload.get("text", ""), filename=filename)
+        filename = _venta_pdf_filename(payment.order)
+        result = build_receipt_pdf_from_text(
+            text=payload.get("text", ""),
+            filename=filename,
+            logo_path=payload.get("meta", {}).get("logo_path"),
+            qr_value=payload.get("meta", {}).get("public_url"),
+            qr_title="QR Hacienda",
+            center_lines=[
+                payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
+                payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
+                payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
+            ],
+            suppress_qr_url_lines=True,
+        )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
         return response

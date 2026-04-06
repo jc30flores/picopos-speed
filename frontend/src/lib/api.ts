@@ -450,6 +450,14 @@ export type AuthUser = {
   redirectTo?: string;
 };
 
+type AuthPayload = AuthUser & {
+  is_superuser?: boolean;
+  is_staff?: boolean;
+  redirect_to?: string;
+  user?: Partial<AuthUser> & { is_superuser?: boolean; is_staff?: boolean };
+  profile?: { role?: AuthUser["role"]; redirect_to?: string; redirectTo?: string };
+};
+
 const buildApiUrl = (path: string) => {
   const base = API_BASE_URL.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -461,6 +469,25 @@ const authDebugLog = (...args: unknown[]) => {
   // eslint-disable-next-line no-console
   console.info("[auth-debug]", ...args);
 };
+
+export class ApiRequestError extends Error {
+  code?: string;
+  status?: number;
+  isNetworkError: boolean;
+
+  constructor(message: string, options?: { code?: string; status?: number; isNetworkError?: boolean }) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.code = options?.code;
+    this.status = options?.status;
+    this.isNetworkError = Boolean(options?.isNetworkError);
+  }
+}
+
+export const isNetworkApiError = (error: unknown): boolean => error instanceof ApiRequestError && error.isNetworkError;
+
+export const isApiStatusError = (error: unknown, statuses: number[]): boolean =>
+  error instanceof ApiRequestError && typeof error.status === "number" && statuses.includes(error.status);
 
 const getCsrfToken = () => {
   const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
@@ -507,7 +534,7 @@ const request = async (path: string, options: RequestInit = {}) => {
     });
   } catch (error) {
     authDebugLog("network_error", { path, method, error: error instanceof Error ? error.message : String(error) });
-    throw new Error("NETWORK_ERROR");
+    throw new ApiRequestError("NETWORK_ERROR", { code: "NETWORK_ERROR", isNetworkError: true });
   }
   const authBypassUnauthorizedEvent = new Set([
     "/auth/csrf",
@@ -527,26 +554,39 @@ const handleJson = async <T>(response: Response): Promise<T> => {
   const isJson = contentType.includes("application/json");
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error("Sesión expirada. Inicia sesión nuevamente.");
-    }
     if (isJson) {
       const errorPayload = await response.json().catch(() => null);
       const message =
         (errorPayload && (errorPayload.detail || errorPayload.error)) ||
         (errorPayload ? JSON.stringify(errorPayload) : "");
-      throw new Error(message || `Error del servidor (${response.status}). Revisa el backend.`);
+      throw new ApiRequestError(message || `Error del servidor (${response.status}). Revisa el backend.`, {
+        status: response.status,
+      });
     }
     await response.text().catch(() => "");
-    throw new Error(`Error del servidor (${response.status}). Revisa el backend.`);
+    throw new ApiRequestError(`Error del servidor (${response.status}). Revisa el backend.`, { status: response.status });
   }
 
   if (!isJson) {
     const text = await response.text();
-    throw new Error(text ? `Unexpected response: ${text.slice(0, 200)}` : "Unexpected response");
+    throw new ApiRequestError(text ? `Unexpected response: ${text.slice(0, 200)}` : "Unexpected response");
   }
 
   return response.json() as Promise<T>;
+};
+
+const normalizeAuthPayload = (raw: AuthPayload): AuthUser => {
+  const nestedUser = raw.user ?? {};
+  const nestedProfile = raw.profile ?? {};
+  return {
+    id: Number(raw.id ?? nestedUser.id ?? 0),
+    username: String(raw.username ?? nestedUser.username ?? ""),
+    email: String(raw.email ?? nestedUser.email ?? ""),
+    role: (raw.role ?? nestedProfile.role ?? "cashier") as AuthUser["role"],
+    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser ?? nestedUser.isSuperuser ?? nestedUser.is_superuser),
+    isStaff: Boolean(raw.isStaff ?? raw.is_staff ?? nestedUser.isStaff ?? nestedUser.is_staff),
+    redirectTo: (raw.redirectTo ?? raw.redirect_to ?? nestedProfile.redirectTo ?? nestedProfile.redirect_to) as string | undefined,
+  };
 };
 
 export const getCSRF = async (): Promise<void> => {
@@ -563,13 +603,10 @@ export const login = async (payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
-  return {
-    ...raw,
-    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
-    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
-    redirectTo: raw.redirectTo ?? raw.redirect_to,
-  };
+  const raw = await handleJson<AuthPayload>(response);
+  const normalized = normalizeAuthPayload(raw);
+  authDebugLog("login.response", { status: response.status, keys: Object.keys(raw ?? {}), username: normalized.username });
+  return normalized;
 };
 
 export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
@@ -582,20 +619,16 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
     const detail = body?.detail ? String(body.detail) : "";
-    if (response.status === 401) throw new Error("PIN_INVALID");
-    if (response.status === 409) throw new Error("PIN_DUPLICATE");
-    if (response.status === 429) throw new Error(detail || "PIN_THROTTLED");
-    if (response.status === 403) throw new Error("PIN_FORBIDDEN");
-    throw new Error(detail || `PIN_LOGIN_ERROR_${response.status}`);
+    if (response.status === 401) throw new ApiRequestError("PIN_INVALID", { code: "PIN_INVALID", status: response.status });
+    if (response.status === 409) throw new ApiRequestError("PIN_DUPLICATE", { code: "PIN_DUPLICATE", status: response.status });
+    if (response.status === 429) throw new ApiRequestError(detail || "PIN_THROTTLED", { code: "PIN_THROTTLED", status: response.status });
+    if (response.status === 403) throw new ApiRequestError("PIN_FORBIDDEN", { code: "PIN_FORBIDDEN", status: response.status });
+    throw new ApiRequestError(detail || `PIN_LOGIN_ERROR_${response.status}`, { status: response.status });
   }
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
+  const raw = await handleJson<AuthPayload>(response);
+  const normalized = normalizeAuthPayload(raw);
   authDebugLog("pin_login.payload_keys", Object.keys(raw ?? {}));
-  return {
-    ...raw,
-    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
-    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
-    redirectTo: raw.redirectTo ?? raw.redirect_to,
-  };
+  return normalized;
 };
 
 export const logout = async (): Promise<void> => {
@@ -608,14 +641,10 @@ export const logout = async (): Promise<void> => {
 
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
-  authDebugLog("me.response", { status: response.status, user: raw?.username, role: raw?.role });
-  return {
-    ...raw,
-    isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
-    isStaff: Boolean(raw.isStaff ?? raw.is_staff),
-    redirectTo: raw.redirectTo ?? raw.redirect_to,
-  };
+  const raw = await handleJson<AuthPayload>(response);
+  const normalized = normalizeAuthPayload(raw);
+  authDebugLog("me.response", { status: response.status, user: normalized?.username, role: normalized?.role, keys: Object.keys(raw ?? {}) });
+  return normalized;
 };
 
 export const verifyPrivilegedPin = async (pin: string): Promise<{ ok: boolean; role: "ADMIN" | "GERENTE"; userId: number }> => {
