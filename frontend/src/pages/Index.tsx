@@ -621,7 +621,13 @@ const POS = () => {
     setIsManualProductOpen(false);
   };
 
-  const canonicalDueCents = activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? checkoutDraft?.total ?? 0);
+  const canonicalDueCents = activeOrder
+    ? (
+      (activeOrder.remainingCents > 0 || activeOrder.remaining <= 0)
+        ? activeOrder.remainingCents
+        : toCents(activeOrder.remaining)
+    )
+    : toCents(checkoutDraft?.total ?? 0);
   const paymentTotal = canonicalDueCents / 100;
   const paymentStatus = activeOrder?.paymentStatus ?? "unpaid";
   const isPaid = paymentStatus === "paid";
@@ -1267,7 +1273,31 @@ const POS = () => {
           dteDocumentType,
           ivaExempt,
         });
-        setActiveOrder(updatedOrder);
+        setActiveOrder((previousOrder) => {
+          if (!previousOrder || previousOrder.id !== updatedOrder.id) return updatedOrder;
+          const fallbackRemaining = previousOrder.remaining > 0 ? previousOrder.remaining : 0;
+          const fallbackRemainingCents = previousOrder.remainingCents > 0 ? previousOrder.remainingCents : toCents(fallbackRemaining);
+          const nextRemaining = updatedOrder.remaining > 0 ? updatedOrder.remaining : fallbackRemaining;
+          const nextRemainingCents =
+            updatedOrder.remainingCents > 0 || nextRemaining <= 0
+              ? updatedOrder.remainingCents
+              : fallbackRemainingCents;
+          return {
+            ...previousOrder,
+            ...updatedOrder,
+            remaining: nextRemaining,
+            remainingCents: nextRemainingCents,
+            total: updatedOrder.total > 0 ? updatedOrder.total : previousOrder.total,
+            subtotalBeforeDiscounts:
+              (updatedOrder.subtotalBeforeDiscounts ?? 0) > 0
+                ? updatedOrder.subtotalBeforeDiscounts
+                : previousOrder.subtotalBeforeDiscounts,
+            totalPayable:
+              (updatedOrder.totalPayable ?? 0) > 0
+                ? updatedOrder.totalPayable
+                : previousOrder.totalPayable,
+          };
+        });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "No se pudo actualizar cliente en la orden");
         return;

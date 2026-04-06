@@ -1651,8 +1651,14 @@ const mapOrder = (order: {
     financialStatus: order.financial_status,
     totalPaid: Number(order.total_paid ?? 0),
     remaining: Number(order.remaining ?? 0),
-    amountDueCents: Number(order.amount_due_cents ?? 0),
-    remainingCents: Number(order.remaining_cents ?? 0),
+    amountDueCents:
+      order.amount_due_cents !== undefined && order.amount_due_cents !== null
+        ? Number(order.amount_due_cents)
+        : toCents(Number(order.total_payable ?? order.total ?? 0)),
+    remainingCents:
+      order.remaining_cents !== undefined && order.remaining_cents !== null
+        ? Number(order.remaining_cents)
+        : toCents(Number(order.remaining ?? 0)),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
