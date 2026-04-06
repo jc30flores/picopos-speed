@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ModifierGroup, Product, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
+import { useReorderableList } from "@/hooks/useReorderableList";
 
 interface ProductModifiersModalProps {
   open: boolean;
@@ -31,6 +32,7 @@ export const ProductModifiersModal = ({
   const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [assignedGroupVisibility, setAssignedGroupVisibility] = useState<Record<number, boolean>>({});
+  const groupOrder = useReorderableList(assignedGroups, (groupId) => groupId);
 
   useEffect(() => {
     if (!selectedProduct) {
@@ -126,22 +128,20 @@ export const ProductModifiersModal = ({
     }
   };
 
-  const handleDropGroup = async (targetGroupId: number) => {
-    if (!selectedProduct || draggingGroupId === null || draggingGroupId === targetGroupId) return;
-    const current = [...assignedGroups];
-    const from = current.indexOf(draggingGroupId);
-    const to = current.indexOf(targetGroupId);
-    if (from < 0 || to < 0) return;
-    current.splice(from, 1);
-    current.splice(to, 0, draggingGroupId);
-    const previous = [...assignedGroups];
-    setAssignedGroups(current);
+  const handleDragEnterGroup = (targetGroupId: number) => {
+    if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
+    groupOrder.moveById(draggingGroupId, targetGroupId);
+  };
+
+  const handleSaveOrder = async () => {
+    if (!selectedProduct || isSavingOrder || !groupOrder.isDirty) return;
     setIsSavingOrder(true);
     try {
-      await reorderProductModifierGroups(selectedProduct.id, current);
+      await reorderProductModifierGroups(selectedProduct.id, groupOrder.currentItems);
+      groupOrder.markSaved();
       await onUpdated(selectedProduct.id);
+      toast.success("Orden guardado");
     } catch {
-      setAssignedGroups(previous);
       toast.error("No se pudo guardar el orden");
     } finally {
       setIsSavingOrder(false);
@@ -149,16 +149,9 @@ export const ProductModifiersModal = ({
     }
   };
 
-  const handleDragEnterGroup = (targetGroupId: number) => {
-    if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
-    const current = [...assignedGroups];
-    const from = current.indexOf(draggingGroupId);
-    const to = current.indexOf(targetGroupId);
-    if (from < 0 || to < 0) return;
-    current.splice(from, 1);
-    current.splice(to, 0, draggingGroupId);
-    setAssignedGroups(current);
-  };
+  useEffect(() => {
+    setAssignedGroups(groupOrder.currentItems);
+  }, [groupOrder.currentItems]);
 
   return (
     <>
@@ -202,7 +195,7 @@ export const ProductModifiersModal = ({
                         className={`flex items-center justify-between gap-2 rounded-lg border p-3 transition-all ${draggingGroupId === group.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                         onDragOver={(event) => event.preventDefault()}
                         onDragEnter={() => handleDragEnterGroup(group.id)}
-                        onDrop={() => handleDropGroup(group.id)}
+                        onDrop={() => setDraggingGroupId(null)}
                       >
                         <button
                           type="button"
@@ -234,6 +227,16 @@ export const ProductModifiersModal = ({
                         </Button>
                       </div>
                     ))}
+                  </div>
+                )}
+                {groupOrder.isDirty && (
+                  <div className="flex items-center justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={groupOrder.reset} disabled={isSavingOrder}>
+                      Deshacer cambios
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>
+                      {isSavingOrder ? "Guardando..." : "Guardar orden"}
+                    </Button>
                   </div>
                 )}
               </Card>

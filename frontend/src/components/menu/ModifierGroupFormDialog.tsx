@@ -17,6 +17,7 @@ import {
   uploadModifierOptionImage,
 } from "@/lib/api";
 import { toast } from "sonner";
+import { useReorderableList } from "@/hooks/useReorderableList";
 
 interface ModifierOption {
   id: string;
@@ -56,6 +57,7 @@ export const ModifierGroupFormDialog = ({
   const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const optionReorder = useReorderableList(options, (option) => option.id);
 
   useEffect(() => {
     if (editingGroup) {
@@ -174,39 +176,30 @@ export const ModifierGroupFormDialog = ({
     }
   };
 
-  const handleDropOption = async (targetOptionId: string) => {
+  const handleDragEnterOption = (targetOptionId: string) => {
     if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
-    const current = [...options];
-    const from = current.findIndex((opt) => opt.id === draggingOptionId);
-    const to = current.findIndex((opt) => opt.id === targetOptionId);
-    if (from < 0 || to < 0) return;
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-    const previous = [...options];
-    setOptions(current);
-    if (!editingGroup) return;
-    const orderedIds = current.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
+    optionReorder.moveById(draggingOptionId, targetOptionId);
+  };
+
+  const handleSaveOrder = async () => {
+    if (!editingGroup || isSavingOrder || !optionReorder.isDirty) return;
+    const orderedIds = optionReorder.currentItems.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
     setIsSavingOrder(true);
     try {
       await reorderModifierGroupOptions(editingGroup.id, orderedIds);
+      optionReorder.markSaved();
+      toast.success("Orden guardado");
     } catch {
-      setOptions(previous);
+      toast.error("No se pudo guardar el orden");
     } finally {
       setIsSavingOrder(false);
       setDraggingOptionId(null);
     }
   };
 
-  const handleDragEnterOption = (targetOptionId: string) => {
-    if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
-    const current = [...options];
-    const from = current.findIndex((opt) => opt.id === draggingOptionId);
-    const to = current.findIndex((opt) => opt.id === targetOptionId);
-    if (from < 0 || to < 0) return;
-    const [moved] = current.splice(from, 1);
-    current.splice(to, 0, moved);
-    setOptions(current);
-  };
+  useEffect(() => {
+    setOptions(optionReorder.currentItems);
+  }, [optionReorder.currentItems]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -257,13 +250,13 @@ export const ModifierGroupFormDialog = ({
               <div className="rounded-lg border py-8 text-center text-muted-foreground">No hay opciones. Agrega al menos una opción.</div>
             ) : (
               <div className="space-y-3">
-                {options.map((option) => (
+                {optionReorder.currentItems.map((option) => (
                   <Card
                     key={option.id}
                     className={`p-4 transition-all ${draggingOptionId === option.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
                     onDragOver={(event) => event.preventDefault()}
                     onDragEnter={() => handleDragEnterOption(option.id)}
-                    onDrop={() => handleDropOption(option.id)}
+                    onDrop={() => setDraggingOptionId(null)}
                   >
                     <div className="flex gap-3">
                       <button
@@ -313,6 +306,16 @@ export const ModifierGroupFormDialog = ({
                     </div>
                   </Card>
                 ))}
+              </div>
+            )}
+            {editingGroup && optionReorder.isDirty && (
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={optionReorder.reset} disabled={isSavingOrder}>
+                  Deshacer cambios
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>
+                  {isSavingOrder ? "Guardando..." : "Guardar orden"}
+                </Button>
               </div>
             )}
           </div>

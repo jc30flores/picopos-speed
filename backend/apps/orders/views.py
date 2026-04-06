@@ -101,8 +101,13 @@ class OrderDetailView(generics.RetrieveUpdateAPIView):
         return OrderSerializer
 
     def patch(self, request, *args, **kwargs):
-        response = super().patch(request, *args, **kwargs)
-        order = self.get_object()
+        partial = kwargs.pop("partial", True)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        order = serializer.instance
+        output = OrderSerializer(order, context={"request": request}).data
         log_audit(
             request,
             "order.customer.update",
@@ -110,7 +115,7 @@ class OrderDetailView(generics.RetrieveUpdateAPIView):
             order.id,
             {"customer_id": order.customer_id, "dte_document_type": order.dte_document_type},
         )
-        return response
+        return Response(output, status=status.HTTP_200_OK)
 
 
 class ActiveOrderListView(generics.ListAPIView):

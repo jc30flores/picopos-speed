@@ -208,8 +208,8 @@ class ProductListCreateView(generics.ListCreateAPIView):
 class ProductReorderView(APIView):
     permission_classes = [IsAdminOrManager]
 
-    def post(self, request):
-        ordered_ids = request.data.get("ordered_ids") or []
+    def _handle(self, request):
+        ordered_ids = request.data.get("ordered_ids", request.data.get("orderedIds")) or []
         category_id = request.data.get("category_id")
 
         if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
@@ -231,7 +231,21 @@ class ProductReorderView(APIView):
                 products_by_id[product_id].sort_order = index
             Product.objects.bulk_update(products_by_id.values(), ["sort_order"])
 
-        return Response({"ok": True}, status=status.HTTP_200_OK)
+        serialized = ProductSerializer(
+            Product.objects.filter(id__in=ordered_ids).order_by("sort_order", "id"),
+            many=True,
+            context={"request": request},
+        )
+        return Response(serialized.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        return self._handle(request)
+
+    def patch(self, request):
+        return self._handle(request)
+
+    def put(self, request):
+        return self._handle(request)
 
 
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
