@@ -401,6 +401,30 @@ export type SalesReportAggregates = {
   };
 };
 
+export type ReportsGranularity = "hours" | "week" | "month" | "year";
+export type ReportsComparisonMode = "none" | "previous_period" | "previous_year";
+
+export type SalesTimeseriesPoint = {
+  bucket: string;
+  currentTotal: number;
+  comparisonTotal: number;
+};
+
+export type SalesTimeseriesResponse = {
+  points: SalesTimeseriesPoint[];
+  current: { totalSales: number; transactions: number; avgTicket: number };
+  comparison?: { totalSales: number; transactions: number; avgTicket: number } | null;
+};
+
+export type SalesBreakdownDimension = "category" | "product" | "service_type" | "payment_method" | "modifier";
+export type SalesBreakdownRow = {
+  key: string;
+  label: string;
+  total: number;
+  percentage: number;
+  transactions: number;
+};
+
 export type Refund = {
   id: number;
   orderId: number;
@@ -2076,6 +2100,126 @@ export const getSalesReport = async (filters?: {
       },
     },
   };
+};
+
+const bucketDate = (date: Date, granularity: ReportsGranularity): string => {
+  if (granularity === "hours") return date.getHours().toString().padStart(2, "0") + ":00";
+  if (granularity === "week") {
+    const day = date.toLocaleDateString("es-SV", { weekday: "short" });
+    return day.charAt(0).toUpperCase() + day.slice(1);
+  }
+  if (granularity === "month") return `${date.getDate().toString().padStart(2, "0")}/${(date.getMonth() + 1).toString().padStart(2, "0")}`;
+  return date.toLocaleDateString("es-SV", { month: "short", year: "2-digit" });
+};
+
+const buildSeries = (rows: SalesReportRow[], granularity: ReportsGranularity): Map<string, { total: number; tx: number }> => {
+  const map = new Map<string, { total: number; tx: number }>();
+  for (const row of rows) {
+    const bucket = bucketDate(row.createdAt, granularity);
+    const current = map.get(bucket) ?? { total: 0, tx: 0 };
+    current.total += row.total;
+    current.tx += 1;
+    map.set(bucket, current);
+  }
+  return map;
+};
+
+export const getSalesTimeseries = async (filters: {
+  dateFrom: string;
+  dateTo: string;
+  granularity: ReportsGranularity;
+  compareWith?: ReportsComparisonMode;
+  compareDateFrom?: string;
+  compareDateTo?: string;
+}): Promise<SalesTimeseriesResponse> => {
+  const params = new URLSearchParams({
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    granularity: filters.granularity,
+    compare_with: filters.compareWith ?? "none",
+  });
+  if (filters.compareDateFrom) params.set("compare_date_from", filters.compareDateFrom);
+  if (filters.compareDateTo) params.set("compare_date_to", filters.compareDateTo);
+
+  const response = await request(`/reports/sales-timeseries/?${params.toString()}`);
+  if (response.ok) {
+    return handleJson<SalesTimeseriesResponse>(response);
+  }
+
+  const currentReport = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  const comparisonReport =
+    filters.compareWith && filters.compareWith !== "none" && filters.compareDateFrom && filters.compareDateTo
+      ? await getSalesReport({ dateFrom: filters.compareDateFrom, dateTo: filters.compareDateTo })
+      : null;
+
+  const currentSeries = buildSeries(currentReport.rows, filters.granularity);
+  const comparisonSeries = comparisonReport ? buildSeries(comparisonReport.rows, filters.granularity) : new Map<string, { total: number; tx: number }>();
+  const keys = Array.from(new Set([...currentSeries.keys(), ...comparisonSeries.keys()]));
+  const points = keys.map((bucket) => ({
+    bucket,
+    currentTotal: currentSeries.get(bucket)?.total ?? 0,
+    comparisonTotal: comparisonSeries.get(bucket)?.total ?? 0,
+  }));
+  return {
+    points,
+    current: {
+      totalSales: currentReport.aggregates.netTotal || currentReport.aggregates.sumTotal,
+      transactions: currentReport.aggregates.countOrders,
+      avgTicket: currentReport.aggregates.countOrders > 0 ? (currentReport.aggregates.netTotal || currentReport.aggregates.sumTotal) / currentReport.aggregates.countOrders : 0,
+    },
+    comparison: comparisonReport
+      ? {
+          totalSales: comparisonReport.aggregates.netTotal || comparisonReport.aggregates.sumTotal,
+          transactions: comparisonReport.aggregates.countOrders,
+          avgTicket:
+            comparisonReport.aggregates.countOrders > 0
+              ? (comparisonReport.aggregates.netTotal || comparisonReport.aggregates.sumTotal) / comparisonReport.aggregates.countOrders
+              : 0,
+        }
+      : null,
+  };
+};
+
+export const getSalesBreakdown = async (filters: {
+  dateFrom: string;
+  dateTo: string;
+  dimension: SalesBreakdownDimension;
+}): Promise<SalesBreakdownRow[]> => {
+  const params = new URLSearchParams({
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    dimension: filters.dimension,
+  });
+  const response = await request(`/reports/sales-breakdown/?${params.toString()}`);
+  if (response.ok) {
+    return handleJson<SalesBreakdownRow[]>(response);
+  }
+
+  const report = await getSalesReport({ dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  const total = report.aggregates.netTotal || report.aggregates.sumTotal || 0;
+  const grouped = new Map<string, SalesBreakdownRow>();
+  for (const row of report.rows) {
+    const key =
+      filters.dimension === "payment_method"
+        ? row.paymentMethodCode || "unknown"
+        : filters.dimension === "service_type"
+          ? row.serviceType || "unknown"
+          : "n/a";
+    const label =
+      filters.dimension === "payment_method"
+        ? row.paymentMethodLabel || "Desconocido"
+        : filters.dimension === "service_type"
+          ? row.serviceTypeLabel || String(row.serviceType || "Desconocido")
+          : "Disponible con endpoint de agregación";
+    const current = grouped.get(key) ?? { key, label, total: 0, percentage: 0, transactions: 0 };
+    current.total += row.total;
+    current.transactions += 1;
+    grouped.set(key, current);
+  }
+  return Array.from(grouped.values())
+    .map((entry) => ({ ...entry, percentage: total > 0 ? (entry.total / total) * 100 : 0 }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
 };
 
 export const changeInternalPaymentMethod = async (

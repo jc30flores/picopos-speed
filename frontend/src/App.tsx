@@ -11,6 +11,7 @@ import CustomerDisplay from "./pages/CustomerDisplay";
 import Menu from "./pages/Menu";
 import RegistrosVentas from "./pages/RegistrosVentas";
 import RegistrosCaja from "./pages/RegistrosCaja";
+import RegistrosReportes from "./pages/RegistrosReportes";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
@@ -83,6 +84,14 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["admin"]}>
                   <RegistrosCaja />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/registros/reportes"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "manager", "cashier"]}>
+                  <RegistrosReportes />
                 </ProtectedRoute>
               }
             />

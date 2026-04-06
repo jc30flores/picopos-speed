@@ -41,9 +41,9 @@ export const filterModulesForUser = (user: Pick<AuthUser, "role" | "isSuperuser"
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/pos", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/dte", "/settings"],
-  manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas"],
-  cashier: ["/", "/pos", "/registros/ventas"],
+  admin: ["/", "/pos", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
+  manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas", "/registros/reportes"],
+  cashier: ["/", "/pos", "/registros/ventas", "/registros/reportes"],
   kitchen: ["/kitchen"],
   accountant: ["/"],
 };
@@ -77,7 +77,8 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
 export const canAccessPath = (role: AppRole, path: string, isSuperuser = false) => {
   if (isSuperuser) return true;
   if (path.startsWith("/registros")) {
-    return allowedRoutesByRole[role].includes("/registros/ventas") && (path === "/registros/ventas" || (role === "admin" && path === "/registros/caja"));
+    if (path === "/registros/caja") return role === "admin";
+    return allowedRoutesByRole[role].includes(path);
   }
   return allowedRoutesByRole[role].some((allowed) => path === allowed || path.startsWith(`${allowed}/`));
 };
