@@ -6,6 +6,7 @@ from io import BytesIO
 from math import floor
 from pathlib import Path
 from textwrap import wrap
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 
@@ -295,5 +296,194 @@ def build_receipt_pdf(
 
 
 def build_receipt_pdf_from_text(*, text: str, filename: str, **kwargs) -> ReceiptPdfResult:
+    receipt_context = kwargs.pop("receipt_context", None)
+    if receipt_context:
+        return build_sale_receipt_pdf(
+            receipt_context=receipt_context,
+            filename=filename,
+            logo_path=kwargs.get("logo_path"),
+            qr_value=kwargs.get("qr_value"),
+            page_width_mm=kwargs.get("page_width_mm"),
+        )
     lines = sanitize_receipt_text(text).split("\n")
     return build_receipt_pdf(lines=lines, filename=filename, **kwargs)
+
+
+def _money(value: Decimal | str | float | int) -> Decimal:
+    return Decimal(str(value or "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _brand_name(ctx: dict) -> str:
+    raw = str(ctx.get("tagline") or ctx.get("restaurant_name") or "Pico de Gallo").strip()
+    if raw.lower().startswith("pico de gallo"):
+        return "Pico de Gallo"
+    return raw or "Pico de Gallo"
+
+
+def build_sale_receipt_pdf(
+    *,
+    receipt_context: dict,
+    filename: str,
+    logo_path: str | None = None,
+    qr_value: str | None = None,
+    page_width_mm: float | None = None,
+) -> ReceiptPdfResult:
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfgen import canvas
+
+    font_name = _register_mono_font()
+    width_mm = page_width_mm if page_width_mm is not None else get_printer_size_mm()
+    page_width_pt = mm_to_points(width_mm)
+    margin_x = mm_to_points(3.0)
+    margin_y = mm_to_points(3.0)
+    content_width = max(1.0, page_width_pt - margin_x * 2)
+    general_size = 8.2
+    item_size = 9.1
+    leading = 9.9
+    item_leading = 11.0
+
+    logo_reader = None
+    logo_w = logo_h = 0.0
+    candidate = Path(logo_path or "")
+    if candidate.exists():
+        try:
+            logo_reader = ImageReader(str(candidate))
+            img_w, img_h = logo_reader.getSize()
+            if img_w and img_h:
+                logo_w = min(content_width * 0.78, mm_to_points(60))
+                logo_h = logo_w * float(img_h) / float(img_w)
+        except Exception:
+            logo_reader = None
+
+    qr_reader = None
+    qr_size = min(content_width * 0.60, mm_to_points(31))
+    if qr_value:
+        try:
+            import qrcode
+
+            qr_img = qrcode.make(sanitize_receipt_text(str(qr_value)))
+            qr_reader = ImageReader(qr_img)
+        except Exception:
+            qr_reader = None
+
+    totals = receipt_context.get("totals") or {}
+    total = _money(totals.get("total") or 0)
+    subtotal = _money(totals.get("subtotal") or (total / Decimal("1.13")))
+    iva = _money(totals.get("iva") or (total - subtotal))
+    if subtotal + iva != total:
+        iva = _money(total - subtotal)
+
+    dte = receipt_context.get("dte") or {}
+    address_lines = wrap(str(receipt_context.get("address") or ""), width=max(18, int((content_width / max(pdfmetrics.stringWidth("0", font_name, general_size), 1))))) or []
+    center_lines = [
+        _brand_name(receipt_context),
+        *address_lines,
+        "DATOS DTE",
+        f"No. Control: {dte.get('numero_control') or '-'}",
+        f"Codigo Gen: {dte.get('codigo_generacion') or '-'}",
+        f"Fecha DTE: {dte.get('fecha_dte') or '-'}",
+    ]
+    center_lines = [line for line in center_lines if str(line).strip()]
+
+    items = receipt_context.get("items") or []
+    cols = max(30, int(content_width / max(pdfmetrics.stringWidth("0", font_name, item_size), 1)))
+    col_qty, col_unit, col_total = 4, 9, 9
+    col_desc = max(10, cols - col_qty - col_unit - col_total - 3)
+    item_lines = [f"{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'P.UNIT':>{col_unit}} {'TOTAL':>{col_total}}"]
+    for row in items:
+        qty = str(row.get("qty", ""))
+        name = str(row.get("name", ""))
+        unit = f"${_money(row.get('unit_price')):.2f}"
+        line_total = f"${_money(row.get('line_total')):.2f}"
+        parts = wrap(name, width=col_desc, break_long_words=True, break_on_hyphens=False) or [""]
+        item_lines.append(f"{qty[:col_qty]:<{col_qty}} {parts[0]:<{col_desc}} {unit:>{col_unit}} {line_total:>{col_total}}")
+        for extra in parts[1:]:
+            item_lines.append(f"{'':<{col_qty}} {extra:<{col_desc}} {'':>{col_unit}} {'':>{col_total}}")
+
+    details_lines = [
+        receipt_context.get("service_type_label") or "",
+        f"Atendido por: {receipt_context.get('cashier_name') or '-'}",
+        f"Orden #{receipt_context.get('order_number') or '-'}",
+        (receipt_context.get("order_datetime").strftime("%Y-%m-%d %H:%M") if receipt_context.get("order_datetime") else ""),
+    ]
+    details_lines = [line for line in details_lines if line]
+    payment = receipt_context.get("payment") or {}
+    payment_lines = [
+        f"Metodo de pago: {payment.get('method_label_es') or '-'}",
+        f"Monto pagado: ${_money(payment.get('amount_paid') or 0):.2f}",
+    ]
+    if payment.get("reference"):
+        payment_lines.append(f"Referencia: {payment.get('reference')}")
+    if _money(payment.get("change_due") or 0) > 0:
+        payment_lines.append(f"Cambio: ${_money(payment.get('change_due')):.2f}")
+
+    height_pt = max(
+        mm_to_points(120),
+        margin_y
+        + logo_h
+        + (len(center_lines) * leading)
+        + (qr_size + leading if qr_reader else 0)
+        + (len(details_lines) * leading)
+        + (len(item_lines) * item_leading)
+        + (8 * leading)
+        + margin_y
+        + mm_to_points(8),
+    )
+    stream = BytesIO()
+    pdf = canvas.Canvas(stream, pagesize=(page_width_pt, height_pt), pageCompression=0)
+    y = height_pt - margin_y
+
+    if logo_reader and logo_w > 0 and logo_h > 0:
+        y -= logo_h
+        pdf.drawImage(logo_reader, (page_width_pt - logo_w) / 2.0, y, width=logo_w, height=logo_h, preserveAspectRatio=True, mask="auto")
+        y -= leading * 0.4
+
+    pdf.setFont(font_name, general_size)
+    for line in center_lines:
+        y -= leading
+        tw = pdfmetrics.stringWidth(line, font_name, general_size)
+        pdf.drawString(max(margin_x, (page_width_pt - tw) / 2.0), y, line)
+
+    if qr_reader:
+        y -= leading * 0.4
+        y -= qr_size
+        pdf.drawImage(qr_reader, (page_width_pt - qr_size) / 2.0, y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
+        y -= leading * 0.5
+
+    def hr() -> None:
+        nonlocal y
+        y -= leading * 0.55
+        pdf.setLineWidth(0.7)
+        pdf.line(margin_x, y, page_width_pt - margin_x, y)
+        y -= leading * 0.35
+
+    hr()
+    for line in details_lines:
+        y -= leading
+        tw = pdfmetrics.stringWidth(line, font_name, general_size)
+        pdf.drawString(max(margin_x, (page_width_pt - tw) / 2.0), y, line)
+    hr()
+    pdf.setFont(font_name, item_size)
+    for line in item_lines:
+        y -= item_leading
+        pdf.drawString(margin_x, y, line)
+    pdf.setFont(font_name, general_size)
+    hr()
+    for label, amount in [("Subtotal", subtotal), ("IVA", iva), ("Total", total)]:
+        text = f"{label}:"
+        value = f"${amount:.2f}"
+        space = int(cols - len(text) - len(value) - 1)
+        pdf.drawString(margin_x, y - leading, (f"{text}{' ' * max(1, space)} {value}")[: max(1, cols)])
+        y -= leading
+    hr()
+    for line in payment_lines:
+        y -= leading
+        pdf.drawString(margin_x, y, line)
+    hr()
+    footer = "Gracias por su visita"
+    y -= leading
+    tw = pdfmetrics.stringWidth(footer, font_name, general_size)
+    pdf.drawString(max(margin_x, (page_width_pt - tw) / 2.0), y, footer)
+    pdf.save()
+    return ReceiptPdfResult(pdf_bytes=stream.getvalue(), filename=filename)

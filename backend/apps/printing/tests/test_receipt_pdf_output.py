@@ -36,6 +36,8 @@ class ReceiptPdfOutputTests(SimpleTestCase):
         self.assertIn("IVA", text)
         self.assertIn("TOTAL", text)
         self.assertNotIn("CONSULTAPUBLICA", text)
+        self.assertNotIn("<<CENTER>>", text)
+        self.assertNotIn("<<ITEM>>", text)
 
         resources = reader.pages[0].get("/Resources", {})
         xobjects = resources.get("/XObject", {}) if resources else {}

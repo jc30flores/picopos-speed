@@ -28,10 +28,6 @@ def _center(text: str) -> str:
     return raw.center(width)
 
 
-def _pdf_center(text: str) -> str:
-    return f"<<CENTER>>{text}"
-
-
 def _format_money(value: Decimal) -> str:
     normalized = Decimal(str(value or "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return f"${normalized:.2f}"
@@ -253,19 +249,18 @@ def render_customer_ticket(order: Order) -> dict:
         ]
     )
 
-    lines: list[str] = []
+    lines: list[str] = [_center(line) for line in center_lines]
     lines.append(_divider())
-    lines.append(_pdf_center(ctx["service_type_label"]))
-    lines.append(_pdf_center(f"Atendido por: {ctx['cashier_name']}"))
-    lines.append(_pdf_center(f"Orden #{ctx['order_number']}"))
-    lines.append(_pdf_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
+    lines.append(_center(ctx["service_type_label"]))
+    lines.append(_center(f"Atendido por: {ctx['cashier_name']}"))
+    lines.append(_center(f"Orden #{ctx['order_number']}"))
+    lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
     lines.append(_divider())
-    lines.append(f"<<ITEM>>{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'P.UNIT':>{col_unit}} {'TOTAL':>{col_total}}")
+    lines.append(f"{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'P.UNIT':>{col_unit}} {'TOTAL':>{col_total}}")
     lines.append(_divider())
     for item in ctx["items"]:
-        lines.extend([
-            f"<<ITEM>>{row}"
-            for row in _format_item_row(
+        lines.extend(
+            _format_item_row(
                 qty=item["qty"],
                 desc=item["name"],
                 unit=Decimal(str(item["unit_price"])),
@@ -275,7 +270,7 @@ def render_customer_ticket(order: Order) -> dict:
                 col_unit=col_unit,
                 col_total=col_total,
             )
-        ])
+        )
 
     lines.append(_divider())
     lines.append(_format_right_label_value("Subtotal", _format_money(ctx["totals"]["subtotal"])))
@@ -291,7 +286,7 @@ def render_customer_ticket(order: Order) -> dict:
     if ctx["payment"]["change_due"] > 0:
         lines.append(_line(f"Cambio: {_format_money(ctx['payment']['change_due'])}"))
     lines.append(_divider())
-    lines.append(_pdf_center("Gracias por su visita"))
+    lines.append(_center("Gracias por su visita"))
 
     text = "\n".join(lines)
     items_html = "".join(

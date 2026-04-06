@@ -554,7 +554,7 @@ class PaymentPrintTicketView(APIView):
                 pdf_kwargs={
                     "logo_path": payload.get("meta", {}).get("logo_path"),
                     "qr_value": payload.get("meta", {}).get("public_url"),
-                    "center_lines": payload.get("meta", {}).get("pdf_center_lines") or [],
+                    "receipt_context": payload.get("meta", {}).get("receipt_context"),
                     "suppress_qr_url_lines": True,
                 },
                 context=context,
@@ -624,7 +624,7 @@ class PaymentTicketPDFView(APIView):
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
             qr_value=payload.get("meta", {}).get("public_url"),
-            center_lines=payload.get("meta", {}).get("pdf_center_lines") or [],
+            receipt_context=payload.get("meta", {}).get("receipt_context"),
             suppress_qr_url_lines=True,
         )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")

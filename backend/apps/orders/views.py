@@ -23,7 +23,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.printing.services.renderers import render_customer_ticket
 from apps.payments.models import Payment
-from apps.printing.receipt_pdf import build_receipt_pdf
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
@@ -305,12 +305,12 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         order = self.get_object()
         payload = render_customer_ticket(order)
         filename = f"venta_{order.order_number}_{timezone.localtime(timezone.now()).strftime('%Y-%m-%d_%H-%M')}.pdf"
-        result = build_receipt_pdf(
-            lines=payload.get("text", "").split("\n"),
+        result = build_receipt_pdf_from_text(
+            text=payload.get("text", ""),
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
             qr_value=payload.get("meta", {}).get("public_url"),
-            center_lines=payload.get("meta", {}).get("pdf_center_lines") or [],
+            receipt_context=payload.get("meta", {}).get("receipt_context"),
             suppress_qr_url_lines=True,
         )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")

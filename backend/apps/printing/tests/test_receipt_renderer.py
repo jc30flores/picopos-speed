@@ -41,7 +41,8 @@ class ReceiptRendererTests(SimpleTestCase):
             payload = render_customer_ticket(order)
 
         self.assertIn("Gracias por su visita", payload["text"])
-        self.assertIn("<<CENTER>>DATOS DTE", payload["text"])
+        self.assertIn("DATOS DTE", payload["text"])
+        self.assertNotIn("<<CENTER>>", payload["text"])
         self.assertNotIn("consultaPublica", payload["text"])
         self.assertFalse(payload["meta"]["logo_exists"])
         self.assertEqual(payload["meta"]["pdf_center_lines"][0], "Pico de Gallo")
