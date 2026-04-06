@@ -20,9 +20,11 @@ import { AttendanceRecordsModal } from "@/components/attendance/AttendanceRecord
 const ROLE_OPTIONS = [
   { value: "all", label: "Todos" },
   { value: "cashier", label: "Cajero" },
-  { value: "kitchen", label: "Cocinero" },
+  { value: "kitchen", label: "Cocina" },
   { value: "manager", label: "Gerente" },
   { value: "admin", label: "Administrador" },
+  { value: "kiosk", label: "Kiosk" },
+  { value: "worker", label: "Worker" },
 ];
 
 export const EmployeesTab = () => {

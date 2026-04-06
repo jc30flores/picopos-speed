@@ -24,6 +24,7 @@ class PinAuthTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["username"], "cashier1")
+        self.assertEqual(payload["redirect_to"], "/")
 
     def test_pin_login_invalid_format_returns_400(self):
         response = self.client.post("/api/auth/pin-login/", {"pin": "12ab"}, format="json")
@@ -89,3 +90,11 @@ class AdminPasswordLoginPinFormatTests(TestCase):
     def test_login_accepts_6_digit_password(self):
         response = self.client.post("/api/auth/login/", {"username": "admin1", "password": "654321"}, format="json")
         self.assertEqual(response.status_code, 200)
+
+    def test_pin_login_returns_role_landing_redirect(self):
+        user_model = get_user_model()
+        kitchen = user_model.objects.create_user(username="kitchen1", password="112233", is_active=True)
+        UserProfile.objects.create(user=kitchen, role="kitchen", is_active=True)
+        response = self.client.post("/api/auth/pin-login/", {"pin": "112233"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get("redirect_to"), "/kitchen")

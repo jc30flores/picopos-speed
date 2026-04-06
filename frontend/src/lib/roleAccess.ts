@@ -19,9 +19,11 @@ export type AppModuleConfig = {
   requiredRoles: AppRole[];
 };
 
+export type RoleAccessUser = Pick<AuthUser, "role" | "isSuperuser"> | null;
+
 export const appModules: AppModuleConfig[] = [
   { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
-  { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin"] },
+  { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin", "kiosk"] },
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
   { key: "menu_discounts", label: "MENÚ & DESCUENTOS", path: "/menu", requiredRoles: ["admin", "manager"] },
@@ -31,13 +33,13 @@ export const appModules: AppModuleConfig[] = [
   { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin"] },
 ];
 
-export const canAccessModule = (user: Pick<AuthUser, "role" | "isSuperuser"> | null, module: AppModuleConfig) => {
+export const canAccessModule = (user: RoleAccessUser, module: AppModuleConfig) => {
   if (!user) return false;
   if (user.isSuperuser) return true;
   return module.requiredRoles.includes(user.role);
 };
 
-export const filterModulesForUser = (user: Pick<AuthUser, "role" | "isSuperuser"> | null, modules: AppModuleConfig[] = appModules) =>
+export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleConfig[] = appModules) =>
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
@@ -45,6 +47,8 @@ export const allowedRoutesByRole: Record<AppRole, string[]> = {
   manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas", "/registros/reportes"],
   cashier: ["/", "/pos", "/registros/ventas", "/registros/reportes"],
   kitchen: ["/kitchen"],
+  kiosk: ["/kiosk"],
+  worker: ["/"],
   accountant: ["/"],
 };
 
@@ -71,10 +75,27 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
     { label: "Registros", path: "/registros/ventas" },
   ],
   kitchen: [{ label: "Cocina", path: "/kitchen" }],
+  kiosk: [{ label: "Kiosk", path: "/kiosk" }],
+  worker: [{ label: "Centro de Control", path: "/" }],
   accountant: [{ label: "POS", path: "/" }],
 };
 
-export const canAccessPath = (role: AppRole, path: string, isSuperuser = false) => {
+const landingRouteByRole: Record<AppRole, string> = {
+  admin: "/",
+  manager: "/",
+  cashier: "/",
+  kitchen: "/kitchen",
+  kiosk: "/kiosk",
+  worker: "/",
+  accountant: "/",
+};
+
+export const getLandingRouteForRole = (role: AppRole, isSuperuser = false) => {
+  if (isSuperuser) return "/";
+  return landingRouteByRole[role] ?? "/";
+};
+
+export const isRouteAllowed = (role: AppRole, path: string, isSuperuser = false) => {
   if (isSuperuser) return true;
   if (path.startsWith("/registros")) {
     if (path === "/registros/caja") return role === "admin";
@@ -82,3 +103,5 @@ export const canAccessPath = (role: AppRole, path: string, isSuperuser = false) 
   }
   return allowedRoutesByRole[role].some((allowed) => path === allowed || path.startsWith(`${allowed}/`));
 };
+
+export const canAccessPath = isRouteAllowed;

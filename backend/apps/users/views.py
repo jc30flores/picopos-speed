@@ -13,12 +13,31 @@ from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_fo
 logger = logging.getLogger(__name__)
 
 
+ROLE_LANDING_ROUTE = {
+    "kitchen": "/kitchen",
+    "kiosk": "/kiosk",
+    "worker": "/",
+}
+
+
 def _get_or_create_profile(user):
     profile, _ = UserProfile.objects.get_or_create(
         user=user,
         defaults={"role": "admin" if user.is_superuser else "cashier", "is_active": True},
     )
     return profile
+
+
+def _build_auth_payload(user, role: str):
+    return {
+        "id": user.id,
+        "username": user.get_username(),
+        "email": user.email,
+        "role": role,
+        "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),
+        "is_superuser": bool(user.is_superuser),
+        "is_staff": bool(user.is_staff),
+    }
 
 
 @api_view(["GET"])
@@ -61,16 +80,7 @@ def login_view(request):
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
 
         login(request, user)
-        return Response(
-            {
-                "id": user.id,
-                "username": user.get_username(),
-                "email": user.email,
-                "role": profile.role,
-                "is_superuser": bool(user.is_superuser),
-                "is_staff": bool(user.is_staff),
-            }
-        )
+        return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.login.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -114,16 +124,7 @@ def pin_login_view(request):
 
         cache.delete(throttle_key)
         login(request, user)
-        return Response(
-            {
-                "id": user.id,
-                "username": user.get_username(),
-                "email": user.email,
-                "role": profile.role,
-                "is_superuser": bool(user.is_superuser),
-                "is_staff": bool(user.is_staff),
-            }
-        )
+        return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.pin_login.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -147,16 +148,7 @@ def me_view(request):
         profile = _get_or_create_profile(request.user)
         if not profile.is_active:
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
-        return Response(
-            {
-                "id": request.user.id,
-                "username": request.user.get_username(),
-                "email": request.user.email,
-                "role": profile.role,
-                "is_superuser": bool(request.user.is_superuser),
-                "is_staff": bool(request.user.is_staff),
-            }
-        )
+        return Response(_build_auth_payload(request.user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.me.failed")
         return Response({"detail": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

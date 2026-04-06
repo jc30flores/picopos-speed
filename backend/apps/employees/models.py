@@ -6,9 +6,11 @@ from apps.core.models import Branch
 class Employee(models.Model):
     ROLE_CHOICES = [
         ("cashier", "Cashier"),
-        ("kitchen", "Kitchen"),
+        ("kitchen", "Cocina"),
         ("manager", "Manager"),
         ("admin", "Admin"),
+        ("kiosk", "Kiosk"),
+        ("worker", "Worker"),
     ]
     STATUS_CHOICES = [
         ("active", "Active"),

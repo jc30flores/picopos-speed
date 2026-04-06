@@ -8,6 +8,7 @@ import { useAuth } from "@/context/useAuth";
 import { toast } from "sonner";
 import { PinKeypad } from "@/components/auth/PinKeypad";
 import { ClockSV } from "@/components/ClockSV";
+import { getLandingRouteForRole } from "@/lib/roleAccess";
 
 const PIN_LENGTH = 6;
 
@@ -32,9 +33,9 @@ const Login = () => {
     }
     setLoading(true);
     try {
-      await loginWithPin({ pin: value });
+      const session = await loginWithPin({ pin: value });
       toast.success("Sesión iniciada");
-      navigate("/");
+      navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.includes("duplicado")) {
@@ -70,9 +71,9 @@ const Login = () => {
 
     setLoading(true);
     try {
-      await login({ identifier, password: numericPassword });
+      const session = await login({ identifier, password: numericPassword });
       toast.success("Sesión iniciada");
-      navigate("/");
+      navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch {
       toast.error("Credenciales inválidas");
     } finally {

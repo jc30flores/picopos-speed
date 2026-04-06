@@ -443,9 +443,10 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "admin" | "manager" | "cashier" | "kitchen" | "accountant";
+  role: "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant";
   isSuperuser: boolean;
   isStaff: boolean;
+  redirectTo?: string;
 };
 
 const buildApiUrl = (path: string) => {
@@ -527,11 +528,12 @@ export const login = async (payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
@@ -540,11 +542,12 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
@@ -558,11 +561,12 @@ export const logout = async (): Promise<void> => {
 
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
-  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean }>(response);
+  const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff),
+    redirectTo: raw.redirectTo ?? raw.redirect_to,
   };
 };
 
@@ -2452,9 +2456,11 @@ export const deleteDiscount = async (discountId: number): Promise<void> => {
 
 const ROLE_LABELS: Record<string, string> = {
   cashier: "Cajero",
-  kitchen: "Cocinero",
+  kitchen: "Cocina",
   manager: "Gerente",
   admin: "Administrador",
+  kiosk: "Kiosk",
+  worker: "Worker",
 };
 
 const ROLE_KEYS: Record<string, string> = Object.entries(ROLE_LABELS).reduce(
