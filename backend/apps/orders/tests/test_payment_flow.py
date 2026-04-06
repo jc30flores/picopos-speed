@@ -192,5 +192,10 @@ class OrderPaymentFlowTests(TestCase):
         payment_id = payment_response.json()["id"]
         pdf_response = self.client.get(f"/api/payments/{payment_id}/ticket.pdf", HTTP_ACCEPT="text/html")
         self.assertEqual(pdf_response.status_code, 200)
+        self.assertRegex(
+            pdf_response["Content-Disposition"],
+            r'attachment; filename="venta_104_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}\\.pdf"',
+        )
         width = self._extract_media_box_width(pdf_response.content)
         self.assertAlmostEqual(width, 80 * 72 / 25.4, delta=1.0)
+        self.assertLess(width, 400.0)

@@ -2,6 +2,7 @@ from decimal import Decimal
 import logging
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+from django.utils import timezone
 from rest_framework import generics
 from rest_framework.views import APIView
 from django.http import HttpResponse
@@ -20,11 +21,8 @@ from apps.core.permissions import (
 )
 from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
+from apps.printing.services.renderers import render_customer_ticket
 from apps.payments.models import Payment
-from apps.dte.models import DTERecord
-from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
-from apps.dte.services.payment_methods import get_cat017_code_and_label
-from apps.core.branch_profile import get_branch_profile
 from apps.printing.receipt_pdf import build_receipt_pdf
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -305,60 +303,21 @@ class OrderReceiptPDFView(generics.GenericAPIView):
 
     def get(self, request, *args, **kwargs):
         order = self.get_object()
-        main_payment = order.payments.select_related("payment_method").order_by("-id").first()
-        payment_id = getattr(main_payment, "id", None)
-        filename = f"ticket_{order.id}_{payment_id or 'na'}.pdf"
-        record = DTERecord.objects.filter(order=order).order_by("-id").first()
-        snapshot = getattr(getattr(order, "invoice", None), "sale_snapshot", {}) or {}
-        snapshot_items = snapshot.get("items") if isinstance(snapshot, dict) else None
-        branch_profile = get_branch_profile(getattr(order, "branch_id", None))
-        _, payment_label = get_cat017_code_and_label(main_payment)
-        lines = [
-            branch_profile.get("emisor_nombre", "Pico de Gallo"),
-            f"Sucursal: {branch_profile.get('branch_name') or getattr(order.branch, 'name', '-')}",
-            f"Dirección: {branch_profile.get('direccion_complemento') or '(Dirección no configurada)'}",
-            "",
-            "Recibo de Venta",
-            f"Orden: {order.order_number}",
-            f"Fecha: {order.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Cliente: {order.customer_name or getattr(getattr(order, 'customer', None), 'name', 'Consumidor Final')}",
-            "",
-            "Items",
-        ]
-        if isinstance(snapshot_items, list) and snapshot_items:
-            for item in snapshot_items:
-                lines.append(f"- {item.get('quantity', 0)} x {item.get('name', '')}  ${item.get('unit_price', '0.00')}")
-                for mod in item.get("modifiers", []) or []:
-                    lines.append(f"  Extra: {mod.get('name', '')}  ${mod.get('price', '0.00')}")
-        else:
-            for item in order.items.all().prefetch_related("applied_modifiers"):
-                lines.append(f"- {item.quantity} x {item.product_name_snapshot}  ${item.effective_unit_price}")
-                for mod in item.applied_modifiers.all():
-                    lines.append(f"  Extra: {mod.modifier_name_snapshot}  ${mod.modifier_price_snapshot}")
-        lines += [
-            "",
-            f"Desechables: ${order.disposable_total}",
-            f"Subtotal: ${order.subtotal}",
-            f"Impuestos: ${order.tax}",
-            f"Descuentos: ${order.discount_total}",
-            f"Total: ${order.total}",
-            f"Método pago: {payment_label}",
-            "",
-            "Datos DTE",
-            f"No. Control: {record.control_number if record else '-'}",
-            f"Codigo generacion: {record.codigo_generacion if record else '-'}",
-            f"Sello/UUID: {(record.sello_recepcion or record.hacienda_uuid) if record else '-'}",
-            f"Estado DTE: {record.status if record else '-'}",
-        ]
-        if record:
-            ident = ((record.request_payload or {}).get("dte") or {}).get("identificacion") or {}
-            fecha_dte = ident.get("fecEmi") or ""
-            lines += [
-                f"Fecha DTE: {fecha_dte or '-'}",
-                f"Consulta publica: {build_hacienda_consulta_publica_url(fecha_dte, record.codigo_generacion)}",
-            ]
-
-        result = build_receipt_pdf(lines=lines, filename=filename)
+        payload = render_customer_ticket(order)
+        filename = f"venta_{order.order_number}_{timezone.localtime(timezone.now()).strftime('%Y-%m-%d_%H-%M')}.pdf"
+        result = build_receipt_pdf(
+            lines=payload.get("text", "").split("\n"),
+            filename=filename,
+            logo_path=payload.get("meta", {}).get("logo_path"),
+            qr_value=payload.get("meta", {}).get("public_url"),
+            qr_title="QR Hacienda",
+            center_lines=[
+                payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
+                payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
+                payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
+            ],
+            suppress_qr_url_lines=True,
+        )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
         return response

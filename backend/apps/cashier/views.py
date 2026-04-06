@@ -366,8 +366,9 @@ class CashSessionTicketPDFView(APIView):
         if not session:
             return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
         pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        ts = timezone.localtime(session.closed_at or timezone.now()).strftime("%Y-%m-%d_%H-%M-%S")
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="cierre_caja_{pk}.pdf"'
+        response["Content-Disposition"] = f'attachment; filename="end_of_day_{ts}.pdf"'
         return response
 
 
