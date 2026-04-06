@@ -33,6 +33,13 @@ class RolePathAccessMiddlewareTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json().get("detail"), "Sin permisos")
 
+    def test_worker_can_hit_auth_me_and_logout_without_trailing_slash(self):
+        self._login_worker()
+        me = self.client.get("/api/auth/me")
+        self.assertEqual(me.status_code, 200)
+        logout = self.client.post("/api/auth/logout")
+        self.assertEqual(logout.status_code, 204)
+
     def test_cashier_is_blocked_from_reports_api(self):
         self.client.post("/api/auth/login/", {"username": "cashier1", "password": "123456"}, format="json")
         response = self.client.get("/api/reports/sales-timeseries/?start=2026-01-01&end=2026-01-01")

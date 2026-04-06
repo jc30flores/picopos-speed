@@ -11,5 +11,7 @@ urlpatterns = [
     path("verify-privileged-pin/", views.verify_privileged_pin_view, name="auth-verify-privileged-pin"),
     path("authorize-price-change/", views.authorize_price_change_view, name="auth-authorize-price-change"),
     path("logout/", views.logout_view, name="auth-logout"),
+    path("logout", views.logout_view),
     path("me/", views.me_view, name="auth-me"),
+    path("me", views.me_view),
 ]

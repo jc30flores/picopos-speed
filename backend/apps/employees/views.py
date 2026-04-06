@@ -142,7 +142,10 @@ class AttendanceActionView(APIView):
     def post(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
-            return Response({"detail": "Empleado no asociado al usuario."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Empleado no asociado al usuario.", "state": "NO_EMPLOYEE"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         today = timezone.localdate()
         record, _ = AttendanceRecord.objects.select_for_update().get_or_create(employee=employee, date=today)
         now = timezone.now()

@@ -54,3 +54,7 @@ class AttendanceMarkingTests(TestCase):
         history = self.client.get("/api/employees/me/attendance/")
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.json(), {"attendance": None, "rows": [], "state": "NO_EMPLOYEE"})
+
+        clock_in = self.client.post("/api/employees/attendance/clock-in/")
+        self.assertEqual(clock_in.status_code, 404)
+        self.assertEqual(clock_in.json().get("state"), "NO_EMPLOYEE")

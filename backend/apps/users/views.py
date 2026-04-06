@@ -5,7 +5,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from apps.users.models import UserProfile
 from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format, user_matches_pin
@@ -139,6 +139,7 @@ def pin_login_view(request):
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def logout_view(request):
     try:
         logout(request)
@@ -149,6 +150,7 @@ def logout_view(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def me_view(request):
     try:
         if not request.user.is_authenticated:
