@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getCSRF, login as loginRequest, pinLogin, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
+import { ApiRequestError, getCSRF, login as loginRequest, pinLogin, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
 import { AuthContext } from "./authContext";
+
+const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
+
+const authDebugLog = (...args: unknown[]) => {
+  if (!AUTH_DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.info("[auth-debug]", ...args);
+};
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -10,7 +18,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       const current = await me();
       setUser(current);
-    } catch {
+    } catch (error) {
+      authDebugLog("bootstrap.me.failed", error instanceof Error ? error.message : String(error));
       setUser(null);
     } finally {
       setLoading(false);
@@ -34,12 +43,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const loginWithPin = useCallback(async ({ pin }: { pin: string }) => {
     await getCSRF();
-    await pinLogin({ pin });
+    const pinResponse = await pinLogin({ pin });
+    authDebugLog("loginWithPin.pinLogin.ok", {
+      user: pinResponse.username,
+      role: pinResponse.role,
+    });
     try {
       const verified = await me();
+      authDebugLog("loginWithPin.me.ok", { user: verified.username, role: verified.role, redirectTo: verified.redirectTo });
       setUser(verified);
       return verified;
-    } catch {
+    } catch (error) {
+      authDebugLog("loginWithPin.me.failed", error instanceof Error ? error.message : String(error));
+      if (error instanceof ApiRequestError) {
+        throw new ApiRequestError("SESSION_VERIFY_FAILED", {
+          code: "SESSION_VERIFY_FAILED",
+          status: error.status,
+          isNetworkError: error.isNetworkError,
+        });
+      }
       throw new Error("SESSION_VERIFY_FAILED");
     }
   }, []);

@@ -51,6 +51,12 @@ def _env_list(name: str, default: list[str] | None = None) -> list[str]:
         return list(default or [])
     return [item.strip() for item in value.split(",") if item.strip()]
 
+def _env_str(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip() or default
+
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
@@ -175,7 +181,13 @@ _default_cors_allowed_origins = [
     "http://127.0.0.1:8182",
     "https://pico-de-gallo-pos.cuskatech.com",
 ]
-CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_default_cors_allowed_origins + _env_list("CORS_ALLOWED_ORIGINS")))
+CORS_ALLOWED_ORIGINS = list(
+    dict.fromkeys(
+        _default_cors_allowed_origins
+        + _env_list("CORS_ALLOWED_ORIGINS")
+        + _env_list("CORS_ALLOWED_ORIGINS_EXTRA")
+    )
+)
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -185,7 +197,13 @@ _default_csrf_trusted_origins = [
     "http://localhost:9102",
     "https://pico-de-gallo-pos.cuskatech.com",
 ]
-CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(_default_csrf_trusted_origins + _env_list("CSRF_TRUSTED_ORIGINS")))
+CSRF_TRUSTED_ORIGINS = list(
+    dict.fromkeys(
+        _default_csrf_trusted_origins
+        + _env_list("CSRF_TRUSTED_ORIGINS")
+        + _env_list("CSRF_TRUSTED_ORIGINS_EXTRA")
+    )
+)
 
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -193,8 +211,8 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=not DEBUG)
 CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE", default=not DEBUG)
 
-SESSION_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SAMESITE = _env_str("SESSION_COOKIE_SAMESITE", "Lax")
+CSRF_COOKIE_SAMESITE = _env_str("CSRF_COOKIE_SAMESITE", "Lax")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 

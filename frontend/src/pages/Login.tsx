@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { PinKeypad } from "@/components/auth/PinKeypad";
 import { ClockSV } from "@/components/ClockSV";
 import { getLandingRouteForRole } from "@/lib/roleAccess";
+import { isApiStatusError, isNetworkApiError } from "@/lib/api";
 
 const PIN_LENGTH = 6;
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
@@ -51,7 +52,11 @@ const Login = () => {
         toast.error("Demasiados intentos, espera 30 segundos");
       } else if (message.includes("SESSION_VERIFY_FAILED")) {
         toast.error("No se pudo verificar sesión. Intenta nuevamente.");
-      } else if (message.includes("NETWORK_ERROR")) {
+      } else if (isApiStatusError(error, [401])) {
+        toast.error("PIN incorrecto.");
+      } else if (isApiStatusError(error, [403])) {
+        toast.error("Error de sesión/seguridad. Recarga e intenta de nuevo.");
+      } else if (isNetworkApiError(error) || message.includes("NETWORK_ERROR")) {
         toast.error("Error de conexión. Reintenta.");
       } else if (message.includes("PIN_FORBIDDEN") || message.includes("csrf")) {
         toast.error("Error de sesión/seguridad. Recarga e intenta de nuevo.");
