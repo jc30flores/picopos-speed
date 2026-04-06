@@ -25,7 +25,7 @@ class Cat017MappingTests(SimpleTestCase):
         self.assertEqual(get_cat017_code_and_label(P("card_debit")), ("02", "Tarjeta Débito"))
         self.assertEqual(get_cat017_code_and_label(P("card_credit")), ("03", "Tarjeta Crédito"))
         self.assertEqual(get_cat017_code_and_label(P("transfer")), ("05", "Transferencia"))
-        self.assertEqual(get_cat017_code_and_label(P("pedidosya")), ("05", "Pedidos Ya (Transferencia)"))
+        self.assertEqual(get_cat017_code_and_label(P("pedidosya")), ("03", "Pedidos Ya (Tarjeta Crédito)"))
         self.assertEqual(get_cat017_code_and_label(P("paypal")), ("05", "PayPal (Transferencia)"))
 
     def test_maps_unknown_to_99_with_other_label(self):

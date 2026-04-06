@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -227,11 +227,13 @@ const POS = () => {
     title: string;
     message: string;
     onDownload: null | (() => Promise<void>);
+    shouldHardReloadAfterClose: boolean;
   }>({
     open: false,
     title: "",
     message: "",
     onDownload: null,
+    shouldHardReloadAfterClose: false,
   });
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
@@ -241,6 +243,7 @@ const POS = () => {
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
+  const hardReloadTriggeredRef = useRef(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
     items: CartItem[];
     subtotal: number;
@@ -949,6 +952,27 @@ const POS = () => {
   }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
 
   useEffect(() => {
+    if (!isPaymentMethodOpen) return;
+    const isPedidosYa = isPedidosYaOrderType(serviceType);
+    if (isPedidosYa) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[pos-debug] auto_payment_method", { serviceType, method: "pedidos_ya" });
+      }
+      setPaymentMethod("transfer");
+      setSelectedPaymentMethodCode("pedidos_ya");
+      setCardType(null);
+      setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
+      return;
+    }
+    if (selectedPaymentMethodCode === "pedidos_ya") {
+      setPaymentMethod("cash");
+      setSelectedPaymentMethodCode("cash");
+      setCardType(null);
+    }
+  }, [expectedPaymentCents, isPaymentMethodOpen, selectedPaymentMethodCode, serviceType]);
+
+  useEffect(() => {
     if (!isPaymentOpen || !checkoutDraft) return;
     if (parts.length === 0) {
       const initialParts = splitEvenly(checkoutTotalCents, 1);
@@ -1006,6 +1030,7 @@ const POS = () => {
             if (!closeResp.sessionId) throw new Error("No se encontró la sesión cerrada.");
             await downloadCashSessionTicketPdf(closeResp.sessionId);
           },
+          shouldHardReloadAfterClose: false,
         });
         toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
@@ -1142,6 +1167,27 @@ const POS = () => {
     }, 250);
   };
 
+  const hardReloadPos = useCallback((reason: string) => {
+    if (hardReloadTriggeredRef.current) return;
+    hardReloadTriggeredRef.current = true;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[pos-debug] hard_reload", { reason });
+    }
+    window.location.reload();
+  }, []);
+
+  const normalizeOrderTypeKey = (value: string | null | undefined) =>
+    String(value || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "_");
+
+  const isPedidosYaOrderType = (value: string | null | undefined) => {
+    const normalized = normalizeOrderTypeKey(value);
+    return normalized === "PEDIDOS_YA" || normalized === "PEDIDOSYA" || normalized === "DELIVERY";
+  };
+
   const triggerPdfDownload = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -1173,34 +1219,37 @@ const POS = () => {
       if (lastPaymentId && postSalePrintChoice) {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (printResult.pdfBlob) {
-          setFallbackPdfModal({
-            open: true,
-            title: "Ticket de venta",
-            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-            onDownload: async () => {
-              triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
-            },
-          });
+        setFallbackPdfModal({
+          open: true,
+          title: "Ticket de venta",
+          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+          onDownload: async () => {
+            triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
+          },
+          shouldHardReloadAfterClose: true,
+        });
           toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.receiptPdfUrl) {
-          setFallbackPdfModal({
-            open: true,
-            title: "Ticket de venta",
-            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-            onDownload: async () => {
-              await downloadPaymentTicketPdf(lastPaymentId);
-            },
-          });
+        setFallbackPdfModal({
+          open: true,
+          title: "Ticket de venta",
+          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+          onDownload: async () => {
+            await downloadPaymentTicketPdf(lastPaymentId);
+          },
+          shouldHardReloadAfterClose: true,
+        });
           toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.printError) {
-          setFallbackPdfModal({
-            open: true,
-            title: "Ticket de venta",
-            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-            onDownload: async () => {
-              await downloadPaymentTicketPdf(lastPaymentId);
-            },
-          });
+        setFallbackPdfModal({
+          open: true,
+          title: "Ticket de venta",
+          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+          onDownload: async () => {
+            await downloadPaymentTicketPdf(lastPaymentId);
+          },
+          shouldHardReloadAfterClose: true,
+        });
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
         if (printResult.drawerError) {
@@ -1722,7 +1771,7 @@ const POS = () => {
                             title="Refrescar"
                             aria-label="Refrescar"
                             className="h-11 w-11 rounded-xl"
-                            onClick={() => scheduleReload()}
+                            onClick={() => hardReloadPos("toolbar_refresh")}
                           >
                             <RefreshCw className="h-5 w-5" />
                           </Button>
@@ -2609,12 +2658,15 @@ const POS = () => {
 
       <Dialog
         open={fallbackPdfModal.open}
-        onOpenChange={(open) =>
+        onOpenChange={(open) => {
           setFallbackPdfModal((prev) => ({
             ...prev,
             open,
-          }))
-        }
+          }));
+          if (!open && fallbackPdfModal.shouldHardReloadAfterClose) {
+            hardReloadPos("fallback_modal_closed");
+          }
+        }}
       >
         <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
           <DialogHeader>
@@ -2628,7 +2680,17 @@ const POS = () => {
               onClick={() => {
                 if (!fallbackPdfModal.onDownload) return;
                 void fallbackPdfModal.onDownload()
-                  .then(() => setFallbackPdfModal((prev) => ({ ...prev, open: false })))
+                  .then(() => {
+                    if (import.meta.env.DEV) {
+                      // eslint-disable-next-line no-console
+                      console.info("[pos-debug] fallback_pdf_download.completed");
+                    }
+                    if (fallbackPdfModal.shouldHardReloadAfterClose) {
+                      hardReloadPos("fallback_pdf_download");
+                      return;
+                    }
+                    setFallbackPdfModal((prev) => ({ ...prev, open: false }));
+                  })
                   .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo descargar PDF"));
               }}
             >
@@ -2638,7 +2700,13 @@ const POS = () => {
               type="button"
               variant="outline"
               className="h-12"
-              onClick={() => setFallbackPdfModal((prev) => ({ ...prev, open: false }))}
+              onClick={() => {
+                if (fallbackPdfModal.shouldHardReloadAfterClose) {
+                  hardReloadPos("fallback_pdf_close");
+                  return;
+                }
+                setFallbackPdfModal((prev) => ({ ...prev, open: false }));
+              }}
             >
               Cerrar
             </Button>

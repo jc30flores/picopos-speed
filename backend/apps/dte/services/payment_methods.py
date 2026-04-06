@@ -31,7 +31,9 @@ def get_cat017_code_and_label(payment) -> tuple[str, str]:
         return "05", "Transferencia"
 
     if raw_lower in {"pedidosya", "pedidos_ya"} or normalized_code in {"pedidosya"}:
-        return "05", "Pedidos Ya (Transferencia)"
+        # Hacienda CAT-017 does not include Pedidos Ya as a dedicated method.
+        # We map it to card to avoid sending it as transfer.
+        return "03", "Pedidos Ya (Tarjeta Crédito)"
 
     if raw_lower == "paypal" or normalized_code == "paypal":
         return "05", "PayPal (Transferencia)"
