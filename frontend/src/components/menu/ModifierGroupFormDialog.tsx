@@ -17,7 +17,6 @@ import {
   uploadModifierOptionImage,
 } from "@/lib/api";
 import { toast } from "sonner";
-import { useReorderableList } from "@/hooks/useReorderableList";
 
 interface ModifierOption {
   id: string;
@@ -54,10 +53,10 @@ export const ModifierGroupFormDialog = ({
   const [groupImage, setGroupImage] = useState("");
   const [groupImageFile, setGroupImageFile] = useState<File | null>(null);
   const [options, setOptions] = useState<ModifierOption[]>([]);
+  const [baselineOptionOrder, setBaselineOptionOrder] = useState<string[]>([]);
   const [draggingOptionId, setDraggingOptionId] = useState<string | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const optionReorder = useReorderableList(options, (option) => option.id);
 
   useEffect(() => {
     if (editingGroup) {
@@ -77,6 +76,7 @@ export const ModifierGroupFormDialog = ({
           imageFile: null,
         }))
       );
+      setBaselineOptionOrder(editingGroup.modifiers.map((m) => String(m.id)));
     } else {
       setName("");
       setRequired(false);
@@ -85,8 +85,11 @@ export const ModifierGroupFormDialog = ({
       setGroupImage("");
       setGroupImageFile(null);
       setOptions([]);
+      setBaselineOptionOrder([]);
     }
   }, [editingGroup, open]);
+
+  const isOrderDirty = baselineOptionOrder.join("|") !== options.map((option) => option.id).join("|");
 
   const addOption = () => {
     setOptions([
@@ -178,16 +181,24 @@ export const ModifierGroupFormDialog = ({
 
   const handleDragEnterOption = (targetOptionId: string) => {
     if (!draggingOptionId || draggingOptionId === targetOptionId || isSavingOrder) return;
-    optionReorder.moveById(draggingOptionId, targetOptionId);
+    setOptions((prev) => {
+      const current = [...prev];
+      const from = current.findIndex((opt) => opt.id === draggingOptionId);
+      const to = current.findIndex((opt) => opt.id === targetOptionId);
+      if (from < 0 || to < 0) return prev;
+      const [moved] = current.splice(from, 1);
+      current.splice(to, 0, moved);
+      return current;
+    });
   };
 
   const handleSaveOrder = async () => {
-    if (!editingGroup || isSavingOrder || !optionReorder.isDirty) return;
-    const orderedIds = optionReorder.currentItems.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
+    if (!editingGroup || isSavingOrder || !isOrderDirty) return;
+    const orderedIds = options.map((opt) => Number(opt.id)).filter((id) => Number.isFinite(id));
     setIsSavingOrder(true);
     try {
       await reorderModifierGroupOptions(editingGroup.id, orderedIds);
-      optionReorder.markSaved();
+      setBaselineOptionOrder(options.map((opt) => opt.id));
       toast.success("Orden guardado");
     } catch {
       toast.error("No se pudo guardar el orden");
@@ -196,10 +207,6 @@ export const ModifierGroupFormDialog = ({
       setDraggingOptionId(null);
     }
   };
-
-  useEffect(() => {
-    setOptions(optionReorder.currentItems);
-  }, [optionReorder.currentItems]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -250,7 +257,7 @@ export const ModifierGroupFormDialog = ({
               <div className="rounded-lg border py-8 text-center text-muted-foreground">No hay opciones. Agrega al menos una opción.</div>
             ) : (
               <div className="space-y-3">
-                {optionReorder.currentItems.map((option) => (
+                {options.map((option) => (
                   <Card
                     key={option.id}
                     className={`p-4 transition-all ${draggingOptionId === option.id ? "opacity-50 ring-2 ring-primary/50" : ""}`}
@@ -308,9 +315,12 @@ export const ModifierGroupFormDialog = ({
                 ))}
               </div>
             )}
-            {editingGroup && optionReorder.isDirty && (
+            {editingGroup && isOrderDirty && (
               <div className="flex items-center justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={optionReorder.reset} disabled={isSavingOrder}>
+                <Button variant="outline" size="sm" onClick={() => setOptions((prev) => {
+                  const byId = new Map(prev.map((option) => [option.id, option]));
+                  return baselineOptionOrder.map((id) => byId.get(id)).filter((option): option is ModifierOption => Boolean(option));
+                })} disabled={isSavingOrder}>
                   Deshacer cambios
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>

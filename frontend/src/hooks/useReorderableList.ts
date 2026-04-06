@@ -7,25 +7,26 @@ export const useReorderableList = <T,>(items: T[], getId: (item: T) => number | 
   const [originalItems, setOriginalItems] = useState<T[]>(items);
   const [currentItems, setCurrentItems] = useState<T[]>(items);
 
+  const isDirty = useMemo(
+    () => toOrderKey(originalItems, getId) !== toOrderKey(currentItems, getId),
+    [currentItems, getId, originalItems]
+  );
+
   useEffect(() => {
+    if (isDirty) return;
     const incomingKey = toOrderKey(items, getId);
+    const originalKey = toOrderKey(originalItems, getId);
     const currentKey = toOrderKey(currentItems, getId);
-    if (incomingKey === currentKey) {
-      const sameRefs =
-        items.length === currentItems.length &&
-        items.every((item, index) => item === currentItems[index]);
+    if (incomingKey === currentKey && incomingKey === originalKey) {
+      const sameRefs = items.length === currentItems.length && items.every((item, index) => item === currentItems[index]);
       if (sameRefs) return;
+      setOriginalItems(items);
       setCurrentItems(items);
       return;
     }
     setOriginalItems(items);
     setCurrentItems(items);
-  }, [currentItems, getId, items]);
-
-  const isDirty = useMemo(
-    () => toOrderKey(originalItems, getId) !== toOrderKey(currentItems, getId),
-    [currentItems, getId, originalItems]
-  );
+  }, [currentItems, getId, isDirty, items, originalItems]);
 
   const moveById = useCallback(
     (activeId: number | string, targetId: number | string) => {

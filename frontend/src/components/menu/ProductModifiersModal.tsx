@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ModifierGroup, Product, reorderProductModifierGroups, updateProductModifierGroups } from "@/lib/api";
 import { toast } from "sonner";
-import { useReorderableList } from "@/hooks/useReorderableList";
 
 interface ProductModifiersModalProps {
   open: boolean;
@@ -32,15 +31,17 @@ export const ProductModifiersModal = ({
   const [draggingGroupId, setDraggingGroupId] = useState<number | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [assignedGroupVisibility, setAssignedGroupVisibility] = useState<Record<number, boolean>>({});
-  const groupOrder = useReorderableList(assignedGroups, (groupId) => groupId);
+  const [baselineGroupOrder, setBaselineGroupOrder] = useState<number[]>([]);
 
   useEffect(() => {
     if (!selectedProduct) {
       setAssignedGroups([]);
+      setBaselineGroupOrder([]);
       setAssignedGroupVisibility({});
       return;
     }
     setAssignedGroups(selectedProduct.modifierGroups ?? []);
+    setBaselineGroupOrder(selectedProduct.modifierGroups ?? []);
     const visibility = (selectedProduct.modifierGroupLinks ?? []).reduce<Record<number, boolean>>((acc, link) => {
       acc[link.groupId] = Boolean(link.showInPos);
       return acc;
@@ -130,15 +131,25 @@ export const ProductModifiersModal = ({
 
   const handleDragEnterGroup = (targetGroupId: number) => {
     if (draggingGroupId === null || draggingGroupId === targetGroupId || isSavingOrder) return;
-    groupOrder.moveById(draggingGroupId, targetGroupId);
+    setAssignedGroups((prev) => {
+      const current = [...prev];
+      const from = current.indexOf(draggingGroupId);
+      const to = current.indexOf(targetGroupId);
+      if (from < 0 || to < 0) return prev;
+      current.splice(from, 1);
+      current.splice(to, 0, draggingGroupId);
+      return current;
+    });
   };
 
+  const isOrderDirty = baselineGroupOrder.join("|") !== assignedGroups.join("|");
+
   const handleSaveOrder = async () => {
-    if (!selectedProduct || isSavingOrder || !groupOrder.isDirty) return;
+    if (!selectedProduct || isSavingOrder || !isOrderDirty) return;
     setIsSavingOrder(true);
     try {
-      await reorderProductModifierGroups(selectedProduct.id, groupOrder.currentItems);
-      groupOrder.markSaved();
+      await reorderProductModifierGroups(selectedProduct.id, assignedGroups);
+      setBaselineGroupOrder(assignedGroups);
       await onUpdated(selectedProduct.id);
       toast.success("Orden guardado");
     } catch {
@@ -148,10 +159,6 @@ export const ProductModifiersModal = ({
       setDraggingGroupId(null);
     }
   };
-
-  useEffect(() => {
-    setAssignedGroups(groupOrder.currentItems);
-  }, [groupOrder.currentItems]);
 
   return (
     <>
@@ -229,9 +236,9 @@ export const ProductModifiersModal = ({
                     ))}
                   </div>
                 )}
-                {groupOrder.isDirty && (
+                {isOrderDirty && (
                   <div className="flex items-center justify-end gap-2">
-                    <Button variant="outline" size="sm" onClick={groupOrder.reset} disabled={isSavingOrder}>
+                    <Button variant="outline" size="sm" onClick={() => setAssignedGroups(baselineGroupOrder)} disabled={isSavingOrder}>
                       Deshacer cambios
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => void handleSaveOrder()} disabled={isSavingOrder}>

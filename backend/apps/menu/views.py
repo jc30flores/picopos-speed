@@ -109,7 +109,18 @@ class CategoryReorderView(APIView):
     permission_classes = [IsAdminOrManager]
 
     def patch(self, request):
-        raw_ordered_ids = request.data.get("orderedIds", request.data.get("ordered_ids")) or []
+        raw_items = request.data.get("items")
+        if isinstance(raw_items, list) and raw_items:
+            try:
+                normalized = sorted(
+                    [{"id": int(item.get("id")), "position": int(item.get("position"))} for item in raw_items],
+                    key=lambda entry: entry["position"],
+                )
+                raw_ordered_ids = [entry["id"] for entry in normalized]
+            except (TypeError, ValueError, AttributeError):
+                return Response({"detail": "items debe contener {id, position} válidos."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            raw_ordered_ids = request.data.get("orderedIds", request.data.get("ordered_ids")) or []
         if not isinstance(raw_ordered_ids, list):
             return Response({"detail": "ordered_ids debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
         if not raw_ordered_ids:
@@ -209,7 +220,18 @@ class ProductReorderView(APIView):
     permission_classes = [IsAdminOrManager]
 
     def _handle(self, request):
-        ordered_ids = request.data.get("ordered_ids", request.data.get("orderedIds")) or []
+        raw_items = request.data.get("items")
+        if isinstance(raw_items, list) and raw_items:
+            try:
+                normalized = sorted(
+                    [{"id": int(item.get("id")), "position": int(item.get("position"))} for item in raw_items],
+                    key=lambda entry: entry["position"],
+                )
+                ordered_ids = [entry["id"] for entry in normalized]
+            except (TypeError, ValueError, AttributeError):
+                return Response({"detail": "items debe contener {id, position} válidos."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            ordered_ids = request.data.get("ordered_ids", request.data.get("orderedIds")) or []
         category_id = request.data.get("category_id")
 
         if not isinstance(ordered_ids, list) or not all(isinstance(item, int) for item in ordered_ids):
