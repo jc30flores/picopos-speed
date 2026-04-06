@@ -140,3 +140,8 @@ class SessionAuthFlowTests(TestCase):
         logout_token = self._ensure_csrf()
         logout_response = self.client.post("/api/auth/logout/", {}, format="json", HTTP_X_CSRFTOKEN=logout_token)
         self.assertEqual(logout_response.status_code, 204)
+
+    def test_logout_is_idempotent_when_no_active_session(self):
+        token = self._ensure_csrf()
+        response = self.client.post("/api/auth/logout/", {}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 204)

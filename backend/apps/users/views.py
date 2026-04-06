@@ -139,10 +139,11 @@ def pin_login_view(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def logout_view(request):
     try:
-        logout(request)
+        if request.user.is_authenticated:
+            logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT)
     except Exception:  # noqa: BLE001
         logger.exception("auth.logout.failed")

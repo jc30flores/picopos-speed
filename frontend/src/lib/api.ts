@@ -460,6 +460,19 @@ const getCsrfToken = () => {
   return match ? decodeURIComponent(match[1]) : null;
 };
 
+const buildEmptyAttendanceState = (): AttendanceState => ({
+  employee: { id: 0, name: "—", role: "worker" },
+  date: new Date().toISOString().slice(0, 10),
+  clockIn: null,
+  breakStart: null,
+  breakEnd: null,
+  clockOut: null,
+  canClockIn: false,
+  canBreakStart: false,
+  canBreakEnd: false,
+  canClockOut: false,
+});
+
 const request = async (path: string, options: RequestInit = {}) => {
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers || {});
@@ -571,7 +584,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
 
 export const logout = async (): Promise<void> => {
   const response = await request("/auth/logout/", { method: "POST" });
-  if (!response.ok && response.status !== 204) {
+  if (!response.ok && response.status !== 204 && response.status !== 401 && response.status !== 403) {
     const message = await response.text();
     throw new Error(message || "Logout failed");
   }
@@ -2855,26 +2868,23 @@ const mapAttendanceState = (data: {
 
 export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
   const response = await request("/employees/attendance/today/");
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();
+  }
   const data = await handleJson<any>(response);
   if (data?.attendance) {
     return mapAttendanceState(data.attendance);
   }
-  return mapAttendanceState({
-    employee: { id: 0, name: "—", role: "worker" },
-    date: new Date().toISOString().slice(0, 10),
-    clock_in: null,
-    break_start: null,
-    break_end: null,
-    clock_out: null,
-    can_clock_in: false,
-    can_break_start: false,
-    can_break_end: false,
-    can_clock_out: false,
-  });
+  return buildEmptyAttendanceState();
 };
 
 const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
   const response = await request(path, { method: "POST" });
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();
+  }
   const data = await handleJson<any>(response);
   return mapAttendanceState(data);
 };
@@ -2898,6 +2908,10 @@ export const getMyAttendanceHistory = async (filters?: { start?: string; end?: s
   if (filters?.start) params.set("start", filters.start);
   if (filters?.end) params.set("end", filters.end);
   const response = await request(`/employees/me/attendance/${params.toString() ? `?${params.toString()}` : ""}`);
+  if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
+    const payload = await response.json().catch(() => null);
+    if (payload?.state === "NO_EMPLOYEE") return [];
+  }
   const data = await handleJson<any>(response);
   const rows = Array.isArray(data) ? data : (data?.rows ?? []);
   return mapAttendanceHistoryRows(rows);

@@ -81,13 +81,16 @@ export const InactivityGuard = () => {
       if (handlingUnauthorizedRef.current) return;
       handlingUnauthorizedRef.current = true;
       void forceLogout();
-      window.setTimeout(() => {
-        handlingUnauthorizedRef.current = false;
-      }, 1000);
     };
     window.addEventListener("auth:unauthorized", handleUnauthorized);
     return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
   }, [forceLogout, location.pathname]);
+
+  useEffect(() => {
+    if (!user || location.pathname === "/login") {
+      handlingUnauthorizedRef.current = false;
+    }
+  }, [location.pathname, user]);
 
   if (countdown == null || location.pathname === "/login") return null;
 

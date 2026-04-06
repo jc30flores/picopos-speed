@@ -37,8 +37,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   const logout = useCallback(async () => {
-    await getCSRF();
-    await logoutRequest();
+    try {
+      await getCSRF();
+      await logoutRequest();
+    } catch {
+      // Logout must be idempotent on client side to avoid retry loops.
+    }
     Object.keys(localStorage)
       .filter((key) => key.startsWith("pos_draft_"))
       .forEach((key) => localStorage.removeItem(key));
