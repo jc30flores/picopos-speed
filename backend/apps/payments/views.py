@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
-from apps.cashier.models import CashSession, CashTransaction
+from apps.cashier.models import Register, CashSession, CashTransaction
 from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
@@ -149,6 +149,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = serializer.validated_data["order"]
+        branch_has_register = Register.objects.filter(branch_id=order.branch_id, is_active=True).exists()
+        if branch_has_register and not _get_open_session_for_branch(order.branch_id):
+            return Response(
+                {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
+                status=status.HTTP_409_CONFLICT,
+            )
         order = order.__class__.objects.select_for_update().get(pk=order.pk)
         existing_applied_cents = sum(
             to_cents(p.amount_applied if p.amount_applied is not None else p.amount)

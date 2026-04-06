@@ -556,10 +556,20 @@ const handleJson = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
     if (isJson) {
       const errorPayload = await response.json().catch(() => null);
+      const errorCode = errorPayload && typeof errorPayload.code === "string" ? String(errorPayload.code) : undefined;
+      const detailText = String((errorPayload && (errorPayload.detail || errorPayload.error)) || "");
+      const shouldRequireCashGate =
+        errorCode === "CASH_SESSION_REQUIRED" ||
+        ((response.status === 401 || response.status === 403 || response.status === 409) &&
+          /caja|cash session|required/i.test(detailText));
+      if (shouldRequireCashGate) {
+        window.dispatchEvent(new CustomEvent("cash:required"));
+      }
       const message =
-        (errorPayload && (errorPayload.detail || errorPayload.error)) ||
+        detailText ||
         (errorPayload ? JSON.stringify(errorPayload) : "");
       throw new ApiRequestError(message || `Error del servidor (${response.status}). Revisa el backend.`, {
+        code: errorCode,
         status: response.status,
       });
     }

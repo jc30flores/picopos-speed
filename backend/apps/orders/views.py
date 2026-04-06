@@ -23,6 +23,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.printing.services.renderers import render_customer_ticket
 from apps.payments.models import Payment
+from apps.cashier.models import CashSession, Register
 from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -54,6 +55,14 @@ def _apply_common_filters(request, queryset):
     return queryset, branch_id, service_type
 
 
+def _has_open_cash_session(branch_id: int | None) -> bool:
+    if not branch_id:
+        return False
+    if not Register.objects.filter(branch_id=branch_id, is_active=True).exists():
+        return True
+    return CashSession.objects.filter(register__branch_id=branch_id, status="open", closed_at__isnull=True).exists()
+
+
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
     order_number = serializers.IntegerField()
     customer_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -77,6 +86,14 @@ class OrderCreateView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        source = str(serializer.validated_data.get("source") or "").strip().lower()
+        branch = serializer.validated_data.get("branch_id")
+        branch_id = getattr(branch, "id", None)
+        if source != "kiosk" and not _has_open_cash_session(branch_id):
+            return Response(
+                {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
+                status=status.HTTP_409_CONFLICT,
+            )
         order = serializer.save()
         output = OrderSerializer(order, context={"request": request}).data
         return Response(output, status=status.HTTP_201_CREATED)
