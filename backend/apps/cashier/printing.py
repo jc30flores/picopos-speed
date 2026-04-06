@@ -366,16 +366,21 @@ def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
 
         lines = text.split("\n")
         page_width = 80 * mm
+        page_height = 220 * mm
         left_margin = 4 * mm
-        top_margin = 4 * mm
+        top_margin = 6 * mm
+        bottom_margin = 6 * mm
         line_height = 4.2 * mm
-        page_height = max((len(lines) * line_height) + (top_margin * 2), 40 * mm)
 
         buf = BytesIO()
         c = canvas.Canvas(buf, pagesize=(page_width, page_height))
         c.setFont("Courier", 8.5)
         y = page_height - top_margin
         for line in lines:
+            if y <= bottom_margin:
+                c.showPage()
+                c.setFont("Courier", 8.5)
+                y = page_height - top_margin
             c.drawString(left_margin, y, line)
             y -= line_height
         c.save()

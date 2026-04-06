@@ -3348,8 +3348,14 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
 
 
 export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
-  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`);
+  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
+    headers: { Accept: "application/pdf" },
+  });
   if (!response.ok) throw new Error('No se pudo descargar ticket PDF');
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+  }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
