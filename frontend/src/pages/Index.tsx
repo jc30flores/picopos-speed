@@ -1205,7 +1205,7 @@ const POS = () => {
 
   const scheduleHardReload = (reason: string) => {
     if (hardReloadTriggeredRef.current) return;
-    window.setTimeout(() => hardReloadPos(reason), 800);
+    window.setTimeout(() => hardReloadPos(reason), 400);
   };
 
   const triggerPdfDownload = (blob: Blob, filename: string) => {
@@ -2667,7 +2667,7 @@ const POS = () => {
               onClick={() => {
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
-                scheduleReload();
+                hardReloadPos("finalize_omit");
               }}
             >
               Omitir
