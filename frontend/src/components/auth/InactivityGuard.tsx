@@ -13,6 +13,7 @@ export const InactivityGuard = () => {
   const [countdown, setCountdown] = useState<number | null>(null);
   const inactivityTimerRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
+  const handlingUnauthorizedRef = useRef(false);
 
   const clearTimers = useCallback(() => {
     if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
@@ -76,11 +77,17 @@ export const InactivityGuard = () => {
 
   useEffect(() => {
     const handleUnauthorized = () => {
+      if (location.pathname === "/login") return;
+      if (handlingUnauthorizedRef.current) return;
+      handlingUnauthorizedRef.current = true;
       void forceLogout();
+      window.setTimeout(() => {
+        handlingUnauthorizedRef.current = false;
+      }, 1000);
     };
     window.addEventListener("auth:unauthorized", handleUnauthorized);
     return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
-  }, [forceLogout]);
+  }, [forceLogout, location.pathname]);
 
   if (countdown == null || location.pathname === "/login") return null;
 

@@ -98,3 +98,45 @@ class AdminPasswordLoginPinFormatTests(TestCase):
         response = self.client.post("/api/auth/pin-login/", {"pin": "112233"}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json().get("redirect_to"), "/kitchen")
+
+
+class SessionAuthFlowTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(enforce_csrf_checks=True)
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username="pin_session", password="012345", is_active=True)
+        UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
+
+    def _ensure_csrf(self):
+        csrf_response = self.client.get("/api/auth/csrf/")
+        self.assertEqual(csrf_response.status_code, 200)
+        token = self.client.cookies.get("csrftoken")
+        self.assertIsNotNone(token)
+        return token.value
+
+    def test_pin_login_success_sets_session(self):
+        token = self._ensure_csrf()
+        response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("sessionid", self.client.cookies)
+
+    def test_me_requires_auth_and_works_after_login(self):
+        unauth = self.client.get("/api/auth/me/")
+        self.assertEqual(unauth.status_code, 401)
+
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+
+        me_response = self.client.get("/api/auth/me/")
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.json().get("username"), "pin_session")
+
+    def test_logout_works_with_csrf(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+
+        logout_token = self._ensure_csrf()
+        logout_response = self.client.post("/api/auth/logout/", {}, format="json", HTTP_X_CSRFTOKEN=logout_token)
+        self.assertEqual(logout_response.status_code, 204)

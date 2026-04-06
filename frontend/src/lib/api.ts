@@ -465,6 +465,7 @@ const request = async (path: string, options: RequestInit = {}) => {
   const headers = new Headers(options.headers || {});
   const isFormData = options.body instanceof FormData;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const normalizedPathKey = normalizedPath.endsWith("/") ? normalizedPath.slice(0, -1) : normalizedPath;
 
   if (!isFormData && !headers.has("Content-Type") && method !== "GET") {
     headers.set("Content-Type", "application/json");
@@ -482,8 +483,13 @@ const request = async (path: string, options: RequestInit = {}) => {
     ...options,
     headers,
   });
-  const isAuthLoginRequest = normalizedPath === "/auth/login/" || normalizedPath === "/auth/pin-login/";
-  if ((response.status === 401 || response.status === 403) && !isAuthLoginRequest) {
+  const authBypassUnauthorizedEvent = new Set([
+    "/auth/csrf",
+    "/auth/login",
+    "/auth/pin-login",
+    "/auth/logout",
+  ]);
+  if ((response.status === 401 || response.status === 403) && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
   }
   return response;
