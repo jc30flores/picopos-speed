@@ -38,12 +38,16 @@ const Login = () => {
       navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      if (message.includes("duplicado")) {
+      if (message.includes("PIN_DUPLICATE") || message.includes("duplicado")) {
         toast.error("PIN duplicado, contacte al administrador");
-      } else if (message.includes("servidor") || message.includes("Internal")) {
-        toast.error("Error del servidor");
-      } else {
+      } else if (message.includes("PIN_INVALID")) {
         toast.error("PIN incorrecto");
+      } else if (message.includes("PIN_THROTTLED")) {
+        toast.error("Demasiados intentos, espera 30 segundos");
+      } else if (message.includes("PIN_FORBIDDEN") || message.includes("csrf")) {
+        toast.error("Error de sesión/seguridad. Recarga e intenta de nuevo.");
+      } else {
+        toast.error("Error de conexión. Reintenta.");
       }
       setPin("");
     } finally {
@@ -120,7 +124,7 @@ const Login = () => {
                 ))}
               </div>
               <PinKeypad value={pin} onChange={(next) => setPin(sanitizePin(next))} disabled={loading} maxLength={PIN_LENGTH} />
-              <Button className="w-full h-12" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
+              <Button className="w-full h-14 text-base" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
                 {loading ? "Validando..." : "Ingresar"}
               </Button>
             </div>

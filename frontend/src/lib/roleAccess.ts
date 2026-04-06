@@ -45,7 +45,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
   admin: ["/", "/pos", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
   manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas"],
-  cashier: ["/pos"],
+  cashier: ["/", "/pos"],
   kitchen: ["/kitchen"],
   kiosk: ["/kiosk"],
   worker: ["/"],
@@ -82,7 +82,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
 const landingRouteByRole: Record<AppRole, string> = {
   admin: "/",
   manager: "/",
-  cashier: "/pos",
+  cashier: "/",
   kitchen: "/kitchen",
   kiosk: "/kiosk",
   worker: "/",

@@ -46,14 +46,6 @@ class DTEConfig(AppConfig):
         if os.environ.get("RUN_MAIN") != "true":
             return
 
-        from apps.dte.services.active_branch import get_active_branch
-
-        try:
-            get_active_branch()
-        except Exception as exc:  # noqa: BLE001
-            logger.error("[DTE] ACTIVE_BRANCH_CODE inválido: %s", exc)
-            raise
-
         from apps.dte.monitor import start_monitor
         from apps.dte.outbox import start_outbox_worker
 

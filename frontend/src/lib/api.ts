@@ -464,6 +464,7 @@ const request = async (path: string, options: RequestInit = {}) => {
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers || {});
   const isFormData = options.body instanceof FormData;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
   if (!isFormData && !headers.has("Content-Type") && method !== "GET") {
     headers.set("Content-Type", "application/json");
@@ -481,7 +482,8 @@ const request = async (path: string, options: RequestInit = {}) => {
     ...options,
     headers,
   });
-  if (response.status === 401 || response.status === 403) {
+  const isAuthLoginRequest = normalizedPath === "/auth/login/" || normalizedPath === "/auth/pin-login/";
+  if ((response.status === 401 || response.status === 403) && !isAuthLoginRequest) {
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
   }
   return response;
@@ -540,8 +542,18 @@ export const login = async (payload: {
 export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
   const response = await request("/auth/pin-login/", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ pin: String(payload.pin) }),
   });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
+    const detail = body?.detail ? String(body.detail) : "";
+    if (response.status === 401) throw new Error("PIN_INVALID");
+    if (response.status === 409) throw new Error("PIN_DUPLICATE");
+    if (response.status === 429) throw new Error(detail || "PIN_THROTTLED");
+    if (response.status === 403) throw new Error("PIN_FORBIDDEN");
+    throw new Error(detail || `PIN_LOGIN_ERROR_${response.status}`);
+  }
   const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
   return {
     ...raw,

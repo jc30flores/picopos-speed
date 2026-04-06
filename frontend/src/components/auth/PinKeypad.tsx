@@ -21,14 +21,14 @@ export const PinKeypad = ({
   };
 
   return (
-    <div className={`space-y-3 ${className}`}>
-      <div className="grid grid-cols-3 gap-2">
+    <div className={`space-y-4 ${className}`}>
+      <div className="grid grid-cols-3 gap-3">
         {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"].map((key) => (
           <Button
             key={key}
             type="button"
             variant={key === "C" ? "secondary" : "outline"}
-            className="h-16 text-2xl active:scale-[0.98]"
+            className="h-20 text-3xl font-semibold active:scale-[0.98] sm:h-24"
             disabled={disabled}
             onClick={() => {
               if (key === "C") onChange("");

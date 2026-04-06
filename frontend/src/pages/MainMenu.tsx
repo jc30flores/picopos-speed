@@ -37,23 +37,29 @@ const MainMenu = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background p-4 sm:p-6">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-7xl flex-col justify-center gap-6">
+    <div className="min-h-screen bg-background p-3 sm:p-4">
+      <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-7xl flex-col justify-start gap-4">
         <div className="flex items-center justify-end gap-2">
-          <Button className="h-9 gap-1.5 rounded-full px-3 text-xs sm:text-sm" variant="outline" onClick={toggleTheme}>
-            {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-            Tema
+          <Button
+            className="h-11 w-11 rounded-full border-border/70 p-0 hover:bg-accent/70 active:scale-[0.98]"
+            variant="outline"
+            onClick={toggleTheme}
+            aria-label="Cambiar tema"
+            title="Tema"
+          >
+            {theme === "light" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
           </Button>
           <Button
-            className="h-9 gap-1.5 rounded-full px-3 text-xs sm:text-sm"
-            variant="destructive"
+            className="h-11 w-11 rounded-full p-0 active:scale-[0.98]"
+            variant="outline"
             onClick={async () => {
               await logout();
               navigate("/login");
             }}
+            aria-label="Cerrar sesión"
+            title="Cerrar sesión"
           >
-            <LogOut className="h-4 w-4" />
-            Salir
+            <LogOut className="h-5 w-5" />
           </Button>
         </div>
         <div className="space-y-1 text-center">
@@ -68,7 +74,7 @@ const MainMenu = () => {
         {!isWorker ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
-              <Button key={card.path} className="h-24 justify-start gap-3 rounded-2xl px-6 text-lg font-semibold shadow-sm" onClick={() => navigate(card.path)}>
+              <Button key={card.path} className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90" onClick={() => navigate(card.path)}>
                 <card.icon className="h-6 w-6" />
                 {card.label}
               </Button>

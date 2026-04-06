@@ -91,7 +91,11 @@ def login_view(request):
 def pin_login_view(request):
     try:
         pin = str(request.data.get("pin") or "").strip()
+        pin_len = len(pin)
+        leading_zero = bool(pin.startswith("0"))
+        logger.info("auth.pin_login.attempt pin_len=%s leading_zero=%s ip=%s", pin_len, leading_zero, request.META.get("REMOTE_ADDR", "unknown"))
         if not is_valid_pin_format(pin):
+            logger.warning("auth.pin_login.invalid_format pin_len=%s leading_zero=%s", pin_len, leading_zero)
             return Response(
                 {"detail": "El PIN debe tener exactamente 6 dígitos numéricos."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -109,8 +113,10 @@ def pin_login_view(request):
         matches = find_active_users_matching_pin(pin)
         if not matches:
             cache.set(throttle_key, attempts + 1, timeout=30)
+            logger.warning("auth.pin_login.no_match pin_len=%s leading_zero=%s attempts=%s", pin_len, leading_zero, attempts + 1)
             return Response({"detail": "PIN incorrecto"}, status=status.HTTP_401_UNAUTHORIZED)
         if len(matches) > 1:
+            logger.warning("auth.pin_login.duplicate pin_len=%s leading_zero=%s matches=%s", pin_len, leading_zero, len(matches))
             return Response(
                 {"detail": "PIN duplicado. Cambie el PIN de uno de los usuarios."},
                 status=status.HTTP_409_CONFLICT,
@@ -120,10 +126,12 @@ def pin_login_view(request):
 
         profile = _get_or_create_profile(user)
         if not profile.is_active:
+            logger.warning("auth.pin_login.inactive_user user_id=%s", user.id)
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
 
         cache.delete(throttle_key)
         login(request, user)
+        logger.info("auth.pin_login.success user_id=%s role=%s", user.id, profile.role)
         return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.pin_login.failed")
