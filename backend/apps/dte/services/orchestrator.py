@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from apps.dte.models import DTERecord
 from apps.dte.outbox import send_or_queue_dte
+from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.control import build_generation_code, next_control_number
 from apps.dte.services.dte_service import (
     DTEPreflightError,
@@ -76,10 +77,11 @@ def transmit_sale_dte(
     payment = order.payments.filter(id=payment_id).first() if payment_id else None
 
     payload: dict = {}
+    active_branch = get_active_branch()
     prebuilt_record = DTERecord.objects.create(
         order=order,
         payment=payment,
-        branch=order.branch,
+        branch=active_branch,
         dte_type=dte_type,
         status=DTERecord.STATUS_PENDING,
         ambiente=ambiente,
@@ -106,7 +108,7 @@ def transmit_sale_dte(
         numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
         DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
-        prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
+        prebuilt_record.request_payload = {**payload, "branch": active_branch.name}
         prebuilt_record.save(update_fields=["request_payload", "updated_at"])
     except DTEPreflightError as exc:
         DTE_LOGGER.info("[DTE] send_dte.preflight_failed order=%s error=%s", sale_id, exc)
@@ -166,7 +168,7 @@ def transmit_sale_dte(
                 (payload.get("dte", {}).get("resumen", {}) if isinstance(payload, dict) else {}),
             )
     prebuilt_record.status = parsed["status"]
-    prebuilt_record.request_payload = {**payload, "branch": order.branch.name}
+    prebuilt_record.request_payload = {**payload, "branch": active_branch.name}
     prebuilt_record.response_payload = response if isinstance(response, dict) else {}
     prebuilt_record.response_text = parsed.get("response_text", "")
     prebuilt_record.mh_response_json = response if isinstance(response, dict) else {}

@@ -4,6 +4,7 @@ import uuid
 from django.db import transaction
 from django.utils import timezone
 
+from apps.dte.services.active_branch import get_active_branch
 from apps.dte.models import DTEControlCounter
 from apps.dte.services.emisor import get_emisor_config
 from apps.orders.models import Order
@@ -48,11 +49,12 @@ def reserve_next_control(*, branch, document_type: str, series: str = "X001X001"
 
 
 def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "00") -> str:
-    emisor_cfg = get_emisor_config(order.branch)
+    active_branch = get_active_branch()
+    emisor_cfg = get_emisor_config()
     est_code = (emisor_cfg.get("codEstable") or "X001")
     pv_code = (emisor_cfg.get("codPuntoVenta") or "X001")
     return reserve_next_control(
-        branch=order.branch,
+        branch=active_branch,
         document_type=dte_type,
         series=f"{est_code}{pv_code}",
         ambiente=ambiente,

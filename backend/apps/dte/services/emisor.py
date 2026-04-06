@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import os
 import re
-import logging
 from typing import Any
 
 from django.conf import settings
 from rest_framework.exceptions import ValidationError
 
-from apps.core.models import Branch
 from apps.dte.models import DTEBranchConfig
+from apps.dte.services.active_branch import get_active_branch
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("apps.dte")
 
 
 def _digits(value: str | None) -> str:
@@ -20,26 +19,6 @@ def _digits(value: str | None) -> str:
 
 def _setting(name: str, default: str = "") -> str:
     return str(getattr(settings, name, os.environ.get(name, default)) or "").strip()
-
-
-def _safe_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _resolve_branch(branch) -> Branch | None:
-    if branch and getattr(branch, "id", None):
-        return branch
-    branch_id = (
-        _safe_int(getattr(settings, "BRANCH_ID", None))
-        or _safe_int(getattr(settings, "POS_BRANCH_ID", None))
-        or _safe_int(getattr(settings, "DEFAULT_BRANCH_ID", None))
-    )
-    if branch_id:
-        return Branch.objects.filter(id=branch_id).first()
-    return None
 
 
 def _is_valid_nit(value: str | None) -> bool:
@@ -65,8 +44,8 @@ def normalize_nit(value: str | None, *, source: str = "desconocido") -> str:
     return digits
 
 
-def get_emisor_nit(branch) -> str:
-    branch_obj = _resolve_branch(branch)
+def get_emisor_nit(branch=None) -> str:
+    branch_obj = get_active_branch()
     cfg = _get_valid_branch_config(branch_obj)
     cfg_nit = _digits(getattr(cfg, "emisor_nit", ""))
     if cfg_nit:
@@ -80,8 +59,8 @@ def get_emisor_nit(branch) -> str:
     return normalize_nit(_setting("DTE_EMISOR_NIT"), source="DTE_EMISOR_NIT")
 
 
-def get_emisor_config(branch) -> dict[str, Any]:
-    branch_obj = _resolve_branch(branch)
+def get_emisor_config(branch=None) -> dict[str, Any]:
+    branch_obj = get_active_branch()
     cfg = _get_valid_branch_config(branch_obj)
     if cfg:
         logger.info("dte.emisor.config source=DTEBranchConfig branch_id=%s", getattr(branch_obj, "id", None))

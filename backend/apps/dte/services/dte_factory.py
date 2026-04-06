@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from apps.dte.services.active_branch import get_active_branch
 from apps.orders.models import Order
 
 
@@ -10,6 +11,7 @@ def _as_str(value: Decimal) -> str:
 
 
 def build_payload(order: Order, control_number: str, codigo_generacion: str, dte_type: str = "CF") -> dict:
+    active_branch = get_active_branch()
     items = []
     for item in order.items.prefetch_related("applied_modifiers").all():
         items.append(
@@ -31,7 +33,7 @@ def build_payload(order: Order, control_number: str, codigo_generacion: str, dte
             "numeroControl": control_number,
             "codigoGeneracion": codigo_generacion,
         },
-        "emisor": {"sucursal": order.branch.name, "codigo": order.branch.code},
+        "emisor": {"sucursal": active_branch.name, "codigo": active_branch.code},
         "receptor": {"nombre": order.customer_name or "Consumidor Final", "nit": ""},
         "resumen": {"total": _as_str(order.total), "subtotal": _as_str(order.subtotal), "impuesto": _as_str(order.tax)},
         "extension": {"service_type": (order.service_type.label if order.service_type else "Sin tipo"), "channel": order.channel},

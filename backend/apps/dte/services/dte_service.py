@@ -10,6 +10,7 @@ from django.conf import settings
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
 from apps.dte.services.payment_methods import get_cat017_code_and_label
@@ -69,7 +70,7 @@ def build_headers() -> dict[str, str]:
 
 
 def _resolve_branch_config(order):
-    return get_emisor_config(order.branch)
+    return get_emisor_config()
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -246,13 +247,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     from django.utils import timezone
 
     emisor = _resolve_branch_config(order)
-    final_nit = get_emisor_nit(order.branch)
-    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, order.branch_id)
+    active_branch = get_active_branch()
+    final_nit = get_emisor_nit()
+    logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, active_branch.id)
     print(f"[DTE DEBUG] Emisor NIT final utilizado={final_nit}")
     required_emisor = ["nit", "nrc", "nombre", "nombreComercial", "codActividad", "descActividad"]
     missing = [k for k in required_emisor if not emisor.get(k)]
     if missing:
-        warn = f"[DTE] WARNING emisor incompleto para branch={order.branch_id}: missing={','.join(missing)}"
+        warn = f"[DTE] WARNING emisor incompleto para branch={active_branch.id}: missing={','.join(missing)}"
         print(warn)
         logger.warning(warn)
 
@@ -574,12 +576,13 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
             "cuerpoDocumento": credit_note.items or [],
         }
     }
-    response = send_to_bridge("NC_05", payload, branch_name=order.branch.name, order_id=order.id, branch_id=order.branch_id)
+    active_branch = get_active_branch()
+    response = send_to_bridge("NC_05", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
     parsed = interpret_dte_response(response)
     return DTERecord.objects.create(
         order=order,
         payment=None,
-        branch=order.branch,
+        branch=active_branch,
         credit_note=credit_note,
         dte_type="NC_05",
         status=parsed["status"],
@@ -625,7 +628,8 @@ def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitan
     if not record:
         raise DTEPreflightError("No existe DTE aceptado para invalidar")
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
-    response = send_to_bridge("INVALIDACION", payload, branch_name=order.branch.name, order_id=order.id, branch_id=order.branch_id)
+    active_branch = get_active_branch()
+    response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
     parsed = interpret_dte_response(response)
     attempt = DteInvalidationAttempt.objects.create(
         order=order,

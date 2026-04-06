@@ -18,6 +18,7 @@ from rest_framework.exceptions import ValidationError
 from apps.dte.client import DTEClient
 from apps.dte.models import DTEOutbox, DTERecord
 from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
+from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.dte_service import DTEPreflightError, assert_no_string_numbers, build_payload_cf
 from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
 from apps.orders.models import OrderInvoice
@@ -236,7 +237,7 @@ def _endpoint_for_payload(payload: dict) -> str:
 
 
 def _repair_payload_nit_if_needed(outbox: DTEOutbox, payload: dict) -> tuple[dict, bool]:
-    expected_nit = get_emisor_nit(outbox.order.branch if outbox.order_id else None)
+    expected_nit = get_emisor_nit()
     payload_nit = payload_emisor_nit(payload)
     if payload_nit == expected_nit:
         return payload, False
@@ -438,7 +439,7 @@ def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | Non
                 payload=payload,
                 order_id=order.id,
                 payment_id=getattr(payment, "id", None),
-                branch_id=order.branch_id,
+                branch_id=get_active_branch().id,
                 attempt_number=outbox.attempts,
             )
             return _apply_result(outbox, result)
@@ -492,7 +493,7 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
             payload=payload,
             order_id=outbox.order_id,
             payment_id=outbox.payment_id,
-            branch_id=outbox.order.branch_id,
+            branch_id=get_active_branch().id,
             attempt_number=outbox.attempts,
         )
         updated = _apply_result(outbox, result)

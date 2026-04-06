@@ -7,10 +7,7 @@ from pathlib import Path
 from textwrap import wrap
 
 from django.conf import settings
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen import canvas
+from apps.printing.services.pdf_text import SimpleTextPdfWriter
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _ESC_POS_RE = re.compile(r"\x1b(?:[@-~]|\[[0-?]*[ -/]*[@-~])")
@@ -38,9 +35,15 @@ def _register_mono_font() -> str:
         path = Path(candidate or "")
         if not path.exists():
             continue
-        pdfmetrics.registerFont(TTFont(_FONT_NAME, str(path)))
-        _FONT_REGISTERED = True
-        return _FONT_NAME
+        try:
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+
+            pdfmetrics.registerFont(TTFont(_FONT_NAME, str(path)))
+            _FONT_REGISTERED = True
+            return _FONT_NAME
+        except Exception:
+            continue
     return "Courier"
 
 
@@ -77,24 +80,33 @@ def build_receipt_pdf(
     line_height: float = 11.0,
 ) -> ReceiptPdfResult:
     clean_lines = _normalize_lines(lines, max_chars_per_line=max_chars_per_line)
-    font_name = _register_mono_font()
+    try:
+        from reportlab.lib.units import mm
+        from reportlab.pdfgen import canvas
 
-    page_width = page_width_mm * mm
-    margin_x = 4 * mm
-    margin_y = 4 * mm
-    page_height = max((len(clean_lines) * line_height) + (margin_y * 2), 40 * mm)
+        font_name = _register_mono_font()
+        page_width = page_width_mm * mm
+        margin_x = 4 * mm
+        margin_y = 4 * mm
+        page_height = max((len(clean_lines) * line_height) + (margin_y * 2), 40 * mm)
 
-    stream = BytesIO()
-    pdf = canvas.Canvas(stream, pagesize=(page_width, page_height), pageCompression=0)
-    text_obj = pdf.beginText(margin_x, page_height - margin_y - font_size)
-    text_obj.setFont(font_name, font_size)
-    text_obj.setLeading(line_height)
-    for line in clean_lines:
-        text_obj.textLine(line)
-    pdf.drawText(text_obj)
-    pdf.showPage()
-    pdf.save()
-    return ReceiptPdfResult(pdf_bytes=stream.getvalue(), filename=filename)
+        stream = BytesIO()
+        pdf = canvas.Canvas(stream, pagesize=(page_width, page_height), pageCompression=0)
+        text_obj = pdf.beginText(margin_x, page_height - margin_y - font_size)
+        text_obj.setFont(font_name, font_size)
+        text_obj.setLeading(line_height)
+        for line in clean_lines:
+            text_obj.textLine(line)
+        pdf.drawText(text_obj)
+        pdf.showPage()
+        pdf.save()
+        pdf_bytes = stream.getvalue()
+    except Exception:
+        fallback = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
+        for line in clean_lines:
+            fallback.writeLine(line)
+        pdf_bytes = fallback.build()
+    return ReceiptPdfResult(pdf_bytes=pdf_bytes, filename=filename)
 
 
 def build_receipt_pdf_from_text(*, text: str, filename: str, **kwargs) -> ReceiptPdfResult:
