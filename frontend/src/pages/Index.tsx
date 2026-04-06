@@ -952,20 +952,23 @@ const POS = () => {
   }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
 
   useEffect(() => {
-    if (!isPaymentMethodOpen) return;
-    const isPedidosYa = isPedidosYaOrderType(serviceType);
-    if (isPedidosYa) {
+    const normalizedMethod = normalizePaymentMethodForOrderType(serviceType, selectedPaymentMethodCode);
+    if (normalizedMethod === "pedidos_ya") {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[pos-debug] auto_payment_method", { serviceType, method: "pedidos_ya" });
       }
       setPaymentMethod("transfer");
-      setSelectedPaymentMethodCode("pedidos_ya");
+      if (selectedPaymentMethodCode !== "pedidos_ya") {
+        setSelectedPaymentMethodCode("pedidos_ya");
+      }
       setCardType(null);
-      setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
+      if (isPaymentMethodOpen) {
+        setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
+      }
       return;
     }
-    if (selectedPaymentMethodCode === "pedidos_ya") {
+    if (normalizedMethod === "cash" && selectedPaymentMethodCode === "pedidos_ya") {
       setPaymentMethod("cash");
       setSelectedPaymentMethodCode("cash");
       setCardType(null);
@@ -1183,9 +1186,26 @@ const POS = () => {
       .toUpperCase()
       .replace(/\s+/g, "_");
 
+  const ORDER_TYPE_PEDIDOS_YA = "PEDIDOS_YA";
+
   const isPedidosYaOrderType = (value: string | null | undefined) => {
     const normalized = normalizeOrderTypeKey(value);
-    return normalized === "PEDIDOS_YA" || normalized === "PEDIDOSYA" || normalized === "DELIVERY";
+    return normalized === ORDER_TYPE_PEDIDOS_YA || normalized === "PEDIDOSYA" || normalized === "DELIVERY";
+  };
+
+  const normalizePaymentMethodForOrderType = (orderTypeCode: string | null | undefined, currentMethodCode: string) => {
+    if (isPedidosYaOrderType(orderTypeCode)) {
+      return "pedidos_ya";
+    }
+    if (String(currentMethodCode || "").toLowerCase() === "pedidos_ya") {
+      return "cash";
+    }
+    return currentMethodCode;
+  };
+
+  const scheduleHardReload = (reason: string) => {
+    if (hardReloadTriggeredRef.current) return;
+    window.setTimeout(() => hardReloadPos(reason), 800);
   };
 
   const triggerPdfDownload = (blob: Blob, filename: string) => {
@@ -2664,7 +2684,7 @@ const POS = () => {
             open,
           }));
           if (!open && fallbackPdfModal.shouldHardReloadAfterClose) {
-            hardReloadPos("fallback_modal_closed");
+            scheduleHardReload("fallback_modal_closed");
           }
         }}
       >
@@ -2686,7 +2706,7 @@ const POS = () => {
                       console.info("[pos-debug] fallback_pdf_download.completed");
                     }
                     if (fallbackPdfModal.shouldHardReloadAfterClose) {
-                      hardReloadPos("fallback_pdf_download");
+                      scheduleHardReload("fallback_pdf_download");
                       return;
                     }
                     setFallbackPdfModal((prev) => ({ ...prev, open: false }));
@@ -2702,7 +2722,7 @@ const POS = () => {
               className="h-12"
               onClick={() => {
                 if (fallbackPdfModal.shouldHardReloadAfterClose) {
-                  hardReloadPos("fallback_pdf_close");
+                  scheduleHardReload("fallback_pdf_close");
                   return;
                 }
                 setFallbackPdfModal((prev) => ({ ...prev, open: false }));
