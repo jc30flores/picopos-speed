@@ -61,6 +61,31 @@ def _logo_path() -> Path:
     return Path(settings.BASE_DIR) / "assets" / "receipt" / "logo_pdg.png"
 
 
+def _display_payment_label(payment) -> str:
+    if payment is None:
+        return "Efectivo"
+    payment_method = getattr(payment, "payment_method", None)
+    method_code = str(getattr(payment_method, "code", "") or "").strip().lower().replace("-", "_")
+    method_name = str(getattr(payment_method, "name", "") or "").strip()
+    if method_code == "pedidos_ya":
+        return "Pedidos Ya"
+    if method_name:
+        return method_name
+    _, label = get_cat017_code_and_label(payment)
+    return label
+
+
+def _derive_totals_from_total(total_including_iva: Decimal) -> tuple[Decimal, Decimal]:
+    total = Decimal(total_including_iva or 0).quantize(Decimal("0.01"))
+    subtotal = (total / Decimal("1.13")).quantize(Decimal("0.01"))
+    iva = (total - subtotal).quantize(Decimal("0.01"))
+    # Ensure exact identity subtotal + iva == total
+    delta = (total - (subtotal + iva)).quantize(Decimal("0.01"))
+    if delta:
+        iva = (iva + delta).quantize(Decimal("0.01"))
+    return subtotal, iva
+
+
 def build_receipt_context(order: Order) -> dict:
     branch_profile = get_branch_profile(getattr(order, "branch_id", None))
     payments = list(order.payments.select_related("payment_method", "received_by").order_by("-id"))
@@ -70,7 +95,8 @@ def build_receipt_context(order: Order) -> dict:
     if main_payment and main_payment.cash_received:
         change_due = max(Decimal(main_payment.cash_received) - (main_payment.amount + main_payment.tip_amount), Decimal("0.00")).quantize(Decimal("0.01"))
 
-    cat017_code, method_label = get_cat017_code_and_label(main_payment)
+    cat017_code, _ = get_cat017_code_and_label(main_payment)
+    method_label = _display_payment_label(main_payment)
     cashier_name = "-"
     if main_payment and main_payment.received_by:
         cashier_name = main_payment.received_by.get_full_name() or main_payment.received_by.username
@@ -83,9 +109,10 @@ def build_receipt_context(order: Order) -> dict:
     codigo_generacion = (identificacion.get("codigoGeneracion") if isinstance(identificacion, dict) else "") or (dte_record.codigo_generacion if dte_record else "")
     numero_control = (identificacion.get("numeroControl") if isinstance(identificacion, dict) else "") or (dte_record.control_number if dte_record else "")
 
-    iva = Decimal(str(resumen.get("totalIva") or order.tax or "0.00")).quantize(Decimal("0.01"))
-    iva_rete1 = Decimal(str(resumen.get("ivaRete1") or "0.00")).quantize(Decimal("0.01"))
     total = Decimal(str(resumen.get("totalPagar") or order.total or "0.00")).quantize(Decimal("0.01"))
+    subtotal_display, iva_display = _derive_totals_from_total(total)
+    iva = iva_display
+    iva_rete1 = Decimal(str(resumen.get("ivaRete1") or "0.00")).quantize(Decimal("0.01"))
 
     items: list[dict] = []
     for item in order.items.all().prefetch_related("applied_modifiers"):
@@ -113,7 +140,7 @@ def build_receipt_context(order: Order) -> dict:
         "order_datetime": timezone.localtime(order.created_at),
         "items": items,
         "totals": {
-            "subtotal": Decimal(order.subtotal).quantize(Decimal("0.01")),
+            "subtotal": subtotal_display,
             "iva": iva,
             "iva_rete1": iva_rete1,
             "total": total,
