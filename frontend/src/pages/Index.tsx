@@ -1438,7 +1438,7 @@ const POS = () => {
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[3fr_2fr]">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {/* Search & Filters */}
@@ -1521,7 +1521,7 @@ const POS = () => {
           </div>
 
           {/* Cart Section */}
-          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[320px]">
+          <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden lg:min-w-[360px]">
             <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
