@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, Customer, ServiceType
+from apps.cashier.models import Register
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
 from apps.users.models import UserProfile
@@ -199,3 +200,47 @@ class OrderPaymentFlowTests(TestCase):
         width = self._extract_media_box_width(pdf_response.content)
         self.assertAlmostEqual(width, 80 * 72 / 25.4, delta=1.0)
         self.assertLess(width, 400.0)
+
+    def test_create_order_requires_open_cash_session_when_register_exists(self):
+        Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
+        response = self.client.post(
+            "/api/orders/",
+            {
+                "branch_id": self.branch.id,
+                "service_type_key": "dine-in",
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "product_name_snapshot": self.product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json().get("code"), "CASH_SESSION_REQUIRED")
+
+    def test_create_payment_requires_open_cash_session_when_register_exists(self):
+        Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
+        order = Order.objects.create(
+            order_number=105,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            customer=self.customer,
+            customer_name=self.customer.name,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+        response = self.client.post(
+            "/api/payments/",
+            {"order": order.id, "method": "cash", "amount": "10.00", "tip_amount": "0.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json().get("code"), "CASH_SESSION_REQUIRED")

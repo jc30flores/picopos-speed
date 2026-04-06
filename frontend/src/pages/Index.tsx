@@ -147,6 +147,7 @@ const POS = () => {
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
+  const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closingCashInput, setClosingCashInput] = useState("");
@@ -871,11 +872,30 @@ const POS = () => {
       ]);
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
+      if (!snapshot.open) {
+        setIsOpenSessionModalOpen(true);
+      }
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
+      setIsOpenSessionModalOpen(true);
+      setCashSnapshot({ open: false });
+    } finally {
+      setIsCashGateLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadCashData().catch(() => undefined);
+    const forceCashGate = () => {
+      setCashSnapshot((previous) => ({ ...previous, open: false }));
+      setIsOpenSessionModalOpen(true);
+    };
+    window.addEventListener("cash:required", forceCashGate as EventListener);
+    return () => {
+      window.removeEventListener("cash:required", forceCashGate as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     getPaymentMethods().then((methods) => {
@@ -1063,6 +1083,7 @@ const POS = () => {
   };
 
   const handleOpenDrawer = async () => {
+    if (!cashSnapshot.open) return;
     const now = Date.now();
     if (now - lastDrawerOpenAtRef.current < 500) return;
     lastDrawerOpenAtRef.current = now;
@@ -1628,6 +1649,14 @@ const POS = () => {
     await handlePrintReceipt();
   };
 
+  if (isCashGateLoading) {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background">
+        <div className="text-sm text-muted-foreground">Verificando estado de caja...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
@@ -2075,8 +2104,8 @@ const POS = () => {
                       size="icon"
                       variant="outline"
                       onClick={handleOpenDrawer}
-                      disabled={isOpeningDrawer}
-                      className="h-14 w-full"
+                      disabled={isOpeningDrawer || !cashSnapshot.open}
+                      className={`h-14 w-full ${!cashSnapshot.open ? "opacity-50 cursor-not-allowed" : ""}`}
                       aria-label="Abrir cajón"
                       title="Abrir cajón"
                     >
@@ -2117,10 +2146,28 @@ const POS = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isOpenSessionModalOpen} onOpenChange={setIsOpenSessionModalOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={isOpenSessionModalOpen}
+        onOpenChange={(open) => {
+          if (!open && !cashSnapshot.open) return;
+          setIsOpenSessionModalOpen(open);
+        }}
+      >
+        <DialogContent
+          className="max-w-md"
+          showCloseButton={cashSnapshot.open}
+          onEscapeKeyDown={(event) => {
+            if (!cashSnapshot.open) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (!cashSnapshot.open) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (!cashSnapshot.open) event.preventDefault();
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Aperturar caja</DialogTitle>
+            <DialogTitle>{cashSnapshot.open ? "Aperturar caja" : "Caja cerrada / Apertura requerida"}</DialogTitle>
             <DialogDescription>Ingresa el efectivo inicial para abrir la sesión.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -2133,7 +2180,9 @@ const POS = () => {
               inputMode="decimal"
             />
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+              {cashSnapshot.open ? (
+                <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+              ) : null}
               <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
               </Button>
@@ -2667,7 +2716,8 @@ const POS = () => {
               onClick={() => {
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
-                hardReloadPos("finalize_omit");
+                scheduleReload();
+                scheduleHardReload("finalize_omit");
               }}
             >
               Omitir

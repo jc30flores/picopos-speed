@@ -8,3 +8,5 @@ pyusb>=1.2,<2.0
 requests>=2.32,<3.0
 python-dotenv>=1.0,<2.0
 reportlab>=4.2,<5.0
+qrcode>=8.0,<9.0
+pypdf>=4.3,<5.0

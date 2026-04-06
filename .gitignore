@@ -26,3 +26,4 @@ backend/assets/receipt/logo_pdg.png
 backend/venv/
 backend/**/__pycache__/
 *.pyc
+backend/media/receipts/*.pdf

@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
-from apps.cashier.models import CashSession, CashTransaction
+from apps.cashier.models import Register, CashSession, CashTransaction
 from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
@@ -149,6 +149,12 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = serializer.validated_data["order"]
+        branch_has_register = Register.objects.filter(branch_id=order.branch_id, is_active=True).exists()
+        if branch_has_register and not _get_open_session_for_branch(order.branch_id):
+            return Response(
+                {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
+                status=status.HTTP_409_CONFLICT,
+            )
         order = order.__class__.objects.select_for_update().get(pk=order.pk)
         existing_applied_cents = sum(
             to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
@@ -554,12 +560,7 @@ class PaymentPrintTicketView(APIView):
                 pdf_kwargs={
                     "logo_path": payload.get("meta", {}).get("logo_path"),
                     "qr_value": payload.get("meta", {}).get("public_url"),
-                    "qr_title": "QR Hacienda",
-                    "center_lines": [
-                        payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
-                        payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
-                        payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
-                    ],
+                    "receipt_context": payload.get("meta", {}).get("receipt_context"),
                     "suppress_qr_url_lines": True,
                 },
                 context=context,
@@ -629,12 +630,7 @@ class PaymentTicketPDFView(APIView):
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
             qr_value=payload.get("meta", {}).get("public_url"),
-            qr_title="QR Hacienda",
-            center_lines=[
-                payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
-                payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
-                payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
-            ],
+            receipt_context=payload.get("meta", {}).get("receipt_context"),
             suppress_qr_url_lines=True,
         )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")

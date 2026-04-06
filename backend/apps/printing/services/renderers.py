@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from textwrap import wrap
 from django.conf import settings
@@ -29,7 +29,8 @@ def _center(text: str) -> str:
 
 
 def _format_money(value: Decimal) -> str:
-    return f"${value:.2f}"
+    normalized = Decimal(str(value or "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"${normalized:.2f}"
 
 
 def _divider() -> str:
@@ -47,6 +48,13 @@ def _service_type_label(order: Order) -> str:
         "drive_thru": "DRIVE THRU",
     }
     return mapping.get(key, key.replace("_", " ").upper())
+
+
+def _display_brand_name(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw.lower().startswith("pico de gallo"):
+        return "Pico de Gallo"
+    return raw or "Pico de Gallo"
 
 
 def _format_right_label_value(label: str, value: str) -> str:
@@ -76,14 +84,25 @@ def _display_payment_label(payment) -> str:
 
 
 def _derive_totals_from_total(total_including_iva: Decimal) -> tuple[Decimal, Decimal]:
-    total = Decimal(total_including_iva or 0).quantize(Decimal("0.01"))
-    subtotal = (total / Decimal("1.13")).quantize(Decimal("0.01"))
-    iva = (total - subtotal).quantize(Decimal("0.01"))
+    total = Decimal(str(total_including_iva or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    iva_rate = Decimal("0.13")
+    subtotal = (total / (Decimal("1.00") + iva_rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    iva = (total - subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     # Ensure exact identity subtotal + iva == total
-    delta = (total - (subtotal + iva)).quantize(Decimal("0.01"))
-    if delta:
-        iva = (iva + delta).quantize(Decimal("0.01"))
+    if subtotal + iva != total:
+        iva = (total - subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return subtotal, iva
+
+
+def _format_item_row(*, qty: int | float | Decimal, desc: str, unit: Decimal, total: Decimal, col_qty: int, col_desc: int, col_unit: int, col_total: int) -> list[str]:
+    wrapped_desc = wrap(str(desc or ""), width=col_desc, break_long_words=True, break_on_hyphens=False) or [""]
+    lines = [
+        f"{str(qty)[:col_qty]:<{col_qty}} {wrapped_desc[0]:<{col_desc}} {_format_money(unit):>{col_unit}} {_format_money(total):>{col_total}}"
+    ]
+    indent = " " * (col_qty + 1)
+    for extra_line in wrapped_desc[1:]:
+        lines.append(f"{indent}{extra_line:<{col_desc}} {'':>{col_unit}} {'':>{col_total}}")
+    return lines
 
 
 def build_receipt_context(order: Order) -> dict:
@@ -109,7 +128,9 @@ def build_receipt_context(order: Order) -> dict:
     codigo_generacion = (identificacion.get("codigoGeneracion") if isinstance(identificacion, dict) else "") or (dte_record.codigo_generacion if dte_record else "")
     numero_control = (identificacion.get("numeroControl") if isinstance(identificacion, dict) else "") or (dte_record.control_number if dte_record else "")
 
-    total = Decimal(str(resumen.get("totalPagar") or order.total or "0.00")).quantize(Decimal("0.01"))
+    payment_total = sum((Decimal(str(p.amount or "0")) for p in payments), Decimal("0"))
+    total_source = payment_total if payment_total > 0 else Decimal(str(resumen.get("totalPagar") or order.total or "0.00"))
+    total = Decimal(str(total_source)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     subtotal_display, iva_display = _derive_totals_from_total(total)
     iva = iva_display
     iva_rete1 = Decimal(str(resumen.get("ivaRete1") or "0.00")).quantize(Decimal("0.01"))
@@ -215,29 +236,41 @@ def render_customer_ticket(order: Order) -> dict:
     col_unit = 8
     col_total = 9
     col_desc = max(8, _width() - col_qty - col_unit - col_total - 3)
-    lines: list[str] = []
-    lines.append(_center(ctx["tagline"]))
-    lines.append(_center(ctx["restaurant_name"]))
+    brand_name = _display_brand_name(ctx["tagline"] or ctx["restaurant_name"])
+    center_lines: list[str] = [brand_name]
     if ctx["address"]:
-        lines.append(_center(str(ctx["address"])))
-    if ctx["phone"]:
-        lines.append(_center(f"Tel: {ctx['phone']}"))
+        center_lines.extend(wrap(str(ctx["address"]), width=_width()) or [str(ctx["address"])])
+    center_lines.extend(
+        [
+            "DATOS DTE",
+            f"No. Control: {ctx['dte']['numero_control'] or '-'}",
+            f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}",
+            f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}",
+        ]
+    )
+
+    lines: list[str] = [_center(line) for line in center_lines]
     lines.append(_divider())
     lines.append(_center(ctx["service_type_label"]))
-    lines.append(_line(f"Atendido por: {ctx['cashier_name']}"))
-    lines.append(_line(f"Orden #{ctx['order_number']}"))
-    lines.append(_line(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
+    lines.append(_center(f"Atendido por: {ctx['cashier_name']}"))
+    lines.append(_center(f"Orden #{ctx['order_number']}"))
+    lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
     lines.append(_divider())
     lines.append(f"{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'P.UNIT':>{col_unit}} {'TOTAL':>{col_total}}")
     lines.append(_divider())
     for item in ctx["items"]:
-        unit = _format_money(item["unit_price"])
-        total = _format_money(item["line_total"])
-        wrapped = wrap(str(item["name"]), width=col_desc) or [""]
-        first_desc = wrapped[0]
-        lines.append(f"{str(item['qty'])[:col_qty]:<{col_qty}} {first_desc:<{col_desc}} {unit:>{col_unit}} {total:>{col_total}}")
-        for extra_line in wrapped[1:]:
-            lines.append(f"{'':<{col_qty}} {extra_line:<{col_desc}} {'':>{col_unit}} {'':>{col_total}}")
+        lines.extend(
+            _format_item_row(
+                qty=item["qty"],
+                desc=item["name"],
+                unit=Decimal(str(item["unit_price"])),
+                total=Decimal(str(item["line_total"])),
+                col_qty=col_qty,
+                col_desc=col_desc,
+                col_unit=col_unit,
+                col_total=col_total,
+            )
+        )
 
     lines.append(_divider())
     lines.append(_format_right_label_value("Subtotal", _format_money(ctx["totals"]["subtotal"])))
@@ -253,22 +286,34 @@ def render_customer_ticket(order: Order) -> dict:
     if ctx["payment"]["change_due"] > 0:
         lines.append(_line(f"Cambio: {_format_money(ctx['payment']['change_due'])}"))
     lines.append(_divider())
-    lines.append(_line("Datos DTE"))
-    lines.append(_line(f"No. Control: {ctx['dte']['numero_control'] or '-'}"))
-    lines.append(_line(f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}"))
-    lines.append(_line(f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}"))
-    lines.append(_line("QR Hacienda:"))
-    for qr_line in wrap(ctx["public_url"], width=_width()):
-        lines.append(_line(qr_line))
-    lines.append(_divider())
     lines.append(_center("Gracias por su visita"))
-    lines.append(_center(f"Order No: {ctx['order_number']}"))
-    lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
 
     text = "\n".join(lines)
+    items_html = "".join(
+        f"<tr><td>{item['qty']}</td><td>{item['name']}</td><td>{_format_money(Decimal(str(item['unit_price'])))}</td><td>{_format_money(Decimal(str(item['line_total'])))}</td></tr>"
+        for item in ctx["items"]
+    )
+    center_html = "".join(f"<div class='center'>{line}</div>" for line in center_lines)
+    html = (
+        "<div class='ticket'>"
+        "<style>"
+        ".ticket{font-family:Courier,monospace;font-size:10px;text-align:center}"
+        ".center{line-height:1.2}"
+        ".items{width:100%;font-size:11px;border-collapse:collapse}"
+        ".items th,.items td{padding:1px 0;vertical-align:top}"
+        ".items th{text-align:right}"
+        ".items th:nth-child(2),.items td:nth-child(2){text-align:left;padding:0 4px}"
+        ".items td{text-align:right}"
+        "</style>"
+        f"{center_html}"
+        "<table class='items'><thead><tr><th>CANT</th><th>DESCRIPCION</th><th>P.UNIT</th><th>TOTAL</th></tr></thead><tbody>"
+        f"{items_html}"
+        "</tbody></table>"
+        "</div>"
+    )
     return {
         "text": text,
-        "html": f"<pre>{text}</pre>",
+        "html": html,
         "meta": {
             "order_id": order.id,
             "type": "customer",
@@ -278,6 +323,7 @@ def render_customer_ticket(order: Order) -> dict:
             "logo_path": ctx["logo_path"],
             "logo_exists": ctx["logo_exists"],
             "receipt_context": ctx,
+            "pdf_center_lines": center_lines,
         },
     }
 

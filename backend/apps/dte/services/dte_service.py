@@ -108,6 +108,44 @@ def json_number(value: str | int | float | Decimal | None) -> int | float:
     return float(dec)
 
 
+def _almost_equal(a: Decimal, b: Decimal, tolerance: Decimal = Decimal("0.01")) -> bool:
+    return abs(money(a) - money(b)) <= tolerance
+
+
+def _sum_item_discounts(cuerpo: list[dict]) -> Decimal:
+    return money(sum((money(line.get("montoDescu")) for line in cuerpo), Decimal("0.00")))
+
+
+def _validate_dte_totals(dte_payload: dict) -> None:
+    resumen = (dte_payload.get("resumen") or {}) if isinstance(dte_payload, dict) else {}
+    cuerpo = (dte_payload.get("cuerpoDocumento") or []) if isinstance(dte_payload, dict) else []
+    total_no_suj = money(resumen.get("totalNoSuj"))
+    total_exenta = money(resumen.get("totalExenta"))
+    total_gravada = money(resumen.get("totalGravada"))
+    sub_total_ventas = money(resumen.get("subTotalVentas"))
+    descu_no_suj = money(resumen.get("descuNoSuj"))
+    descu_exenta = money(resumen.get("descuExenta"))
+    descu_gravada = money(resumen.get("descuGravada"))
+    sub_total = money(resumen.get("subTotal"))
+    total_descu = money(resumen.get("totalDescu"))
+
+    calc_sub_total_ventas = money(total_no_suj + total_exenta + total_gravada)
+    calc_global_desc = money(descu_no_suj + descu_exenta + descu_gravada)
+    calc_sub_total = money(calc_sub_total_ventas - calc_global_desc)
+    calc_total_descu = money(_sum_item_discounts(cuerpo) + calc_global_desc)
+
+    errors: list[str] = []
+    if not _almost_equal(sub_total_ventas, calc_sub_total_ventas):
+        errors.append(f"subTotalVentas={sub_total_ventas} calc={calc_sub_total_ventas}")
+    if not _almost_equal(sub_total, calc_sub_total):
+        errors.append(f"subTotal={sub_total} calc={calc_sub_total}")
+    if not _almost_equal(total_descu, calc_total_descu):
+        errors.append(f"totalDescu={total_descu} calc={calc_total_descu}")
+    if errors:
+        logger.error("dte.validation_failed resumen_mismatch %s", " | ".join(errors))
+        raise DTEPreflightError("DTE inconsistente: resumen de totales no cuadra.")
+
+
 _NUMERIC_KEYS = {
     "cantidad",
     "precioUni",
@@ -333,8 +371,12 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
-    subtotal_final = _q2(total_gravada + total_exenta)
-    subtotal_ventas = _q2(subtotal_final + total_descuento)
+    subtotal_ventas = money(total_gravada + total_exenta)
+    global_desc_no_suj = Decimal("0.00")
+    global_desc_exenta = Decimal("0.00")
+    global_desc_gravada = Decimal("0.00")
+    global_desc_total = money(global_desc_no_suj + global_desc_exenta + global_desc_gravada)
+    subtotal_final = money(subtotal_ventas - global_desc_total)
     total_pagar = subtotal_final
     emisor_payload = {
         "nit": final_nit,
@@ -407,8 +449,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     pagos = get_mh_payment_info(order)
     resumen = {
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
-        "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(Decimal("0.00")), "descuExenta": json_number(money(total_descuento if order.iva_exempt else Decimal("0.00"))), "descuGravada": json_number(money(total_descuento if not order.iva_exempt else Decimal("0.00"))),
-        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
+        "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(money(global_desc_no_suj)), "descuExenta": json_number(money(global_desc_exenta)), "descuGravada": json_number(money(global_desc_gravada)),
+        "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento + global_desc_total)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
         "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
@@ -432,6 +474,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
+    _validate_dte_totals(payload.get("dte", {}))
     assert_no_string_numbers(payload)
     return payload
 
