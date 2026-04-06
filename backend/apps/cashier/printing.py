@@ -11,6 +11,7 @@ from apps.cashier.serializers import calculate_shift_summary
 from apps.core.models import ServiceType
 from apps.orders.models import AppliedDiscount, Order
 from apps.payments.models import Payment, PaymentMethod, Refund
+from apps.printing.services.pdf_text import SimpleTextPdfWriter
 from apps.printing.services.usb_printer import USBPrinterService
 
 TZ_SV = ZoneInfo("America/El_Salvador")
@@ -314,76 +315,35 @@ def print_ticket_text(text: str) -> tuple[bool, str | None]:
 
 
 def _fallback_pdf_bytes(text: str) -> bytes:
-    lines = text.splitlines() or [""]
-    font_size = 10
-    line_height = 14
-    left_margin = 40
-    top_margin = 32
-    bottom_margin = 32
-    page_width = 612
-    page_height = max(792, top_margin + bottom_margin + (len(lines) * line_height))
-    start_y = page_height - top_margin
-
-    escaped_lines = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
-    content_lines = [
-        "BT",
-        f"/F1 {font_size} Tf",
-        f"{line_height} TL",
-        f"{left_margin} {start_y} Td",
-    ]
-    for idx, line in enumerate(escaped_lines):
-        content_lines.append(f"({line}) Tj")
-        if idx < len(escaped_lines) - 1:
-            content_lines.append("T*")
-    content_lines.append("ET")
-    content = "\n".join(content_lines)
-    content_len = len(content.encode("latin-1", errors="ignore"))
-    objects = []
-    objects.append('1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj')
-    objects.append('2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj')
-    objects.append(f'3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj')
-    objects.append(f'4 0 obj << /Length {content_len} >> stream\n{content}\nendstream endobj')
-    objects.append('5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj')
-    pdf = '%PDF-1.4\n'
-    offsets = []
-    for obj in objects:
-        offsets.append(len(pdf.encode('latin-1')))
-        pdf += obj + '\n'
-    xref_offset = len(pdf.encode('latin-1'))
-    pdf += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
-    for off in offsets:
-        pdf += f"{off:010d} 00000 n \n"
-    pdf += f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF"
-    return pdf.encode('latin-1', errors='ignore')
+    writer = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
+    for line in (text.splitlines() or [""]):
+        writer.writeLine(line)
+    return writer.build()
 
 
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
+    session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
+    summary = calculate_shift_summary(session)
     text = build_end_of_day_ticket(session_id)
-    try:
-        from io import BytesIO
-        from reportlab.lib.units import mm
-        from reportlab.pdfgen import canvas
 
-        lines = text.split("\n")
-        page_width = 80 * mm
-        page_height = 220 * mm
-        left_margin = 4 * mm
-        top_margin = 6 * mm
-        bottom_margin = 6 * mm
-        line_height = 4.2 * mm
-
-        buf = BytesIO()
-        c = canvas.Canvas(buf, pagesize=(page_width, page_height))
-        c.setFont("Courier", 8.5)
-        y = page_height - top_margin
-        for line in lines:
-            if y <= bottom_margin:
-                c.showPage()
-                c.setFont("Courier", 8.5)
-                y = page_height - top_margin
-            c.drawString(left_margin, y, line)
-            y -= line_height
-        c.save()
-        return buf.getvalue()
-    except Exception:
-        return _fallback_pdf_bytes(text)
+    writer = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
+    writer.writeTitle("Cierre de Caja")
+    writer.writeKeyValue("Sucursal", session.register.branch.name)
+    writer.writeKeyValue("Caja", f"{session.register.station_name} - {session.register.name}")
+    writer.writeKeyValue("Usuario apertura", getattr(session.opened_by, "username", "N/A"))
+    writer.writeKeyValue("Usuario cierre", getattr(session.closed_by, "username", "N/A"))
+    writer.writeKeyValue("Apertura", _format_dt_sv(session.opened_at))
+    writer.writeKeyValue("Cierre", _format_dt_sv(session.closed_at or timezone.now()))
+    writer.writeKeyValue("Esperado", _money(summary.get("expected_cash_in_drawer")))
+    writer.writeKeyValue("Contado", _money(summary.get("counted_cash")))
+    writer.writeKeyValue("Diferencia", _money(summary.get("difference")))
+    writer.writeLine("")
+    writer.writeTitle("Resumen")
+    writer.writeKeyValue("Efectivo inicial", _money(summary.get("opening_cash")))
+    writer.writeKeyValue("Ventas efectivo", _money(summary.get("total_cash_sales")))
+    writer.writeKeyValue("Gastos", _money(summary.get("cash_expenses_total")))
+    writer.writeLine("")
+    writer.writeTitle("Detalle del cierre")
+    for line in text.split("\n"):
+        writer.writeLine(line)
+    return writer.build()

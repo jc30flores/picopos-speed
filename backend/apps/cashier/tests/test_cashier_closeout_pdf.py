@@ -41,5 +41,17 @@ class CashierCloseoutPdfTests(TestCase):
         pdf_bytes = _fallback_pdf_bytes(long_text)
         self.assertIn(b" TL", pdf_bytes)
         self.assertIn(b"T*", pdf_bytes)
-        # 180 lines should force the dynamic page height above default Letter(792)
-        self.assertIn(b"/MediaBox [0 0 612 2584]", pdf_bytes)
+
+    def test_closeout_pdf_contains_required_sections_and_uses_leading(self):
+        session = CashSession.objects.create(
+            register=self.register,
+            opened_by=self.user,
+            status="closed",
+            opening_cash="50.00",
+            closing_counted_cash="55.00",
+        )
+        pdf_bytes = build_end_of_day_ticket_pdf(session.id)
+        self.assertIn(b"CIERRE DE CAJA", pdf_bytes)
+        self.assertIn(b"SUCURSAL", pdf_bytes)
+        self.assertIn(b"DIFERENCIA", pdf_bytes)
+        self.assertIn(b" TL", pdf_bytes)

@@ -89,6 +89,7 @@ class CashierFlowTests(TestCase):
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
+        self.assertEqual(pdf['Content-Disposition'], f'attachment; filename="cierre_caja_{session_id}.pdf"')
 
     def test_close_without_open_session_returns_400(self):
         close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
