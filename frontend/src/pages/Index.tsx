@@ -2667,7 +2667,8 @@ const POS = () => {
               onClick={() => {
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
-                hardReloadPos("finalize_omit");
+                scheduleReload();
+                scheduleHardReload("finalize_omit");
               }}
             >
               Omitir

@@ -27,7 +27,7 @@ def get_cat017_code_and_label(payment) -> tuple[str, str]:
     if raw_lower == "card" or normalized_code in {"card", "tarjeta"}:
         return ("03", "Tarjeta Crédito") if card_type == "credit" else ("02", "Tarjeta Débito")
 
-    if raw_lower in {"pedidosya", "pedidos_ya"} or normalized_code in {"pedidosya"}:
+    if raw_lower in {"pedidosya", "pedidos_ya", "delivery"} or normalized_code in {"pedidosya", "delivery"}:
         # Pedidos Ya must be reported as card in MH CAT-017 (never transfer).
         return "03", "Pedidos Ya (Tarjeta Crédito)"
 

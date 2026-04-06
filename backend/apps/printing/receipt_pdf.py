@@ -152,11 +152,9 @@ def build_receipt_pdf(
 
     margin_x = mm_to_points(margins_mm)
     margin_y = mm_to_points(margins_mm)
+    leading = max(line_height, font_size + 1.2)
 
     try:
-        from reportlab.graphics import renderPDF
-        from reportlab.graphics.barcode import qr as rl_qr
-        from reportlab.graphics.shapes import Drawing
         from reportlab.lib.utils import ImageReader
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfgen import canvas
@@ -177,28 +175,41 @@ def build_receipt_pdf(
                     if img_w and img_h:
                         logo_draw_width = min(content_width * 0.75, mm_to_points(55))
                         logo_draw_height = logo_draw_width * (float(img_h) / float(img_w))
-                        logo_padding_bottom = line_height * 0.4
+                        logo_padding_bottom = leading * 0.5
                 except Exception:
                     logo_reader = None
 
         qr_size = 0.0
         qr_padding_top = 0.0
-        qr_title_height = 0.0
+        qr_reader = None
         if qr_value:
-            qr_size = min(content_width * 0.7, mm_to_points(42))
-            qr_padding_top = line_height * 0.5
-            qr_title_height = line_height if qr_title else 0.0
+            qr_size = min(content_width * 0.58, mm_to_points(32))
+            qr_padding_top = leading * 0.5
+            try:
+                import qrcode
+
+                qr_img = qrcode.make(sanitize_receipt_text(str(qr_value)))
+                qr_reader = ImageReader(qr_img)
+            except Exception:
+                qr_reader = None
+
+        line_segments: list[tuple[str, bool]] = []
+        for line in clean_lines:
+            normalized = line.strip()
+            is_rule = bool(normalized and set(normalized) <= {"-", "_"} and len(normalized) >= 3)
+            line_segments.append((line, is_rule))
+        text_height = sum((leading * 0.9) if is_rule else leading for _, is_rule in line_segments)
 
         page_height = max(
             mm_to_points(35),
             margin_y
             + logo_draw_height
             + logo_padding_bottom
-            + (len(centered) * line_height)
+            + (len(centered) * leading)
             + qr_padding_top
-            + qr_title_height
             + qr_size
-            + (len(clean_lines) * line_height)
+            + (leading * 0.4 if qr_size > 0 else 0.0)
+            + text_height
             + margin_y,
         )
 
@@ -215,37 +226,25 @@ def build_receipt_pdf(
             y -= logo_padding_bottom
 
         for line in centered:
-            y -= line_height
+            y -= leading
             text_width = pdfmetrics.stringWidth(line, font_name, font_size)
             x_line = max(margin_x, (page_width_pt - text_width) / 2.0)
             pdf.drawString(x_line, y, line)
 
-        if qr_value and qr_size > 0:
+        if qr_reader and qr_size > 0:
             y -= qr_padding_top
-            if qr_title:
-                title = sanitize_receipt_text(qr_title).strip()
-                y -= line_height
-                text_width = pdfmetrics.stringWidth(title, font_name, font_size)
-                pdf.drawString(max(margin_x, (page_width_pt - text_width) / 2.0), y, title)
             y -= qr_size
-            qr_widget = rl_qr.QrCodeWidget(qr_value)
-            bounds = qr_widget.getBounds()
-            qr_w = bounds[2] - bounds[0]
-            qr_h = bounds[3] - bounds[1]
-            drawing = Drawing(qr_size, qr_size, transform=[qr_size / qr_w, 0, 0, qr_size / qr_h, 0, 0])
-            drawing.add(qr_widget)
-            renderPDF.draw(drawing, pdf, (page_width_pt - qr_size) / 2.0, y)
-            y -= line_height * 0.5
+            pdf.drawImage(qr_reader, (page_width_pt - qr_size) / 2.0, y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
+            y -= leading * 0.4
 
-        for line in clean_lines:
-            normalized = line.strip()
-            if normalized and set(normalized) <= {"-", "_"} and len(normalized) >= 3:
-                y -= line_height * 0.6
+        for line, is_rule in line_segments:
+            if is_rule:
+                y -= leading * 0.55
                 pdf.setLineWidth(0.7)
                 pdf.line(margin_x, y, page_width_pt - margin_x, y)
-                y -= line_height * 0.4
+                y -= leading * 0.35
                 continue
-            y -= line_height
+            y -= leading
             pdf.drawString(margin_x, y, line)
 
         pdf.save()
