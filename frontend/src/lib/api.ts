@@ -1,5 +1,6 @@
 import { fromCents, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
+const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
 
 export type Category = {
   id: number;
@@ -455,6 +456,12 @@ const buildApiUrl = (path: string) => {
   return `${base}${normalizedPath}`;
 };
 
+const authDebugLog = (...args: unknown[]) => {
+  if (!AUTH_DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.info("[auth-debug]", ...args);
+};
+
 const getCsrfToken = () => {
   const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -491,16 +498,23 @@ const request = async (path: string, options: RequestInit = {}) => {
     }
   }
 
-  const response = await fetch(buildApiUrl(path), {
-    credentials: "include",
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(buildApiUrl(path), {
+      credentials: "include",
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    authDebugLog("network_error", { path, method, error: error instanceof Error ? error.message : String(error) });
+    throw new Error("NETWORK_ERROR");
+  }
   const authBypassUnauthorizedEvent = new Set([
     "/auth/csrf",
     "/auth/login",
     "/auth/pin-login",
     "/auth/logout",
+    "/auth/me",
   ]);
   if ((response.status === 401 || response.status === 403) && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
@@ -563,6 +577,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     method: "POST",
     body: JSON.stringify({ pin: String(payload.pin) }),
   });
+  authDebugLog("pin_login.response", { status: response.status, ok: response.ok });
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
@@ -574,6 +589,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
     throw new Error(detail || `PIN_LOGIN_ERROR_${response.status}`);
   }
   const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
+  authDebugLog("pin_login.payload_keys", Object.keys(raw ?? {}));
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),
@@ -593,6 +609,7 @@ export const logout = async (): Promise<void> => {
 export const me = async (): Promise<AuthUser> => {
   const response = await request("/auth/me/");
   const raw = await handleJson<AuthUser & { is_superuser?: boolean; is_staff?: boolean; redirect_to?: string }>(response);
+  authDebugLog("me.response", { status: response.status, user: raw?.username, role: raw?.role });
   return {
     ...raw,
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser),

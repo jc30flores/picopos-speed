@@ -29,14 +29,24 @@ def _get_or_create_profile(user):
 
 
 def _build_auth_payload(user, role: str):
-    return {
+    profile_payload = {
+        "role": role,
+        "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),
+    }
+    user_payload = {
         "id": user.id,
         "username": user.get_username(),
         "email": user.email,
-        "role": role,
-        "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),
         "is_superuser": bool(user.is_superuser),
         "is_staff": bool(user.is_staff),
+    }
+    return {
+        # Legacy flat shape (frontend compatibility)
+        **user_payload,
+        **profile_payload,
+        # Stable structured shape (new contract)
+        "user": user_payload,
+        "profile": profile_payload,
     }
 
 
@@ -131,7 +141,15 @@ def pin_login_view(request):
 
         cache.delete(throttle_key)
         login(request, user)
-        logger.info("auth.pin_login.success user_id=%s role=%s", user.id, profile.role)
+        session_key = getattr(request.session, "session_key", None)
+        cookie_name = getattr(getattr(request, "session", None), "cookie_name", "sessionid")
+        logger.info(
+            "auth.pin_login.success user_id=%s role=%s session_key=%s session_cookie=%s",
+            user.id,
+            profile.role,
+            f"{str(session_key)[:8]}..." if session_key else "(empty)",
+            cookie_name,
+        )
         return Response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.pin_login.failed")
@@ -159,6 +177,11 @@ def me_view(request):
         profile = _get_or_create_profile(request.user)
         if not profile.is_active:
             return Response({"detail": "User inactive"}, status=status.HTTP_403_FORBIDDEN)
+        logger.debug(
+            "auth.me.success user_id=%s session_key=%s",
+            request.user.id,
+            f"{str(getattr(request.session, 'session_key', ''))[:8]}...",
+        )
         return Response(_build_auth_payload(request.user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.me.failed")

@@ -132,6 +132,21 @@ class SessionAuthFlowTests(TestCase):
         self.assertEqual(me_response.status_code, 200)
         self.assertEqual(me_response.json().get("username"), "pin_session")
 
+    def test_pin_login_and_me_return_stable_contract(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+        payload = login_response.json()
+        self.assertIn("user", payload)
+        self.assertIn("profile", payload)
+        self.assertEqual(payload["user"]["username"], "pin_session")
+
+        me_response = self.client.get("/api/auth/me/")
+        self.assertEqual(me_response.status_code, 200)
+        me_payload = me_response.json()
+        self.assertEqual(me_payload["user"]["username"], "pin_session")
+        self.assertEqual(me_payload["profile"]["role"], "cashier")
+
     def test_logout_works_with_csrf(self):
         token = self._ensure_csrf()
         login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)

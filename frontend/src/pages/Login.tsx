@@ -11,6 +11,7 @@ import { ClockSV } from "@/components/ClockSV";
 import { getLandingRouteForRole } from "@/lib/roleAccess";
 
 const PIN_LENGTH = 6;
+const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -35,6 +36,10 @@ const Login = () => {
     try {
       const session = await loginWithPin({ pin: value });
       toast.success("Sesión iniciada");
+      if (AUTH_DEBUG) {
+        // eslint-disable-next-line no-console
+        console.info("[auth-debug] login.navigate", session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser));
+      }
       navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -44,10 +49,14 @@ const Login = () => {
         toast.error("PIN incorrecto");
       } else if (message.includes("PIN_THROTTLED")) {
         toast.error("Demasiados intentos, espera 30 segundos");
+      } else if (message.includes("SESSION_VERIFY_FAILED")) {
+        toast.error("No se pudo verificar sesión. Intenta nuevamente.");
+      } else if (message.includes("NETWORK_ERROR")) {
+        toast.error("Error de conexión. Reintenta.");
       } else if (message.includes("PIN_FORBIDDEN") || message.includes("csrf")) {
         toast.error("Error de sesión/seguridad. Recarga e intenta de nuevo.");
       } else {
-        toast.error("Error de conexión. Reintenta.");
+        toast.error(message || "No se pudo iniciar sesión.");
       }
       setPin("");
     } finally {
