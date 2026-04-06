@@ -23,7 +23,7 @@ from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.printing.services.renderers import render_customer_ticket
 from apps.payments.models import Payment
-from apps.cashier.models import CashSession, Register
+from apps.cashier.services import has_open_cash_session_for_branch, resolve_branch_id
 from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -34,15 +34,7 @@ logger = logging.getLogger(__name__)
 
 def _selected_branch_id(request):
     raw = request.query_params.get("branch_id")
-    if raw and str(raw).isdigit():
-        return int(raw)
-    from apps.core.models import Branch
-
-    principal = Branch.objects.filter(code="PRINCIPAL", is_active=True).first()
-    if principal:
-        return principal.id
-    first = Branch.objects.filter(is_active=True).order_by("id").first()
-    return first.id if first else None
+    return resolve_branch_id(raw)
 
 
 def _apply_common_filters(request, queryset):
@@ -53,14 +45,6 @@ def _apply_common_filters(request, queryset):
     if service_type and service_type not in {"all", "todos"}:
         queryset = queryset.filter(service_type__key=service_type)
     return queryset, branch_id, service_type
-
-
-def _has_open_cash_session(branch_id: int | None) -> bool:
-    if not branch_id:
-        return False
-    if not Register.objects.filter(branch_id=branch_id, is_active=True).exists():
-        return True
-    return CashSession.objects.filter(register__branch_id=branch_id, status="open", closed_at__isnull=True).exists()
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
@@ -89,7 +73,7 @@ class OrderCreateView(generics.CreateAPIView):
         source = str(serializer.validated_data.get("source") or "").strip().lower()
         branch = serializer.validated_data.get("branch_id")
         branch_id = getattr(branch, "id", None)
-        if source != "kiosk" and not _has_open_cash_session(branch_id):
+        if source != "kiosk" and not has_open_cash_session_for_branch(branch_id):
             return Response(
                 {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
                 status=status.HTTP_409_CONFLICT,

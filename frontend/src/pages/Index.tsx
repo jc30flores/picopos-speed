@@ -822,6 +822,7 @@ const POS = () => {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (isOpenSessionModalOpen && !cashSnapshot.open) return;
     try {
       await ensureCashSessionOpen(async () => {
         await proceedToCheckout();
@@ -829,7 +830,17 @@ const POS = () => {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/caja no aperturada|cash session|required/i.test(message)) {
-        requestOpenSession();
+        try {
+          const current = await getCurrentCashSession();
+          setCashSnapshot(current);
+          if (!current.open) {
+            requestOpenSession();
+            return;
+          }
+          toast.error(message || "Conflicto al crear orden");
+        } catch {
+          requestOpenSession();
+        }
         return;
       }
       toast.error(message || "No se pudo continuar al cobro");
@@ -891,6 +902,8 @@ const POS = () => {
       setCashTransactions(transactions);
       if (!snapshot.open) {
         setIsOpenSessionModalOpen(true);
+      } else {
+        setIsOpenSessionModalOpen(false);
       }
     } catch (error) {
       console.error("Failed to load cash data", error);

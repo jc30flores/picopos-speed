@@ -3603,7 +3603,13 @@ export type CashSessionHistoryRow = {
   summary: CashSessionSnapshot["summary"];
 };
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
-  const response = await request('/cashier/session/current/');
+  const params = new URLSearchParams();
+  const branchIdRaw = localStorage.getItem("selected_branch_id");
+  if (branchIdRaw && Number.isFinite(Number(branchIdRaw))) {
+    params.set("branch_id", String(Number(branchIdRaw)));
+  }
+  const query = params.toString();
+  const response = await request(`/cashier/session/current/${query ? `?${query}` : ""}`);
   const data = await handleJson<any>(response);
   const session = data.session ?? null;
   if (!session) return { open: false };
@@ -3637,9 +3643,13 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
 };
 
 export const openCashSession = async (openingCash: number): Promise<void> => {
+  const branchIdRaw = localStorage.getItem("selected_branch_id");
   await handleJson(await request('/cashier/session/open/', {
     method: 'POST',
-    body: JSON.stringify({ opening_cash: openingCash }),
+    body: JSON.stringify({
+      opening_cash: openingCash,
+      ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
+    }),
   }));
 };
 

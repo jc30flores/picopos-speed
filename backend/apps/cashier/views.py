@@ -24,7 +24,7 @@ from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
-from apps.cashier.services import CashDrawerService
+from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +89,13 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        session = (
-            CashSession.objects.filter(closed_at__isnull=True)
-            .select_related("register", "register__branch")
-            .order_by("-opened_at")
-            .first()
+        raw_branch_id = (
+            request.query_params.get("branch_id")
+            or request.headers.get("X-Branch-Id")
+            or request.headers.get("x-branch-id")
         )
+        branch_id = resolve_branch_id(raw_branch_id)
+        session = get_open_cash_session_for_branch(branch_id)
         if not session:
             return Response({"session": None, "summary": None}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session)
@@ -117,7 +118,10 @@ class CashSessionOpenView(APIView):
             return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
+            branch_id = resolve_branch_id(request.data.get("branch_id"))
+            register = Register.objects.filter(branch_id=branch_id, is_active=True).order_by("id").first()
+            if not register:
+                register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -125,7 +129,7 @@ class CashSessionOpenView(APIView):
         existing_session = (
             CashSession.objects.select_for_update()
             .select_related("register", "register__branch")
-            .filter(register=register, status="open", closed_at__isnull=True)
+            .filter(register__branch_id=register.branch_id, status="open", closed_at__isnull=True)
             .first()
         )
         if existing_session:
