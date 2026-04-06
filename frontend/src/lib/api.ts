@@ -3769,7 +3769,10 @@ export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<v
     const blob = await response.blob();
     const disposition = response.headers.get("content-disposition") || "";
     const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
-    const filename = filenameMatch?.[1] || `cierre_caja_${sessionId}.pdf`;
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const fallback = `end_of_day_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.pdf`;
+    const filename = filenameMatch?.[1] || fallback;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -3800,7 +3803,10 @@ export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void>
   const blob = await response.blob();
   const disposition = response.headers.get("content-disposition") || "";
   const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
-  const filename = filenameMatch?.[1] || `ticket_pago_${paymentId}.pdf`;
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const fallback = `venta_${paymentId}_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.pdf`;
+  const filename = filenameMatch?.[1] || fallback;
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

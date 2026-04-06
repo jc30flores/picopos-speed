@@ -14,6 +14,8 @@ from apps.printing.services.pdf_text import SimpleTextPdfWriter
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _ESC_POS_RE = re.compile(r"\x1b(?:[@-~]|\[[0-?]*[ -/]*[@-~])")
 _QR_URL_RE = re.compile(r"https?://admin\.factura\.gob\.sv/\S*", re.IGNORECASE)
+_CENTER_MARKER = "<<CENTER>>"
+_ITEM_MARKER = "<<ITEM>>"
 _FONT_NAME = "ReceiptMono"
 _FONT_REGISTERED = False
 
@@ -127,8 +129,8 @@ def build_receipt_pdf(
     filename: str,
     page_width_mm: float | None = None,
     max_chars_per_line: int | None = None,
-    font_size: float = 9.0,
-    line_height: float = 11.0,
+    font_size: float = 8.2,
+    line_height: float = 9.8,
     margins_mm: float = 3.0,
     logo_path: str | None = None,
     qr_value: str | None = None,
@@ -193,12 +195,21 @@ def build_receipt_pdf(
             except Exception:
                 qr_reader = None
 
-        line_segments: list[tuple[str, bool]] = []
+        item_font_size = font_size + 0.8
+        item_leading = leading + 0.9
+        line_segments: list[tuple[str, bool, bool, bool]] = []
         for line in clean_lines:
-            normalized = line.strip()
+            is_center = line.startswith(_CENTER_MARKER)
+            is_item = line.startswith(_ITEM_MARKER)
+            line_text = line
+            if is_center:
+                line_text = line_text[len(_CENTER_MARKER):]
+            if is_item:
+                line_text = line_text[len(_ITEM_MARKER):]
+            normalized = line_text.strip()
             is_rule = bool(normalized and set(normalized) <= {"-", "_"} and len(normalized) >= 3)
-            line_segments.append((line, is_rule))
-        text_height = sum((leading * 0.9) if is_rule else leading for _, is_rule in line_segments)
+            line_segments.append((line_text, is_rule, is_center, is_item))
+        text_height = sum((leading * 0.9) if is_rule else (item_leading if is_item else leading) for _, is_rule, _, is_item in line_segments)
 
         page_height = max(
             mm_to_points(35),
@@ -237,15 +248,24 @@ def build_receipt_pdf(
             pdf.drawImage(qr_reader, (page_width_pt - qr_size) / 2.0, y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
             y -= leading * 0.4
 
-        for line, is_rule in line_segments:
+        for line, is_rule, is_center, is_item in line_segments:
             if is_rule:
                 y -= leading * 0.55
                 pdf.setLineWidth(0.7)
                 pdf.line(margin_x, y, page_width_pt - margin_x, y)
                 y -= leading * 0.35
                 continue
-            y -= leading
-            pdf.drawString(margin_x, y, line)
+            active_size = item_font_size if is_item else font_size
+            active_leading = item_leading if is_item else leading
+            pdf.setFont(font_name, active_size)
+            y -= active_leading
+            if is_center:
+                text_width = pdfmetrics.stringWidth(line, font_name, active_size)
+                x_line = max(margin_x, (page_width_pt - text_width) / 2.0)
+                pdf.drawString(x_line, y, line)
+            else:
+                pdf.drawString(margin_x, y, line)
+            pdf.setFont(font_name, font_size)
 
         pdf.save()
         pdf_bytes = stream.getvalue()

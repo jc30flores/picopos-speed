@@ -554,12 +554,7 @@ class PaymentPrintTicketView(APIView):
                 pdf_kwargs={
                     "logo_path": payload.get("meta", {}).get("logo_path"),
                     "qr_value": payload.get("meta", {}).get("public_url"),
-                    "qr_title": "QR Hacienda",
-                    "center_lines": [
-                        payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
-                        payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
-                        payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
-                    ],
+                    "center_lines": payload.get("meta", {}).get("pdf_center_lines") or [],
                     "suppress_qr_url_lines": True,
                 },
                 context=context,
@@ -629,12 +624,7 @@ class PaymentTicketPDFView(APIView):
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
             qr_value=payload.get("meta", {}).get("public_url"),
-            qr_title="QR Hacienda",
-            center_lines=[
-                payload.get("meta", {}).get("receipt_context", {}).get("tagline", "Pico de Gallo POS"),
-                payload.get("meta", {}).get("receipt_context", {}).get("restaurant_name", ""),
-                payload.get("meta", {}).get("receipt_context", {}).get("address", ""),
-            ],
+            center_lines=payload.get("meta", {}).get("pdf_center_lines") or [],
             suppress_qr_url_lines=True,
         )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")

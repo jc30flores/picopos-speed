@@ -3,10 +3,14 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from apps.printing.services.renderers import render_customer_ticket
+from apps.printing.services.renderers import _derive_totals_from_total, render_customer_ticket
 
 
 class ReceiptRendererTests(SimpleTestCase):
+    def test_totals_identity_subtotal_plus_iva_equals_total(self):
+        subtotal, iva = _derive_totals_from_total(11.30)
+        self.assertAlmostEqual(float(subtotal + iva), 11.30, places=2)
+
     def test_render_customer_ticket_does_not_fail_when_logo_missing(self):
         mock_ctx = {
             "tagline": "Pico de Gallo POS",
@@ -37,7 +41,7 @@ class ReceiptRendererTests(SimpleTestCase):
             payload = render_customer_ticket(order)
 
         self.assertIn("Gracias por su visita", payload["text"])
-        self.assertIn("QR Hacienda", payload["text"])
+        self.assertIn("<<CENTER>>DATOS DTE", payload["text"])
         self.assertNotIn("consultaPublica", payload["text"])
         self.assertFalse(payload["meta"]["logo_exists"])
-        self.assertNotIn("[Logo]", payload["text"])
+        self.assertEqual(payload["meta"]["pdf_center_lines"][0], "Pico de Gallo")
