@@ -2136,6 +2136,7 @@ export const getSalesTimeseries = async (filters: {
   modifierIds?: string[];
   serviceTypes?: string[];
   paymentMethods?: string[];
+  signal?: AbortSignal;
 }): Promise<SalesTimeseriesResponse> => {
   const params = new URLSearchParams({
     start: filters.dateFrom,
@@ -2155,7 +2156,7 @@ export const getSalesTimeseries = async (filters: {
   if (filters.compareDateFrom) params.set("compare_date_from", filters.compareDateFrom);
   if (filters.compareDateTo) params.set("compare_date_to", filters.compareDateTo);
 
-  const response = await request(`/reports/sales-timeseries/?${params.toString()}`);
+  const response = await request(`/reports/sales-timeseries/?${params.toString()}`, { signal: filters.signal });
   if (response.ok) {
     const payload = await handleJson<{
       series?: Array<{ key: string; total: string | number }>;
@@ -2230,6 +2231,7 @@ export const getSalesBreakdown = async (filters: {
   modifierIds?: string[];
   serviceTypes?: string[];
   paymentMethods?: string[];
+  signal?: AbortSignal;
 }): Promise<SalesBreakdownRow[]> => {
   const params = new URLSearchParams({
     start: filters.dateFrom,
@@ -2245,7 +2247,7 @@ export const getSalesBreakdown = async (filters: {
   if (filters.modifierIds?.length) params.set("modifier_ids", filters.modifierIds.join(","));
   if (filters.serviceTypes?.length) params.set("service_types", filters.serviceTypes.join(","));
   if (filters.paymentMethods?.length) params.set("payment_methods", filters.paymentMethods.join(","));
-  const response = await request(`/reports/sales-breakdown/?${params.toString()}`);
+  const response = await request(`/reports/sales-breakdown/?${params.toString()}`, { signal: filters.signal });
   if (response.ok) {
     const payload = await handleJson<{ items?: Array<{ id: string | number; name: string; total: string | number; pct: number; count: number }> }>(response);
     return (payload.items ?? []).map((item) => ({

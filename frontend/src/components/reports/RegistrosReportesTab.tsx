@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -104,6 +104,7 @@ export const RegistrosReportesTab = () => {
   const [breakdownRows, setBreakdownRows] = useState<SalesBreakdownRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [debouncedFilters, setDebouncedFilters] = useState("");
+  const pendingRequestRef = useRef<AbortController | null>(null);
   const { activeServiceTypes } = useServiceTypes();
 
   const serviceTypeOptions = activeServiceTypes.map((item) => ({ id: item.key, label: item.label }));
@@ -126,7 +127,10 @@ export const RegistrosReportesTab = () => {
   const toggle = (current: string[], setter: (next: string[]) => void, id: string) =>
     setter(current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    pendingRequestRef.current?.abort();
+    const controller = new AbortController();
+    pendingRequestRef.current = controller;
     setIsLoading(true);
     try {
       const comparison = compareRange(dateFrom, dateTo, granularity, compareWith);
@@ -143,6 +147,7 @@ export const RegistrosReportesTab = () => {
           modifierIds: selectedModifiers,
           serviceTypes: selectedServiceTypes,
           paymentMethods: selectedPaymentMethods,
+          signal: controller.signal,
         }),
         getSalesBreakdown({
           dateFrom,
@@ -154,14 +159,21 @@ export const RegistrosReportesTab = () => {
           modifierIds: selectedModifiers,
           serviceTypes: selectedServiceTypes,
           paymentMethods: selectedPaymentMethods,
+          signal: controller.signal,
         }),
       ]);
       setSeries(timeseries);
       setBreakdownRows(breakdown);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        throw error;
+      }
     } finally {
-      setIsLoading(false);
+      if (pendingRequestRef.current === controller) {
+        setIsLoading(false);
+      }
     }
-  };
+  }, [breakdownTab, compareWith, dateFrom, dateTo, granularity, selectedCategories, selectedModifiers, selectedPaymentMethods, selectedProducts, selectedServiceTypes]);
 
   useEffect(() => {
     const next = JSON.stringify({
@@ -183,7 +195,8 @@ export const RegistrosReportesTab = () => {
   useEffect(() => {
     if (!debouncedFilters) return;
     load().catch(() => undefined);
-  }, [debouncedFilters]);
+    return () => pendingRequestRef.current?.abort();
+  }, [debouncedFilters, load]);
 
   const currentKpis = series?.current ?? { totalSales: 0, transactions: 0, avgTicket: 0 };
   const comparisonKpis = series?.comparison ?? null;

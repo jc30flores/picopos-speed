@@ -18,10 +18,12 @@ def _setting(name: str, default: str = "") -> str:
     return str(getattr(settings, name, os.environ.get(name, default)) or "").strip()
 
 
-def normalize_nit(value: str | None) -> str:
+def normalize_nit(value: str | None, *, source: str = "desconocido") -> str:
     digits = _digits(value)
     if len(digits) != 14:
-        raise ValidationError(f"NIT emisor inválido: se esperaban 14 dígitos y se recibió '{value or ''}'.")
+        raise ValidationError(
+            f"NIT emisor inválido ({source}): se esperaban 14 dígitos y se recibió '{value or ''}'."
+        )
     return digits
 
 
@@ -29,8 +31,11 @@ def get_emisor_nit(branch) -> str:
     cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first() if branch else None
     cfg_nit = _digits(getattr(cfg, "emisor_nit", ""))
     if cfg_nit:
-        return normalize_nit(cfg_nit)
-    return normalize_nit(_setting("DTE_EMISOR_NIT"))
+        return normalize_nit(cfg_nit, source="DTEBranchConfig.emisor_nit")
+    branch_nit = _digits(getattr(branch, "nit", "")) if branch else ""
+    if branch_nit:
+        return normalize_nit(branch_nit, source="Branch.nit")
+    return normalize_nit(_setting("DTE_EMISOR_NIT"), source="DTE_EMISOR_NIT")
 
 
 def get_emisor_config(branch) -> dict[str, Any]:

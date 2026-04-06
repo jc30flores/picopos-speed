@@ -5,6 +5,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
+from rest_framework.exceptions import ValidationError
 
 from apps.core.models import Branch, ServiceType
 from apps.core.models import Customer
@@ -71,6 +72,17 @@ class DTECoreTests(TestCase):
     def test_get_emisor_nit_uses_branch_config(self):
         DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="1217-140990-106-3", is_active=True)
         self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    def test_get_emisor_nit_falls_back_to_branch_nit(self):
+        self.branch.nit = "1217-140990-106-3"
+        self.branch.save(update_fields=["nit"])
+        self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
+
+    def test_get_emisor_nit_invalid_value_reports_source(self):
+        self.branch.nit = "048143931"
+        self.branch.save(update_fields=["nit"])
+        with self.assertRaisesMessage(ValidationError, "Branch.nit"):
+            get_emisor_nit(self.branch)
 
     def test_build_payload_cf_uses_order_item_snapshots(self):
         DTEBranchConfig.objects.create(
