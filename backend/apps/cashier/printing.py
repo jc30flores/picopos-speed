@@ -3,15 +3,15 @@ from __future__ import annotations
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from django.conf import settings
 from django.utils import timezone
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
 
 from apps.cashier.models import CashSession
 from apps.cashier.serializers import calculate_shift_summary
+from apps.core.branch_profile import get_active_branch_id, get_branch_profile
 from apps.core.models import Branch, ServiceType
 from apps.orders.models import AppliedDiscount, Order
-from apps.payments.models import Payment, PaymentMethod, Refund
+from apps.payments.models import Payment, Refund
 from apps.payments.normalization import payment_code_from_payment
 from apps.printing.services.pdf_text import SimpleTextPdfWriter
 from apps.printing.services.usb_printer import USBPrinterService
@@ -75,15 +75,19 @@ def _get_session_range(session: CashSession):
 
 def _payments_for_session(session: CashSession):
     start_at, end_at = _get_session_range(session)
-    return Payment.objects.select_related("payment_method", "reporting_payment_method", "order").filter(created_at__gte=start_at, created_at__lte=end_at)
+    base = Payment.objects.select_related("payment_method", "reporting_payment_method", "order")
+    has_direct_session_rows = base.filter(cash_session=session).exists()
+    if has_direct_session_rows:
+        return base.filter(cash_session=session) | base.filter(
+            cash_session__isnull=True,
+            created_at__gte=start_at,
+            created_at__lte=end_at,
+        )
+    return base.filter(created_at__gte=start_at, created_at__lte=end_at)
 
 
 def _resolve_pdf_branch(session: CashSession):
-    configured_branch_id = (
-        getattr(settings, "BRANCH_ID", None)
-        or getattr(settings, "POS_BRANCH_ID", None)
-        or getattr(settings, "DEFAULT_BRANCH_ID", None)
-    )
+    configured_branch_id = get_active_branch_id()
     if configured_branch_id:
         branch = Branch.objects.filter(id=configured_branch_id).first()
         if branch:
@@ -93,6 +97,17 @@ def _resolve_pdf_branch(session: CashSession):
         if branch:
             return branch
     return Branch.objects.order_by("id").first()
+
+
+def _resolve_branch_profile(session: CashSession) -> dict[str, str]:
+    resolved_branch = _resolve_pdf_branch(session)
+    resolved_branch_id = getattr(resolved_branch, "id", None)
+    profile = get_branch_profile(resolved_branch_id)
+    if resolved_branch and not profile.get("branch_name"):
+        profile["branch_name"] = resolved_branch.name
+    if resolved_branch and not profile.get("branch_code"):
+        profile["branch_code"] = resolved_branch.code
+    return profile
 
 
 def _payment_rows(payments_qs):
@@ -225,6 +240,7 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
 def build_end_of_day_ticket(session_id: int) -> str:
     session = CashSession.objects.select_related("register", "register__branch").get(pk=session_id)
     branch = _resolve_pdf_branch(session)
+    branch_profile = _resolve_branch_profile(session)
     summary = calculate_shift_summary(session)
     ticket_timestamp = _format_dt_sv(session.closed_at or timezone.now())
 
@@ -238,10 +254,10 @@ def build_end_of_day_ticket(session_id: int) -> str:
     item_rows, item_total = _item_subtotals(paid_orders)
     discount_rows, discount_total = _discount_rows(paid_orders)
 
-    addr_1, addr_2, city_dept = _parse_branch_address(getattr(branch, "address", ""))
+    addr_1, addr_2, city_dept = _parse_branch_address(branch_profile.get("direccion_complemento", ""))
 
     lines: list[str] = [
-        (getattr(branch, "name", "PICO DE GALLO POS") or "PICO DE GALLO POS").upper(),
+        (branch_profile.get("branch_name", "") or getattr(branch, "name", "PICO DE GALLO POS") or "PICO DE GALLO POS").upper(),
         addr_1,
         addr_2,
         city_dept,
@@ -340,14 +356,16 @@ def _fallback_pdf_bytes(text: str) -> bytes:
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
     branch = _resolve_pdf_branch(session)
+    branch_profile = _resolve_branch_profile(session)
     summary = calculate_shift_summary(session)
     text = build_end_of_day_ticket(session_id)
 
     writer = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
     writer.writeTitle("Cierre de Caja")
     writer.writeKeyValue("Comercio", "Pico de Gallo POS")
-    writer.writeKeyValue("Sucursal", getattr(branch, "name", "N/A"))
-    writer.writeKeyValue("Dirección", getattr(branch, "address", "N/A") or "N/A")
+    writer.writeKeyValue("Sucursal", branch_profile.get("branch_name") or getattr(branch, "name", "N/A"))
+    writer.writeKeyValue("Código sucursal", branch_profile.get("branch_code") or getattr(branch, "code", "N/A"))
+    writer.writeKeyValue("Dirección", branch_profile.get("direccion_complemento") or "(Dirección no configurada)")
     writer.writeKeyValue("Caja", f"{session.register.station_name} - {session.register.name}")
     writer.writeKeyValue("Usuario apertura", getattr(session.opened_by, "username", "N/A"))
     writer.writeKeyValue("Usuario cierre", getattr(session.closed_by, "username", "N/A"))

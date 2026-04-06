@@ -357,6 +357,10 @@ class CashSessionTicketPDFView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
     renderer_classes = [PdfRenderer]
 
+    def perform_content_negotiation(self, request, force=False):
+        renderer = PdfRenderer()
+        return renderer, renderer.media_type
+
     def get(self, request, pk: int):
         session = CashSession.objects.filter(pk=pk).first()
         if not session:
