@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/useAuth";
 import { toast } from "sonner";
 import { PinKeypad } from "@/components/auth/PinKeypad";
+import { ClockSV } from "@/components/ClockSV";
 
 const PIN_LENGTH = 6;
 
@@ -81,6 +82,8 @@ const Login = () => {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <div className="w-full max-w-md space-y-4">
+      <ClockSV className="mx-auto w-full max-w-sm bg-background/50" timeClassName="text-4xl sm:text-5xl" />
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>{usePassword ? "Login administrador" : "Ingresa tu PIN"}</CardTitle>
@@ -130,6 +133,7 @@ const Login = () => {
           </button>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 };
