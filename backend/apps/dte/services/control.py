@@ -4,7 +4,8 @@ import uuid
 from django.db import transaction
 from django.utils import timezone
 
-from apps.dte.models import DTEBranchConfig, DTEControlCounter
+from apps.dte.models import DTEControlCounter
+from apps.dte.services.emisor import get_emisor_config
 from apps.orders.models import Order
 
 
@@ -47,9 +48,9 @@ def reserve_next_control(*, branch, document_type: str, series: str = "X001X001"
 
 
 def next_control_number(order: Order, dte_type: str = "CF_01", ambiente: str = "00") -> str:
-    cfg = DTEBranchConfig.objects.filter(branch=order.branch, is_active=True).first()
-    est_code = (cfg.cod_estable if cfg and cfg.cod_estable else "X001")
-    pv_code = (cfg.cod_punto_venta if cfg and cfg.cod_punto_venta else "X001")
+    emisor_cfg = get_emisor_config(order.branch)
+    est_code = (emisor_cfg.get("codEstable") or "X001")
+    pv_code = (emisor_cfg.get("codPuntoVenta") or "X001")
     return reserve_next_control(
         branch=order.branch,
         document_type=dte_type,

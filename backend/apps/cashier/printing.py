@@ -8,12 +8,12 @@ from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
 
 from apps.cashier.models import CashSession
 from apps.cashier.serializers import calculate_shift_summary
-from apps.core.branch_profile import get_active_branch_id, get_branch_profile
+from apps.core.branch_profile import get_current_branch_id, get_branch_profile
 from apps.core.models import Branch, ServiceType
 from apps.orders.models import AppliedDiscount, Order
 from apps.payments.models import Payment, Refund
 from apps.payments.normalization import payment_code_from_payment
-from apps.printing.services.pdf_text import SimpleTextPdfWriter
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.printing.services.usb_printer import USBPrinterService
 
 TZ_SV = ZoneInfo("America/El_Salvador")
@@ -87,7 +87,7 @@ def _payments_for_session(session: CashSession):
 
 
 def _resolve_pdf_branch(session: CashSession):
-    configured_branch_id = get_active_branch_id()
+    configured_branch_id = get_current_branch_id()
     if configured_branch_id:
         branch = Branch.objects.filter(id=configured_branch_id).first()
         if branch:
@@ -257,6 +257,7 @@ def build_end_of_day_ticket(session_id: int) -> str:
     addr_1, addr_2, city_dept = _parse_branch_address(branch_profile.get("direccion_complemento", ""))
 
     lines: list[str] = [
+        (branch_profile.get("emisor_nombre", "Pico de Gallo") or "Pico de Gallo").upper(),
         (branch_profile.get("branch_name", "") or getattr(branch, "name", "PICO DE GALLO POS") or "PICO DE GALLO POS").upper(),
         addr_1,
         addr_2,
@@ -347,40 +348,11 @@ def print_ticket_text(text: str) -> tuple[bool, str | None]:
 
 
 def _fallback_pdf_bytes(text: str) -> bytes:
-    writer = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
-    for line in (text.splitlines() or [""]):
-        writer.writeLine(line)
-    return writer.build()
+    return build_receipt_pdf_from_text(text=text, filename="fallback.pdf", page_width_mm=80.0, max_chars_per_line=42).pdf_bytes
 
 
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
-    branch = _resolve_pdf_branch(session)
-    branch_profile = _resolve_branch_profile(session)
-    summary = calculate_shift_summary(session)
     text = build_end_of_day_ticket(session_id)
-
-    writer = SimpleTextPdfWriter(page_width=612, page_height=792, font_name="Courier", font_size=10, line_height=14)
-    writer.writeTitle("Cierre de Caja")
-    writer.writeKeyValue("Comercio", "Pico de Gallo POS")
-    writer.writeKeyValue("Sucursal", branch_profile.get("branch_name") or getattr(branch, "name", "N/A"))
-    writer.writeKeyValue("Código sucursal", branch_profile.get("branch_code") or getattr(branch, "code", "N/A"))
-    writer.writeKeyValue("Dirección", branch_profile.get("direccion_complemento") or "(Dirección no configurada)")
-    writer.writeKeyValue("Caja", f"{session.register.station_name} - {session.register.name}")
-    writer.writeKeyValue("Usuario apertura", getattr(session.opened_by, "username", "N/A"))
-    writer.writeKeyValue("Usuario cierre", getattr(session.closed_by, "username", "N/A"))
-    writer.writeKeyValue("Apertura", _format_dt_sv(session.opened_at))
-    writer.writeKeyValue("Cierre", _format_dt_sv(session.closed_at or timezone.now()))
-    writer.writeKeyValue("Esperado", _money(summary.get("expected_cash_in_drawer")))
-    writer.writeKeyValue("Contado", _money(summary.get("counted_cash")))
-    writer.writeKeyValue("Diferencia", _money(summary.get("difference")))
-    writer.writeLine("")
-    writer.writeTitle("Resumen")
-    writer.writeKeyValue("Efectivo inicial", _money(summary.get("opening_cash")))
-    writer.writeKeyValue("Ventas efectivo", _money(summary.get("total_cash_sales")))
-    writer.writeKeyValue("Gastos", _money(summary.get("cash_expenses_total")))
-    writer.writeLine("")
-    writer.writeTitle("Detalle del cierre")
-    for line in text.split("\n"):
-        writer.writeLine(line)
-    return writer.build()
+    filename = f"cierre_caja_{session.id}.pdf"
+    return build_receipt_pdf_from_text(text=text, filename=filename, page_width_mm=80.0, max_chars_per_line=42).pdf_bytes

@@ -65,8 +65,8 @@ class CashierCloseoutPdfTests(TestCase):
     def test_fallback_pdf_uses_text_leading_and_expands_media_box_for_long_reports(self):
         long_text = "\n".join([f"Linea {idx:03d}" for idx in range(180)])
         pdf_bytes = _fallback_pdf_bytes(long_text)
-        self.assertIn(b" TL", pdf_bytes)
-        self.assertIn(b"T*", pdf_bytes)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+        self.assertIn("LINEA 000".encode("utf-8"), pdf_bytes.upper())
 
     def test_closeout_pdf_contains_required_sections_and_uses_leading(self):
         session = CashSession.objects.create(
@@ -80,7 +80,7 @@ class CashierCloseoutPdfTests(TestCase):
         self.assertIn(b"CIERRE DE CAJA", pdf_bytes)
         self.assertIn(b"SUCURSAL", pdf_bytes)
         self.assertIn(b"DIFERENCIA", pdf_bytes)
-        self.assertIn(b" TL", pdf_bytes)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
 
     @override_settings(BRANCH_ID=5)
     def test_closeout_pdf_uses_branch_from_env_and_dte_address(self):

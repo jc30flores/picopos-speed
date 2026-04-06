@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from typing import Any
 
 from django.conf import settings
 from rest_framework.exceptions import ValidationError
 
+from apps.core.models import Branch
 from apps.dte.models import DTEBranchConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _digits(value: str | None) -> str:
@@ -16,6 +20,40 @@ def _digits(value: str | None) -> str:
 
 def _setting(name: str, default: str = "") -> str:
     return str(getattr(settings, name, os.environ.get(name, default)) or "").strip()
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_branch(branch) -> Branch | None:
+    if branch and getattr(branch, "id", None):
+        return branch
+    branch_id = (
+        _safe_int(getattr(settings, "BRANCH_ID", None))
+        or _safe_int(getattr(settings, "POS_BRANCH_ID", None))
+        or _safe_int(getattr(settings, "DEFAULT_BRANCH_ID", None))
+    )
+    if branch_id:
+        return Branch.objects.filter(id=branch_id).first()
+    return None
+
+
+def _is_valid_nit(value: str | None) -> bool:
+    return len(_digits(value)) == 14
+
+
+def _get_valid_branch_config(branch) -> DTEBranchConfig | None:
+    if not branch:
+        return None
+    configs = DTEBranchConfig.objects.filter(branch_id=branch.id, is_active=True).order_by("-updated_at", "-id")
+    for cfg in configs:
+        if _is_valid_nit(cfg.emisor_nit):
+            return cfg
+    return None
 
 
 def normalize_nit(value: str | None, *, source: str = "desconocido") -> str:
@@ -28,21 +66,27 @@ def normalize_nit(value: str | None, *, source: str = "desconocido") -> str:
 
 
 def get_emisor_nit(branch) -> str:
-    cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first() if branch else None
+    branch_obj = _resolve_branch(branch)
+    cfg = _get_valid_branch_config(branch_obj)
     cfg_nit = _digits(getattr(cfg, "emisor_nit", ""))
     if cfg_nit:
+        logger.info("dte.emisor.nit source=DTEBranchConfig branch_id=%s", getattr(branch_obj, "id", None))
         return normalize_nit(cfg_nit, source="DTEBranchConfig.emisor_nit")
-    branch_nit = _digits(getattr(branch, "nit", "")) if branch else ""
+    branch_nit = _digits(getattr(branch_obj, "nit", "")) if branch_obj else ""
     if branch_nit:
+        logger.info("dte.emisor.nit source=Branch.nit branch_id=%s", getattr(branch_obj, "id", None))
         return normalize_nit(branch_nit, source="Branch.nit")
+    logger.info("dte.emisor.nit source=ENV branch_id=%s", getattr(branch_obj, "id", None))
     return normalize_nit(_setting("DTE_EMISOR_NIT"), source="DTE_EMISOR_NIT")
 
 
 def get_emisor_config(branch) -> dict[str, Any]:
-    cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first() if branch else None
+    branch_obj = _resolve_branch(branch)
+    cfg = _get_valid_branch_config(branch_obj)
     if cfg:
+        logger.info("dte.emisor.config source=DTEBranchConfig branch_id=%s", getattr(branch_obj, "id", None))
         return {
-            "nit": get_emisor_nit(branch),
+            "nit": get_emisor_nit(branch_obj),
             "nrc": (cfg.emisor_nrc or "").strip(),
             "nombre": (cfg.emisor_nombre or "").strip(),
             "nombreComercial": (cfg.emisor_nombre_comercial or "").strip(),
@@ -59,8 +103,9 @@ def get_emisor_config(branch) -> dict[str, Any]:
             "telefono": (cfg.telefono or "").strip(),
             "correo": (cfg.correo or "").strip(),
         }
+    logger.info("dte.emisor.config source=ENV branch_id=%s", getattr(branch_obj, "id", None))
     return {
-        "nit": get_emisor_nit(branch),
+        "nit": get_emisor_nit(branch_obj),
         "nrc": _setting("DTE_EMISOR_NRC"),
         "nombre": _setting("DTE_EMISOR_NOMBRE") or _setting("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
         "nombreComercial": _setting("DTE_EMISOR_NOMBRE_COMERCIAL") or _setting("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",

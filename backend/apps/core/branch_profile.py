@@ -20,12 +20,16 @@ def _setting(name: str, default: str = "") -> str:
     return str(getattr(settings, name, os.environ.get(name, default)) or "").strip()
 
 
-def get_active_branch_id() -> int | None:
+def get_current_branch_id() -> int | None:
     return (
         _safe_int(getattr(settings, "BRANCH_ID", None))
         or _safe_int(getattr(settings, "POS_BRANCH_ID", None))
         or _safe_int(getattr(settings, "DEFAULT_BRANCH_ID", None))
     )
+
+
+def get_active_branch_id() -> int | None:
+    return get_current_branch_id()
 
 
 def get_branch_profile(branch_id: int | None) -> dict[str, str]:
@@ -41,10 +45,20 @@ def get_branch_profile(branch_id: int | None) -> dict[str, str]:
 
     telefono = ((getattr(cfg, "telefono", "") if cfg else "") or _setting("DTE_EMISOR_TELEFONO")).strip()
     correo = ((getattr(cfg, "correo", "") if cfg else "") or _setting("DTE_EMISOR_CORREO")).strip()
+    emisor_nombre = (
+        (getattr(cfg, "emisor_nombre_comercial", "") if cfg else "")
+        or (getattr(cfg, "emisor_nombre", "") if cfg else "")
+        or _setting("DTE_EMISOR_NOMBRE_COMERCIAL")
+        or _setting("DTE_EMISOR_NOMBRE")
+        or _setting("DTE_NOMBRE_COMERCIAL")
+        or "Pico de Gallo"
+    ).strip()
 
     return {
+        "branch_id": str(getattr(branch, "id", "") or ""),
         "branch_name": branch_name,
         "branch_code": branch_code,
+        "emisor_nombre": emisor_nombre,
         "direccion_complemento": direccion_complemento,
         "telefono": telefono,
         "correo": correo,

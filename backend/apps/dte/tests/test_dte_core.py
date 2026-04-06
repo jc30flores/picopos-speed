@@ -3,7 +3,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework.exceptions import ValidationError
 
@@ -83,6 +83,11 @@ class DTECoreTests(TestCase):
         self.branch.save(update_fields=["nit"])
         with self.assertRaisesMessage(ValidationError, "Branch.nit"):
             get_emisor_nit(self.branch)
+
+    @override_settings(DTE_EMISOR_NIT="1217-140990-106-3")
+    def test_get_emisor_nit_ignores_invalid_branch_config_and_uses_env(self):
+        DTEBranchConfig.objects.create(branch=self.branch, emisor_nit="048143931", is_active=True)
+        self.assertEqual(get_emisor_nit(self.branch), "12171409901063")
 
     def test_build_payload_cf_uses_order_item_snapshots(self):
         DTEBranchConfig.objects.create(

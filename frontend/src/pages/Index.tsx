@@ -55,6 +55,8 @@ import {
   getCashTransactions,
   createCashPayout,
   openCashDrawer,
+  downloadCashSessionTicketPdf,
+  downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
   printPaymentTicket,
@@ -254,6 +256,17 @@ const POS = () => {
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
   const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
   const [printerAvailable, setPrinterAvailable] = useState(true);
+  const [fallbackPdfModal, setFallbackPdfModal] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    onDownload: null | (() => Promise<void>);
+  }>({
+    open: false,
+    title: "",
+    message: "",
+    onDownload: null,
+  });
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -940,7 +953,16 @@ const POS = () => {
       if (closeResp.printed) {
         toast.success("Caja cerrada. Ticket impreso");
       } else {
-        toast.success(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
+        setFallbackPdfModal({
+          open: true,
+          title: "Caja cerrada",
+          message: "No se pudo imprimir. Puedes descargar el PDF del cierre.",
+          onDownload: async () => {
+            if (!closeResp.sessionId) throw new Error("No se encontró la sesión cerrada.");
+            await downloadCashSessionTicketPdf(closeResp.sessionId);
+          },
+        });
+        toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
       
@@ -1101,19 +1123,34 @@ const POS = () => {
       if (lastPaymentId && postSalePrintChoice) {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (printResult.pdfBlob) {
-          triggerPdfDownload(printResult.pdfBlob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
-          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
+            },
+          });
+          toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.receiptPdfUrl) {
-          const anchor = document.createElement("a");
-          anchor.href = printResult.receiptPdfUrl;
-          anchor.download = `ticket_pago_${lastPaymentId}.pdf`;
-          anchor.target = "_blank";
-          anchor.rel = "noopener";
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
-          toast.warning("Impresora no detectada, se descargó el ticket en PDF.");
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              await downloadPaymentTicketPdf(lastPaymentId);
+            },
+          });
+          toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.printError) {
+          setFallbackPdfModal({
+            open: true,
+            title: "Ticket de venta",
+            message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
+            onDownload: async () => {
+              await downloadPaymentTicketPdf(lastPaymentId);
+            },
+          });
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
         if (printResult.drawerError) {
@@ -2505,6 +2542,45 @@ const POS = () => {
               }}
             >
               Omitir
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={fallbackPdfModal.open}
+        onOpenChange={(open) =>
+          setFallbackPdfModal((prev) => ({
+            ...prev,
+            open,
+          }))
+        }
+      >
+        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">{fallbackPdfModal.title}</DialogTitle>
+            <DialogDescription className="text-base">{fallbackPdfModal.message}</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Button
+              type="button"
+              className="h-12"
+              onClick={() => {
+                if (!fallbackPdfModal.onDownload) return;
+                void fallbackPdfModal.onDownload()
+                  .then(() => setFallbackPdfModal((prev) => ({ ...prev, open: false })))
+                  .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo descargar PDF"));
+              }}
+            >
+              Descargar PDF
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-12"
+              onClick={() => setFallbackPdfModal((prev) => ({ ...prev, open: false }))}
+            >
+              Cerrar
             </Button>
           </div>
         </DialogContent>

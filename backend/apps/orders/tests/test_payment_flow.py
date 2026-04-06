@@ -115,3 +115,41 @@ class OrderPaymentFlowTests(TestCase):
         self.assertEqual(payload.get("total"), "20.00")
         self.assertIn("remaining", payload)
         self.assertIn("subtotal_before_discounts", payload)
+
+    def test_payment_ticket_pdf_endpoint_returns_readable_pdf(self):
+        order = Order.objects.create(
+            order_number=103,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            customer=self.customer,
+            customer_name=self.customer.name,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("10.00"),
+            discount_total=Decimal("0.00"),
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=self.product,
+            product_name_snapshot=self.product.name,
+            price_snapshot=self.product.price,
+            quantity=1,
+        )
+        payment_response = self.client.post(
+            "/api/payments/",
+            {
+                "order": order.id,
+                "method": "cash",
+                "amount": "10.00",
+                "tip_amount": "0.00",
+            },
+            format="json",
+        )
+        self.assertEqual(payment_response.status_code, 201)
+        payment_id = payment_response.json()["id"]
+        pdf_response = self.client.get(f"/api/payments/{payment_id}/ticket.pdf", HTTP_ACCEPT="text/html")
+        self.assertEqual(pdf_response.status_code, 200)
+        self.assertEqual(pdf_response["Content-Type"], "application/pdf")
+        self.assertIn(b"%PDF", pdf_response.content[:10])
+        self.assertIn(b"ORDEN", pdf_response.content.upper())

@@ -15,6 +15,7 @@ from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
 from apps.printing.services.renderers import render_customer_ticket
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.printing.services.system_printer import SystemPrinterService
 from apps.payments.serializers import (
     PaymentSerializer,
@@ -591,3 +592,22 @@ class PaymentPrintTicketView(APIView):
         except Exception as exc:  # noqa: BLE001
             logger.exception("payment.print.exception", extra={"payment_id": payment.id, "order_id": payment.order_id})
             return Response({"printed": False, "print_error": str(exc), "drawer_opened": False, "drawer_error": None}, status=status.HTTP_200_OK)
+
+
+class PaymentTicketPDFView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def perform_content_negotiation(self, request, force=False):
+        renderer = self.get_renderers()[0]
+        return renderer, renderer.media_type
+
+    def get(self, request, pk: int):
+        payment = Payment.objects.select_related("order").filter(pk=pk).first()
+        if not payment:
+            return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+        payload = render_customer_ticket(payment.order)
+        filename = f"ticket_{payment.order_id}_{payment.id}.pdf"
+        result = build_receipt_pdf_from_text(text=payload.get("text", ""), filename=filename, page_width_mm=80.0, max_chars_per_line=42)
+        response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+        return response

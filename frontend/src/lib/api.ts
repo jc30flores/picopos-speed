@@ -3440,12 +3440,20 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
   }));
 };
 
-export const closeCashSession = async (closingCashCounted: number, notes?: string): Promise<{ ticketText?: string; printed?: boolean; printError?: string | null }> => {
+export const closeCashSession = async (
+  closingCashCounted: number,
+  notes?: string
+): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
   }));
-  return { ticketText: data.ticket_text, printed: Boolean(data.printed), printError: data.print_error ?? null };
+  return {
+    sessionId: Number(data.session?.id ?? 0) || undefined,
+    ticketText: data.ticket_text,
+    printed: Boolean(data.printed),
+    printError: data.print_error ?? null,
+  };
 };
 
 export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
@@ -3583,6 +3591,31 @@ export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<v
     }
     throw error instanceof Error ? error : new Error("No se pudo descargar ticket PDF");
   }
+};
+
+export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void> => {
+  const response = await request(`/payments/${paymentId}/ticket.pdf`, {
+    headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+  });
+  if (!response.ok) {
+    throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("Respuesta inválida al descargar PDF de ticket.");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] || `ticket_pago_${paymentId}.pdf`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 };
 export type DTERecord = {
   id: number;
