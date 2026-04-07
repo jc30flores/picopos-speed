@@ -23,6 +23,7 @@ from apps.payments.serializers import (
     PaymentMethodSerializer,
     InternalPaymentMethodChangeSerializer,
 )
+from apps.payments.normalization import normalize_payment_method_code
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import send_dte_for_order, invalidate_dte_for_order, send_dte_for_credit_note
@@ -138,8 +139,8 @@ class PaymentMethodListView(generics.ListAPIView):
         collapsed: list[dict] = []
         card_entry: dict | None = None
         for row in serialized:
-            normalized_code = str(row.get("code") or "").strip().lower()
-            if normalized_code in {"card", "card_debit", "card_credit", "debit_card", "credit_card"}:
+            normalized_code = normalize_payment_method_code(str(row.get("code") or "").strip().lower())
+            if normalized_code == "card":
                 if card_entry is None:
                     card_entry = {**row, "code": "card", "name": "Tarjeta"}
                     collapsed.append(card_entry)

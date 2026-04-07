@@ -22,8 +22,10 @@ class Cat017MappingTests(SimpleTestCase):
                 self.payment_method = type("PM", (), {"code": code})() if code else None
 
         self.assertEqual(get_cat017_code_and_label(P("cash")), ("01", "Efectivo"))
+        self.assertEqual(get_cat017_code_and_label(P("card")), ("03", "Tarjeta"))
         self.assertEqual(get_cat017_code_and_label(P("card_debit")), ("03", "Tarjeta"))
         self.assertEqual(get_cat017_code_and_label(P("card_credit")), ("03", "Tarjeta"))
+        self.assertEqual(get_cat017_code_and_label(P("transfer", code="card")), ("03", "Tarjeta"))
         self.assertEqual(get_cat017_code_and_label(P("transfer")), ("05", "Transferencia"))
         self.assertEqual(get_cat017_code_and_label(P("pedidosya")), ("03", "Pedidos Ya (Tarjeta)"))
         self.assertEqual(get_cat017_code_and_label(P("transfer", code="PEDIDOS_YA")), ("03", "Pedidos Ya (Tarjeta)"))

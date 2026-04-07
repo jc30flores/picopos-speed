@@ -79,12 +79,11 @@ export const CashHistoryTab = () => {
           <DialogHeader><DialogTitle>Detalle de cierre de caja</DialogTitle></DialogHeader>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between"><span>Ventas efectivo</span><span>{formatMoney(selectedRow?.summary?.methods.cash ?? 0)}</span></div>
-            <div className="flex justify-between"><span>Ventas tarjeta débito</span><span>{formatMoney(selectedRow?.summary?.methods.cardDebit ?? 0)}</span></div>
-            <div className="flex justify-between"><span>Ventas tarjeta crédito</span><span>{formatMoney(selectedRow?.summary?.methods.cardCredit ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Ventas tarjeta</span><span>{formatMoney(selectedRow?.summary?.methods.card ?? 0)}</span></div>
             <div className="flex justify-between"><span>Ventas transferencia</span><span>{formatMoney(selectedRow?.summary?.methods.transfer ?? 0)}</span></div>
             <div className="flex justify-between"><span>Ventas PedidosYa</span><span>{formatMoney(selectedRow?.summary?.methods.pedidosYa ?? 0)}</span></div>
             <div className="flex justify-between"><span>Ventas PayPal</span><span>{formatMoney(selectedRow?.summary?.methods.payPal ?? 0)}</span></div>
-            <div className="flex justify-between font-semibold"><span>Total ventas</span><span>{formatMoney((selectedRow?.summary?.methods.cash ?? 0) + (selectedRow?.summary?.methods.cardDebit ?? 0) + (selectedRow?.summary?.methods.cardCredit ?? 0) + (selectedRow?.summary?.methods.transfer ?? 0) + (selectedRow?.summary?.methods.pedidosYa ?? 0) + (selectedRow?.summary?.methods.payPal ?? 0))}</span></div>
+            <div className="flex justify-between font-semibold"><span>Total ventas</span><span>{formatMoney((selectedRow?.summary?.methods.cash ?? 0) + (selectedRow?.summary?.methods.card ?? 0) + (selectedRow?.summary?.methods.transfer ?? 0) + (selectedRow?.summary?.methods.pedidosYa ?? 0) + (selectedRow?.summary?.methods.payPal ?? 0))}</span></div>
             <div className="flex justify-between"><span>Pagos/Ingresos en efectivo</span><span>{formatMoney(selectedRow?.summary?.totalCashSales ?? 0)}</span></div>
             <div className="flex justify-between"><span>Gastos/Salidas</span><span>{formatMoney(selectedRow?.summary?.totalCashOut ?? 0)}</span></div>
             <div className="flex justify-between"><span>Efectivo esperado</span><span>{formatMoney(selectedRow?.summary?.expectedCashInDrawer ?? 0)}</span></div>

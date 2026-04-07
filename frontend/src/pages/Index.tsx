@@ -953,7 +953,7 @@ const POS = () => {
   useEffect(() => {
     getPaymentMethods().then((methods) => {
       setPaymentMethods(methods);
-      const first = methods[0];
+      const first = methods.find((method) => String(method.code || "").toLowerCase() === "cash") || methods[0];
       if (first) {
         setSelectedPaymentMethodCode(first.code);
         const code = (first.code || "").toLowerCase();
@@ -1012,6 +1012,22 @@ const POS = () => {
       setSelectedCustomerId(String(defaultConsumerCustomer.id));
     }
   }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
+
+  const paymentMethodButtons = useMemo(() => {
+    const byCode = new Map(paymentMethods.map((method) => [String(method.code || "").toLowerCase(), method]));
+    const desiredCodes = ["cash", "card", "transfer", "pedidos_ya", "paypal"] as const;
+    return desiredCodes
+      .map((code) => {
+        const method = byCode.get(code);
+        if (!method) return null;
+        return {
+          code,
+          label: method.name || (code === "card" ? "Tarjeta" : code),
+          method: code === "cash" ? ("cash" as PaymentMethod) : code === "card" ? ("card" as PaymentMethod) : ("transfer" as PaymentMethod),
+        };
+      })
+      .filter((item): item is { code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal"; label: string; method: PaymentMethod } => Boolean(item));
+  }, [paymentMethods]);
 
   useEffect(() => {
     if (isPaymentOpen) {
@@ -2494,13 +2510,7 @@ const POS = () => {
             </div>
             <Label>Método</Label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {[
-                { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
-                { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
-                { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
-                { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
-                { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
-              ].map((option) => (
+              {paymentMethodButtons.map((option) => (
                 <Button
                   key={option.code}
                   type="button"
@@ -2509,7 +2519,7 @@ const POS = () => {
                   onClick={() => {
                     setPaymentMethod(option.method);
                     if (option.code === "card") {
-                      setSelectedPaymentMethodCode("card");
+                      setSelectedPaymentMethodCode(option.code);
                       setCardType("credit");
                     } else {
                       setSelectedPaymentMethodCode(option.code);
