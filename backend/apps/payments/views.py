@@ -8,7 +8,7 @@ from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
-from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager
+from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager, IsAdmin
 from apps.cashier.models import Register, CashSession, CashTransaction
 from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
@@ -302,7 +302,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
 
 
 class PaymentInternalMethodUpdateView(APIView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsAdmin]
 
     @transaction.atomic
     def patch(self, request, pk: int):
@@ -366,7 +366,7 @@ class PaymentInternalMethodUpdateView(APIView):
 
 
 class PaymentRecordRefundView(APIView):
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsAdmin]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -454,7 +454,7 @@ class PaymentRecordRefundView(APIView):
 
 class RefundListCreateView(generics.ListCreateAPIView):
     serializer_class = RefundSerializer
-    permission_classes = [IsAdminOrManager]
+    permission_classes = [IsAdmin]
 
     def get_queryset(self):
         queryset = Refund.objects.select_related(

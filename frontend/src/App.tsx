@@ -76,7 +76,7 @@ const App = () => (
             <Route
               path="/registros/ventas"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["admin"]}>
                   <RegistrosVentas />
                 </ProtectedRoute>
               }
@@ -97,7 +97,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/reports-history" element={<Navigate to="/registros/ventas" replace />} />
+            <Route path="/reports-history" element={<Navigate to="/" replace />} />
             <Route
               path="/dte"
               element={

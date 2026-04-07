@@ -123,6 +123,14 @@ const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
 
 const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
+const normalizeServiceTypeKey = (value: string, available: Array<{ key: string }>) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const exact = available.find((item) => item.key === normalized);
+  if (exact) return exact.key;
+  const insensitive = available.find((item) => String(item.key || "").trim().toUpperCase() === normalized);
+  return insensitive?.key ?? "";
+};
 
 const DrawerIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
@@ -151,6 +159,7 @@ const POS = () => {
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closingCashInput, setClosingCashInput] = useState("");
+  const [closeCashStep, setCloseCashStep] = useState<"review" | "confirm">("review");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
@@ -258,6 +267,7 @@ const POS = () => {
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
+  const canManageCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
@@ -316,8 +326,13 @@ const POS = () => {
 
   useEffect(() => {
     if (!serviceTypes.length) return;
-    if (!serviceType || !serviceTypes.some((item) => item.key === serviceType)) {
+    const normalizedServiceType = normalizeServiceTypeKey(serviceType, serviceTypes);
+    if (!normalizedServiceType) {
       setServiceType(serviceTypes[0].key);
+      return;
+    }
+    if (normalizedServiceType !== serviceType) {
+      setServiceType(normalizedServiceType);
     }
   }, [serviceTypes, serviceType]);
 
@@ -336,7 +351,8 @@ const POS = () => {
         ivaExempt?: boolean;
       };
       if (Array.isArray(parsed.cart)) setCart(parsed.cart);
-      if (parsed.serviceType && serviceTypes.some((type) => type.key === parsed.serviceType)) setServiceType(parsed.serviceType);
+      const restoredServiceType = normalizeServiceTypeKey(parsed.serviceType || "", serviceTypes);
+      if (restoredServiceType) setServiceType(restoredServiceType);
       if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
       if (parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
       if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
@@ -1103,6 +1119,10 @@ const POS = () => {
   };
 
   const handleCloseCashSession = async () => {
+    if (!canManageCash) {
+      toast.error("Solo administrador o cajero puede cerrar caja.");
+      return;
+    }
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
@@ -1122,6 +1142,7 @@ const POS = () => {
         toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
+      setCloseCashStep("review");
       
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
@@ -2130,7 +2151,13 @@ const POS = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
+      <Dialog
+        open={isCashDialogOpen}
+        onOpenChange={(open) => {
+          setIsCashDialogOpen(open);
+          if (!open) setCloseCashStep("review");
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <div className="flex items-center justify-between gap-2">
@@ -2157,10 +2184,10 @@ const POS = () => {
               )}
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open}>
+              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCash}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
-              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
+              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open || !canManageCash}>PAGOS</Button>
               <TooltipProvider delayDuration={120}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -2168,7 +2195,7 @@ const POS = () => {
                       size="icon"
                       variant="outline"
                       onClick={handleOpenDrawer}
-                      disabled={isOpeningDrawer || !cashSnapshot.open}
+                      disabled={isOpeningDrawer || !cashSnapshot.open || !canManageCash}
                       className={`h-14 w-full ${!cashSnapshot.open ? "opacity-50 cursor-not-allowed" : ""}`}
                       aria-label="Abrir cajón"
                       title="Abrir cajón"
@@ -2183,11 +2210,26 @@ const POS = () => {
 
             {cashSnapshot.open ? (
               <div className="space-y-2 rounded-md border p-3">
-                <Label>Efectivo contado al cierre</Label>
-                <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
-                <Label>Notas</Label>
-                <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
-                <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
+                {!canManageCash ? <div className="text-sm text-muted-foreground">Solo administrador o cajero pueden ejecutar apertura/cierre, pagos y gaveta.</div> : null}
+                {canManageCash && closeCashStep === "review" ? (
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground">Paso 1 de 2: revisa el esperado y confirma que iniciarás el cierre.</div>
+                    <Button variant="secondary" onClick={() => setCloseCashStep("confirm")}>Continuar cierre</Button>
+                  </div>
+                ) : null}
+                {canManageCash && closeCashStep === "confirm" ? (
+                  <>
+                    <div className="text-sm text-muted-foreground">Paso 2 de 2: ingresa el efectivo contado y confirma.</div>
+                    <Label>Efectivo contado al cierre</Label>
+                    <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
+                    <Label>Notas</Label>
+                    <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" onClick={() => setCloseCashStep("review")}>Atrás</Button>
+                      <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : null}
 

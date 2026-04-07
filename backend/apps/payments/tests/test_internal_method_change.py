@@ -18,6 +18,8 @@ class PaymentInternalMethodChangeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         user_model = get_user_model()
+        self.admin = user_model.objects.create_user(username="admin_method_change", password="123456")
+        UserProfile.objects.create(user=self.admin, role="admin", is_active=True)
         self.manager = user_model.objects.create_user(username="manager_method_change", password="123456")
         UserProfile.objects.create(user=self.manager, role="manager", is_active=True)
         self.cashier = user_model.objects.create_user(username="cashier_method_change", password="123456")
@@ -39,9 +41,9 @@ class PaymentInternalMethodChangeTests(TestCase):
         )
         return Payment.objects.create(order=order, method="cash", payment_method=self.pm_cash, amount=Decimal("10.00"))
 
-    def test_manager_can_change_internal_payment_method_and_creates_log(self):
+    def test_admin_can_change_internal_payment_method_and_creates_log(self):
         payment = self._create_paid_payment()
-        self.client.force_authenticate(self.manager)
+        self.client.force_authenticate(self.admin)
 
         response = self.client.patch(
             f"/api/payments/{payment.id}/internal-payment-method/",
@@ -58,9 +60,19 @@ class PaymentInternalMethodChangeTests(TestCase):
                 old_payment_method=self.pm_cash,
                 new_payment_method=self.pm_paypal,
                 reason="Corrección de cierre",
-                changed_by=self.manager,
+                changed_by=self.admin,
             ).exists()
         )
+
+    def test_manager_cannot_change_internal_payment_method(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.manager)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_code": "paypal"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_cashier_cannot_change_internal_payment_method(self):
         payment = self._create_paid_payment()
@@ -87,7 +99,7 @@ class PaymentInternalMethodChangeTests(TestCase):
             control_number="DTE-TEST-1",
             total_amount=Decimal("10.00"),
         )
-        self.client.force_authenticate(self.manager)
+        self.client.force_authenticate(self.admin)
 
         response = self.client.post(
             f"/api/payments/{payment.id}/record-refund/",
@@ -116,7 +128,7 @@ class PaymentInternalMethodChangeTests(TestCase):
         old_ts = timezone.now() - timedelta(hours=25)
         record.recibido_at = old_ts
         record.save(update_fields=["recibido_at"])
-        self.client.force_authenticate(self.manager)
+        self.client.force_authenticate(self.admin)
 
         response = self.client.post(
             f"/api/payments/{payment.id}/record-refund/",

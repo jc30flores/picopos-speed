@@ -88,7 +88,7 @@ const mapStatus = (
 
 export const SalesHistoryTab = () => {
   const { user } = useAuth();
-  const restrictedRole = user?.role === "cashier" || user?.role === "manager";
+  const restrictedRole = user?.role === "cashier";
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
@@ -110,7 +110,7 @@ export const SalesHistoryTab = () => {
   const [methodChangeReason, setMethodChangeReason] = useState("");
   const [isChangingMethod, setIsChangingMethod] = useState(false);
   const [sendingByOrderId, setSendingByOrderId] = useState<number | null>(null);
-  const canChangePaymentMethod = user?.role === "admin" || user?.role === "manager" || Boolean(user?.isSuperuser);
+  const canChangePaymentMethod = user?.role === "admin" || Boolean(user?.isSuperuser);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
   const dateTo = endDate ? getLocalDateSV(endDate) : undefined;

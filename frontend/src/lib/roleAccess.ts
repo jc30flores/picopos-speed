@@ -27,7 +27,7 @@ export const appModules: AppModuleConfig[] = [
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
   { key: "menu_discounts", label: "MENÚ & DESCUENTOS", path: "/menu", requiredRoles: ["admin", "manager"] },
-  { key: "registers", label: "REGISTROS", path: "/registros/ventas", requiredRoles: ["admin", "manager"] },
+  { key: "registers", label: "REGISTROS", path: "/registros/ventas", requiredRoles: ["admin"] },
   { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["admin"] },
   { key: "clients", label: "CLIENTES", path: "/clientes", requiredRoles: ["admin", "manager"] },
   { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin"] },
@@ -44,7 +44,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
   admin: ["/", "/pos", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
-  manager: ["/", "/pos", "/menu", "/clientes", "/registros/ventas"],
+  manager: ["/", "/pos", "/menu", "/clientes"],
   cashier: ["/", "/pos"],
   kitchen: ["/kitchen"],
   kiosk: ["/kiosk"],
@@ -67,7 +67,6 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
   manager: [
     { label: "POS", path: "/" },
     { label: "Menú & Descuentos", path: "/menu" },
-    { label: "Registros", path: "/registros/ventas" },
     { label: "Clientes", path: "/clientes" },
   ],
   cashier: [
