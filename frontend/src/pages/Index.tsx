@@ -1421,10 +1421,6 @@ const POS = () => {
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
-    if (paymentMethod === "card" && !cardType) {
-      toast.error("Selecciona débito o crédito para tarjeta");
-      return;
-    }
     if (amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
@@ -1464,7 +1460,7 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        cardType: paymentMethod === "card" ? (cardType ?? undefined) : undefined,
+        cardType: paymentMethod === "card" ? "credit" : undefined,
         amount: amountForApi,
         amountApplied: amountForApi,
         cashReceived: amountReceived,
@@ -2456,8 +2452,8 @@ const POS = () => {
                   onClick={() => {
                     setPaymentMethod(option.method);
                     if (option.code === "card") {
-                      setSelectedPaymentMethodCode("card_credit");
-                      setCardType(null);
+                      setSelectedPaymentMethodCode("card");
+                      setCardType("credit");
                     } else {
                       setSelectedPaymentMethodCode(option.code);
                       setCardType(null);
@@ -2468,12 +2464,6 @@ const POS = () => {
                 </Button>
               ))}
             </div>
-            {paymentMethod === "card" ? (
-              <div className="grid grid-cols-2 gap-2">
-                <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
-                <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
-              </div>
-            ) : null}
             <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Monto recibido</Label>
@@ -2503,7 +2493,7 @@ const POS = () => {
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
-              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
                 {isProcessingPayment ? "Procesando..." : "Registrar pago"}
               </Button>
             </div>

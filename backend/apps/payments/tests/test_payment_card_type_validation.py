@@ -26,7 +26,7 @@ class PaymentCardTypeValidationTests(TestCase):
             total=Decimal("10.00"),
         )
 
-    def test_card_payment_requires_card_type(self):
+    def test_card_payment_defaults_to_single_card_type(self):
         response = self.client.post(
             "/api/payments/",
             {
@@ -36,5 +36,5 @@ class PaymentCardTypeValidationTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("card_type", str(response.data))
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data.get("card_type"), "credit")

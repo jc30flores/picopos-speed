@@ -291,7 +291,7 @@ export type Customer = {
 
 export type PaymentMethodOption = {
   id: number;
-  code: "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal" | string;
+  code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal" | string;
   name: string;
   isCash: boolean;
   sortOrder: number;
@@ -2133,8 +2133,9 @@ export const getSalesReport = async (filters?: {
       net_total?: string;
       payment_methods?: {
         cash: string;
-        card_debit: string;
-        card_credit: string;
+        card?: string;
+        card_debit?: string;
+        card_credit?: string;
         transfer: string;
         pedidos_ya: string;
         paypal: string;
@@ -2180,7 +2181,11 @@ export const getSalesReport = async (filters?: {
       netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
-        card: fromCents(toCents(data.aggregates.payment_methods?.card_debit ?? 0) + toCents(data.aggregates.payment_methods?.card_credit ?? 0)),
+        card: fromCents(
+          toCents(data.aggregates.payment_methods?.card ?? 0)
+          + toCents(data.aggregates.payment_methods?.card_debit ?? 0)
+          + toCents(data.aggregates.payment_methods?.card_credit ?? 0)
+        ),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
@@ -3631,9 +3636,13 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
-        card: fromCents(toCents(data.summary?.totals_by_method?.card_debit ?? 0) + toCents(data.summary?.totals_by_method?.card_credit ?? 0)),
-        cardDebit: Number(data.summary?.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(data.summary?.totals_by_method?.card_credit ?? 0),
+        card: fromCents(
+          toCents(data.summary?.totals_by_method?.card ?? 0)
+          + toCents(data.summary?.totals_by_method?.card_debit ?? 0)
+          + toCents(data.summary?.totals_by_method?.card_credit ?? 0)
+        ),
+        cardDebit: 0,
+        cardCredit: 0,
         transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),
@@ -3730,9 +3739,13 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
         cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
-        cardDebit: Number(row.summary_snapshot?.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(row.summary_snapshot?.totals_by_method?.card_credit ?? 0),
-        card: fromCents(toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0) + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)),
+        cardDebit: 0,
+        cardCredit: 0,
+        card: fromCents(
+          toCents(row.summary_snapshot?.totals_by_method?.card ?? 0)
+          + toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0)
+          + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)
+        ),
         transfer: Number(row.summary_snapshot?.totals_by_method?.transfer ?? row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(row.summary_snapshot?.totals_by_method?.pedidos_ya ?? row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(row.summary_snapshot?.totals_by_method?.paypal ?? row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
@@ -3755,9 +3768,13 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
         cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
-        cardDebit: Number(data.summary.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(data.summary.totals_by_method?.card_credit ?? 0),
-        card: fromCents(toCents(data.summary.totals_by_method?.card_debit ?? 0) + toCents(data.summary.totals_by_method?.card_credit ?? 0)),
+        cardDebit: 0,
+        cardCredit: 0,
+        card: fromCents(
+          toCents(data.summary.totals_by_method?.card ?? 0)
+          + toCents(data.summary.totals_by_method?.card_debit ?? 0)
+          + toCents(data.summary.totals_by_method?.card_credit ?? 0)
+        ),
         transfer: Number(data.summary.totals_by_method?.transfer ?? data.summary.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary.totals_by_method?.pedidos_ya ?? data.summary.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary.totals_by_method?.paypal ?? data.summary.methods?.PAYPAL?.total ?? 0),
@@ -3941,32 +3958,58 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
 export const dteDeliver = async (
   id: number,
   channels: Array<"whatsapp" | "email">
-): Promise<{ message: string; channels: Record<string, { success: boolean; message: string }>; record?: DTERecord }> => {
+): Promise<{
+  success: boolean;
+  summary: string;
+  orderId?: number;
+  issuedId?: number;
+  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+}> => {
   const res = await request(`/dte/issued/${id}/deliver/`, {
     method: "POST",
     body: JSON.stringify({ channels }),
   });
   const payload = await handleJson<any>(res);
   return {
-    message: payload.message ?? "Envío completado",
-    channels: payload.channels ?? {},
-    record: payload.record,
+    success: Boolean(payload.success),
+    summary: payload.summary ?? "Envío completado",
+    orderId: payload.order_id,
+    issuedId: payload.issued_id,
+    results: Object.fromEntries(
+      Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
+        key,
+        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+      ])
+    ),
   };
 };
 
 export const dteDeliverByOrder = async (
   orderId: number,
   channels: Array<"whatsapp" | "email">
-): Promise<{ message: string; channels: Record<string, { success: boolean; message: string }>; record?: DTERecord }> => {
+): Promise<{
+  success: boolean;
+  summary: string;
+  orderId?: number;
+  issuedId?: number;
+  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+}> => {
   const res = await request(`/dte/orders/${orderId}/deliver/`, {
     method: "POST",
     body: JSON.stringify({ channels }),
   });
   const payload = await handleJson<any>(res);
   return {
-    message: payload.message ?? "Envío completado",
-    channels: payload.channels ?? {},
-    record: payload.record,
+    success: Boolean(payload.success),
+    summary: payload.summary ?? "Envío completado",
+    orderId: payload.order_id,
+    issuedId: payload.issued_id,
+    results: Object.fromEntries(
+      Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
+        key,
+        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+      ])
+    ),
   };
 };
 

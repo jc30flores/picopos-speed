@@ -80,17 +80,12 @@ class PaymentSerializer(serializers.ModelSerializer):
                 attrs["method"] = "card"
             else:
                 attrs["method"] = "transfer"
-            if method_code == "card_debit":
-                attrs["card_type"] = "debit"
-            elif method_code in {"card_credit", "card"} and not attrs.get("card_type"):
+            if method_code in {"card_debit", "card_credit", "card"} and not attrs.get("card_type"):
                 attrs["card_type"] = "credit"
 
         method_value = (attrs.get("method") or "").strip().lower()
-        card_type = (attrs.get("card_type") or "").strip().lower()
         if method_value == "card":
-            if card_type not in {"debit", "credit"}:
-                raise serializers.ValidationError({"card_type": "Debe seleccionar tipo de tarjeta: débito o crédito."})
-            attrs["card_type"] = card_type
+            attrs["card_type"] = "credit"
         else:
             attrs["card_type"] = ""
 

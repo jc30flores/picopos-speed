@@ -4,8 +4,9 @@ from apps.payments.models import Payment
 
 PAYMENT_METHOD_LABELS = {
     "cash": "Efectivo",
-    "card_debit": "Tarjeta Débito",
-    "card_credit": "Tarjeta Crédito",
+    "card": "Tarjeta",
+    "card_debit": "Tarjeta",
+    "card_credit": "Tarjeta",
     "transfer": "Transferencia",
     "pedidos_ya": "Pedidos Ya",
     "paypal": "PayPal",
@@ -15,11 +16,15 @@ PAYMENT_METHOD_ALIASES = {
     "cash": "cash",
     "efectivo": "cash",
     "01": "cash",
-    "card": "card_credit",
-    "credit_card": "card_credit",
-    "debit_card": "card_debit",
-    "card_credit": "card_credit",
-    "card_debit": "card_debit",
+    "card": "card",
+    "credit_card": "card",
+    "debit_card": "card",
+    "card_credit": "card",
+    "card_debit": "card",
+    "credito": "card",
+    "debito": "card",
+    "credit": "card",
+    "debit": "card",
     "transfer": "transfer",
     "bank_transfer": "transfer",
     "pedidosya": "pedidos_ya",
@@ -37,13 +42,12 @@ def payment_code_from_payment(payment: Payment) -> str:
     effective_method = payment.reporting_payment_method if payment.reporting_payment_method_id else payment.payment_method
     code = normalize_payment_method_code(effective_method.code if effective_method else "")
     method = str(payment.method or "").strip().lower()
-    card_type = str(payment.card_type or "").strip().lower()
     if code:
-        if code == "card_credit" and card_type == "debit":
-            return "card_debit"
+        if code in {"card_credit", "card_debit"}:
+            return "card"
         return code
     if method == "cash":
         return "cash"
     if method == "card":
-        return "card_debit" if card_type == "debit" else "card_credit"
+        return "card"
     return "transfer"

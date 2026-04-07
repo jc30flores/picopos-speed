@@ -10,7 +10,7 @@ from apps.payments.normalization import payment_code_from_payment
 
 MONEY_Q = Decimal("0.01")
 
-PAYMENT_METHOD_CODES = ["cash", "card_debit", "card_credit", "transfer", "pedidos_ya", "paypal"]
+PAYMENT_METHOD_CODES = ["cash", "card", "transfer", "pedidos_ya", "paypal"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):

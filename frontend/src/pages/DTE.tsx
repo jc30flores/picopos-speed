@@ -161,15 +161,21 @@ export default function DTEPage() {
       }
       if (action === "email") {
         const result = await dteDeliver(row.id, ["email"]);
-        patchRow(result.record);
-        const channel = result.channels?.email;
-        toast({ title: "Correo", description: channel?.message || result.message });
+        const channel = result.results?.email;
+        toast({
+          title: "Correo",
+          description: channel?.ok ? "Correo enviado correctamente." : (channel?.error || result.summary),
+          variant: channel?.ok ? "default" : "destructive",
+        });
       }
       if (action === "whatsapp") {
         const result = await dteDeliver(row.id, ["whatsapp"]);
-        patchRow(result.record);
-        const channel = result.channels?.whatsapp;
-        toast({ title: "WhatsApp", description: channel?.message || result.message });
+        const channel = result.results?.whatsapp;
+        toast({
+          title: "WhatsApp",
+          description: channel?.ok ? "WhatsApp enviado correctamente." : (channel?.error || result.summary),
+          variant: channel?.ok ? "default" : "destructive",
+        });
       }
       if (action === "credit_note") {
         if (!window.confirm("¿Crear nota de crédito para este DTE?")) return;

@@ -13,6 +13,16 @@ from apps.printing.receipt_pdf import build_receipt_pdf, build_receipt_pdf_from_
 
 
 class ReceiptPdfOutputTests(SimpleTestCase):
+    def test_fallback_pdf_trims_trailing_blank_lines_to_avoid_extra_page(self):
+        text = "ORDEN #171\nTOTAL: $10.00\n" + ("\n" * 40)
+        result = build_receipt_pdf_from_text(
+            text=text,
+            filename="venta_171.pdf",
+            receipt_context={"order_number": 171},
+        )
+        page_markers = result.pdf_bytes.count(b"/Type /Page")
+        self.assertEqual(page_markers, 1)
+
     def test_ticket_pdf_contains_images_and_single_page(self):
         if PdfReader is None:
             self.skipTest("pypdf no está instalado en el entorno de pruebas")

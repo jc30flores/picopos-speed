@@ -20,6 +20,7 @@ from apps.dte.serializers import (
     DTERecordListSerializer,
 )
 from apps.dte.services.dte_retry import resend_record
+from apps.dte.services.delivery import deliver_dte_to_client
 from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
@@ -32,7 +33,7 @@ logger = logging.getLogger("apps.dte")
 class IsDTECashierOrAbove(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"admin"})
+        return bool(profile and profile.is_active and profile.role in {"admin", "manager", "cashier"})
 
 
 class IsDTEAccountantOrAdmin(BasePermission):
@@ -182,75 +183,22 @@ class DTESendEmailView(APIView):
         )
 
 
-def _normalize_channels(raw_channels) -> list[str]:
-    if not isinstance(raw_channels, list):
-        return []
-    out: list[str] = []
-    for channel in raw_channels:
-        normalized = str(channel or "").strip().lower()
-        if normalized in {"whatsapp", "email"} and normalized not in out:
-            out.append(normalized)
-    return out
-
-
-def _deliver_record(record: DTERecord, *, request, channels: list[str], to_email: str | None, to_phone: str | None) -> dict:
-    results: dict[str, dict] = {}
-    for channel in channels:
-        if channel == "email":
-            flags = evaluate_record_actions(record)
-            if not flags["can_send_email"]:
-                results["email"] = {"success": False, "status": "FAILED", "message": flags["missing_email_reason"], "detail": "missing_email"}
-                continue
-            attempt = send_dte_email(record, to_email=to_email or flags["customer_email"])
-            log_audit(request, "dte.send_email", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
-            results["email"] = {
-                "success": attempt.status == "SENT",
-                "status": attempt.status,
-                "provider_status": attempt.provider_status,
-                "retries": attempt.retries,
-                "message": "Correo enviado" if attempt.status == "SENT" else "No se pudo enviar correo",
-            }
-        if channel == "whatsapp":
-            flags = evaluate_record_actions(record)
-            if not flags["can_send_whatsapp"]:
-                results["whatsapp"] = {"success": False, "status": "FAILED", "message": flags["missing_phone_reason"], "detail": "missing_phone"}
-                continue
-            attempt = send_dte_whatsapp(record, to_phone=to_phone or flags["customer_phone"])
-            log_audit(request, "dte.send_whatsapp", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
-            results["whatsapp"] = {
-                "success": attempt.status == "SENT",
-                "status": attempt.status,
-                "provider_status": attempt.provider_status,
-                "retries": attempt.retries,
-                "message": "WhatsApp enviado" if attempt.status == "SENT" else "No se pudo enviar WhatsApp",
-            }
-    return results
-
-
 class DTEBulkDeliveryView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
-        channels = _normalize_channels(request.data.get("channels"))
-        if not channels:
-            return Response({"detail": "Debe enviar channels con al menos uno: whatsapp, email"}, status=status.HTTP_400_BAD_REQUEST)
-        results = _deliver_record(
+        result = deliver_dte_to_client(
             record,
+            channels=request.data.get("channels"),
+            actor_user=request.user,
             request=request,
-            channels=channels,
             to_email=request.data.get("email"),
             to_phone=request.data.get("phone"),
         )
-        success = all(bool(result.get("success")) for result in results.values()) if results else False
-        return Response(
-            {
-                "success": success,
-                "message": "Envío completado" if success else "Uno o más envíos fallaron",
-                "channels": results,
-                "record": DTERecordDetailSerializer(record).data,
-            }
-        )
+        if not result.get("results"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
 
 
 class DTEOrderBulkDeliveryView(APIView):
@@ -260,25 +208,17 @@ class DTEOrderBulkDeliveryView(APIView):
         record = DTERecord.objects.select_related("order", "order__customer").filter(order_id=order_id).order_by("-id").first()
         if not record:
             return Response({"detail": "No existe DTE para esta venta"}, status=status.HTTP_404_NOT_FOUND)
-        channels = _normalize_channels(request.data.get("channels"))
-        if not channels:
-            return Response({"detail": "Debe enviar channels con al menos uno: whatsapp, email"}, status=status.HTTP_400_BAD_REQUEST)
-        results = _deliver_record(
+        result = deliver_dte_to_client(
             record,
+            channels=request.data.get("channels"),
+            actor_user=request.user,
             request=request,
-            channels=channels,
             to_email=request.data.get("email"),
             to_phone=request.data.get("phone"),
         )
-        success = all(bool(result.get("success")) for result in results.values()) if results else False
-        return Response(
-            {
-                "success": success,
-                "message": "Envío completado" if success else "Uno o más envíos fallaron",
-                "channels": results,
-                "record": DTERecordDetailSerializer(record).data,
-            }
-        )
+        if not result.get("results"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
 
 
 class DTESendWhatsAppView(APIView):

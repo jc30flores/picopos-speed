@@ -99,6 +99,8 @@ def _normalize_lines(lines: list[str] | tuple[str, ...], *, max_chars_per_line: 
             break_on_hyphens=False,
         ) or [""]
         out.extend(chunk.rstrip() for chunk in wrapped)
+    while len(out) > 1 and out[-1] == "":
+        out.pop()
     return out or [""]
 
 

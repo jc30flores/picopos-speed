@@ -22,8 +22,8 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
 
 
 def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliveryAttempt:
-    base = (getattr(settings, "DELIVER_EMAIL_API_BASE_URL", "") or "").rstrip("/")
-    key = getattr(settings, "DELIVER_EMAIL_API_KEY", "") or ""
+    base = ((getattr(settings, "DELIVER_EMAIL_API_BASE_URL", "") or "").strip() or (getattr(settings, "EMAIL_API_BASE_URL", "") or "").strip()).rstrip("/")
+    key = (getattr(settings, "DELIVER_EMAIL_API_KEY", "") or "").strip() or (getattr(settings, "EMAIL_API_KEY", "") or "").strip()
     endpoint = f"{base}/send" if base else ""
     payload = build_email_payload(record, to_email=to_email)
 
@@ -52,7 +52,7 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
     if attempt.status != "SENT":
         attempt.status = "FAILED"
     attempt.provider_status = provider_status or None
-    attempt.provider_body = provider_body
+    attempt.provider_body = {**(provider_body or {}), "error": error or None}
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info("[DTE EMAIL] SEND order=%s status=%s provider_status=%s error=%s", record.order_id, attempt.status, provider_status, error)
     return attempt

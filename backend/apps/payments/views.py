@@ -132,6 +132,21 @@ class PaymentMethodListView(generics.ListAPIView):
     def get_queryset(self):
         return PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name")
 
+    def list(self, request, *args, **kwargs):
+        queryset = list(self.get_queryset())
+        serialized = self.get_serializer(queryset, many=True).data
+        collapsed: list[dict] = []
+        card_entry: dict | None = None
+        for row in serialized:
+            normalized_code = str(row.get("code") or "").strip().lower()
+            if normalized_code in {"card", "card_debit", "card_credit", "debit_card", "credit_card"}:
+                if card_entry is None:
+                    card_entry = {**row, "code": "card", "name": "Tarjeta"}
+                    collapsed.append(card_entry)
+                continue
+            collapsed.append(row)
+        return Response(collapsed)
+
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer
     permission_classes = [IsCashierOrManagerOrAdmin]

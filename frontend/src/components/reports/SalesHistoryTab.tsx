@@ -51,7 +51,7 @@ import { fromCents, toCents } from "@/lib/money";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
-type PaymentMethodFilter = "all" | "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal";
+type PaymentMethodFilter = "all" | "cash" | "card" | "transfer" | "pedidos_ya" | "paypal";
 
 interface Sale {
   id: string;
@@ -279,9 +279,13 @@ export const SalesHistoryTab = () => {
     setSendingByOrderId(Number(sale.id));
     try {
       const result = await dteDeliverByOrder(Number(sale.id), ["whatsapp", "email"]);
-      const wa = result.channels?.whatsapp;
-      const email = result.channels?.email;
-      toast.success(`WhatsApp: ${wa?.message || "sin respuesta"} | Correo: ${email?.message || "sin respuesta"}`);
+      const wa = result.results?.whatsapp;
+      const email = result.results?.email;
+      if (result.success) {
+        toast.success("DTE enviado por correo y WhatsApp.");
+      } else {
+        toast.error(`WhatsApp: ${wa?.error || "OK"} | Correo: ${email?.error || "OK"}`);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo enviar DTE");
     } finally {
@@ -433,8 +437,7 @@ export const SalesHistoryTab = () => {
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="cash">Efectivo</SelectItem>
-                  <SelectItem value="card_debit">Tarjeta Débito</SelectItem>
-                  <SelectItem value="card_credit">Tarjeta Crédito</SelectItem>
+                  <SelectItem value="card">Tarjeta</SelectItem>
                   <SelectItem value="transfer">Transferencia</SelectItem>
                   <SelectItem value="pedidos_ya">Pedidos Ya</SelectItem>
                   <SelectItem value="paypal">PayPal</SelectItem>
