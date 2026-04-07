@@ -158,8 +158,9 @@ const POS = () => {
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
-  const [closingCashInput, setClosingCashInput] = useState("");
-  const [closeCashStep, setCloseCashStep] = useState<"review" | "confirm">("review");
+  const [closeBillsInput, setCloseBillsInput] = useState("");
+  const [closeCoinsInput, setCloseCoinsInput] = useState("");
+  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "confirm">("idle");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
@@ -267,7 +268,9 @@ const POS = () => {
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
-  const canManageCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
@@ -1119,13 +1122,20 @@ const POS = () => {
   };
 
   const handleCloseCashSession = async () => {
-    if (!canManageCash) {
-      toast.error("Solo administrador o cajero puede cerrar caja.");
+    if (!canCloseCash) {
+      toast.error("No tienes permisos para cerrar caja.");
+      return;
+    }
+    const totalBills = Number(closeBillsInput || 0);
+    const totalCoins = Number(closeCoinsInput || 0);
+    const countedTotal = totalBills + totalCoins;
+    if (!Number.isFinite(totalBills) || totalBills < 0 || !Number.isFinite(totalCoins) || totalCoins < 0) {
+      toast.error("Ingresa montos válidos para billetes y monedas.");
       return;
     }
     setIsSavingCashAction(true);
     try {
-      const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      const closeResp = await closeCashSession(countedTotal, cashNotes, { bills: totalBills, coins: totalCoins });
       if (closeResp.printed) {
         toast.success("Caja cerrada. Ticket impreso");
       } else {
@@ -1142,7 +1152,9 @@ const POS = () => {
         toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
-      setCloseCashStep("review");
+      setCloseCashStep("idle");
+      setCloseBillsInput("");
+      setCloseCoinsInput("");
       
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
@@ -2151,7 +2163,11 @@ const POS = () => {
         open={isCashDialogOpen}
         onOpenChange={(open) => {
           setIsCashDialogOpen(open);
-          if (!open) setCloseCashStep("review");
+          if (!open) {
+            setCloseCashStep("idle");
+            setCloseBillsInput("");
+            setCloseCoinsInput("");
+          }
         }}
       >
         <DialogContent className="max-w-2xl">
@@ -2166,7 +2182,7 @@ const POS = () => {
           <div className="space-y-4">
             <div className="rounded-md border p-3 text-sm">
               <div className="font-semibold">Estado: {cashSnapshot.open ? "Caja Abierta" : "Caja Cerrada"}</div>
-              {cashSnapshot.open && cashSnapshot.summary && (
+              {canViewSensitiveCash && cashSnapshot.open && cashSnapshot.summary && (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
@@ -2180,10 +2196,10 @@ const POS = () => {
               )}
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCash}>
+              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCashOperations}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
-              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open || !canManageCash}>PAGOS</Button>
+              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open || !canManageCashOperations}>PAGOS</Button>
               <TooltipProvider delayDuration={120}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -2191,7 +2207,7 @@ const POS = () => {
                       size="icon"
                       variant="outline"
                       onClick={handleOpenDrawer}
-                      disabled={isOpeningDrawer || !cashSnapshot.open || !canManageCash}
+                      disabled={isOpeningDrawer || !cashSnapshot.open || !canManageCashOperations}
                       className={`h-14 w-full ${!cashSnapshot.open ? "opacity-50 cursor-not-allowed" : ""}`}
                       aria-label="Abrir cajón"
                       title="Abrir cajón"
@@ -2206,44 +2222,85 @@ const POS = () => {
 
             {cashSnapshot.open ? (
               <div className="space-y-2 rounded-md border p-3">
-                {!canManageCash ? <div className="text-sm text-muted-foreground">Solo administrador o cajero pueden ejecutar apertura/cierre, pagos y gaveta.</div> : null}
-                {canManageCash && closeCashStep === "review" ? (
-                  <div className="space-y-2">
-                    <div className="text-sm text-muted-foreground">Paso 1 de 2: revisa el esperado y confirma que iniciarás el cierre.</div>
-                    <Button variant="secondary" onClick={() => setCloseCashStep("confirm")}>Continuar cierre</Button>
+                {!canCloseCash ? <div className="text-sm text-muted-foreground">No tienes permisos para cerrar caja.</div> : null}
+                {canCloseCash && closeCashStep === "idle" ? (
+                  <div className="space-y-3">
+                    <div className="text-sm text-muted-foreground">Caja abierta.</div>
+                    <Button className="h-14 w-full text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Iniciar cierre</Button>
                   </div>
                 ) : null}
-                {canManageCash && closeCashStep === "confirm" ? (
+                {canCloseCash && closeCashStep === "bills" ? (
                   <>
-                    <div className="text-sm text-muted-foreground">Paso 2 de 2: ingresa el efectivo contado y confirma.</div>
-                    <Label>Efectivo contado al cierre</Label>
-                    <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
+                    <div className="text-center text-2xl font-bold">Billetes</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closeBillsInput}
+                      onChange={(e) => setCloseBillsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")} disabled={Number(closeBillsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "coins" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">Monedas</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closeCoinsInput}
+                      onChange={(e) => setCloseCoinsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "confirm" ? (
+                  <>
+                    <div className="space-y-2 rounded-lg border p-3 text-base">
+                      <div className="flex justify-between"><span>Total billetes</span><span>{formatMoney(Number(closeBillsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
+                    </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" onClick={() => setCloseCashStep("review")}>Atrás</Button>
-                      <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
                     </div>
                   </>
                 ) : null}
               </div>
             ) : null}
 
-            <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
-              {cashTransactions.length === 0 ? (
-                <div className="text-muted-foreground">Sin gastos registrados.</div>
-              ) : (
-                cashTransactions.map((tx) => (
-                  <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
-                    <div>
-                      <div className="font-medium">{tx.description}</div>
-                      <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+            {canViewSensitiveCash ? (
+              <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
+                {cashTransactions.length === 0 ? (
+                  <div className="text-muted-foreground">Sin gastos registrados.</div>
+                ) : (
+                  cashTransactions.map((tx) => (
+                    <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
+                      <div>
+                        <div className="font-medium">{tx.description}</div>
+                        <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+                      </div>
+                      <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
                     </div>
-                    <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
-                  </div>
-                ))
-              )}
-            </div>
+                  ))
+                )}
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

@@ -21,7 +21,7 @@ from apps.cashier.serializers import (
 )
 from apps.core.audit import log_audit
 from apps.core.models import Branch
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
+from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
 from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id
@@ -79,11 +79,11 @@ def _to_json_compatible(value):
     return json.loads(json.dumps(value, default=str))
 
 
-def _session_contract_payload(session: CashSession) -> dict:
+def _session_contract_payload(session: CashSession, *, include_sensitive: bool = True) -> dict:
     raw = CashSessionSerializer(session).data
-    return {
+    payload = {
         **raw,
-        "opening_amount": raw.get("opening_cash"),
+        "opening_amount": raw.get("opening_cash") if include_sensitive else None,
         "user": {
             "id": raw.get("opened_by"),
             "username": raw.get("opened_by_username"),
@@ -95,6 +95,16 @@ def _session_contract_payload(session: CashSession) -> dict:
             "station_name": raw.get("station_name"),
         },
     }
+    if not include_sensitive:
+        payload["opening_cash"] = None
+    return payload
+
+
+def _can_view_sensitive_cash_data(request) -> bool:
+    if getattr(request.user, "is_superuser", False):
+        return True
+    profile = _get_profile(request.user)
+    return bool(profile and profile.is_active and profile.role == "admin")
 
 
 class RegisterListCreateView(generics.ListCreateAPIView):
@@ -114,15 +124,16 @@ class CashSessionCurrentView(APIView):
         )
         branch_id = resolve_branch_id(raw_branch_id)
         session = get_open_cash_session_for_branch(branch_id)
+        include_sensitive = _can_view_sensitive_cash_data(request)
         logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
             return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
-        summary = calculate_shift_summary(session)
+        summary = calculate_shift_summary(session) if include_sensitive else None
         return Response(
             {
                 "has_open_session": True,
-                "session": _session_contract_payload(session),
-                "summary": CashSessionSummarySerializer(summary).data,
+                "session": _session_contract_payload(session, include_sensitive=include_sensitive),
+                "summary": CashSessionSummarySerializer(summary).data if summary else None,
             },
             status=status.HTTP_200_OK,
         )
@@ -169,7 +180,7 @@ class CashSessionOpenView(APIView):
                 {
                     "has_open_session": True,
                     "already_open": True,
-                    "session": _session_contract_payload(existing_session),
+                    "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
                 },
                 status=status.HTTP_200_OK,
             )
@@ -181,7 +192,7 @@ class CashSessionOpenView(APIView):
             {
                 "has_open_session": True,
                 "already_open": False,
-                "session": _session_contract_payload(session),
+                "session": _session_contract_payload(session, include_sensitive=_can_view_sensitive_cash_data(request)),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -201,21 +212,27 @@ class CashSessionCloseView(APIView):
                 request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0",
                 field_label="Monto contado",
             )
+            counted_bills = _parse_decimal(request.data.get("total_bills", "0") or "0", field_label="Total billetes")
+            counted_coins = _parse_decimal(request.data.get("total_coins", "0") or "0", field_label="Total monedas")
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notes = str(request.data.get("notes", "")).strip()
-        if counted_cash < 0:
+        if counted_cash < 0 or counted_bills < 0 or counted_coins < 0:
             return Response({"detail": "Monto contado inválido"}, status=status.HTTP_400_BAD_REQUEST)
+        if abs((counted_bills + counted_coins) - counted_cash) > Decimal("0.01"):
+            return Response({"detail": "El total contado no coincide con billetes + monedas."}, status=status.HTTP_400_BAD_REQUEST)
 
         session.status = "closed"
         session.closed_by = request.user
         session.closed_at = timezone.now()
         session.closing_counted_cash = counted_cash
+        session.closing_total_bills = counted_bills
+        session.closing_total_coins = counted_coins
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
         session.summary_snapshot = _to_json_compatible(snapshot)
-        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
+        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "closing_total_bills", "closing_total_coins", "notes", "summary_snapshot"])
 
         ticket_text = ""
         printed = False
@@ -258,6 +275,8 @@ class CashSessionCloseView(APIView):
                 "ticket_text": ticket_text,
                 "printed": printed,
                 "print_error": print_error,
+                "total_bills": f"{counted_bills:.2f}",
+                "total_coins": f"{counted_coins:.2f}",
             }
         )
 
@@ -266,6 +285,8 @@ class CashTransactionListCreateView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
+        if not _can_view_sensitive_cash_data(request):
+            return Response([], status=status.HTTP_200_OK)
         session_id = request.query_params.get("session_id")
         start_at, end_at = parse_business_date_range(
             request.query_params.get("date_from"),

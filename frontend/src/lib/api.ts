@@ -3665,11 +3665,17 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 
 export const closeCashSession = async (
   closingCashCounted: number,
-  notes?: string
+  notes?: string,
+  totals?: { bills?: number; coins?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
-    body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
+    body: JSON.stringify({
+      closing_cash_counted: closingCashCounted,
+      total_bills: Number(totals?.bills ?? 0),
+      total_coins: Number(totals?.coins ?? 0),
+      notes: notes ?? '',
+    }),
   }));
   return {
     sessionId: Number(data.session?.id ?? 0) || undefined,
