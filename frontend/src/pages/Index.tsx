@@ -123,6 +123,14 @@ const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
 
 const centsToInput = (value: number): string => (Math.max(0, value) / 100).toFixed(2);
+const normalizeServiceTypeKey = (value: string, available: Array<{ key: string }>) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const exact = available.find((item) => item.key === normalized);
+  if (exact) return exact.key;
+  const insensitive = available.find((item) => String(item.key || "").trim().toUpperCase() === normalized);
+  return insensitive?.key ?? "";
+};
 
 const DrawerIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
@@ -150,7 +158,9 @@ const POS = () => {
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
-  const [closingCashInput, setClosingCashInput] = useState("");
+  const [closeBillsInput, setCloseBillsInput] = useState("");
+  const [closeCoinsInput, setCloseCoinsInput] = useState("");
+  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "confirm">("idle");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
@@ -158,7 +168,8 @@ const POS = () => {
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
   const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
-  const postOpenSessionActionRef = useRef<(() => void) | null>(null);
+  const postOpenSessionActionRef = useRef<(() => Promise<void>) | null>(null);
+  const openSessionResolverRef = useRef<((opened: boolean) => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
@@ -257,6 +268,9 @@ const POS = () => {
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
+  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
@@ -315,8 +329,13 @@ const POS = () => {
 
   useEffect(() => {
     if (!serviceTypes.length) return;
-    if (!serviceType || !serviceTypes.some((item) => item.key === serviceType)) {
+    const normalizedServiceType = normalizeServiceTypeKey(serviceType, serviceTypes);
+    if (!normalizedServiceType) {
       setServiceType(serviceTypes[0].key);
+      return;
+    }
+    if (normalizedServiceType !== serviceType) {
+      setServiceType(normalizedServiceType);
     }
   }, [serviceTypes, serviceType]);
 
@@ -335,7 +354,8 @@ const POS = () => {
         ivaExempt?: boolean;
       };
       if (Array.isArray(parsed.cart)) setCart(parsed.cart);
-      if (parsed.serviceType && serviceTypes.some((type) => type.key === parsed.serviceType)) setServiceType(parsed.serviceType);
+      const restoredServiceType = normalizeServiceTypeKey(parsed.serviceType || "", serviceTypes);
+      if (restoredServiceType) setServiceType(restoredServiceType);
       if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
       if (parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
       if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
@@ -793,30 +813,57 @@ const POS = () => {
     setIsPaymentOpen(true);
   };
 
-  const requestOpenSession = (postAction?: () => void) => {
+  const requestOpenSession = (postAction?: () => Promise<void>, resolver?: (opened: boolean) => void) => {
     postOpenSessionActionRef.current = postAction ?? null;
+    openSessionResolverRef.current = resolver ?? null;
     setOpenSessionAmount("0.00");
     setIsOpenSessionModalOpen(true);
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
-  const ensureCashSessionOpen = async (postAction: () => Promise<void> | void) => {
+  const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
     try {
       const current = await getCurrentCashSession();
       setCashSnapshot(current);
       if (current.open) {
         await postAction();
-        return;
+        return true;
       }
-      requestOpenSession(postAction);
+      return await new Promise<boolean>((resolve) => {
+        requestOpenSession(postAction, resolve);
+      });
     } catch {
-      requestOpenSession(postAction);
+      return await new Promise<boolean>((resolve) => {
+        requestOpenSession(postAction, resolve);
+      });
     }
   };
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    await ensureCashSessionOpen(() => proceedToCheckout());
+    if (isOpenSessionModalOpen && !cashSnapshot.open) return;
+    try {
+      await ensureCashSessionOpen(async () => {
+        await proceedToCheckout();
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/caja no aperturada|cash session|required/i.test(message)) {
+        try {
+          const current = await getCurrentCashSession();
+          setCashSnapshot(current);
+          if (!current.open) {
+            requestOpenSession();
+            return;
+          }
+          toast.error(message || "Conflicto al crear orden");
+        } catch {
+          requestOpenSession();
+        }
+        return;
+      }
+      toast.error(message || "No se pudo continuar al cobro");
+    }
   };
 
   const getPendingSelectionValidation = () => {
@@ -870,10 +917,16 @@ const POS = () => {
         getCurrentCashSession(),
         getCashTransactions(),
       ]);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] current-session", { open: snapshot.open, sessionId: snapshot.session?.id ?? null });
+      }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
       if (!snapshot.open) {
         setIsOpenSessionModalOpen(true);
+      } else {
+        setIsOpenSessionModalOpen(false);
       }
     } catch (error) {
       console.error("Failed to load cash data", error);
@@ -900,7 +953,7 @@ const POS = () => {
   useEffect(() => {
     getPaymentMethods().then((methods) => {
       setPaymentMethods(methods);
-      const first = methods[0];
+      const first = methods.find((method) => String(method.code || "").toLowerCase() === "cash") || methods[0];
       if (first) {
         setSelectedPaymentMethodCode(first.code);
         const code = (first.code || "").toLowerCase();
@@ -960,6 +1013,22 @@ const POS = () => {
     }
   }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
+  const paymentMethodButtons = useMemo(() => {
+    const byCode = new Map(paymentMethods.map((method) => [String(method.code || "").toLowerCase(), method]));
+    const desiredCodes = ["cash", "card", "transfer", "pedidos_ya", "paypal"] as const;
+    return desiredCodes
+      .map((code) => {
+        const method = byCode.get(code);
+        if (!method) return null;
+        return {
+          code,
+          label: method.name || (code === "card" ? "Tarjeta" : code),
+          method: code === "cash" ? ("cash" as PaymentMethod) : code === "card" ? ("card" as PaymentMethod) : ("transfer" as PaymentMethod),
+        };
+      })
+      .filter((item): item is { code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal"; label: string; method: PaymentMethod } => Boolean(item));
+  }, [paymentMethods]);
+
   useEffect(() => {
     if (isPaymentOpen) {
       if (splitEnabled) {
@@ -1005,15 +1074,35 @@ const POS = () => {
   }, [checkoutTotalCents, isPaymentOpen, checkoutDraft, parts.length]);
 
   const handleOpenCashSession = async () => {
+    if (isSavingCashAction) return;
     setIsSavingCashAction(true);
     try {
       await openCashSession(Number(openSessionAmount || 0));
+      const current = await getCurrentCashSession();
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-refetch", { open: current.open, sessionId: current.session?.id ?? null });
+      }
+      setCashSnapshot(current);
+      if (!current.open) {
+        toast.error("No se pudo confirmar apertura de caja.");
+        openSessionResolverRef.current?.(false);
+        return;
+      }
       await loadCashData();
-      toast.success("Caja aperturada");
-      setIsOpenSessionModalOpen(false);
       const action = postOpenSessionActionRef.current;
       postOpenSessionActionRef.current = null;
-      action?.();
+      setIsOpenSessionModalOpen(false);
+      if (action) {
+        try {
+          await action();
+        } catch (actionError) {
+          const message = actionError instanceof Error ? actionError.message : "Error en checkout";
+          toast.error(message);
+        }
+      }
+      openSessionResolverRef.current?.(true);
+      toast.success("Caja aperturada");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error desconocido";
       if (message.includes("409") || message.toLowerCase().includes("abierta")) {
@@ -1024,7 +1113,15 @@ const POS = () => {
             setIsOpenSessionModalOpen(false);
             const action = postOpenSessionActionRef.current;
             postOpenSessionActionRef.current = null;
-            action?.();
+            if (action) {
+              try {
+                await action();
+              } catch (actionError) {
+                const actionMessage = actionError instanceof Error ? actionError.message : "Error en checkout";
+                toast.error(actionMessage);
+              }
+            }
+            openSessionResolverRef.current?.(true);
             toast.success("Caja ya estaba aperturada");
             return;
           }
@@ -1032,16 +1129,29 @@ const POS = () => {
           // fallback to generic error below
         }
       }
+      openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
     } finally {
+      openSessionResolverRef.current = null;
       setIsSavingCashAction(false);
     }
   };
 
   const handleCloseCashSession = async () => {
+    if (!canCloseCash) {
+      toast.error("No tienes permisos para cerrar caja.");
+      return;
+    }
+    const totalBills = Number(closeBillsInput || 0);
+    const totalCoins = Number(closeCoinsInput || 0);
+    const countedTotal = totalBills + totalCoins;
+    if (!Number.isFinite(totalBills) || totalBills < 0 || !Number.isFinite(totalCoins) || totalCoins < 0) {
+      toast.error("Ingresa montos válidos para billetes y monedas.");
+      return;
+    }
     setIsSavingCashAction(true);
     try {
-      const closeResp = await closeCashSession(Number(closingCashInput || 0), cashNotes);
+      const closeResp = await closeCashSession(countedTotal, cashNotes, { bills: totalBills, coins: totalCoins });
       if (closeResp.printed) {
         toast.success("Caja cerrada. Ticket impreso");
       } else {
@@ -1058,6 +1168,9 @@ const POS = () => {
         toast.warning(`Caja cerrada, pero no se pudo imprimir: ${closeResp.printError || "Error desconocido"}`);
       }
       await loadCashData();
+      setCloseCashStep("idle");
+      setCloseBillsInput("");
+      setCloseCoinsInput("");
       
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
@@ -1336,10 +1449,6 @@ const POS = () => {
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
-    if (paymentMethod === "card" && !cardType) {
-      toast.error("Selecciona débito o crédito para tarjeta");
-      return;
-    }
     if (amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
@@ -1379,7 +1488,7 @@ const POS = () => {
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
-        cardType: paymentMethod === "card" ? (cardType ?? undefined) : undefined,
+        cardType: paymentMethod === "card" ? "credit" : undefined,
         amount: amountForApi,
         amountApplied: amountForApi,
         cashReceived: amountReceived,
@@ -2066,7 +2175,17 @@ const POS = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isCashDialogOpen} onOpenChange={setIsCashDialogOpen}>
+      <Dialog
+        open={isCashDialogOpen}
+        onOpenChange={(open) => {
+          setIsCashDialogOpen(open);
+          if (!open) {
+            setCloseCashStep("idle");
+            setCloseBillsInput("");
+            setCloseCoinsInput("");
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <div className="flex items-center justify-between gap-2">
@@ -2079,7 +2198,7 @@ const POS = () => {
           <div className="space-y-4">
             <div className="rounded-md border p-3 text-sm">
               <div className="font-semibold">Estado: {cashSnapshot.open ? "Caja Abierta" : "Caja Cerrada"}</div>
-              {cashSnapshot.open && cashSnapshot.summary && (
+              {canViewSensitiveCash && cashSnapshot.open && cashSnapshot.summary && (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
@@ -2093,10 +2212,10 @@ const POS = () => {
               )}
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open}>
+              <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCashOperations}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
-              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open}>PAGOS</Button>
+              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open || !canManageCashOperations}>PAGOS</Button>
               <TooltipProvider delayDuration={120}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -2104,7 +2223,7 @@ const POS = () => {
                       size="icon"
                       variant="outline"
                       onClick={handleOpenDrawer}
-                      disabled={isOpeningDrawer || !cashSnapshot.open}
+                      disabled={isOpeningDrawer || !cashSnapshot.open || !canManageCashOperations}
                       className={`h-14 w-full ${!cashSnapshot.open ? "opacity-50 cursor-not-allowed" : ""}`}
                       aria-label="Abrir cajón"
                       title="Abrir cajón"
@@ -2119,29 +2238,85 @@ const POS = () => {
 
             {cashSnapshot.open ? (
               <div className="space-y-2 rounded-md border p-3">
-                <Label>Efectivo contado al cierre</Label>
-                <Input type="number" min="0" step="0.01" value={closingCashInput} onChange={(e) => setClosingCashInput(e.target.value)} />
-                <Label>Notas</Label>
-                <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
-                <Button variant="destructive" onClick={handleCloseCashSession} disabled={isSavingCashAction || !closingCashInput}>Cerrar Caja</Button>
+                {!canCloseCash ? <div className="text-sm text-muted-foreground">No tienes permisos para cerrar caja.</div> : null}
+                {canCloseCash && closeCashStep === "idle" ? (
+                  <div className="space-y-3">
+                    <div className="text-sm text-muted-foreground">Caja abierta.</div>
+                    <Button className="h-14 w-full text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Iniciar cierre</Button>
+                  </div>
+                ) : null}
+                {canCloseCash && closeCashStep === "bills" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">Billetes</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closeBillsInput}
+                      onChange={(e) => setCloseBillsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")} disabled={Number(closeBillsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "coins" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">Monedas</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closeCoinsInput}
+                      onChange={(e) => setCloseCoinsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "confirm" ? (
+                  <>
+                    <div className="space-y-2 rounded-lg border p-3 text-base">
+                      <div className="flex justify-between"><span>Total billetes</span><span>{formatMoney(Number(closeBillsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
+                    </div>
+                    <Label>Notas</Label>
+                    <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : null}
 
-            <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
-              {cashTransactions.length === 0 ? (
-                <div className="text-muted-foreground">Sin gastos registrados.</div>
-              ) : (
-                cashTransactions.map((tx) => (
-                  <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
-                    <div>
-                      <div className="font-medium">{tx.description}</div>
-                      <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+            {canViewSensitiveCash ? (
+              <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
+                {cashTransactions.length === 0 ? (
+                  <div className="text-muted-foreground">Sin gastos registrados.</div>
+                ) : (
+                  cashTransactions.map((tx) => (
+                    <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
+                      <div>
+                        <div className="font-medium">{tx.description}</div>
+                        <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+                      </div>
+                      <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
                     </div>
-                    <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
-                  </div>
-                ))
-              )}
-            </div>
+                  ))
+                )}
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
@@ -2335,13 +2510,7 @@ const POS = () => {
             </div>
             <Label>Método</Label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {[
-                { code: "cash", label: "Efectivo", method: "cash" as PaymentMethod },
-                { code: "card", label: "Tarjeta", method: "card" as PaymentMethod },
-                { code: "transfer", label: "Transferencia", method: "transfer" as PaymentMethod },
-                { code: "pedidos_ya", label: "Pedidos Ya", method: "transfer" as PaymentMethod },
-                { code: "paypal", label: "PayPal", method: "transfer" as PaymentMethod },
-              ].map((option) => (
+              {paymentMethodButtons.map((option) => (
                 <Button
                   key={option.code}
                   type="button"
@@ -2350,8 +2519,8 @@ const POS = () => {
                   onClick={() => {
                     setPaymentMethod(option.method);
                     if (option.code === "card") {
-                      setSelectedPaymentMethodCode("card_credit");
-                      setCardType(null);
+                      setSelectedPaymentMethodCode(option.code);
+                      setCardType("credit");
                     } else {
                       setSelectedPaymentMethodCode(option.code);
                       setCardType(null);
@@ -2362,12 +2531,6 @@ const POS = () => {
                 </Button>
               ))}
             </div>
-            {paymentMethod === "card" ? (
-              <div className="grid grid-cols-2 gap-2">
-                <Button type="button" className="h-14 text-base" variant={cardType === "debit" ? "default" : "outline"} onClick={() => { setCardType("debit"); setSelectedPaymentMethodCode("card_debit"); }}>Débito</Button>
-                <Button type="button" className="h-14 text-base" variant={cardType === "credit" ? "default" : "outline"} onClick={() => { setCardType("credit"); setSelectedPaymentMethodCode("card_credit"); }}>Crédito</Button>
-              </div>
-            ) : null}
             <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Monto recibido</Label>
@@ -2397,7 +2560,7 @@ const POS = () => {
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
-              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid) || (paymentMethod === "card" && !cardType)}>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
                 {isProcessingPayment ? "Procesando..." : "Registrar pago"}
               </Button>
             </div>

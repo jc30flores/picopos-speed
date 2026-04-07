@@ -10,7 +10,7 @@ from apps.payments.normalization import payment_code_from_payment
 
 MONEY_Q = Decimal("0.01")
 
-PAYMENT_METHOD_CODES = ["cash", "card_debit", "card_credit", "transfer", "pedidos_ya", "paypal"]
+PAYMENT_METHOD_CODES = ["cash", "card", "transfer", "pedidos_ya", "paypal"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -43,6 +43,8 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "closed_by_username",
             "closed_at",
             "closing_counted_cash",
+            "closing_total_bills",
+            "closing_total_coins",
             "notes",
             "summary_snapshot",
         ]
@@ -147,6 +149,8 @@ def calculate_shift_summary(session: CashSession) -> dict:
     cash_sales = _q2(totals_by_method["cash"])
     expected_cash_in_drawer = _q2(cash_initial + cash_sales - expenses_total)
     counted_cash = _q2(session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0"))
+    counted_bills = _q2(session.closing_total_bills if session.closing_total_bills is not None else Decimal("0"))
+    counted_coins = _q2(session.closing_total_coins if session.closing_total_coins is not None else Decimal("0"))
     difference = _q2(counted_cash - expected_cash_in_drawer)
     order_ids = payments.values_list("order_id", flat=True).distinct()
 
@@ -156,6 +160,8 @@ def calculate_shift_summary(session: CashSession) -> dict:
         "cash_expenses_total": f"{expenses_total:.2f}",
         "expected_cash_in_drawer": f"{expected_cash_in_drawer:.2f}",
         "counted_cash": f"{counted_cash:.2f}",
+        "counted_bills": f"{counted_bills:.2f}",
+        "counted_coins": f"{counted_coins:.2f}",
         "difference": f"{difference:.2f}",
         "totals_by_method": {k: f"{_q2(v):.2f}" for k, v in totals_by_method.items()},
         "cash_movements": cash_movements,

@@ -178,3 +178,33 @@ class SalesAggregatesTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data["items"]), 1)
         self.assertEqual(response.data["items"][0]["name"], self.cat_burritos.name)
+
+    def test_sales_breakdown_payment_method_dimension_consolidates_legacy_card_credit_and_debit(self):
+        pm_card_debit = PaymentMethod.objects.create(code="card_debit", name="Tarjeta Débito", is_cash=False)
+        now = timezone.now().replace(minute=0, second=0, microsecond=0)
+        self._create_sale(
+            order_number=32,
+            created_at=now,
+            service_type=self.service_dine,
+            payment_method=self.pm_card,
+            method="card",
+            amount="7.00",
+        )
+        self._create_sale(
+            order_number=33,
+            created_at=now,
+            service_type=self.service_dine,
+            payment_method=pm_card_debit,
+            method="card",
+            amount="5.00",
+        )
+
+        start = now.date().isoformat()
+        end = now.date().isoformat()
+        response = self.client.get(
+            f"/api/reports/sales-breakdown/?start={start}&end={end}&dimension=payment_method"
+        )
+        self.assertEqual(response.status_code, 200)
+        card_rows = [row for row in response.data["items"] if row["id"] == "card"]
+        self.assertEqual(len(card_rows), 1, response.data["items"])
+        self.assertEqual(card_rows[0]["total"], "12.00")

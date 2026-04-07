@@ -20,6 +20,7 @@ from apps.dte.serializers import (
     DTERecordListSerializer,
 )
 from apps.dte.services.dte_retry import resend_record
+from apps.dte.services.delivery import deliver_dte_to_client
 from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
@@ -32,7 +33,7 @@ logger = logging.getLogger("apps.dte")
 class IsDTECashierOrAbove(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"admin"})
+        return bool(profile and profile.is_active and profile.role in {"admin", "manager", "cashier"})
 
 
 class IsDTEAccountantOrAdmin(BasePermission):
@@ -180,6 +181,44 @@ class DTESendEmailView(APIView):
                 "record": DTERecordDetailSerializer(record).data,
             }
         )
+
+
+class DTEBulkDeliveryView(APIView):
+    permission_classes = [IsDTECashierOrAbove]
+
+    def post(self, request, pk: int):
+        record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
+        result = deliver_dte_to_client(
+            record,
+            channels=request.data.get("channels"),
+            actor_user=request.user,
+            request=request,
+            to_email=request.data.get("email"),
+            to_phone=request.data.get("phone"),
+        )
+        if not result.get("results"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+
+class DTEOrderBulkDeliveryView(APIView):
+    permission_classes = [IsDTECashierOrAbove]
+
+    def post(self, request, order_id: int):
+        record = DTERecord.objects.select_related("order", "order__customer").filter(order_id=order_id).order_by("-id").first()
+        if not record:
+            return Response({"detail": "No existe DTE para esta venta"}, status=status.HTTP_404_NOT_FOUND)
+        result = deliver_dte_to_client(
+            record,
+            channels=request.data.get("channels"),
+            actor_user=request.user,
+            request=request,
+            to_email=request.data.get("email"),
+            to_phone=request.data.get("phone"),
+        )
+        if not result.get("results"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
 
 
 class DTESendWhatsAppView(APIView):

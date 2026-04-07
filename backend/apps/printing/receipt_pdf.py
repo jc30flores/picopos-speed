@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from dataclasses import dataclass
 from io import BytesIO
 from math import floor
@@ -11,6 +12,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 
 from apps.printing.services.pdf_text import SimpleTextPdfWriter
+
+logger = logging.getLogger(__name__)
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _ESC_POS_RE = re.compile(r"\x1b(?:[@-~]|\[[0-?]*[ -/]*[@-~])")
@@ -96,6 +99,8 @@ def _normalize_lines(lines: list[str] | tuple[str, ...], *, max_chars_per_line: 
             break_on_hyphens=False,
         ) or [""]
         out.extend(chunk.rstrip() for chunk in wrapped)
+    while len(out) > 1 and out[-1] == "":
+        out.pop()
     return out or [""]
 
 
@@ -298,13 +303,19 @@ def build_receipt_pdf(
 def build_receipt_pdf_from_text(*, text: str, filename: str, **kwargs) -> ReceiptPdfResult:
     receipt_context = kwargs.pop("receipt_context", None)
     if receipt_context:
-        return build_sale_receipt_pdf(
-            receipt_context=receipt_context,
-            filename=filename,
-            logo_path=kwargs.get("logo_path"),
-            qr_value=kwargs.get("qr_value"),
-            page_width_mm=kwargs.get("page_width_mm"),
-        )
+        try:
+            return build_sale_receipt_pdf(
+                receipt_context=receipt_context,
+                filename=filename,
+                logo_path=kwargs.get("logo_path"),
+                qr_value=kwargs.get("qr_value"),
+                page_width_mm=kwargs.get("page_width_mm"),
+            )
+        except ModuleNotFoundError as exc:
+            if "reportlab" in str(exc).lower():
+                logger.warning("receipt_pdf.reportlab_missing_fallback filename=%s", filename)
+            else:
+                raise
     lines = sanitize_receipt_text(text).split("\n")
     return build_receipt_pdf(lines=lines, filename=filename, **kwargs)
 

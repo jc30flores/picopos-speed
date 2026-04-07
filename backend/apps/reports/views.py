@@ -93,25 +93,26 @@ def _comparison_range(start_date, end_date, mode: str, group_by: str | None):
 
 def _payment_method_code_expression():
     return Case(
-        When(reporting_payment_method__code__iexact="card", card_type__iexact="debit", then=Value("card_debit")),
-        When(reporting_payment_method__code__iexact="card", then=Value("card_credit")),
-        When(reporting_payment_method__code__iexact="credit_card", then=Value("card_credit")),
-        When(reporting_payment_method__code__iexact="debit_card", then=Value("card_debit")),
+        When(reporting_payment_method__code__iexact="card", then=Value("card")),
+        When(reporting_payment_method__code__iexact="credit_card", then=Value("card")),
+        When(reporting_payment_method__code__iexact="debit_card", then=Value("card")),
+        When(reporting_payment_method__code__iexact="card_credit", then=Value("card")),
+        When(reporting_payment_method__code__iexact="card_debit", then=Value("card")),
         When(reporting_payment_method__code__iexact="efectivo", then=Value("cash")),
         When(reporting_payment_method__code__iexact="01", then=Value("cash")),
         When(reporting_payment_method__code__iexact="pedidosya", then=Value("pedidos_ya")),
         When(reporting_payment_method__isnull=False, then=F("reporting_payment_method__code")),
-        When(payment_method__code__iexact="card", card_type__iexact="debit", then=Value("card_debit")),
-        When(payment_method__code__iexact="card", then=Value("card_credit")),
-        When(payment_method__code__iexact="credit_card", then=Value("card_credit")),
-        When(payment_method__code__iexact="debit_card", then=Value("card_debit")),
+        When(payment_method__code__iexact="card", then=Value("card")),
+        When(payment_method__code__iexact="credit_card", then=Value("card")),
+        When(payment_method__code__iexact="debit_card", then=Value("card")),
+        When(payment_method__code__iexact="card_credit", then=Value("card")),
+        When(payment_method__code__iexact="card_debit", then=Value("card")),
         When(payment_method__code__iexact="efectivo", then=Value("cash")),
         When(payment_method__code__iexact="01", then=Value("cash")),
         When(payment_method__code__iexact="pedidosya", then=Value("pedidos_ya")),
         When(payment_method__isnull=False, then=F("payment_method__code")),
         When(method__iexact="cash", then=Value("cash")),
-        When(method__iexact="card", card_type__iexact="debit", then=Value("card_debit")),
-        When(method__iexact="card", then=Value("card_credit")),
+        When(method__iexact="card", then=Value("card")),
         default=Value("transfer"),
         output_field=CharField(),
     )
@@ -192,20 +193,19 @@ class SalesReportListView(generics.ListAPIView):
         status = self.request.query_params.get("status")
 
         if payment_method:
-            if payment_method == "card_debit":
+            if payment_method in {"card", "card_debit", "card_credit"}:
                 queryset = queryset.filter(
-                    Q(reporting_payment_method__code__iexact="card_debit")
-                    | Q(reporting_payment_method__code__iexact="card", card_type="debit")
+                    Q(reporting_payment_method__code__iexact="card")
+                    | Q(reporting_payment_method__code__iexact="card_debit")
+                    | Q(reporting_payment_method__code__iexact="card_credit")
+                    | Q(reporting_payment_method__code__iexact="debit_card")
+                    | Q(reporting_payment_method__code__iexact="credit_card")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card")
                     | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card_debit")
-                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card", card_type="debit")
-                )
-            elif payment_method == "card_credit":
-                queryset = queryset.filter(
-                    Q(reporting_payment_method__code__iexact="card_credit")
-                    | Q(reporting_payment_method__code__iexact="card", card_type="credit")
                     | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card_credit")
-                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="card", card_type="credit")
-                    | Q(reporting_payment_method__isnull=True, payment_method__isnull=True, method="card", card_type="credit")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="debit_card")
+                    | Q(reporting_payment_method__isnull=True, payment_method__code__iexact="credit_card")
+                    | Q(reporting_payment_method__isnull=True, payment_method__isnull=True, method="card")
                 )
             else:
                 q = Q(reporting_payment_method__code__iexact=payment_method) | Q(

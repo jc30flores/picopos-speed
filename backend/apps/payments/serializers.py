@@ -4,7 +4,7 @@ from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund, PaymentMethod
-from apps.payments.normalization import normalize_payment_method_code
+from apps.payments.normalization import normalize_payment_method_code, resolve_payment_method
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +67,16 @@ class PaymentSerializer(serializers.ModelSerializer):
         code = normalize_payment_method_code(attrs.pop("payment_method_code", ""))
         payment_method = attrs.get("payment_method")
         if code and not payment_method:
-            payment_method = PaymentMethod.objects.filter(code__iexact=code, is_active=True).first()
+            payment_method = resolve_payment_method(code, active_only=True)
             if not payment_method:
                 raise serializers.ValidationError("Payment method not found")
             attrs["payment_method"] = payment_method
+
+        method_value = (attrs.get("method") or "").strip().lower()
+        if method_value == "card" and not attrs.get("payment_method"):
+            resolved_card_method = resolve_payment_method("card", active_only=True)
+            if resolved_card_method:
+                attrs["payment_method"] = resolved_card_method
 
         if payment_method and not attrs.get("method"):
             method_code = payment_method.code.lower()
@@ -80,17 +86,13 @@ class PaymentSerializer(serializers.ModelSerializer):
                 attrs["method"] = "card"
             else:
                 attrs["method"] = "transfer"
-            if method_code == "card_debit":
-                attrs["card_type"] = "debit"
-            elif method_code in {"card_credit", "card"} and not attrs.get("card_type"):
+            if method_code in {"card_debit", "card_credit", "card"} and not attrs.get("card_type"):
                 attrs["card_type"] = "credit"
 
+        payment_method = attrs.get("payment_method")
         method_value = (attrs.get("method") or "").strip().lower()
-        card_type = (attrs.get("card_type") or "").strip().lower()
         if method_value == "card":
-            if card_type not in {"debit", "credit"}:
-                raise serializers.ValidationError({"card_type": "Debe seleccionar tipo de tarjeta: débito o crédito."})
-            attrs["card_type"] = card_type
+            attrs["card_type"] = "credit"
         else:
             attrs["card_type"] = ""
 

@@ -453,7 +453,7 @@ class DTECoreTests(TestCase):
     def test_get_mh_payment_info_card_debit_and_credit(self):
         Payment.objects.create(order=self.order, method="card", card_type="debit", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
         code, _ = get_mh_payment_info(self.order)
-        self.assertEqual(code, "02")
+        self.assertEqual(code, "03")
         self.order.payments.all().delete()
         Payment.objects.create(order=self.order, method="card", card_type="credit", amount=Decimal("10.00"), tip_amount=Decimal("0.00"))
         code, _ = get_mh_payment_info(self.order)

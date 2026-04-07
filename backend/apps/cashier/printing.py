@@ -28,8 +28,7 @@ SEP_UNDERSCORE = f"{PREFIX}{'_' * 36}"
 SEP_TOTAL = f"{PREFIX}=========="
 PAYMENT_METHOD_REPORT_ORDER = [
     ("cash", "EFECTIVO"),
-    ("card_debit", "T. DEBITO"),
-    ("card_credit", "T. CREDITO"),
+    ("card", "TARJETA"),
     ("transfer", "TRANSFERENCIA"),
     ("paypal", "PAYPAL"),
     ("pedidos_ya", "PEDIDOS YA"),
@@ -226,8 +225,7 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
         SEP_DOTS,
         "OTHER TRANSACTIONS SUMMARY",
         "(DOES NOT AFFECT DRAWER COUNT)",
-        _line_item("T. DEBITO", payment_map["card_debit"]["total"], payment_map["card_debit"]["count"]),
-        _line_item("T. CREDITO", payment_map["card_credit"]["total"], payment_map["card_credit"]["count"]),
+        _line_item("TARJETA", payment_map["card"]["total"], payment_map["card"]["count"]),
         "(CC TIPS NOT INCLUDED)",
         _line_item("TRANSFERENCIA", payment_map["transfer"]["total"], payment_map["transfer"]["count"]),
         _line_item("PAYPAL", payment_map["paypal"]["total"], payment_map["paypal"]["count"]),

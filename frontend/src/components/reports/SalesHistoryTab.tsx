@@ -28,6 +28,7 @@ import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2 } from "luc
 import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
+  dteDeliverByOrder,
   refundSaleRecord,
   getPaymentMethods,
   getSalesReport,
@@ -50,7 +51,7 @@ import { fromCents, toCents } from "@/lib/money";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
-type PaymentMethodFilter = "all" | "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal";
+type PaymentMethodFilter = "all" | "cash" | "card" | "transfer" | "pedidos_ya" | "paypal";
 
 interface Sale {
   id: string;
@@ -87,7 +88,7 @@ const mapStatus = (
 
 export const SalesHistoryTab = () => {
   const { user } = useAuth();
-  const restrictedRole = user?.role === "cashier" || user?.role === "manager";
+  const restrictedRole = user?.role === "cashier";
   const [timeRange, setTimeRange] = useState<TimeRange>("daily");
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
@@ -108,7 +109,8 @@ export const SalesHistoryTab = () => {
   const [selectedMethodCode, setSelectedMethodCode] = useState("");
   const [methodChangeReason, setMethodChangeReason] = useState("");
   const [isChangingMethod, setIsChangingMethod] = useState(false);
-  const canChangePaymentMethod = user?.role === "admin" || user?.role === "manager" || Boolean(user?.isSuperuser);
+  const [sendingByOrderId, setSendingByOrderId] = useState<number | null>(null);
+  const canChangePaymentMethod = user?.role === "admin" || Boolean(user?.isSuperuser);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
   const dateTo = endDate ? getLocalDateSV(endDate) : undefined;
@@ -273,6 +275,24 @@ export const SalesHistoryTab = () => {
     }
   };
 
+  const handleSendDteToCustomer = async (sale: Sale) => {
+    setSendingByOrderId(Number(sale.id));
+    try {
+      const result = await dteDeliverByOrder(Number(sale.id), ["whatsapp", "email"]);
+      const wa = result.results?.whatsapp;
+      const email = result.results?.email;
+      if (result.success) {
+        toast.success("DTE enviado por correo y WhatsApp.");
+      } else {
+        toast.error(`WhatsApp: ${wa?.error || "OK"} | Correo: ${email?.error || "OK"}`);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo enviar DTE");
+    } finally {
+      setSendingByOrderId(null);
+    }
+  };
+
 
   return (
     <div className="space-y-6">
@@ -417,8 +437,7 @@ export const SalesHistoryTab = () => {
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="cash">Efectivo</SelectItem>
-                  <SelectItem value="card_debit">Tarjeta Débito</SelectItem>
-                  <SelectItem value="card_credit">Tarjeta Crédito</SelectItem>
+                  <SelectItem value="card">Tarjeta</SelectItem>
                   <SelectItem value="transfer">Transferencia</SelectItem>
                   <SelectItem value="pedidos_ya">Pedidos Ya</SelectItem>
                   <SelectItem value="paypal">PayPal</SelectItem>
@@ -548,10 +567,11 @@ export const SalesHistoryTab = () => {
                             className="h-9 rounded-lg px-3"
                             title="Enviar DTE a Cliente"
                             aria-label="Enviar DTE a Cliente"
-                            onClick={() => toast.info("Próximamente")}
+                            onClick={() => void handleSendDteToCustomer(sale)}
+                            disabled={sendingByOrderId === Number(sale.id)}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            Enviar DTE a Cliente
+                            {sendingByOrderId === Number(sale.id) ? "Enviando..." : "Enviar DTE a Cliente"}
                           </Button>
                         </div>
                       </TableCell>

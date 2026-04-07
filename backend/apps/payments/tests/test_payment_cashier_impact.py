@@ -81,6 +81,6 @@ class PaymentCashierImpactTests(TestCase):
         self.assertEqual(Decimal(summary["total_cash_sales"]), Decimal("10.00"))
         self.assertEqual(Decimal(summary["cash_expenses_total"]), Decimal("5.00"))
         self.assertEqual(Decimal(summary["expected_cash_in_drawer"]), Decimal("105.00"))
-        self.assertEqual(Decimal(summary["totals_by_method"]["card_credit"]), Decimal("20.00"))
+        self.assertEqual(Decimal(summary["totals_by_method"]["card"]), Decimal("20.00"))
         self.assertEqual(Decimal(summary["totals_by_method"]["transfer"]), Decimal("15.00"))
         self.assertTrue(all(row["description"] == "Mercado" for row in summary["cash_movements"]))

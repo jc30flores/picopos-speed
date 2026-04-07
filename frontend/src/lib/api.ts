@@ -291,7 +291,7 @@ export type Customer = {
 
 export type PaymentMethodOption = {
   id: number;
-  code: "cash" | "card_debit" | "card_credit" | "transfer" | "pedidos_ya" | "paypal" | string;
+  code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal" | string;
   name: string;
   isCash: boolean;
   sortOrder: number;
@@ -2133,8 +2133,9 @@ export const getSalesReport = async (filters?: {
       net_total?: string;
       payment_methods?: {
         cash: string;
-        card_debit: string;
-        card_credit: string;
+        card?: string;
+        card_debit?: string;
+        card_credit?: string;
         transfer: string;
         pedidos_ya: string;
         paypal: string;
@@ -2180,7 +2181,11 @@ export const getSalesReport = async (filters?: {
       netTotal: Number(data.aggregates.net_total ?? 0),
       paymentMethods: {
         cash: Number(data.aggregates.payment_methods?.cash ?? 0),
-        card: fromCents(toCents(data.aggregates.payment_methods?.card_debit ?? 0) + toCents(data.aggregates.payment_methods?.card_credit ?? 0)),
+        card: fromCents(
+          toCents(data.aggregates.payment_methods?.card ?? 0)
+          + toCents(data.aggregates.payment_methods?.card_debit ?? 0)
+          + toCents(data.aggregates.payment_methods?.card_credit ?? 0)
+        ),
         transfer: Number(data.aggregates.payment_methods?.transfer ?? 0),
       },
       tipsTotal: Number(data.aggregates.tips_total ?? 0),
@@ -3603,10 +3608,17 @@ export type CashSessionHistoryRow = {
   summary: CashSessionSnapshot["summary"];
 };
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
-  const response = await request('/cashier/session/current/');
+  const params = new URLSearchParams();
+  const branchIdRaw = localStorage.getItem("selected_branch_id");
+  if (branchIdRaw && Number.isFinite(Number(branchIdRaw))) {
+    params.set("branch_id", String(Number(branchIdRaw)));
+  }
+  const query = params.toString();
+  const response = await request(`/cashier/session/current/${query ? `?${query}` : ""}`);
   const data = await handleJson<any>(response);
+  const hasOpenSession = Boolean(data.has_open_session);
   const session = data.session ?? null;
-  if (!session) return { open: false };
+  if (!hasOpenSession || !session) return { open: false };
   return {
     open: true,
     session: {
@@ -3624,9 +3636,13 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
-        card: fromCents(toCents(data.summary?.totals_by_method?.card_debit ?? 0) + toCents(data.summary?.totals_by_method?.card_credit ?? 0)),
-        cardDebit: Number(data.summary?.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(data.summary?.totals_by_method?.card_credit ?? 0),
+        card: fromCents(
+          toCents(data.summary?.totals_by_method?.card ?? 0)
+          + toCents(data.summary?.totals_by_method?.card_debit ?? 0)
+          + toCents(data.summary?.totals_by_method?.card_credit ?? 0)
+        ),
+        cardDebit: 0,
+        cardCredit: 0,
         transfer: Number(data.summary?.totals_by_method?.transfer ?? data.summary?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary?.totals_by_method?.pedidos_ya ?? data.summary?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary?.totals_by_method?.paypal ?? data.summary?.methods?.PAYPAL?.total ?? 0),
@@ -3637,19 +3653,29 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
 };
 
 export const openCashSession = async (openingCash: number): Promise<void> => {
+  const branchIdRaw = localStorage.getItem("selected_branch_id");
   await handleJson(await request('/cashier/session/open/', {
     method: 'POST',
-    body: JSON.stringify({ opening_cash: openingCash }),
+    body: JSON.stringify({
+      opening_cash: openingCash,
+      ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
+    }),
   }));
 };
 
 export const closeCashSession = async (
   closingCashCounted: number,
-  notes?: string
+  notes?: string,
+  totals?: { bills?: number; coins?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
-    body: JSON.stringify({ closing_cash_counted: closingCashCounted, notes: notes ?? '' }),
+    body: JSON.stringify({
+      closing_cash_counted: closingCashCounted,
+      total_bills: Number(totals?.bills ?? 0),
+      total_coins: Number(totals?.coins ?? 0),
+      notes: notes ?? '',
+    }),
   }));
   return {
     sessionId: Number(data.session?.id ?? 0) || undefined,
@@ -3719,9 +3745,13 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
         cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
-        cardDebit: Number(row.summary_snapshot?.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(row.summary_snapshot?.totals_by_method?.card_credit ?? 0),
-        card: fromCents(toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0) + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)),
+        cardDebit: 0,
+        cardCredit: 0,
+        card: fromCents(
+          toCents(row.summary_snapshot?.totals_by_method?.card ?? 0)
+          + toCents(row.summary_snapshot?.totals_by_method?.card_debit ?? 0)
+          + toCents(row.summary_snapshot?.totals_by_method?.card_credit ?? 0)
+        ),
         transfer: Number(row.summary_snapshot?.totals_by_method?.transfer ?? row.summary_snapshot?.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(row.summary_snapshot?.totals_by_method?.pedidos_ya ?? row.summary_snapshot?.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(row.summary_snapshot?.totals_by_method?.paypal ?? row.summary_snapshot?.methods?.PAYPAL?.total ?? 0),
@@ -3744,9 +3774,13 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
         cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
-        cardDebit: Number(data.summary.totals_by_method?.card_debit ?? 0),
-        cardCredit: Number(data.summary.totals_by_method?.card_credit ?? 0),
-        card: fromCents(toCents(data.summary.totals_by_method?.card_debit ?? 0) + toCents(data.summary.totals_by_method?.card_credit ?? 0)),
+        cardDebit: 0,
+        cardCredit: 0,
+        card: fromCents(
+          toCents(data.summary.totals_by_method?.card ?? 0)
+          + toCents(data.summary.totals_by_method?.card_debit ?? 0)
+          + toCents(data.summary.totals_by_method?.card_credit ?? 0)
+        ),
         transfer: Number(data.summary.totals_by_method?.transfer ?? data.summary.methods?.TRANSFER?.total ?? 0),
         pedidosYa: Number(data.summary.totals_by_method?.pedidos_ya ?? data.summary.methods?.PEDIDOS_YA?.total ?? 0),
         payPal: Number(data.summary.totals_by_method?.paypal ?? data.summary.methods?.PAYPAL?.total ?? 0),
@@ -3804,7 +3838,14 @@ export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void>
     headers: { Accept: "application/pdf,application/octet-stream,*/*" },
   });
   if (!response.ok) {
-    throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const payload = await response.json().catch(() => ({}));
+      const detail = String(payload?.detail ?? "").trim();
+      throw new Error(detail || `No se pudo descargar ticket PDF (${response.status})`);
+    }
+    const raw = await response.text().catch(() => "");
+    throw new Error(raw || `No se pudo descargar ticket PDF (${response.status})`);
   }
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/pdf")) {
@@ -3918,6 +3959,64 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
   const res = await request(`/dte/issued/${id}/send-whatsapp/`, { method: "POST" });
   const payload = await handleJson<any>(res);
   return { message: payload.message ?? "WhatsApp enviado", record: payload.record };
+};
+
+export const dteDeliver = async (
+  id: number,
+  channels: Array<"whatsapp" | "email">
+): Promise<{
+  success: boolean;
+  summary: string;
+  orderId?: number;
+  issuedId?: number;
+  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+}> => {
+  const res = await request(`/dte/issued/${id}/deliver/`, {
+    method: "POST",
+    body: JSON.stringify({ channels }),
+  });
+  const payload = await handleJson<any>(res);
+  return {
+    success: Boolean(payload.success),
+    summary: payload.summary ?? "Envío completado",
+    orderId: payload.order_id,
+    issuedId: payload.issued_id,
+    results: Object.fromEntries(
+      Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
+        key,
+        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+      ])
+    ),
+  };
+};
+
+export const dteDeliverByOrder = async (
+  orderId: number,
+  channels: Array<"whatsapp" | "email">
+): Promise<{
+  success: boolean;
+  summary: string;
+  orderId?: number;
+  issuedId?: number;
+  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+}> => {
+  const res = await request(`/dte/orders/${orderId}/deliver/`, {
+    method: "POST",
+    body: JSON.stringify({ channels }),
+  });
+  const payload = await handleJson<any>(res);
+  return {
+    success: Boolean(payload.success),
+    summary: payload.summary ?? "Envío completado",
+    orderId: payload.order_id,
+    issuedId: payload.issued_id,
+    results: Object.fromEntries(
+      Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
+        key,
+        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+      ])
+    ),
+  };
 };
 
 export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {

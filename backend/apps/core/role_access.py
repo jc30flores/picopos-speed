@@ -44,9 +44,9 @@ ROLE_DENIED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"^/api/cashier/sessions/\d+/ticket\.pdf/?$"),
     ),
     "manager": (
-        re.compile(r"^/api/reports/sales-timeseries/?$"),
-        re.compile(r"^/api/reports/sales-breakdown/?$"),
+        re.compile(r"^/api/reports/"),
         re.compile(r"^/api/cashier/session/history/?$"),
+        re.compile(r"^/api/cashier/sessions/\d+/?$"),
         re.compile(r"^/api/cashier/sessions/\d+/ticket\.pdf/?$"),
     ),
 }

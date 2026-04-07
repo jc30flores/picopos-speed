@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from apps.payments.models import Payment
+from apps.payments.models import Payment, PaymentMethod
 
 PAYMENT_METHOD_LABELS = {
     "cash": "Efectivo",
-    "card_debit": "Tarjeta Débito",
-    "card_credit": "Tarjeta Crédito",
+    "card": "Tarjeta",
+    "card_debit": "Tarjeta",
+    "card_credit": "Tarjeta",
     "transfer": "Transferencia",
     "pedidos_ya": "Pedidos Ya",
     "paypal": "PayPal",
@@ -15,11 +16,18 @@ PAYMENT_METHOD_ALIASES = {
     "cash": "cash",
     "efectivo": "cash",
     "01": "cash",
-    "card": "card_credit",
-    "credit_card": "card_credit",
-    "debit_card": "card_debit",
-    "card_credit": "card_credit",
-    "card_debit": "card_debit",
+    "card": "card",
+    "credit_card": "card",
+    "debit_card": "card",
+    "card_credit": "card",
+    "card_debit": "card",
+    "tarjeta": "card",
+    "tarjeta_credito": "card",
+    "tarjeta_debito": "card",
+    "credito": "card",
+    "debito": "card",
+    "credit": "card",
+    "debit": "card",
     "transfer": "transfer",
     "bank_transfer": "transfer",
     "pedidosya": "pedidos_ya",
@@ -33,17 +41,47 @@ def normalize_payment_method_code(value: str | None) -> str:
     return PAYMENT_METHOD_ALIASES.get(raw, raw)
 
 
+def payment_method_lookup_candidates(value: str | None) -> list[str]:
+    normalized = normalize_payment_method_code(value)
+    if not normalized:
+        return []
+    candidates: list[str] = [normalized]
+    if normalized == "card":
+        candidates.extend(["card_credit", "card_debit", "credit_card", "debit_card", "credit", "debit"])
+    return candidates
+
+
+def resolve_payment_method(value: str | None, *, active_only: bool = True) -> PaymentMethod | None:
+    candidates = payment_method_lookup_candidates(value)
+    if not candidates:
+        return None
+    queryset = PaymentMethod.objects.all()
+    if active_only:
+        queryset = queryset.filter(is_active=True)
+    methods = list(queryset)
+    by_code = {str(method.code or "").strip().lower(): method for method in methods}
+    for candidate in candidates:
+        found = by_code.get(candidate)
+        if found:
+            return found
+    if normalize_payment_method_code(value) == "card":
+        for method in methods:
+            normalized_name = str(method.name or "").strip().lower()
+            if normalized_name in {"tarjeta", "tarjeta credito", "tarjeta debito"}:
+                return method
+    return None
+
+
 def payment_code_from_payment(payment: Payment) -> str:
     effective_method = payment.reporting_payment_method if payment.reporting_payment_method_id else payment.payment_method
     code = normalize_payment_method_code(effective_method.code if effective_method else "")
     method = str(payment.method or "").strip().lower()
-    card_type = str(payment.card_type or "").strip().lower()
     if code:
-        if code == "card_credit" and card_type == "debit":
-            return "card_debit"
+        if code in {"card_credit", "card_debit"}:
+            return "card"
         return code
     if method == "cash":
         return "cash"
     if method == "card":
-        return "card_debit" if card_type == "debit" else "card_credit"
+        return "card"
     return "transfer"

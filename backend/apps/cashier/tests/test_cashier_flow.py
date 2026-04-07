@@ -14,14 +14,21 @@ from apps.dte.models import DTEBranchConfig
 class CashierFlowTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        user = get_user_model().objects.create_user(username='cash', password='pw')
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='cash', password='pw')
+        self.admin = user_model.objects.create_user(username='admin_cash', password='pw')
+        self.manager = user_model.objects.create_user(username='manager_cash', password='pw')
         UserProfile.objects.create(user=user, role='cashier', is_active=True)
+        UserProfile.objects.create(user=self.admin, role='admin', is_active=True)
+        UserProfile.objects.create(user=self.manager, role='manager', is_active=True)
         Branch.objects.create(name='Main', code='MAIN')
         self.client.force_authenticate(user)
 
     def test_open_session_ok(self):
         res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data.get('has_open_session'), True)
+        self.assertIsNone(res.data.get('session', {}).get('opening_amount'))
 
     def test_open_session_is_idempotent_for_same_user(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
@@ -49,7 +56,7 @@ class CashierFlowTests(TestCase):
         self.assertEqual(statuses.count(200), 7)
         self.assertEqual(CashSession.objects.filter(opened_by=user, status='open').count(), 1)
 
-    def test_current_session_returns_open_even_when_opened_by_another_user(self):
+    def test_current_session_hides_sensitive_summary_for_cashier(self):
         user_model = get_user_model()
         opener = user_model.objects.create_user(username='cash_other', password='pw')
         UserProfile.objects.create(user=opener, role='cashier', is_active=True)
@@ -60,7 +67,25 @@ class CashierFlowTests(TestCase):
 
         current = self.client.get('/api/cashier/session/current/')
         self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('has_open_session'), True)
         self.assertIsNotNone(current.data.get('session'))
+        self.assertIsNone(current.data.get('summary'))
+        self.assertIsNone(current.data.get('session', {}).get('opening_amount'))
+
+    def test_current_session_returns_sensitive_summary_for_admin(self):
+        admin_client = APIClient()
+        admin_client.force_authenticate(self.admin)
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '50.00'}, format='json')
+        current = admin_client.get('/api/cashier/session/current/')
+        self.assertEqual(current.status_code, 200)
+        self.assertIsNotNone(current.data.get('summary'))
+        self.assertIsNotNone(current.data.get('session', {}).get('opening_amount'))
+
+    def test_current_session_returns_has_open_session_false_when_none(self):
+        current = self.client.get('/api/cashier/session/current/')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('has_open_session'), False)
+        self.assertIsNone(current.data.get('session'))
 
     def test_open_session_returns_200_if_register_already_open(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
@@ -83,11 +108,13 @@ class CashierFlowTests(TestCase):
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00', 'total_bills': '80.00', 'total_coins': '15.00'}, format='json')
         self.assertEqual(close.status_code, 200)
         session_id = close.data['session']['id']
         session = CashSession.objects.get(id=session_id)
         json.dumps(session.summary_snapshot)
+        self.assertEqual(str(session.closing_total_bills), "80.00")
+        self.assertEqual(str(session.closing_total_coins), "15.00")
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
@@ -129,8 +156,15 @@ class CashierFlowTests(TestCase):
         pdf_upper = pdf_bytes.upper()
         self.assertIn(b"PLAZA MONACO", pdf_upper)
         self.assertIn(b"AVENIDA MONACO", pdf_upper)
-        for label in [b"EFECTIVO", b"T. DEBITO", b"T. CREDITO", b"TRANSFERENCIA", b"PAYPAL", b"PEDIDOS YA"]:
+        for label in [b"EFECTIVO", b"TARJETA", b"TRANSFERENCIA", b"PAYPAL", b"PEDIDOS YA"]:
             self.assertIn(label, pdf_upper)
+
+    def test_manager_can_close_session(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        manager_client = APIClient()
+        manager_client.force_authenticate(self.manager)
+        close = manager_client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00', 'total_bills': '90.00', 'total_coins': '5.00'}, format='json')
+        self.assertEqual(close.status_code, 200)
 
     def test_close_without_open_session_returns_400(self):
         close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')

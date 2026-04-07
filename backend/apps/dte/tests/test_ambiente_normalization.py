@@ -2,10 +2,18 @@ from django.test import SimpleTestCase
 import os
 
 from apps.dte.services.dte_service import DTEPreflightError
+from apps.dte.services.dte_service import _normalize_ambiente_value
 from apps.dte.services.orchestrator import _normalize_ambiente, _ambiente
 
 
 class AmbienteNormalizationTests(SimpleTestCase):
+    def test_dte_service_normalizes_ambiente_values(self):
+        self.assertEqual(_normalize_ambiente_value("00"), "00")
+        self.assertEqual(_normalize_ambiente_value("test"), "00")
+        self.assertEqual(_normalize_ambiente_value("01"), "01")
+        self.assertEqual(_normalize_ambiente_value("prod"), "01")
+        self.assertEqual(_normalize_ambiente_value("INVALID"), "00")
+
     def test_normalize_basic_values(self):
         self.assertEqual(_normalize_ambiente("00"), "00")
         self.assertEqual(_normalize_ambiente("01"), "01")

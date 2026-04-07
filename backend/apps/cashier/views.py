@@ -21,10 +21,10 @@ from apps.cashier.serializers import (
 )
 from apps.core.audit import log_audit
 from apps.core.models import Branch
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive
+from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
-from apps.cashier.services import CashDrawerService
+from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,34 @@ def _to_json_compatible(value):
     return json.loads(json.dumps(value, default=str))
 
 
+def _session_contract_payload(session: CashSession, *, include_sensitive: bool = True) -> dict:
+    raw = CashSessionSerializer(session).data
+    payload = {
+        **raw,
+        "opening_amount": raw.get("opening_cash") if include_sensitive else None,
+        "user": {
+            "id": raw.get("opened_by"),
+            "username": raw.get("opened_by_username"),
+        },
+        "branch": raw.get("branch_id"),
+        "terminal": {
+            "register_id": raw.get("register"),
+            "register_name": raw.get("register_name"),
+            "station_name": raw.get("station_name"),
+        },
+    }
+    if not include_sensitive:
+        payload["opening_cash"] = None
+    return payload
+
+
+def _can_view_sensitive_cash_data(request) -> bool:
+    if getattr(request.user, "is_superuser", False):
+        return True
+    profile = _get_profile(request.user)
+    return bool(profile and profile.is_active and profile.role == "admin")
+
+
 class RegisterListCreateView(generics.ListCreateAPIView):
     queryset = Register.objects.select_related("branch").all()
     serializer_class = RegisterSerializer
@@ -89,16 +117,26 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        session = (
-            CashSession.objects.filter(closed_at__isnull=True)
-            .select_related("register", "register__branch")
-            .order_by("-opened_at")
-            .first()
+        raw_branch_id = (
+            request.query_params.get("branch_id")
+            or request.headers.get("X-Branch-Id")
+            or request.headers.get("x-branch-id")
         )
+        branch_id = resolve_branch_id(raw_branch_id)
+        session = get_open_cash_session_for_branch(branch_id)
+        include_sensitive = _can_view_sensitive_cash_data(request)
+        logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
-            return Response({"session": None, "summary": None}, status=status.HTTP_200_OK)
-        summary = calculate_shift_summary(session)
-        return Response({"session": CashSessionSerializer(session).data, "summary": CashSessionSummarySerializer(summary).data}, status=status.HTTP_200_OK)
+            return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
+        summary = calculate_shift_summary(session) if include_sensitive else None
+        return Response(
+            {
+                "has_open_session": True,
+                "session": _session_contract_payload(session, include_sensitive=include_sensitive),
+                "summary": CashSessionSummarySerializer(summary).data if summary else None,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class CashSessionOpenView(APIView):
@@ -117,32 +155,44 @@ class CashSessionOpenView(APIView):
             return Response({"detail": "Monto inicial inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
+            branch_id = resolve_branch_id(request.data.get("branch_id"))
+            register = Register.objects.filter(branch_id=branch_id, is_active=True).order_by("id").first() if branch_id else None
+            if not register and branch_id:
+                branch = Branch.objects.filter(id=branch_id, is_active=True).first()
+                if branch:
+                    register = Register.objects.create(name="CAJA 1", station_name="POS 1", branch=branch, is_active=True)
+            if not register:
+                register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         register = Register.objects.select_for_update().get(pk=register.pk)
+        scope_branch_id = branch_id or register.branch_id
         existing_session = (
             CashSession.objects.select_for_update()
             .select_related("register", "register__branch")
-            .filter(register=register, status="open", closed_at__isnull=True)
+            .filter(register__branch_id=scope_branch_id, status="open", closed_at__isnull=True)
             .first()
         )
         if existing_session:
+            logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
             return Response(
                 {
+                    "has_open_session": True,
                     "already_open": True,
-                    "session": CashSessionSerializer(existing_session).data,
+                    "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
                 },
                 status=status.HTTP_200_OK,
             )
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
+        logger.info("cash_session.open branch_id=%s opened_session_id=%s", register.branch_id, session.id)
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(
             {
+                "has_open_session": True,
                 "already_open": False,
-                "session": CashSessionSerializer(session).data,
+                "session": _session_contract_payload(session, include_sensitive=_can_view_sensitive_cash_data(request)),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -162,21 +212,27 @@ class CashSessionCloseView(APIView):
                 request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0",
                 field_label="Monto contado",
             )
+            counted_bills = _parse_decimal(request.data.get("total_bills", "0") or "0", field_label="Total billetes")
+            counted_coins = _parse_decimal(request.data.get("total_coins", "0") or "0", field_label="Total monedas")
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notes = str(request.data.get("notes", "")).strip()
-        if counted_cash < 0:
+        if counted_cash < 0 or counted_bills < 0 or counted_coins < 0:
             return Response({"detail": "Monto contado inválido"}, status=status.HTTP_400_BAD_REQUEST)
+        if abs((counted_bills + counted_coins) - counted_cash) > Decimal("0.01"):
+            return Response({"detail": "El total contado no coincide con billetes + monedas."}, status=status.HTTP_400_BAD_REQUEST)
 
         session.status = "closed"
         session.closed_by = request.user
         session.closed_at = timezone.now()
         session.closing_counted_cash = counted_cash
+        session.closing_total_bills = counted_bills
+        session.closing_total_coins = counted_coins
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
         session.summary_snapshot = _to_json_compatible(snapshot)
-        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "notes", "summary_snapshot"])
+        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "closing_total_bills", "closing_total_coins", "notes", "summary_snapshot"])
 
         ticket_text = ""
         printed = False
@@ -219,6 +275,8 @@ class CashSessionCloseView(APIView):
                 "ticket_text": ticket_text,
                 "printed": printed,
                 "print_error": print_error,
+                "total_bills": f"{counted_bills:.2f}",
+                "total_coins": f"{counted_coins:.2f}",
             }
         )
 
@@ -227,6 +285,8 @@ class CashTransactionListCreateView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
+        if not _can_view_sensitive_cash_data(request):
+            return Response([], status=status.HTTP_200_OK)
         session_id = request.query_params.get("session_id")
         start_at, end_at = parse_business_date_range(
             request.query_params.get("date_from"),

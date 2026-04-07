@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, Customer, ServiceType
-from apps.cashier.models import Register
+from apps.cashier.models import CashSession, Register
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
 from apps.users.models import UserProfile
@@ -222,6 +222,28 @@ class OrderPaymentFlowTests(TestCase):
         )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json().get("code"), "CASH_SESSION_REQUIRED")
+
+    def test_create_order_allows_when_open_session_exists_for_branch(self):
+        register = Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
+        CashSession.objects.create(register=register, opened_by=self.user, opening_cash=Decimal("20.00"), status="open")
+        response = self.client.post(
+            "/api/orders/",
+            {
+                "branch_id": self.branch.id,
+                "service_type_key": "dine-in",
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "product_name_snapshot": self.product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
 
     def test_create_payment_requires_open_cash_session_when_register_exists(self):
         Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
