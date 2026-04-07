@@ -248,7 +248,7 @@ RECEIPT_PRINTER_CUT_ENABLED = _env_bool("RECEIPT_PRINTER_CUT_ENABLED", default=T
 PRINTER_SIZE = _env_float("PRINTER_SIZE", 80.0)
 PRINTER_SIZE_MM = _env_float("PRINTER_SIZE_MM", PRINTER_SIZE)
 
-MH_AMBIENTE = os.environ.get("MH_AMBIENTE", "").strip()
+MH_AMBIENTE = os.environ.get("MH_AMBIENTE", "00").strip() or "00"
 DTE_BASE_URL = os.environ.get("DTE_BASE_URL", "").strip()
 DTE_API_TOKEN = os.environ.get("DTE_API_TOKEN", "").strip()
 DTE_API_AUTH_HEADER = os.environ.get("DTE_API_AUTH_HEADER", "Authorization").strip() or "Authorization"

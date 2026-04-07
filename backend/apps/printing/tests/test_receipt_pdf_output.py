@@ -1,5 +1,6 @@
 from pathlib import Path
 from io import BytesIO
+from unittest.mock import patch
 
 from django.conf import settings
 from django.test import SimpleTestCase
@@ -8,7 +9,7 @@ try:
 except Exception:  # pragma: no cover
     PdfReader = None
 
-from apps.printing.receipt_pdf import build_receipt_pdf
+from apps.printing.receipt_pdf import build_receipt_pdf, build_receipt_pdf_from_text
 
 
 class ReceiptPdfOutputTests(SimpleTestCase):
@@ -47,3 +48,12 @@ class ReceiptPdfOutputTests(SimpleTestCase):
             if resolved.get("/Subtype") == "/Image":
                 image_count += 1
         self.assertGreaterEqual(image_count, 1)
+
+    def test_build_receipt_pdf_from_text_falls_back_when_reportlab_missing_for_sale_layout(self):
+        with patch("apps.printing.receipt_pdf.build_sale_receipt_pdf", side_effect=ModuleNotFoundError("No module named 'reportlab'")):
+            result = build_receipt_pdf_from_text(
+                text="ORDEN #200\nTOTAL: $10.00",
+                filename="venta_200.pdf",
+                receipt_context={"order_number": 200},
+            )
+        self.assertTrue(result.pdf_bytes.startswith(b"%PDF"))

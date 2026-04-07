@@ -19,6 +19,15 @@ from apps.dte.services.payment_methods import get_cat017_code_and_label
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ambiente_value(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"00", "0", "test", "prueba", "testing"}:
+        return "00"
+    if value in {"01", "1", "prod", "produccion", "production"}:
+        return "01"
+    return "00"
+
+
 def _mask_token(token: str) -> str:
     if not token:
         return ""
@@ -287,6 +296,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     from django.utils import timezone
 
     emisor = _resolve_branch_config(order)
+    ambiente = _normalize_ambiente_value(ambiente)
     active_branch = get_active_branch()
     final_nit = get_emisor_nit()
     logger.info("[DTE DEBUG] Emisor NIT final utilizado=%s branch_id=%s", final_nit, active_branch.id)

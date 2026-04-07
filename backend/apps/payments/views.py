@@ -623,16 +623,26 @@ class PaymentTicketPDFView(APIView):
         payment = Payment.objects.select_related("order").filter(pk=pk).first()
         if not payment:
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
-        payload = render_customer_ticket(payment.order)
-        filename = _venta_pdf_filename(payment.order)
-        result = build_receipt_pdf_from_text(
-            text=payload.get("text", ""),
-            filename=filename,
-            logo_path=payload.get("meta", {}).get("logo_path"),
-            qr_value=payload.get("meta", {}).get("public_url"),
-            receipt_context=payload.get("meta", {}).get("receipt_context"),
-            suppress_qr_url_lines=True,
-        )
-        response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
-        return response
+        try:
+            payload = render_customer_ticket(payment.order)
+            filename = _venta_pdf_filename(payment.order)
+            result = build_receipt_pdf_from_text(
+                text=payload.get("text", ""),
+                filename=filename,
+                logo_path=payload.get("meta", {}).get("logo_path"),
+                qr_value=payload.get("meta", {}).get("public_url"),
+                receipt_context=payload.get("meta", {}).get("receipt_context"),
+                suppress_qr_url_lines=True,
+            )
+            response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
+            response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+            return response
+        except ModuleNotFoundError as exc:
+            logger.exception("payment.ticket_pdf.dependency_missing payment_id=%s", payment.id)
+            return Response(
+                {"detail": f"No se pudo generar el PDF: dependencia faltante ({exc})."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception:
+            logger.exception("payment.ticket_pdf.failed payment_id=%s", payment.id)
+            return Response({"detail": "No se pudo generar el ticket PDF."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

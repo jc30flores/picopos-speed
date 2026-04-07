@@ -3815,7 +3815,14 @@ export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void>
     headers: { Accept: "application/pdf,application/octet-stream,*/*" },
   });
   if (!response.ok) {
-    throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const payload = await response.json().catch(() => ({}));
+      const detail = String(payload?.detail ?? "").trim();
+      throw new Error(detail || `No se pudo descargar ticket PDF (${response.status})`);
+    }
+    const raw = await response.text().catch(() => "");
+    throw new Error(raw || `No se pudo descargar ticket PDF (${response.status})`);
   }
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/pdf")) {
