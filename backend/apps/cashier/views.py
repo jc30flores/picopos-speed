@@ -79,6 +79,24 @@ def _to_json_compatible(value):
     return json.loads(json.dumps(value, default=str))
 
 
+def _session_contract_payload(session: CashSession) -> dict:
+    raw = CashSessionSerializer(session).data
+    return {
+        **raw,
+        "opening_amount": raw.get("opening_cash"),
+        "user": {
+            "id": raw.get("opened_by"),
+            "username": raw.get("opened_by_username"),
+        },
+        "branch": raw.get("branch_id"),
+        "terminal": {
+            "register_id": raw.get("register"),
+            "register_name": raw.get("register_name"),
+            "station_name": raw.get("station_name"),
+        },
+    }
+
+
 class RegisterListCreateView(generics.ListCreateAPIView):
     queryset = Register.objects.select_related("branch").all()
     serializer_class = RegisterSerializer
@@ -96,14 +114,14 @@ class CashSessionCurrentView(APIView):
         )
         branch_id = resolve_branch_id(raw_branch_id)
         session = get_open_cash_session_for_branch(branch_id)
-        logger.info("cash_session.current branch_id=%s has_open_session=%s", branch_id, bool(session))
+        logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
             return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session)
         return Response(
             {
                 "has_open_session": True,
-                "session": CashSessionSerializer(session).data,
+                "session": _session_contract_payload(session),
                 "summary": CashSessionSummarySerializer(summary).data,
             },
             status=status.HTTP_200_OK,
@@ -127,26 +145,31 @@ class CashSessionOpenView(APIView):
 
         try:
             branch_id = resolve_branch_id(request.data.get("branch_id"))
-            register = Register.objects.filter(branch_id=branch_id, is_active=True).order_by("id").first()
+            register = Register.objects.filter(branch_id=branch_id, is_active=True).order_by("id").first() if branch_id else None
+            if not register and branch_id:
+                branch = Branch.objects.filter(id=branch_id, is_active=True).first()
+                if branch:
+                    register = Register.objects.create(name="CAJA 1", station_name="POS 1", branch=branch, is_active=True)
             if not register:
                 register = _ensure_register(request.data.get("cash_register_id") or request.data.get("register_id"))
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         register = Register.objects.select_for_update().get(pk=register.pk)
+        scope_branch_id = branch_id or register.branch_id
         existing_session = (
             CashSession.objects.select_for_update()
             .select_related("register", "register__branch")
-            .filter(register__branch_id=register.branch_id, status="open", closed_at__isnull=True)
+            .filter(register__branch_id=scope_branch_id, status="open", closed_at__isnull=True)
             .first()
         )
         if existing_session:
-            logger.info("cash_session.open branch_id=%s already_open_session_id=%s", register.branch_id, existing_session.id)
+            logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
             return Response(
                 {
                     "has_open_session": True,
                     "already_open": True,
-                    "session": CashSessionSerializer(existing_session).data,
+                    "session": _session_contract_payload(existing_session),
                 },
                 status=status.HTTP_200_OK,
             )
@@ -158,7 +181,7 @@ class CashSessionOpenView(APIView):
             {
                 "has_open_session": True,
                 "already_open": False,
-                "session": CashSessionSerializer(session).data,
+                "session": _session_contract_payload(session),
             },
             status=status.HTTP_201_CREATED,
         )

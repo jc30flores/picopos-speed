@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def _selected_branch_id(request):
     raw = request.query_params.get("branch_id")
-    return resolve_branch_id(raw)
+    return resolve_branch_id(raw, fallback_to_default=True)
 
 
 def _apply_common_filters(request, queryset):
