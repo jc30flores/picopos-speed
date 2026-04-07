@@ -898,6 +898,10 @@ const POS = () => {
         getCurrentCashSession(),
         getCashTransactions(),
       ]);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] current-session", { open: snapshot.open, sessionId: snapshot.session?.id ?? null });
+      }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
       if (!snapshot.open) {
@@ -1040,6 +1044,10 @@ const POS = () => {
     try {
       await openCashSession(Number(openSessionAmount || 0));
       const current = await getCurrentCashSession();
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-refetch", { open: current.open, sessionId: current.session?.id ?? null });
+      }
       setCashSnapshot(current);
       if (!current.open) {
         toast.error("No se pudo confirmar apertura de caja.");

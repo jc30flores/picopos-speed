@@ -22,6 +22,7 @@ class CashierFlowTests(TestCase):
     def test_open_session_ok(self):
         res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data.get('has_open_session'), True)
 
     def test_open_session_is_idempotent_for_same_user(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
@@ -60,7 +61,14 @@ class CashierFlowTests(TestCase):
 
         current = self.client.get('/api/cashier/session/current/')
         self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('has_open_session'), True)
         self.assertIsNotNone(current.data.get('session'))
+
+    def test_current_session_returns_has_open_session_false_when_none(self):
+        current = self.client.get('/api/cashier/session/current/')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('has_open_session'), False)
+        self.assertIsNone(current.data.get('session'))
 
     def test_open_session_returns_200_if_register_already_open(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

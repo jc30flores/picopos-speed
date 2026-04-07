@@ -96,10 +96,18 @@ class CashSessionCurrentView(APIView):
         )
         branch_id = resolve_branch_id(raw_branch_id)
         session = get_open_cash_session_for_branch(branch_id)
+        logger.info("cash_session.current branch_id=%s has_open_session=%s", branch_id, bool(session))
         if not session:
-            return Response({"session": None, "summary": None}, status=status.HTTP_200_OK)
+            return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session)
-        return Response({"session": CashSessionSerializer(session).data, "summary": CashSessionSummarySerializer(summary).data}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "has_open_session": True,
+                "session": CashSessionSerializer(session).data,
+                "summary": CashSessionSummarySerializer(summary).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class CashSessionOpenView(APIView):
@@ -133,8 +141,10 @@ class CashSessionOpenView(APIView):
             .first()
         )
         if existing_session:
+            logger.info("cash_session.open branch_id=%s already_open_session_id=%s", register.branch_id, existing_session.id)
             return Response(
                 {
+                    "has_open_session": True,
                     "already_open": True,
                     "session": CashSessionSerializer(existing_session).data,
                 },
@@ -142,9 +152,11 @@ class CashSessionOpenView(APIView):
             )
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
+        logger.info("cash_session.open branch_id=%s opened_session_id=%s", register.branch_id, session.id)
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(
             {
+                "has_open_session": True,
                 "already_open": False,
                 "session": CashSessionSerializer(session).data,
             },

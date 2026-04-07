@@ -3611,8 +3611,9 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const query = params.toString();
   const response = await request(`/cashier/session/current/${query ? `?${query}` : ""}`);
   const data = await handleJson<any>(response);
+  const hasOpenSession = Boolean(data.has_open_session);
   const session = data.session ?? null;
-  if (!session) return { open: false };
+  if (!hasOpenSession || !session) return { open: false };
   return {
     open: true,
     session: {
