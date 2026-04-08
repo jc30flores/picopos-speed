@@ -389,11 +389,14 @@ const POS = () => {
         dteDocumentType?: "CF" | "CCF" | "SX";
         ivaExempt?: boolean;
       };
-      if (Array.isArray(parsed.cart)) setCart(parsed.cart);
+      const restoredCart = Array.isArray(parsed.cart) ? parsed.cart : [];
+      if (restoredCart.length > 0) {
+        setCart(restoredCart);
+      }
       const restoredServiceType = normalizeServiceTypeKey(parsed.serviceType || "", serviceTypes);
       if (restoredServiceType) setServiceType(restoredServiceType);
       if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
-      if (parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
+      if (restoredCart.length > 0 && parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
       if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
       if (typeof parsed.ivaExempt === "boolean") setIvaExempt(parsed.ivaExempt);
     } catch (error) {
@@ -415,7 +418,7 @@ const POS = () => {
           cart,
           serviceType,
           selectedCustomerId,
-          selectedDiscount,
+          selectedDiscount: cart.length > 0 ? selectedDiscount : null,
           dteDocumentType,
           ivaExempt,
         })
@@ -478,10 +481,15 @@ const POS = () => {
   };
 
   useEffect(() => {
-    if (isDiscountDialogOpen) {
-      void loadActiveDiscounts();
-    }
-  }, [isDiscountDialogOpen, serviceType, itemsGross]);
+    if (!serviceType) return;
+    void loadActiveDiscounts();
+  }, [serviceType, itemsGross]);
+
+  useEffect(() => {
+    if (cart.length > 0 || activeOrder) return;
+    if (!selectedDiscount) return;
+    setSelectedDiscount(null);
+  }, [activeOrder, cart.length, selectedDiscount]);
 
   useEffect(() => {
     if (paymentMethod !== "cash") {

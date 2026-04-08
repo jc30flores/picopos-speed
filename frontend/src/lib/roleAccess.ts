@@ -81,7 +81,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
 const landingRouteByRole: Record<AppRole, string> = {
   admin: "/",
   manager: "/",
-  cashier: "/",
+  cashier: "/pos",
   kitchen: "/kitchen",
   kiosk: "/kiosk",
   worker: "/",
