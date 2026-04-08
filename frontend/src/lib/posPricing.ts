@@ -85,7 +85,13 @@ export const calculatePosPricing = ({
   }
 
   const autoDiscounts = (availableDiscounts ?? [])
-    .filter((discount) => discount.autoApply && discount.id !== selectedDiscount?.id)
+    // Auto discounts are only valid when backend confirms conditions are currently met.
+    .filter(
+      (discount) =>
+        discount.autoApply &&
+        discount.availableNow === true &&
+        discount.id !== selectedDiscount?.id
+    )
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
   for (const autoDiscount of autoDiscounts) {
