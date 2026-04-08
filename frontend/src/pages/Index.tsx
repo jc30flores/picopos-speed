@@ -2168,7 +2168,23 @@ const POS = () => {
       </div>
 
 
-      <Dialog open={isDiscountDialogOpen} onOpenChange={setIsDiscountDialogOpen}>
+      <Dialog
+        open={isDiscountDialogOpen}
+        onOpenChange={(open) => {
+          if (import.meta.env.DEV && open) {
+            // eslint-disable-next-line no-console
+            console.info("[discount-debug] modal_open", {
+              manualDiscountId: selectedDiscount?.id ?? null,
+              autoDiscountCandidates: availableDiscounts.filter((discount) => discount.autoApply).map((discount) => ({
+                id: discount.id,
+                name: discount.name,
+                availableNow: discount.availableNow,
+              })),
+            });
+          }
+          setIsDiscountDialogOpen(open);
+        }}
+      >
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Seleccionar descuento</DialogTitle>
@@ -2218,13 +2234,23 @@ const POS = () => {
                       </div>
                       <Button
                         onClick={() => {
+                          let applyReason: "manual_click" | "out_of_conditions_confirm" = "manual_click";
                           if (!discount.availableNow) {
                             const confirmOut = window.confirm("Este descuento está fuera de condiciones. ¿Aplicar de todos modos?");
                             if (!confirmOut) return;
+                            applyReason = "out_of_conditions_confirm";
                           }
                           if (selectedDiscount && selectedDiscount.id !== discount.id) {
                             const confirmReplace = window.confirm("Ya hay un descuento aplicado. ¿Reemplazarlo?");
                             if (!confirmReplace) return;
+                          }
+                          if (import.meta.env.DEV) {
+                            // eslint-disable-next-line no-console
+                            console.info("[discount-debug] manual_discount_apply", {
+                              reason: applyReason,
+                              discountId: discount.id,
+                              discountName: discount.name,
+                            });
                           }
                           setSelectedDiscount(discount);
                           setIsDiscountDialogOpen(false);

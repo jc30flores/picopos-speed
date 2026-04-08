@@ -61,7 +61,7 @@ export const DiscountFormDialog = ({
   const [serviceTypes, setServiceTypes] = useState<ServiceTypeKey[]>([]);
   const serviceTypeLabelByKey = useMemo(() => new Map(availableServiceTypes.map((service) => [service.key, service.label])), [availableServiceTypes]);
   const [minAmount, setMinAmount] = useState("");
-  const [autoApply, setAutoApply] = useState(true);
+  const [autoApply, setAutoApply] = useState(false);
 
   const [priority, setPriority] = useState(100);
   const [stackable, setStackable] = useState(false);
@@ -226,7 +226,7 @@ export const DiscountFormDialog = ({
       setEndTime("");
       setServiceTypes([]);
       setMinAmount("");
-      setAutoApply(true);
+      setAutoApply(false);
       setPriority(100);
       setStackable(false);
       setBxgyBuyQty(2);
