@@ -1200,7 +1200,12 @@ const POS = () => {
     setCashCloseFlowState("closingInProgress");
     setIsSavingCashAction(true);
     try {
-      const closeResp = await closeCashSession(countedTotal, cashNotes, { bills: totalBills, coins: totalCoins });
+      const closeResp = await closeCashSession(
+        countedTotal,
+        cashNotes,
+        { bills: totalBills, coins: totalCoins },
+        { sessionId: cashSnapshot.session?.id }
+      );
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });

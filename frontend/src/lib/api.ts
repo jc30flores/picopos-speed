@@ -3666,12 +3666,14 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 export const closeCashSession = async (
   closingCashCounted: number,
   notes?: string,
-  totals?: { bills?: number; coins?: number }
+  totals?: { bills?: number; coins?: number },
+  options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({
+      ...(options?.sessionId ? { session_id: Number(options.sessionId) } : {}),
       total_contado: closingCashCounted,
       total_billetes: Number(totals?.bills ?? 0),
       total_monedas: Number(totals?.coins ?? 0),
