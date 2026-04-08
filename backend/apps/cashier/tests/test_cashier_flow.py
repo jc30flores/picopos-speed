@@ -203,6 +203,55 @@ class CashierFlowTests(TestCase):
         self.assertEqual(close.status_code, 200)
         self.assertEqual(close.data['session']['id'], session_id)
 
+    def test_close_resolves_same_session_as_current_when_session_id_is_sent(self):
+        branch_secondary = Branch.objects.create(name='North', code='NORTH')
+        Register.objects.create(name='CAJA N', station_name='POS N', branch=branch_secondary, is_active=True)
+        open_response = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '75.00', 'branch_id': branch_secondary.id}, format='json')
+        self.assertEqual(open_response.status_code, 201)
+        session_id = open_response.data['session']['id']
+
+        current = self.client.get(f'/api/cashier/session/current/?branch_id={branch_secondary.id}')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data['session']['id'], session_id)
+
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'session_id': session_id, 'branch_id': branch_secondary.id, 'total_billetes': '50.00', 'total_monedas': '25.00', 'total_contado': '75.00'},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        self.assertEqual(close.data['session']['id'], session_id)
+
+    def test_close_returns_specific_error_when_session_does_not_match_branch(self):
+        branch_secondary = Branch.objects.create(name='West', code='WEST')
+        Register.objects.create(name='CAJA W', station_name='POS W', branch=branch_secondary, is_active=True)
+        open_response = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '30.00', 'branch_id': branch_secondary.id}, format='json')
+        self.assertEqual(open_response.status_code, 201)
+        session_id = open_response.data['session']['id']
+
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'session_id': session_id, 'branch_id': 999999, 'total_billetes': '20.00', 'total_monedas': '10.00', 'total_contado': '30.00'},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 400)
+        self.assertEqual(close.data.get('code'), 'CASH_SESSION_BRANCH_MISMATCH')
+
+    def test_close_session_can_be_done_by_another_user_when_session_id_matches(self):
+        open_response = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(open_response.status_code, 201)
+        session_id = open_response.data['session']['id']
+
+        manager_client = APIClient()
+        manager_client.force_authenticate(self.manager)
+        close = manager_client.post(
+            '/api/cashier/session/close/',
+            {'session_id': session_id, 'total_billetes': '80.00', 'total_monedas': '20.00', 'total_contado': '100.00'},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        self.assertEqual(close.data['session']['id'], session_id)
+
     def test_open_drawer_mock_mode_returns_ok(self):
         with override_settings(CASH_DRAWER_ENABLED=True, CASH_DRAWER_MODE="mock"):
             res = self.client.post('/api/cashier/drawer/open/', {}, format='json')
