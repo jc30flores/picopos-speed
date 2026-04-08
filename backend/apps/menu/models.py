@@ -201,7 +201,7 @@ class Discount(models.Model):
     applies_to = models.CharField(max_length=20, choices=APPLIES_CHOICES)
     is_active = models.BooleanField(default=True)
     min_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    auto_apply = models.BooleanField(default=True)
+    auto_apply = models.BooleanField(default=False)
     service_types = ArrayField(models.CharField(max_length=32), default=list, blank=True)
     days_of_week = ArrayField(models.IntegerField(), default=list, blank=True)
     start_time = models.TimeField(blank=True, null=True)

@@ -97,6 +97,36 @@ class CashSessionSummarySerializer(serializers.Serializer):
     orders_count = serializers.IntegerField()
 
 
+class CashSessionCloseSerializer(serializers.Serializer):
+    total_billetes = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
+    total_monedas = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
+    total_contado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        total_billetes = _q2(attrs.get("total_billetes"))
+        total_monedas = _q2(attrs.get("total_monedas"))
+        total_contado = attrs.get("total_contado")
+
+        if total_billetes < 0 or total_monedas < 0:
+            raise serializers.ValidationError("Billetes y monedas deben ser montos no negativos.")
+
+        computed_total = _q2(total_billetes + total_monedas)
+        if total_contado is None:
+            attrs["total_contado"] = computed_total
+        else:
+            total_contado = _q2(total_contado)
+            if total_contado < 0:
+                raise serializers.ValidationError("El total contado debe ser un monto no negativo.")
+            if abs(total_contado - computed_total) > MONEY_Q:
+                raise serializers.ValidationError("El total contado no coincide con billetes + monedas.")
+            attrs["total_contado"] = total_contado
+
+        attrs["total_billetes"] = total_billetes
+        attrs["total_monedas"] = total_monedas
+        attrs["notes"] = str(attrs.get("notes", "")).strip()
+        return attrs
+
 
 def _q2(value: Decimal | None) -> Decimal:
     return (value or Decimal("0")).quantize(MONEY_Q, rounding=ROUND_HALF_UP)

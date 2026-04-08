@@ -3668,13 +3668,15 @@ export const closeCashSession = async (
   notes?: string,
   totals?: { bills?: number; coins?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
+  const branchIdRaw = localStorage.getItem("selected_branch_id");
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({
-      closing_cash_counted: closingCashCounted,
-      total_bills: Number(totals?.bills ?? 0),
-      total_coins: Number(totals?.coins ?? 0),
+      total_contado: closingCashCounted,
+      total_billetes: Number(totals?.bills ?? 0),
+      total_monedas: Number(totals?.coins ?? 0),
       notes: notes ?? '',
+      ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),
   }));
   return {

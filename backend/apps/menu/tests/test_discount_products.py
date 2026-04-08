@@ -1,6 +1,6 @@
 from django.test import TestCase
 
-from apps.menu.models import Category, Product
+from apps.menu.models import Category, Discount, Product
 from apps.menu.serializers import DiscountSerializer
 
 
@@ -78,6 +78,17 @@ class DiscountProductValidationTests(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("bxgy_config", serializer.errors)
 
+    def test_discount_auto_apply_defaults_to_false(self) -> None:
+        discount = Discount.objects.create(
+            name="Manual por defecto",
+            description="",
+            type="percent",
+            value="10.00",
+            applies_to="order",
+            is_active=True,
+        )
+        self.assertFalse(discount.auto_apply)
+
     def test_bxgy_valid_config_passes(self) -> None:
         serializer = DiscountSerializer(
             data={
@@ -148,4 +159,3 @@ class DiscountProductValidationTests(TestCase):
         )
         self.assertFalse(serializer.is_valid())
         self.assertIn("bxgy_config", serializer.errors)
-

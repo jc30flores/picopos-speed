@@ -15,6 +15,7 @@ from apps.cashier.printing import build_end_of_day_ticket, build_end_of_day_tick
 from apps.cashier.serializers import (
     RegisterSerializer,
     CashSessionSerializer,
+    CashSessionCloseSerializer,
     CashSessionSummarySerializer,
     CashTransactionSerializer,
     calculate_shift_summary,
@@ -48,9 +49,20 @@ def _get_open_session_for_register(register):
 
 
 def _get_open_session_for_request(request, register_id=None):
-    register = _ensure_register(register_id or request.query_params.get("register_id") or request.data.get("register_id"))
-    session = _get_open_session_for_register(register)
-    return register, session
+    requested_register_id = register_id or request.query_params.get("register_id") or request.data.get("register_id")
+    if requested_register_id:
+        register = _ensure_register(requested_register_id)
+        return register, _get_open_session_for_register(register)
+
+    raw_branch_id = (
+        request.query_params.get("branch_id")
+        or request.headers.get("X-Branch-Id")
+        or request.headers.get("x-branch-id")
+        or request.data.get("branch_id")
+    )
+    branch_id = resolve_branch_id(raw_branch_id)
+    session = get_open_cash_session_for_branch(branch_id)
+    return None, session
 
 
 def _ensure_register(register_id=None):
@@ -77,6 +89,26 @@ def _parse_decimal(value, *, field_label: str) -> Decimal:
 
 def _to_json_compatible(value):
     return json.loads(json.dumps(value, default=str))
+
+
+def _build_close_payload(data) -> dict:
+    return {
+        "total_billetes": data.get("total_billetes", data.get("total_bills")),
+        "total_monedas": data.get("total_monedas", data.get("total_coins")),
+        "total_contado": data.get("total_contado", data.get("counted_cash_amount", data.get("closing_cash_counted"))),
+        "notes": data.get("notes", ""),
+    }
+
+
+def _first_serializer_error(errors) -> str:
+    if isinstance(errors, list) and errors:
+        return str(errors[0])
+    if isinstance(errors, dict):
+        for value in errors.values():
+            msg = _first_serializer_error(value)
+            if msg:
+                return msg
+    return "Datos inválidos."
 
 
 def _session_contract_payload(session: CashSession, *, include_sensitive: bool = True) -> dict:
@@ -203,24 +235,37 @@ class CashSessionCloseView(APIView):
 
     @transaction.atomic
     def post(self, request):
+        raw_payload = _build_close_payload(request.data)
+        logger.info(
+            "cash_session.close.request user_id=%s username=%s payload=%s",
+            getattr(request.user, "id", None),
+            getattr(request.user, "username", ""),
+            _to_json_compatible(raw_payload),
+        )
         _, session = _get_open_session_for_request(request)
         if not session:
-            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            counted_cash = _parse_decimal(
-                request.data.get("counted_cash_amount", request.data.get("closing_cash_counted", "0")) or "0",
-                field_label="Monto contado",
+            logger.warning(
+                "cash_session.close.no_open_session user_id=%s branch_header=%s branch_query=%s",
+                getattr(request.user, "id", None),
+                request.headers.get("X-Branch-Id") or request.headers.get("x-branch-id"),
+                request.query_params.get("branch_id"),
             )
-            counted_bills = _parse_decimal(request.data.get("total_bills", "0") or "0", field_label="Total billetes")
-            counted_coins = _parse_decimal(request.data.get("total_coins", "0") or "0", field_label="Total monedas")
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        notes = str(request.data.get("notes", "")).strip()
-        if counted_cash < 0 or counted_bills < 0 or counted_coins < 0:
-            return Response({"detail": "Monto contado inválido"}, status=status.HTTP_400_BAD_REQUEST)
-        if abs((counted_bills + counted_coins) - counted_cash) > Decimal("0.01"):
-            return Response({"detail": "El total contado no coincide con billetes + monedas."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = CashSessionCloseSerializer(data=raw_payload)
+        if not serializer.is_valid():
+            logger.warning(
+                "cash_session.close.validation_error session_id=%s errors=%s",
+                session.id,
+                _to_json_compatible(serializer.errors),
+            )
+            return Response(
+                {"detail": _first_serializer_error(serializer.errors), "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        counted_cash = serializer.validated_data["total_contado"]
+        counted_bills = serializer.validated_data["total_billetes"]
+        counted_coins = serializer.validated_data["total_monedas"]
+        notes = serializer.validated_data["notes"]
 
         session.status = "closed"
         session.closed_by = request.user
@@ -275,8 +320,9 @@ class CashSessionCloseView(APIView):
                 "ticket_text": ticket_text,
                 "printed": printed,
                 "print_error": print_error,
-                "total_bills": f"{counted_bills:.2f}",
-                "total_coins": f"{counted_coins:.2f}",
+                "total_billetes": f"{counted_bills:.2f}",
+                "total_monedas": f"{counted_coins:.2f}",
+                "total_contado": f"{counted_cash:.2f}",
             }
         )
 

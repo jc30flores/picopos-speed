@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,17 +22,20 @@ const Login = () => {
   const [pin, setPin] = useState("");
   const [loading, setLoading] = useState(false);
   const [usePassword, setUsePassword] = useState(false);
+  const loginInFlightRef = useRef(false);
 
   const pinDots = useMemo(() => Array.from({ length: PIN_LENGTH }), []);
 
   const sanitizePin = (value: string) => value.replace(/\D/g, "").slice(0, PIN_LENGTH);
 
   const submitPin = async (forcedPin?: string) => {
+    if (loginInFlightRef.current) return;
     const value = sanitizePin((forcedPin ?? pin).trim());
     if (!/^\d{6}$/.test(value)) {
       toast.error("PIN inválido (exactamente 6 dígitos)");
       return;
     }
+    loginInFlightRef.current = true;
     setLoading(true);
     try {
       const session = await loginWithPin({ pin: value });
@@ -65,18 +68,14 @@ const Login = () => {
       }
       setPin("");
     } finally {
+      loginInFlightRef.current = false;
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (!usePassword && pin.length === PIN_LENGTH && !loading) {
-      void submitPin(pin);
-    }
-  }, [pin, loading, usePassword]);
-
   const handlePasswordSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (loginInFlightRef.current) return;
     if (!identifier || !password) {
       toast.error("Completa usuario/correo y PIN");
       return;
@@ -87,6 +86,7 @@ const Login = () => {
       return;
     }
 
+    loginInFlightRef.current = true;
     setLoading(true);
     try {
       const session = await login({ identifier, password: numericPassword });
@@ -95,6 +95,7 @@ const Login = () => {
     } catch {
       toast.error("Credenciales inválidas");
     } finally {
+      loginInFlightRef.current = false;
       setLoading(false);
     }
   };
