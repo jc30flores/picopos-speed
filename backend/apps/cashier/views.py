@@ -25,7 +25,7 @@ from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
-from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id
+from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id, resolve_open_cash_session
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,8 @@ def _to_json_compatible(value):
 
 def _build_close_payload(data) -> dict:
     return {
+        "branch_id": data.get("branch_id"),
+        "session_id": data.get("session_id"),
         "total_billetes": data.get("total_billetes", data.get("total_bills")),
         "total_monedas": data.get("total_monedas", data.get("total_coins")),
         "total_contado": data.get("total_contado", data.get("counted_cash_amount", data.get("closing_cash_counted"))),
@@ -236,14 +238,37 @@ class CashSessionCloseView(APIView):
     @transaction.atomic
     def post(self, request):
         raw_payload = _build_close_payload(request.data)
+        branch_id = resolve_branch_id(
+            raw_payload.get("branch_id")
+            or request.query_params.get("branch_id")
+            or request.headers.get("X-Branch-Id")
+            or request.headers.get("x-branch-id")
+        )
+        raw_session_id = raw_payload.get("session_id")
+        session_id = int(raw_session_id) if str(raw_session_id).isdigit() else None
         logger.info(
-            "cash_session.close.request user_id=%s username=%s payload=%s",
+            "cash_session.close.request user_id=%s username=%s branch_id=%s session_id=%s payload=%s",
             getattr(request.user, "id", None),
             getattr(request.user, "username", ""),
+            branch_id,
+            session_id,
             _to_json_compatible(raw_payload),
         )
-        _, session = _get_open_session_for_request(request)
+        current_scope_session = get_open_cash_session_for_branch(branch_id)
+        session, resolution_error = resolve_open_cash_session(branch_id=branch_id, session_id=session_id)
+        logger.info(
+            "cash_session.close.resolution branch_id=%s requested_session_id=%s current_scope_session_id=%s resolved_session_id=%s resolution_error=%s",
+            branch_id,
+            session_id,
+            getattr(current_scope_session, "id", None),
+            getattr(session, "id", None),
+            resolution_error,
+        )
         if not session:
+            if resolution_error == "SESSION_BRANCH_MISMATCH":
+                return Response({"detail": "La sesión indicada no pertenece a la sucursal seleccionada."}, status=status.HTTP_400_BAD_REQUEST)
+            if resolution_error == "SESSION_NOT_OPEN":
+                return Response({"detail": "La sesión indicada no está abierta."}, status=status.HTTP_400_BAD_REQUEST)
             logger.warning(
                 "cash_session.close.no_open_session user_id=%s branch_header=%s branch_query=%s",
                 getattr(request.user, "id", None),

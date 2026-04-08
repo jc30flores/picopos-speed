@@ -142,7 +142,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 
 const POS = () => {
-  type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck" | "gracePeriod";
+type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const navigate = useNavigate();
   const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -249,7 +249,6 @@ const POS = () => {
     shouldHardReloadAfterClose: false,
   });
   const [cashCloseFlowState, setCashCloseFlowState] = useState<CashCloseFlowState>("idle");
-  const closeGraceTimerRef = useRef<number | null>(null);
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -272,6 +271,7 @@ const POS = () => {
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
   const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
@@ -318,39 +318,6 @@ const POS = () => {
     setCategories(categoriesResponse);
     setModifierGroups(modifierGroupsResponse);
   };
-
-  const clearCloseGraceTimer = useCallback(() => {
-    if (closeGraceTimerRef.current != null) {
-      window.clearTimeout(closeGraceTimerRef.current);
-      closeGraceTimerRef.current = null;
-    }
-  }, []);
-
-  const startCloseGracePeriod = useCallback((reason: "printer_ok" | "fallback_ack") => {
-    clearCloseGraceTimer();
-    setCashCloseFlowState("gracePeriod");
-    setIsOpenSessionModalOpen(false);
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.info("[cash-close-flow] grace_period_started", { reason, durationMs: 60000 });
-    }
-    closeGraceTimerRef.current = window.setTimeout(() => {
-      closeGraceTimerRef.current = null;
-      setCashCloseFlowState((current) => (current === "gracePeriod" ? "idle" : current));
-      setCashSnapshot((previous) => {
-        if (!previous.open) {
-          setIsOpenSessionModalOpen(true);
-        }
-        return previous;
-      });
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[cash-close-flow] grace_period_finished");
-      }
-    }, 60_000);
-  }, [clearCloseGraceTimer]);
-
-  useEffect(() => () => clearCloseGraceTimer(), [clearCloseGraceTimer]);
 
   useEffect(() => {
     loadMenuData().catch((error) => {
@@ -967,7 +934,7 @@ const POS = () => {
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "gracePeriod" || cashCloseFlowState === "closingInProgress";
+      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
       if (!snapshot.open && !shouldDelayOpenGate) {
         setIsOpenSessionModalOpen(true);
       } else {
@@ -987,7 +954,7 @@ const POS = () => {
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false }));
-      if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "gracePeriod" || cashCloseFlowState === "closingInProgress") {
+      if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
       }
       setIsOpenSessionModalOpen(true);
@@ -1200,15 +1167,22 @@ const POS = () => {
     setCashCloseFlowState("closingInProgress");
     setIsSavingCashAction(true);
     try {
-      const closeResp = await closeCashSession(countedTotal, cashNotes, { bills: totalBills, coins: totalCoins });
+      const closeResp = await closeCashSession(
+        countedTotal,
+        cashNotes,
+        { bills: totalBills, coins: totalCoins },
+        { sessionId: cashSnapshot.session?.id }
+      );
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
       }
       if (closeResp.printed) {
-        setCashCloseFlowState("gracePeriod");
+        setCashCloseFlowState("idle");
         toast.success("Caja cerrada. Ticket impreso");
-        startCloseGracePeriod("printer_ok");
+        setIsCashDialogOpen(false);
+        setIsOpenSessionModalOpen(false);
+        navigate("/");
       } else {
         setCashCloseFlowState("pendingUserAck");
         if (import.meta.env.DEV) {
@@ -1227,7 +1201,10 @@ const POS = () => {
               console.info("[cash-close-flow] user_ack_download");
             }
             setFallbackPdfModal((prev) => ({ ...prev, open: false }));
-            startCloseGracePeriod("fallback_ack");
+            setCashCloseFlowState("idle");
+            setIsCashDialogOpen(false);
+            setIsOpenSessionModalOpen(false);
+            navigate("/");
           },
           shouldHardReloadAfterClose: false,
         });
@@ -2308,7 +2285,14 @@ const POS = () => {
               <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCashOperations}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
-              <Button className="h-14 text-base font-semibold" onClick={() => setIsPayoutDialogOpen(true)} disabled={!cashSnapshot.open || !canManageCashOperations}>PAGOS</Button>
+              <Button
+                variant="destructive"
+                className="h-14 text-base font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:bg-red-300 disabled:text-red-50 dark:bg-red-700 dark:hover:bg-red-600 dark:active:bg-red-500 dark:disabled:bg-red-900 dark:disabled:text-red-200"
+                onClick={() => setIsPayoutDialogOpen(true)}
+                disabled={!cashSnapshot.open || !canManageCashPayouts}
+              >
+                PAGOS
+              </Button>
               <TooltipProvider delayDuration={120}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -2335,7 +2319,12 @@ const POS = () => {
                 {canCloseCash && closeCashStep === "idle" ? (
                   <div className="space-y-3">
                     <div className="text-sm text-muted-foreground">Caja abierta.</div>
-                    <Button className="h-14 w-full text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Iniciar cierre</Button>
+                    <Button
+                      className="h-14 w-full text-base font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:bg-red-300 disabled:text-red-50 dark:bg-red-700 dark:hover:bg-red-600 dark:active:bg-red-500 dark:disabled:bg-red-900 dark:disabled:text-red-200"
+                      onClick={() => setCloseCashStep("bills")}
+                    >
+                      Iniciar cierre
+                    </Button>
                   </div>
                 ) : null}
                 {canCloseCash && closeCashStep === "bills" ? (
@@ -2455,6 +2444,19 @@ const POS = () => {
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
               </Button>
             </div>
+            {!cashSnapshot.open ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setIsOpenSessionModalOpen(false);
+                  navigate("/");
+                }}
+              >
+                Volver
+              </Button>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
@@ -3032,7 +3034,10 @@ const POS = () => {
                   console.info("[cash-close-flow] user_ack_close");
                 }
                 setFallbackPdfModal((prev) => ({ ...prev, open: false }));
-                startCloseGracePeriod("fallback_ack");
+                setCashCloseFlowState("idle");
+                setIsCashDialogOpen(false);
+                setIsOpenSessionModalOpen(false);
+                navigate("/");
               }}
             >
               Cerrar
