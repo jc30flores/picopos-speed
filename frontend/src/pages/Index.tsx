@@ -142,6 +142,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 
 
 const POS = () => {
+  type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck" | "gracePeriod";
   const navigate = useNavigate();
   const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -247,6 +248,8 @@ const POS = () => {
     onDownload: null,
     shouldHardReloadAfterClose: false,
   });
+  const [cashCloseFlowState, setCashCloseFlowState] = useState<CashCloseFlowState>("idle");
+  const closeGraceTimerRef = useRef<number | null>(null);
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
@@ -315,6 +318,39 @@ const POS = () => {
     setCategories(categoriesResponse);
     setModifierGroups(modifierGroupsResponse);
   };
+
+  const clearCloseGraceTimer = useCallback(() => {
+    if (closeGraceTimerRef.current != null) {
+      window.clearTimeout(closeGraceTimerRef.current);
+      closeGraceTimerRef.current = null;
+    }
+  }, []);
+
+  const startCloseGracePeriod = useCallback((reason: "printer_ok" | "fallback_ack") => {
+    clearCloseGraceTimer();
+    setCashCloseFlowState("gracePeriod");
+    setIsOpenSessionModalOpen(false);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-close-flow] grace_period_started", { reason, durationMs: 60000 });
+    }
+    closeGraceTimerRef.current = window.setTimeout(() => {
+      closeGraceTimerRef.current = null;
+      setCashCloseFlowState((current) => (current === "gracePeriod" ? "idle" : current));
+      setCashSnapshot((previous) => {
+        if (!previous.open) {
+          setIsOpenSessionModalOpen(true);
+        }
+        return previous;
+      });
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-close-flow] grace_period_finished");
+      }
+    }, 60_000);
+  }, [clearCloseGraceTimer]);
+
+  useEffect(() => () => clearCloseGraceTimer(), [clearCloseGraceTimer]);
 
   useEffect(() => {
     loadMenuData().catch((error) => {
@@ -923,7 +959,8 @@ const POS = () => {
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      if (!snapshot.open) {
+      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "gracePeriod" || cashCloseFlowState === "closingInProgress";
+      if (!snapshot.open && !shouldDelayOpenGate) {
         setIsOpenSessionModalOpen(true);
       } else {
         setIsOpenSessionModalOpen(false);
@@ -942,13 +979,16 @@ const POS = () => {
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false }));
+      if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "gracePeriod" || cashCloseFlowState === "closingInProgress") {
+        return;
+      }
       setIsOpenSessionModalOpen(true);
     };
     window.addEventListener("cash:required", forceCashGate as EventListener);
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, []);
+  }, [cashCloseFlowState]);
 
   useEffect(() => {
     getPaymentMethods().then((methods) => {
@@ -1149,12 +1189,24 @@ const POS = () => {
       toast.error("Ingresa montos válidos para billetes y monedas.");
       return;
     }
+    setCashCloseFlowState("closingInProgress");
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(countedTotal, cashNotes, { bills: totalBills, coins: totalCoins });
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
+      }
       if (closeResp.printed) {
+        setCashCloseFlowState("gracePeriod");
         toast.success("Caja cerrada. Ticket impreso");
+        startCloseGracePeriod("printer_ok");
       } else {
+        setCashCloseFlowState("pendingUserAck");
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-close-flow] fallback_modal_opened");
+        }
         setFallbackPdfModal({
           open: true,
           title: "Caja cerrada",
@@ -1162,6 +1214,12 @@ const POS = () => {
           onDownload: async () => {
             if (!closeResp.sessionId) throw new Error("No se encontró la sesión cerrada.");
             await downloadCashSessionTicketPdf(closeResp.sessionId);
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.info("[cash-close-flow] user_ack_download");
+            }
+            setFallbackPdfModal((prev) => ({ ...prev, open: false }));
+            startCloseGracePeriod("fallback_ack");
           },
           shouldHardReloadAfterClose: false,
         });
@@ -1173,6 +1231,7 @@ const POS = () => {
       setCloseCoinsInput("");
       
     } catch (error) {
+      setCashCloseFlowState("idle");
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
       setIsSavingCashAction(false);
@@ -2892,6 +2951,7 @@ const POS = () => {
       <Dialog
         open={fallbackPdfModal.open}
         onOpenChange={(open) => {
+          if (!open && cashCloseFlowState === "pendingUserAck") return;
           setFallbackPdfModal((prev) => ({
             ...prev,
             open,
@@ -2914,15 +2974,10 @@ const POS = () => {
                 if (!fallbackPdfModal.onDownload) return;
                 void fallbackPdfModal.onDownload()
                   .then(() => {
-                    if (import.meta.env.DEV) {
-                      // eslint-disable-next-line no-console
-                      console.info("[pos-debug] fallback_pdf_download.completed");
-                    }
                     if (fallbackPdfModal.shouldHardReloadAfterClose) {
                       scheduleHardReload("fallback_pdf_download");
                       return;
                     }
-                    setFallbackPdfModal((prev) => ({ ...prev, open: false }));
                   })
                   .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo descargar PDF"));
               }}
@@ -2938,7 +2993,12 @@ const POS = () => {
                   scheduleHardReload("fallback_pdf_close");
                   return;
                 }
+                if (import.meta.env.DEV) {
+                  // eslint-disable-next-line no-console
+                  console.info("[cash-close-flow] user_ack_close");
+                }
                 setFallbackPdfModal((prev) => ({ ...prev, open: false }));
+                startCloseGracePeriod("fallback_ack");
               }}
             >
               Cerrar
