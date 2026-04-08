@@ -126,7 +126,7 @@ class CashierFlowTests(TestCase):
 
     def test_ticket_pdf_ignores_accept_header_html_and_returns_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '90.00', 'total_monedas': '5.00', 'total_contado': '95.00'}, format='json')
         session_id = close.data['session']['id']
         pdf = self.client.get(
             f'/api/cashier/sessions/{session_id}/ticket.pdf',
@@ -139,7 +139,7 @@ class CashierFlowTests(TestCase):
     @override_settings(BRANCH_ID=999999)
     def test_ticket_pdf_endpoint_falls_back_and_returns_valid_pdf_headers(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
         session_id = close.data['session']['id']
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
@@ -167,15 +167,41 @@ class CashierFlowTests(TestCase):
         self.assertEqual(close.status_code, 200)
 
     def test_close_without_open_session_returns_400(self):
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '90.00', 'total_monedas': '5.00', 'total_contado': '95.00'}, format='json')
         self.assertEqual(close.status_code, 400)
         self.assertIn('No hay caja abierta', str(close.data))
 
     def test_close_with_invalid_amount_returns_400(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': 'abc'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '80.00', 'total_monedas': '20.00', 'total_contado': 'abc'}, format='json')
         self.assertEqual(close.status_code, 400)
-        self.assertIn('Monto contado inválido', str(close.data))
+        self.assertIn('total_contado', str(close.data.get('errors', {})))
+
+    def test_close_requires_bill_and_coin_fields(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_contado': '95.00'}, format='json')
+        self.assertEqual(close.status_code, 400)
+        self.assertIn('total_billetes', str(close.data.get('errors', {})))
+        self.assertIn('total_monedas', str(close.data.get('errors', {})))
+
+    def test_close_uses_same_branch_scope_as_current_session(self):
+        branch_secondary = Branch.objects.create(name='Secondary', code='SECONDARY')
+        Register.objects.create(name='CAJA 2', station_name='POS 2', branch=branch_secondary, is_active=True)
+        open_response = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '120.00', 'branch_id': branch_secondary.id}, format='json')
+        self.assertEqual(open_response.status_code, 201)
+        session_id = open_response.data['session']['id']
+
+        current = self.client.get(f'/api/cashier/session/current/?branch_id={branch_secondary.id}')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data['session']['id'], session_id)
+
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'total_billetes': '100.00', 'total_monedas': '20.00', 'total_contado': '120.00', 'branch_id': branch_secondary.id},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        self.assertEqual(close.data['session']['id'], session_id)
 
     def test_open_drawer_mock_mode_returns_ok(self):
         with override_settings(CASH_DRAWER_ENABLED=True, CASH_DRAWER_MODE="mock"):
