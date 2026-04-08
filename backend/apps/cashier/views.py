@@ -25,7 +25,7 @@ from apps.core.models import Branch
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
-from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id
+from apps.cashier.services import CashDrawerService, get_open_cash_session, resolve_branch_id
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,17 @@ def _get_open_session_for_register(register):
     )
 
 
-def _get_open_session_for_request(request, register_id=None):
-    requested_register_id = register_id or request.query_params.get("register_id") or request.data.get("register_id")
-    if requested_register_id:
-        register = _ensure_register(requested_register_id)
-        return register, _get_open_session_for_register(register)
+def _to_int_or_none(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    value_str = str(value).strip()
+    return int(value_str) if value_str.isdigit() else None
 
+
+def _resolve_session_scope(request, register_id=None):
+    requested_register_id = register_id or request.query_params.get("register_id") or request.data.get("register_id")
     raw_branch_id = (
         request.query_params.get("branch_id")
         or request.headers.get("X-Branch-Id")
@@ -61,8 +66,18 @@ def _get_open_session_for_request(request, register_id=None):
         or request.data.get("branch_id")
     )
     branch_id = resolve_branch_id(raw_branch_id)
-    session = get_open_cash_session_for_branch(branch_id)
-    return None, session
+    session_id = _to_int_or_none(request.query_params.get("session_id") or request.data.get("session_id"))
+    register_id = _to_int_or_none(requested_register_id)
+    return {"branch_id": branch_id, "register_id": register_id, "session_id": session_id}
+
+
+def _get_open_session_for_request(request, register_id=None):
+    scope = _resolve_session_scope(request, register_id=register_id)
+    if scope["register_id"]:
+        register = _ensure_register(scope["register_id"])
+        return register, _get_open_session_for_register(register), scope
+    session = get_open_cash_session(branch_id=scope["branch_id"], session_id=scope["session_id"])
+    return None, session, scope
 
 
 def _ensure_register(register_id=None):
@@ -149,15 +164,15 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        raw_branch_id = (
-            request.query_params.get("branch_id")
-            or request.headers.get("X-Branch-Id")
-            or request.headers.get("x-branch-id")
-        )
-        branch_id = resolve_branch_id(raw_branch_id)
-        session = get_open_cash_session_for_branch(branch_id)
+        scope = _resolve_session_scope(request)
+        session = get_open_cash_session(branch_id=scope["branch_id"], session_id=scope["session_id"])
         include_sensitive = _can_view_sensitive_cash_data(request)
-        logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
+        logger.info(
+            "cash_session.current branch_id=%s session_id=%s has_open_session=%s",
+            scope["branch_id"],
+            scope["session_id"],
+            bool(session),
+        )
         if not session:
             return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
         summary = calculate_shift_summary(session) if include_sensitive else None
@@ -242,13 +257,38 @@ class CashSessionCloseView(APIView):
             getattr(request.user, "username", ""),
             _to_json_compatible(raw_payload),
         )
-        _, session = _get_open_session_for_request(request)
+        _, session, scope = _get_open_session_for_request(request)
+        if scope["session_id"] and not session:
+            logger.warning(
+                "cash_session.close.session_id_not_open user_id=%s session_id=%s branch_id=%s",
+                getattr(request.user, "id", None),
+                scope["session_id"],
+                scope["branch_id"],
+            )
+            return Response(
+                {"detail": "La sesión indicada no está abierta o no existe.", "code": "CASH_SESSION_NOT_OPEN"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if scope["session_id"] and scope["branch_id"] and session and session.register.branch_id != scope["branch_id"]:
+            logger.warning(
+                "cash_session.close.branch_mismatch user_id=%s session_id=%s session_branch=%s requested_branch=%s",
+                getattr(request.user, "id", None),
+                session.id,
+                session.register.branch_id,
+                scope["branch_id"],
+            )
+            return Response(
+                {"detail": "La sesión abierta no pertenece a la sucursal enviada.", "code": "CASH_SESSION_BRANCH_MISMATCH"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not session:
             logger.warning(
-                "cash_session.close.no_open_session user_id=%s branch_header=%s branch_query=%s",
+                "cash_session.close.no_open_session user_id=%s branch_header=%s branch_query=%s branch_payload=%s session_id=%s",
                 getattr(request.user, "id", None),
                 request.headers.get("X-Branch-Id") or request.headers.get("x-branch-id"),
                 request.query_params.get("branch_id"),
+                request.data.get("branch_id"),
+                scope["session_id"],
             )
             return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
         serializer = CashSessionCloseSerializer(data=raw_payload)
@@ -341,7 +381,7 @@ class CashTransactionListCreateView(APIView):
         if session_id:
             session = CashSession.objects.filter(pk=session_id).first()
         else:
-            _, session = _get_open_session_for_request(request)
+            _, session, _ = _get_open_session_for_request(request)
         if not session:
             return Response([], status=status.HTTP_200_OK)
         items = CashTransaction.objects.filter(
@@ -358,7 +398,7 @@ class CashTransactionListCreateView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        _, session = _get_open_session_for_request(request)
+        _, session, _ = _get_open_session_for_request(request)
         if not session:
             return Response({"detail": "No hay caja abierta"}, status=status.HTTP_409_CONFLICT)
 
@@ -482,7 +522,7 @@ class CashDrawerOpenView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def post(self, request):
-        _, session = _get_open_session_for_request(request)
+        _, session, _ = _get_open_session_for_request(request)
         branch_name = getattr(getattr(session, "register", None), "branch", None)
         branch_name = getattr(branch_name, "name", None)
         log_extra = {

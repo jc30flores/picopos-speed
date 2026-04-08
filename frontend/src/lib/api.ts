@@ -557,7 +557,9 @@ const handleJson = async <T>(response: Response): Promise<T> => {
     if (isJson) {
       const errorPayload = await response.json().catch(() => null);
       const errorCode = errorPayload && typeof errorPayload.code === "string" ? String(errorPayload.code) : undefined;
-      const detailText = String((errorPayload && (errorPayload.detail || errorPayload.error)) || "");
+      const nestedError = errorPayload && typeof errorPayload === "object" ? (errorPayload.errors ?? errorPayload) : null;
+      const nestedErrorText = nestedError ? JSON.stringify(nestedError) : "";
+      const detailText = String((errorPayload && (errorPayload.detail || errorPayload.error)) || nestedErrorText || "");
       const shouldRequireCashGate =
         errorCode === "CASH_SESSION_REQUIRED" ||
         ((response.status === 401 || response.status === 403 || response.status === 409) &&
@@ -3666,7 +3668,7 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 export const closeCashSession = async (
   closingCashCounted: number,
   notes?: string,
-  totals?: { bills?: number; coins?: number }
+  totals?: { bills?: number; coins?: number; sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
   const data = await handleJson<any>(await request('/cashier/session/close/', {
@@ -3676,6 +3678,7 @@ export const closeCashSession = async (
       total_billetes: Number(totals?.bills ?? 0),
       total_monedas: Number(totals?.coins ?? 0),
       notes: notes ?? '',
+      ...(Number.isFinite(Number(totals?.sessionId)) ? { session_id: Number(totals?.sessionId) } : {}),
       ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),
   }));
