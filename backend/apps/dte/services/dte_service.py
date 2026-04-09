@@ -18,6 +18,9 @@ from apps.dte.services.payment_methods import get_cat017_code_and_label
 
 logger = logging.getLogger(__name__)
 
+TAX_RATE = Decimal("0.13")
+TAX_DIVISOR = Decimal("1.13")
+
 
 def _normalize_ambiente_value(raw: str | None) -> str:
     value = str(raw or "").strip().lower()
@@ -117,6 +120,48 @@ def json_number(value: str | int | float | Decimal | None) -> int | float:
     return float(dec)
 
 
+def quantize_money(value: str | int | float | Decimal | None) -> Decimal:
+    return money(value)
+
+
+def calculate_taxable_base_from_gross(gross_amount: Decimal) -> Decimal:
+    return _q2(gross_amount / TAX_DIVISOR)
+
+
+def calculate_iva_from_base(base_amount: Decimal) -> Decimal:
+    return _q2(base_amount * TAX_RATE)
+
+
+def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal, discount_gross: Decimal, taxable: bool) -> dict[str, Decimal]:
+    gross_line_before_discount = _q2(unit_price_gross * quantity)
+    discount_gross = _q2(min(gross_line_before_discount, discount_gross))
+
+    if taxable:
+        base_unit = calculate_taxable_base_from_gross(unit_price_gross)
+        base_line_before_discount = _q2(base_unit * quantity)
+        base_discount = calculate_taxable_base_from_gross(discount_gross)
+        venta_gravada = _q2(base_line_before_discount - base_discount)
+        iva_item = calculate_iva_from_base(venta_gravada)
+        return {
+            "precio_uni": base_unit,
+            "monto_descu": base_discount,
+            "venta_gravada": venta_gravada,
+            "venta_exenta": Decimal("0.00"),
+            "iva_item": iva_item,
+            "linea_total": _q2(venta_gravada + iva_item),
+        }
+
+    venta_exenta = _q2(gross_line_before_discount - discount_gross)
+    return {
+        "precio_uni": _q2(unit_price_gross),
+        "monto_descu": discount_gross,
+        "venta_gravada": Decimal("0.00"),
+        "venta_exenta": venta_exenta,
+        "iva_item": Decimal("0.00"),
+        "linea_total": venta_exenta,
+    }
+
+
 def _almost_equal(a: Decimal, b: Decimal, tolerance: Decimal = Decimal("0.01")) -> bool:
     return abs(money(a) - money(b)) <= tolerance
 
@@ -128,6 +173,7 @@ def _sum_item_discounts(cuerpo: list[dict]) -> Decimal:
 def _validate_dte_totals(dte_payload: dict) -> None:
     resumen = (dte_payload.get("resumen") or {}) if isinstance(dte_payload, dict) else {}
     cuerpo = (dte_payload.get("cuerpoDocumento") or []) if isinstance(dte_payload, dict) else []
+
     total_no_suj = money(resumen.get("totalNoSuj"))
     total_exenta = money(resumen.get("totalExenta"))
     total_gravada = money(resumen.get("totalGravada"))
@@ -137,22 +183,68 @@ def _validate_dte_totals(dte_payload: dict) -> None:
     descu_gravada = money(resumen.get("descuGravada"))
     sub_total = money(resumen.get("subTotal"))
     total_descu = money(resumen.get("totalDescu"))
+    total_iva = money(resumen.get("totalIva"))
+    monto_total_operacion = money(resumen.get("montoTotalOperacion"))
+    total_pagar = money(resumen.get("totalPagar"))
+    iva_rete1 = money(resumen.get("ivaRete1"))
+    rete_renta = money(resumen.get("reteRenta"))
+
+    sum_line_gravada = Decimal("0.00")
+    sum_line_exenta = Decimal("0.00")
+    sum_line_iva = Decimal("0.00")
+    errors: list[str] = []
+
+    for line in cuerpo:
+        qty = money(line.get("cantidad"))
+        precio_uni = money(line.get("precioUni"))
+        monto_descu_line = money(line.get("montoDescu"))
+        venta_gravada_line = money(line.get("ventaGravada"))
+        venta_exenta_line = money(line.get("ventaExenta"))
+        iva_item_line = money(line.get("ivaItem"))
+        num_item = line.get("numItem")
+
+        if venta_gravada_line > Decimal("0.00"):
+            calc_venta = _q2((precio_uni * qty) - monto_descu_line)
+            calc_iva = calculate_iva_from_base(venta_gravada_line)
+            if not _almost_equal(venta_gravada_line, calc_venta):
+                errors.append(f"item.{num_item}.ventaGravada={venta_gravada_line} calc={calc_venta}")
+            if not _almost_equal(iva_item_line, calc_iva):
+                errors.append(f"item.{num_item}.ivaItem={iva_item_line} calc={calc_iva}")
+
+        if venta_exenta_line > Decimal("0.00") and iva_item_line != Decimal("0.00"):
+            errors.append(f"item.{num_item}.ivaItem_debe_ser_0_para_exenta={iva_item_line}")
+
+        sum_line_gravada += venta_gravada_line
+        sum_line_exenta += venta_exenta_line
+        sum_line_iva += iva_item_line
 
     calc_sub_total_ventas = money(total_no_suj + total_exenta + total_gravada)
     calc_global_desc = money(descu_no_suj + descu_exenta + descu_gravada)
     calc_sub_total = money(calc_sub_total_ventas - calc_global_desc)
     calc_total_descu = money(_sum_item_discounts(cuerpo) + calc_global_desc)
+    calc_monto_total_operacion = money(calc_sub_total + total_iva)
+    calc_total_pagar = money(calc_monto_total_operacion - iva_rete1 - rete_renta)
 
-    errors: list[str] = []
     if not _almost_equal(sub_total_ventas, calc_sub_total_ventas):
         errors.append(f"subTotalVentas={sub_total_ventas} calc={calc_sub_total_ventas}")
     if not _almost_equal(sub_total, calc_sub_total):
         errors.append(f"subTotal={sub_total} calc={calc_sub_total}")
     if not _almost_equal(total_descu, calc_total_descu):
         errors.append(f"totalDescu={total_descu} calc={calc_total_descu}")
+    if not _almost_equal(total_gravada, money(sum_line_gravada)):
+        errors.append(f"totalGravada={total_gravada} sum_items={money(sum_line_gravada)}")
+    if not _almost_equal(total_exenta, money(sum_line_exenta)):
+        errors.append(f"totalExenta={total_exenta} sum_items={money(sum_line_exenta)}")
+    if not _almost_equal(total_iva, money(sum_line_iva)):
+        errors.append(f"totalIva={total_iva} sum_items={money(sum_line_iva)}")
+    if not _almost_equal(monto_total_operacion, calc_monto_total_operacion):
+        errors.append(f"montoTotalOperacion={monto_total_operacion} calc={calc_monto_total_operacion}")
+    if not _almost_equal(total_pagar, calc_total_pagar):
+        errors.append(f"totalPagar={total_pagar} calc={calc_total_pagar}")
+
     if errors:
         logger.error("dte.validation_failed resumen_mismatch %s", " | ".join(errors))
-        raise DTEPreflightError("DTE inconsistente: resumen de totales no cuadra.")
+        raise DTEPreflightError("DTE inconsistente: resumen de totales/IVA no cuadra.")
 
 
 _NUMERIC_KEYS = {
@@ -319,10 +411,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_descuento = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
+        quantity = money(item.quantity)
         effective_unit_price = money(item.unit_price)
-        line_total_original = money(effective_unit_price * to_decimal(item.quantity or 0))
+        line_total_original = money(effective_unit_price * quantity)
         line_discount = money(min(line_total_original, money(item.discount_amount)))
-        net_line_total = _q2(line_total_original - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
@@ -334,50 +426,45 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         if free_mods:
             desc = f"{desc} ({', '.join(free_mods)})"
 
-        if order.iva_exempt:
-            venta_exenta = money(net_line_total / Decimal("1.13"))
-            venta_gravada = Decimal("0.00")
-            iva_item = Decimal("0.00")
-        else:
-            venta_exenta = Decimal("0.00")
-            venta_gravada = net_line_total
-            base = money(net_line_total / Decimal("1.13"))
-            iva_item = money(net_line_total - base)
+        line_calc = calculate_line_tax_breakdown(
+            unit_price_gross=effective_unit_price,
+            quantity=quantity,
+            discount_gross=line_discount,
+            taxable=not order.iva_exempt,
+        )
 
-        total_gravada += venta_gravada
-        total_exenta += venta_exenta
-        total_iva += iva_item
-        total_descuento += line_discount
+        total_gravada += line_calc["venta_gravada"]
+        total_exenta += line_calc["venta_exenta"]
+        total_iva += line_calc["iva_item"]
+        total_descuento += line_calc["monto_descu"]
 
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": json_number(money(item.quantity)), "uniMedida": 59, "precioUni": json_number(money(effective_unit_price)),
-            "montoDescu": json_number(money(line_discount)), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(venta_exenta)),
-            "ventaGravada": json_number(money(venta_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-            "ivaItem": json_number(money(iva_item)), "codTributo": None, "numeroDocumento": None,
+            "cantidad": json_number(quantity), "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
+            "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
+            "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+            "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
         })
         num_item += 1
 
         for mod in paid_mods:
             mod_total = money(mod.modifier_price_snapshot)
-            if order.iva_exempt:
-                mod_exenta = money(mod_total / Decimal("1.13"))
-                mod_gravada = Decimal("0.00")
-                mod_iva = Decimal("0.00")
-            else:
-                mod_exenta = Decimal("0.00")
-                mod_gravada = mod_total
-                mod_iva = money(mod_total - money(mod_total / Decimal("1.13")))
-            total_gravada += mod_gravada
-            total_exenta += mod_exenta
-            total_iva += mod_iva
+            mod_calc = calculate_line_tax_breakdown(
+                unit_price_gross=mod_total,
+                quantity=Decimal("1.00"),
+                discount_gross=Decimal("0.00"),
+                taxable=not order.iva_exempt,
+            )
+            total_gravada += mod_calc["venta_gravada"]
+            total_exenta += mod_calc["venta_exenta"]
+            total_iva += mod_calc["iva_item"]
             cuerpo.append({
                 "numItem": num_item, "tipoItem": 1, "codigo": f"MOD-{item.id}-{num_item}", "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
-                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(money(mod_total)),
-                "montoDescu": json_number(Decimal("0.00")), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(mod_exenta)),
-                "ventaGravada": json_number(money(mod_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(money(mod_iva)), "codTributo": None, "numeroDocumento": None,
+                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(mod_calc["precio_uni"]),
+                "montoDescu": json_number(mod_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(mod_calc["venta_exenta"]),
+                "ventaGravada": json_number(mod_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(mod_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
             })
             num_item += 1
 
@@ -387,7 +474,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     global_desc_gravada = Decimal("0.00")
     global_desc_total = money(global_desc_no_suj + global_desc_exenta + global_desc_gravada)
     subtotal_final = money(subtotal_ventas - global_desc_total)
-    total_pagar = subtotal_final
+    monto_total_operacion = money(subtotal_final + (Decimal("0.00") if order.iva_exempt else total_iva))
+    total_pagar = monto_total_operacion
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -461,12 +549,25 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
         "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(money(global_desc_no_suj)), "descuExenta": json_number(money(global_desc_exenta)), "descuGravada": json_number(money(global_desc_gravada)),
         "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento + global_desc_total)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
-        "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
+        "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(monto_total_operacion)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
         "pagos": pagos,
         "numPagoElectronico": None,
     }
+
+    logger.info("dte.tax_rule precioUni/base_sin_iva ventaGravada/base_sin_iva ivaItem=round(ventaGravada*0.13,2)")
+    for line in cuerpo:
+        logger.info(
+            "dte.preflight.line numItem=%s cantidad=%s precioUni=%s ventaGravada=%s ventaExenta=%s ivaItem=%s montoDescu=%s",
+            line.get("numItem"),
+            line.get("cantidad"),
+            line.get("precioUni"),
+            line.get("ventaGravada"),
+            line.get("ventaExenta"),
+            line.get("ivaItem"),
+            line.get("montoDescu"),
+        )
 
     payload = {"dte": {
         "identificacion": {
@@ -499,6 +600,7 @@ def send_to_bridge(
     branch_id: int | None = None,
 ) -> dict:
     assert_no_string_numbers(payload)
+    _validate_dte_totals(payload.get("dte", {}))
     ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 
