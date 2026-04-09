@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -35,8 +35,24 @@ PAYMENT_METHOD_REPORT_ORDER = [
 ]
 
 
-def _money(value: Decimal | float | int | None) -> str:
-    return f"${Decimal(value or 0):.2f}"
+def _as_decimal(value: Decimal | float | int | str | None) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    cleaned = str(value).strip().replace("$", "").replace(",", "")
+    if not cleaned:
+        return Decimal("0")
+    try:
+        return Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _money(value: Decimal | float | int | str | None) -> str:
+    return f"${_as_decimal(value):.2f}"
 
 
 def _format_dt_sv(value) -> str:
@@ -210,15 +226,20 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
     cash_count = payment_map["cash"]["count"]
     cash_total = payment_map["cash"]["total"]
 
-    station_name = session.register.station_name or "POS 1"
+    register = getattr(session, "register", None)
+    register_name = getattr(register, "name", "CAJA") or "CAJA"
+    station_name = getattr(register, "station_name", "") or "POS 1"
+    session_branch = getattr(getattr(register, "branch", None), "name", "")
+    header_branch = (getattr(branch, "name", None) or session_branch or "SUCURSAL")
+
     return [
-        (getattr(branch, "name", None) or session.register.branch.name).upper(),
+        header_branch.upper(),
         SEP_HYPHEN,
         "REPORTE DE CAJA",
-        f"ESTACION {station_name} - {session.register.name}",
+        f"ESTACION {station_name} - {register_name}",
         _format_dt_sv(session.closed_at or timezone.now()),
         SEP_HYPHEN,
-        _line_item("CANTIDAD INICIAL", Decimal(summary.get("opening_cash") or 0)),
+        _line_item("CANTIDAD INICIAL", _as_decimal(summary.get("opening_cash"))),
         SEP_DOTS,
         "Resumen De Pagos (+)",
         _line_item("EFECTIVO", cash_total, cash_count),
@@ -231,7 +252,7 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
         _line_item("PAYPAL", payment_map["paypal"]["total"], payment_map["paypal"]["count"]),
         _line_item("PEDIDOS YA", payment_map["pedidos_ya"]["total"], payment_map["pedidos_ya"]["count"]),
         SEP_DOTS,
-        _line_item("Efectivo En Caja", Decimal(summary.get("expected_cash_in_drawer") or 0)),
+        _line_item("Efectivo En Caja", _as_decimal(summary.get("expected_cash_in_drawer"))),
         f"DRAWER RESET ID {session.id}",
         f"END OF DAY LOG ID {session.id}",
     ]

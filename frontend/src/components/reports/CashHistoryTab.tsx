@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { downloadCashSessionTicketPdf, getCashSessionsHistory, type CashSessionHistoryRow } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { formatMoney } from "@/lib/money";
+import { toast } from "sonner";
 
 export const CashHistoryTab = () => {
   const [rows, setRows] = useState<CashSessionHistoryRow[]>([]);
@@ -15,12 +16,26 @@ export const CashHistoryTab = () => {
   const [dateTo, setDateTo] = useState("");
   const [openDetail, setOpenDetail] = useState(false);
   const [selectedRow, setSelectedRow] = useState<CashSessionHistoryRow | null>(null);
+  const [downloadingSessionId, setDownloadingSessionId] = useState<number | null>(null);
 
   const load = async () => {
     setRows(await getCashSessionsHistory({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }));
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleDownloadPdf = async (sessionId: number) => {
+    if (downloadingSessionId === sessionId) return;
+    setDownloadingSessionId(sessionId);
+    try {
+      await downloadCashSessionTicketPdf(sessionId);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo descargar ticket PDF");
+    } finally {
+      setDownloadingSessionId((current) => (current === sessionId ? null : current));
+    }
+  };
+
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime()),
     [rows]
@@ -65,7 +80,7 @@ export const CashHistoryTab = () => {
                   </TableCell>
                   <TableCell className="flex flex-wrap gap-2 py-3">
                     <Button className="min-h-11 rounded-xl px-4" size="sm" variant="outline" onClick={() => { setSelectedRow(r); setOpenDetail(true); }}>Ver detalle</Button>
-                    <Button className="min-h-11 rounded-xl px-4" size="sm" onClick={() => downloadCashSessionTicketPdf(r.id)}>PDF</Button>
+                    <Button className="min-h-11 rounded-xl px-4" size="sm" disabled={downloadingSessionId === r.id} onClick={() => void handleDownloadPdf(r.id)}>{downloadingSessionId === r.id ? "Descargando..." : "PDF"}</Button>
                   </TableCell>
                 </TableRow>
               ))}

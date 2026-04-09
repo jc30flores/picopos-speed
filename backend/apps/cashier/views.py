@@ -485,7 +485,7 @@ class CashSessionDetailView(APIView):
 
 
 class CashSessionTicketPDFView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsCashierOrManagerOrAdmin]
     renderer_classes = [PdfRenderer]
 
     def perform_content_negotiation(self, request, force=False):
@@ -493,10 +493,14 @@ class CashSessionTicketPDFView(APIView):
         return renderer, renderer.media_type
 
     def get(self, request, pk: int):
-        session = CashSession.objects.filter(pk=pk).first()
+        session = CashSession.objects.select_related("register", "register__branch").filter(pk=pk).first()
         if not session:
             return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
-        pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        try:
+            pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        except Exception:
+            logger.exception("cashier.ticket_pdf.failed session_id=%s", pk)
+            return Response({"detail": "No se pudo generar el PDF de cierre de caja."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         ts = timezone.localtime(session.closed_at or timezone.now()).strftime("%Y-%m-%d_%H-%M-%S")
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="end_of_day_{ts}.pdf"'
