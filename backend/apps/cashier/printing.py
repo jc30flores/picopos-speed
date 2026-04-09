@@ -375,13 +375,20 @@ def _fallback_pdf_bytes(text: str) -> bytes:
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
     text = build_end_of_day_ticket(session_id)
-    branch = _resolve_branch_for_report(session)
-    branch_name = getattr(branch, "name", "Sucursal")
-    branch_address = _resolve_branch_address(branch)
+
+    branch = _resolve_pdf_branch(session)
+    profile = _resolve_branch_profile(session)
+    branch_name = (profile.get("branch_name") or getattr(branch, "name", "") or "Sucursal").strip()
+    branch_address = profile.get("direccion_complemento", "").strip()
+
     filename = f"end_of_day_{timezone.localtime(session.closed_at or timezone.now()).strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
+    center_lines = ["Pico de Gallo POS", f"Sucursal {branch_name}"]
+    if branch_address:
+        center_lines.append(branch_address)
+
     return build_receipt_pdf_from_text(
         text=text,
         filename=filename,
         logo_path=str(Path(settings.BASE_DIR) / "assets" / "receipt" / "logo_pdg.png"),
-        center_lines=["Pico de Gallo POS", f"Sucursal {branch_name}", branch_address],
+        center_lines=center_lines,
     ).pdf_bytes

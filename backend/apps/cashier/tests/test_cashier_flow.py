@@ -125,6 +125,17 @@ class CashierFlowTests(TestCase):
         self.assertIn(b"CONTADO", pdf.content)
         self.assertIn(b"DIFERENCIA", pdf.content)
 
+
+    def test_ticket_pdf_regression_no_missing_branch_helper_nameerror(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
+        self.assertEqual(close.status_code, 200)
+        session_id = close.data['session']['id']
+
+        response = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.startswith(b'%PDF'))
+
     def test_ticket_pdf_ignores_accept_header_html_and_returns_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         close = self.client.post('/api/cashier/session/close/', {'total_billetes': '90.00', 'total_monedas': '5.00', 'total_contado': '95.00'}, format='json')
