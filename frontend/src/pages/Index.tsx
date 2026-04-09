@@ -2570,10 +2570,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
-                      Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
+                      <span className="min-w-0 truncate text-left">
+                        Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                      </span>
                     </Button>
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
@@ -2664,7 +2666,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerDteOpen} onOpenChange={setIsCustomerDteOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="w-[95vw] max-w-xl">
           <DialogHeader>
             <DialogTitle>Cliente / DTE</DialogTitle>
           </DialogHeader>
@@ -2672,29 +2674,31 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="space-y-2">
               <Label>Tipo DTE</Label>
               <div className="grid grid-cols-3 gap-2">
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-2">
               <Label>Cliente</Label>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-14 flex-1 justify-start text-base"
+                  className="h-12 w-full min-w-0 justify-start text-sm sm:h-14 sm:flex-1 sm:text-base"
                   onClick={() => {
                     setIsCustomerPickerOpen(true);
                     setCustomerSearch("");
                   }}
                 >
-                  {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                  <span className="min-w-0 truncate">
+                    {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                  </span>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-14 text-base"
+                  className="h-12 w-full min-w-[120px] text-sm sm:h-14 sm:w-auto sm:text-base"
                   onClick={() => {
                     setCustomerFormErrors({});
                     setCustomerServerErrors({});
@@ -2710,9 +2714,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             {dteDocumentType === "CCF" ? (
               <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
             ) : null}
-            <div className="flex gap-2">
-              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
+              <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
             </div>
           </div>
         </DialogContent>

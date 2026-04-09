@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.cashier.models import CashSession, Register, CashTransaction
 from apps.core.models import Branch, ServiceType
 from apps.dte.models import DTERecord
 from apps.orders.models import Order
@@ -25,6 +26,13 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.cashier = user_model.objects.create_user(username="cashier_method_change", password="123456")
         UserProfile.objects.create(user=self.cashier, role="cashier", is_active=True)
         self.branch = Branch.objects.create(name="Main", code="MAIN")
+        self.register = Register.objects.create(name="Caja Principal", branch=self.branch, is_active=True)
+        self.cash_session = CashSession.objects.create(
+            register=self.register,
+            opened_by=self.admin,
+            opening_cash=Decimal("100.00"),
+            status="open",
+        )
         self.service_type = ServiceType.objects.create(key="dine_in", label="En local")
         self.pm_cash = PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True)
         self.pm_paypal = PaymentMethod.objects.create(code="paypal", name="PayPal", is_cash=False)
@@ -110,6 +118,7 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["action"], "invalidate")
         self.assertTrue(Refund.objects.filter(original_payment=payment).exists())
+        self.assertTrue(CashTransaction.objects.filter(refund__original_payment=payment, type="cash_out").exists())
         payment.order.refresh_from_db()
         self.assertIn(payment.order.financial_status, {"refunded_partial", "refunded_full"})
 
@@ -141,6 +150,16 @@ class PaymentInternalMethodChangeTests(TestCase):
 
     def test_record_refund_without_accepted_dte_creates_internal_refund(self):
         payment = self._create_paid_payment()
+        DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_REJECTED,
+            control_number="DTE-TEST-REJ",
+            generation_code="A" * 36,
+            total_amount=Decimal("10.00"),
+        )
         self.client.force_authenticate(self.admin)
 
         response = self.client.post(
@@ -151,5 +170,25 @@ class PaymentInternalMethodChangeTests(TestCase):
 
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["action"], "internal_refund")
-        self.assertIn("No existe DTE aceptado", response.data["message"])
         self.assertTrue(Refund.objects.filter(original_payment=payment).exists())
+        self.assertTrue(response.data["fiscal_result"]["attempted"])
+
+    @patch("apps.payments.views.invalidate_dte_for_order")
+    def test_record_refund_attempts_invalidation_when_latest_dte_rejected(self, mock_invalidate):
+        mock_invalidate.return_value = {"success": False, "status": "RECHAZADO", "error": "Documento no anulable"}
+        payment = self._create_paid_payment()
+        DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_REJECTED,
+            control_number="DTE-TEST-REJ2",
+            generation_code="B" * 36,
+            total_amount=Decimal("10.00"),
+        )
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(f"/api/payments/{payment.id}/record-refund/", {"reason": "Reembolso"}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["fiscal_result"]["attempted"])
+        mock_invalidate.assert_called_once()

@@ -26,10 +26,10 @@ def resolve_ambiente_from_env() -> str:
 
 
 def resolve_ambiente_with_source() -> tuple[str, str]:
-    if os.environ.get("DTE_AMBIENTE"):
-        return os.environ["DTE_AMBIENTE"], "DTE_AMBIENTE"
     if os.environ.get("MH_AMBIENTE"):
         return os.environ["MH_AMBIENTE"], "MH_AMBIENTE"
+    if os.environ.get("DTE_AMBIENTE"):
+        return os.environ["DTE_AMBIENTE"], "DTE_AMBIENTE"
     if os.environ.get("HACIENDA_AMBIENTE"):
         return os.environ["HACIENDA_AMBIENTE"], "HACIENDA_AMBIENTE"
     return "00", "default"

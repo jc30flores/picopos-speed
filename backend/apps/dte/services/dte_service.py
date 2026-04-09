@@ -847,10 +847,21 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     return payload
 
 
-def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitante_dui: str, **kwargs) -> dict:
-    record = order.dte_records.filter(status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+def invalidate_dte_for_order(
+    order,
+    motivo: str,
+    responsable_dui: str,
+    solicitante_dui: str,
+    *,
+    dte_record: DTERecord | None = None,
+    allow_non_accepted: bool = False,
+    **kwargs,
+) -> dict:
+    record = dte_record or order.dte_records.filter(status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+    if not record and allow_non_accepted:
+        record = order.dte_records.order_by("-id").first()
     if not record:
-        raise DTEPreflightError("No existe DTE aceptado para invalidar")
+        raise DTEPreflightError("No existe DTE base para invalidar")
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
@@ -870,4 +881,12 @@ def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitan
     if attempt.success:
         record.status = DTERecord.STATUS_INVALIDATED
         record.save(update_fields=["status", "updated_at"])
-    return {"attempt_id": attempt.id, "success": attempt.success, "status": parsed["status"]}
+    logger.info(
+        "dte.invalidation.attempt order_id=%s dte_record_id=%s base_status=%s success=%s error=%s",
+        order.id,
+        record.id,
+        record.status,
+        attempt.success,
+        attempt.error_message,
+    )
+    return {"attempt_id": attempt.id, "success": attempt.success, "status": parsed["status"], "error": attempt.error_message}
