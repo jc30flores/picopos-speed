@@ -14,7 +14,7 @@ from apps.dte.services.dte_service import (
     build_payload_cf,
     interpret_dte_response,
 )
-from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env
+from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env, resolve_ambiente_with_source
 from apps.orders.models import Order, OrderInvoice
 from apps.orders.services.snapshots import persist_sale_snapshot
 
@@ -31,11 +31,14 @@ def _validate_ambiente_or_raise(raw_value: str | None, normalized: str) -> None:
 
 
 def _ambiente() -> str:
+    configured_raw, source = resolve_ambiente_with_source()
     try:
         normalized = resolve_ambiente_from_env()
     except ValueError as exc:
+        DTE_LOGGER.error("[DTE] ambiente_invalid source=%s raw=%s", source, configured_raw)
         raise DTEPreflightError(str(exc)) from exc
     _validate_ambiente_or_raise(None, normalized)
+    DTE_LOGGER.info("[DTE] ambiente_resolved source=%s configured=%s resolved=%s", source, configured_raw, normalized)
     return normalized
 
 

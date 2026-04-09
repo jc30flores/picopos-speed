@@ -15,6 +15,7 @@ from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import (
     DTEPreflightError,
     _validate_dte_totals,
+    validate_dte_preflight_payload,
     assert_no_string_numbers,
     build_payload_cf,
     get_mh_payment_info,
@@ -310,6 +311,12 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(resumen["subTotalVentas"], 2), round(resumen["totalGravada"] + resumen["totalExenta"], 2))
         self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"] + resumen["totalIva"], 2))
         self.assertEqual(resumen["totalDescu"], 0)
+
+    def test_preflight_rejects_invalid_identificacion_fields(self):
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000202", "A" * 36, "01")
+        payload["dte"]["identificacion"]["numeroControl"] = "INVALID-CONTROL"
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(

@@ -396,12 +396,28 @@ class PaymentRecordRefundView(APIView):
 
         reason = (request.data.get("reason") or "").strip() or "Reembolso desde registros"
         record = DTERecord.objects.filter(order=order, status=DTERecord.STATUS_ACCEPTED).order_by("-created_at").first()
+        latest_dte = DTERecord.objects.filter(order=order).order_by("-created_at").first()
+        logger.info(
+            "refund.record_refund.precheck payment_id=%s order_id=%s accepted_dte_id=%s latest_dte_id=%s latest_dte_status=%s latest_error=%s",
+            payment.id,
+            order.id,
+            getattr(record, "id", None),
+            getattr(latest_dte, "id", None),
+            getattr(latest_dte, "status", None),
+            getattr(latest_dte, "error_message", None),
+        )
 
         if not record:
             dte_action = {
                 "action": "internal_refund",
                 "message": "No existe DTE aceptado. Se registró reembolso interno sin invalidación/NC en Hacienda.",
             }
+            logger.warning(
+                "refund.record_refund.internal_only payment_id=%s order_id=%s reason=no_accepted_dte latest_status=%s",
+                payment.id,
+                order.id,
+                getattr(latest_dte, "status", None),
+            )
         else:
             dte_type = (record.dte_type or "").upper()
             issued_at = resolve_issued_at(record)

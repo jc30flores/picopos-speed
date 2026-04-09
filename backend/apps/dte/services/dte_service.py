@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -320,6 +321,58 @@ def validate_receptor_payload(receptor: dict[str, Any]) -> None:
             raise DTEPreflightError(f"receptor.{key} no puede ser string vacío")
 
 
+def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
+    ambiente = identificacion.get("ambiente")
+    try:
+        normalize_ambiente(ambiente)
+    except ValueError as exc:
+        raise DTEPreflightError(str(exc)) from exc
+    tipo_dte = str(identificacion.get("tipoDte") or "").strip()
+    if tipo_dte not in {"01", "03", "05", "14"}:
+        raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
+    numero_control = str(identificacion.get("numeroControl") or "").strip()
+    if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
+        raise DTEPreflightError(f"numeroControl inválido: {numero_control}")
+    codigo_generacion = str(identificacion.get("codigoGeneracion") or "").strip().upper()
+    if not re.fullmatch(r"[A-F0-9-]{36}", codigo_generacion):
+        raise DTEPreflightError(f"codigoGeneracion inválido: {codigo_generacion}")
+
+
+def _validate_emisor_payload(emisor: dict[str, Any]) -> None:
+    missing = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not emisor.get(k)]
+    if missing:
+        raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing)}")
+    emisor_nit_digits = "".join(ch for ch in str(emisor.get("nit") or "") if ch.isdigit())
+    if len(emisor_nit_digits) != 14:
+        raise DTEPreflightError(f"NIT emisor inválido: {emisor.get('nit')}")
+
+
+def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
+    pagos = resumen.get("pagos")
+    if not isinstance(pagos, list) or not pagos:
+        raise DTEPreflightError("resumen.pagos debe contener al menos un pago")
+    for idx, pago in enumerate(pagos):
+        monto = money((pago or {}).get("montoPago"))
+        if monto <= Decimal("0.00"):
+            raise DTEPreflightError(f"resumen.pagos[{idx}].montoPago inválido: {monto}")
+
+
+def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
+    dte = payload.get("dte") if isinstance(payload, dict) else None
+    if not isinstance(dte, dict):
+        raise DTEPreflightError("Payload DTE inválido: falta objeto dte")
+    identificacion = dte.get("identificacion") or {}
+    emisor = dte.get("emisor") or {}
+    receptor = dte.get("receptor") or {}
+    resumen = dte.get("resumen") or {}
+    _validate_identificacion_payload(identificacion)
+    _validate_emisor_payload(emisor)
+    validate_receptor_payload(receptor)
+    _validate_pagos_payload(resumen)
+    _validate_dte_totals(dte)
+    assert_no_string_numbers(payload)
+
+
 def _number_to_words_es_usd(amount: Decimal) -> str:
     units = ["CERO", "UNO", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"]
     teens = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"]
@@ -594,8 +647,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
-    _validate_dte_totals(payload.get("dte", {}))
-    assert_no_string_numbers(payload)
+    validate_dte_preflight_payload(payload)
+    logger.info(
+        "dte.preflight.ok ambiente=%s tipoDte=%s receptor_tipoDocumento=%s receptor_numDocumento=%s",
+        payload["dte"]["identificacion"].get("ambiente"),
+        payload["dte"]["identificacion"].get("tipoDte"),
+        payload["dte"]["receptor"].get("tipoDocumento"),
+        payload["dte"]["receptor"].get("numDocumento"),
+    )
     return payload
 
 
@@ -608,8 +667,7 @@ def send_to_bridge(
     payment_id: int | None = None,
     branch_id: int | None = None,
 ) -> dict:
-    assert_no_string_numbers(payload)
-    _validate_dte_totals(payload.get("dte", {}))
+    validate_dte_preflight_payload(payload)
     ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 

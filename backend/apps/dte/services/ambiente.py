@@ -17,9 +17,19 @@ def normalize_ambiente(raw: str | None) -> str:
 
 
 def resolve_ambiente_from_env() -> str:
-    raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE") or "00"
+    raw, _ = resolve_ambiente_with_source()
     normalized = normalize_ambiente(raw)
     requires_prod = str(os.environ.get("DTE_REQUIRE_AMBIENTE_01", "")).strip().lower() in {"1", "true", "yes"}
     if requires_prod:
         return "01"
     return normalized
+
+
+def resolve_ambiente_with_source() -> tuple[str, str]:
+    if os.environ.get("DTE_AMBIENTE"):
+        return os.environ["DTE_AMBIENTE"], "DTE_AMBIENTE"
+    if os.environ.get("MH_AMBIENTE"):
+        return os.environ["MH_AMBIENTE"], "MH_AMBIENTE"
+    if os.environ.get("HACIENDA_AMBIENTE"):
+        return os.environ["HACIENDA_AMBIENTE"], "HACIENDA_AMBIENTE"
+    return "00", "default"
