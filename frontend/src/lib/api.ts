@@ -3416,16 +3416,17 @@ export const voidOrder = async (orderId: number, reason: string): Promise<{ orde
 export const refundSaleRecord = async (
   paymentId: number,
   payload?: { reason?: string }
-): Promise<{ order: Order; action: "invalidate" | "credit_note" }> => {
+): Promise<{ order: Order; action: "invalidate" | "credit_note" | "internal_refund"; message?: string }> => {
   const response = await request(`/payments/${paymentId}/record-refund/`, {
     method: "POST",
     body: JSON.stringify({ reason: payload?.reason ?? "" }),
   });
   const data = await handleJson<{
     order: Parameters<typeof mapOrder>[0];
-    action: "invalidate" | "credit_note";
+    action: "invalidate" | "credit_note" | "internal_refund";
+    message?: string;
   }>(response);
-  return { order: mapOrder(data.order), action: data.action };
+  return { order: mapOrder(data.order), action: data.action, message: data.message };
 };
 
 export const createPrintJob = async (payload: {

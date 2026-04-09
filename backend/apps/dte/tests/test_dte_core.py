@@ -348,6 +348,22 @@ class DTECoreTests(TestCase):
         self.assertEqual(receptor["numDocumento"], "01234567-8")
         self.assertEqual(receptor["correo"], "cliente@correo.com")
 
+    def test_receptor_with_nit_14_uses_tipo_documento_36(self):
+        self.order.customer = Customer.objects.create(
+            name="Empresa NIT",
+            full_name="Empresa NIT",
+            client_type="CCF",
+            nit="06141234567890",
+            tipo_documento="36",
+            num_documento="0614-123456-789-0",
+            correo="empresa@correo.com",
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000013", "H" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+        self.assertEqual(receptor["tipoDocumento"], "36")
+        self.assertEqual(receptor["numDocumento"], "06141234567890")
+
     def test_receptor_uses_customer_email_when_present(self):
         self.order.customer = Customer.objects.create(
             name="Cliente con correo",

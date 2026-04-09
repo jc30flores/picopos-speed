@@ -18,6 +18,8 @@ class AmbienteNormalizationTests(SimpleTestCase):
         self.assertEqual(_normalize_ambiente("00"), "00")
         self.assertEqual(_normalize_ambiente("01"), "01")
         self.assertEqual(_normalize_ambiente("prod"), "01")
+        with self.assertRaises(ValueError):
+            _normalize_ambiente("INVALID")
 
     def test_force_prod_flag(self):
         previous = os.environ.get("DTE_REQUIRE_AMBIENTE_01")

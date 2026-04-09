@@ -138,3 +138,18 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["action"], "credit_note")
         mock_send_credit.assert_called_once()
+
+    def test_record_refund_without_accepted_dte_creates_internal_refund(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "Sin DTE aceptado"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["action"], "internal_refund")
+        self.assertIn("No existe DTE aceptado", response.data["message"])
+        self.assertTrue(Refund.objects.filter(original_payment=payment).exists())

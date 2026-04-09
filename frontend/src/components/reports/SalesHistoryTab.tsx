@@ -263,13 +263,19 @@ export const SalesHistoryTab = () => {
 
     try {
       setIsSubmittingRefund(true);
-      await refundSaleRecord(selectedSale.paymentId, { reason: refundReason });
+      const result = await refundSaleRecord(selectedSale.paymentId, { reason: refundReason });
       setIsRefundOpen(false);
-      toast.success("Reembolso registrado");
+      if (result.action === "internal_refund") {
+        toast.warning(result.message || "Reembolso interno registrado. No se modificó un DTE en Hacienda.");
+      } else if (result.action === "credit_note") {
+        toast.success("Reembolso registrado con nota de crédito.");
+      } else {
+        toast.success("Reembolso registrado con invalidación DTE.");
+      }
       await loadSales(debouncedSearchQuery);
     } catch (error) {
       console.error("Failed to create refund", error);
-      toast.error("No se pudo registrar el reembolso");
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar el reembolso");
     } finally {
       setIsSubmittingRefund(false);
     }
@@ -588,7 +594,9 @@ export const SalesHistoryTab = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Reembolsar venta</DialogTitle>
-            <DialogDescription>Se invalidará DTE o se generará NC según reglas fiscales.</DialogDescription>
+            <DialogDescription>
+              Si hay DTE aceptado, se invalidará o se generará NC según reglas fiscales. Si no hay DTE aceptado, se hará reembolso interno.
+            </DialogDescription>
           </DialogHeader>
           {selectedSale ? (
             <div className="space-y-4">

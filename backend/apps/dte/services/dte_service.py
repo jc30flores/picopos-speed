@@ -10,6 +10,7 @@ from django.conf import settings
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.services.ambiente import normalize_ambiente
 from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
@@ -23,12 +24,10 @@ TAX_DIVISOR = Decimal("1.13")
 
 
 def _normalize_ambiente_value(raw: str | None) -> str:
-    value = str(raw or "").strip().lower()
-    if value in {"00", "0", "test", "prueba", "testing"}:
+    try:
+        return normalize_ambiente(raw)
+    except ValueError:
         return "00"
-    if value in {"01", "1", "prod", "produccion", "production"}:
-        return "01"
-    return "00"
 
 
 def _mask_token(token: str) -> str:
@@ -306,6 +305,11 @@ def _has_real_dui(value: str | None) -> bool:
     return len(digits) == 9 and digits != "000000000"
 
 
+def _has_nit_14(value: str | None) -> bool:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return len(digits) == 14
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -516,11 +520,16 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         is_consumer_final,
     )
     has_real_dui = _has_real_dui(getattr(customer, "dui", None)) or _has_real_dui(getattr(customer, "num_documento", None))
+    nit_value = getattr(customer, "nit", None) or getattr(customer, "num_documento", None)
+    has_nit_14 = _has_nit_14(nit_value)
     receptor_tipo_documento = None
     receptor_num_documento = None
     if has_real_dui:
         receptor_tipo_documento = "13"
         receptor_num_documento = _none_if_blank(getattr(customer, "dui", None) or getattr(customer, "num_documento", None))
+    elif has_nit_14:
+        receptor_tipo_documento = "36"
+        receptor_num_documento = "".join(ch for ch in str(nit_value) if ch.isdigit())
     elif not is_consumer_final:
         receptor_tipo_documento = _none_if_blank(getattr(customer, "tipo_documento", None))
         receptor_num_documento = _none_if_blank(getattr(customer, "num_documento", None))

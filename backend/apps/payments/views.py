@@ -396,42 +396,46 @@ class PaymentRecordRefundView(APIView):
 
         reason = (request.data.get("reason") or "").strip() or "Reembolso desde registros"
         record = DTERecord.objects.filter(order=order, status=DTERecord.STATUS_ACCEPTED).order_by("-created_at").first()
+
         if not record:
-            return Response({"detail": "No existe DTE aceptado para esta venta."}, status=status.HTTP_400_BAD_REQUEST)
-
-        dte_type = (record.dte_type or "").upper()
-        issued_at = resolve_issued_at(record)
-        should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
-
-        if should_credit_note:
-            note = CreditNote.objects.create(
-                order=order,
-                original_dte_record=record,
-                motivo=reason,
-                total=record.total_amount,
-                dte_numero_control=record.control_number,
-                dte_codigo_generacion=record.codigo_generacion,
-                items=[],
-                status=DTERecord.STATUS_PENDING,
-            )
-            send_dte_for_credit_note(note)
-            dte_action = {"action": "credit_note", "credit_note_id": note.id}
+            dte_action = {
+                "action": "internal_refund",
+                "message": "No existe DTE aceptado. Se registró reembolso interno sin invalidación/NC en Hacienda.",
+            }
         else:
-            invalidation = DTEInvalidation.objects.create(
-                order=order,
-                dte_record=record,
-                motivo=reason,
-                tipo_anulacion="total",
-                status=DTERecord.STATUS_PENDING,
-            )
-            result = invalidate_dte_for_order(order, motivo=reason, responsable_dui="", solicitante_dui="")
-            if not result.get("success"):
-                return Response({"detail": result.get("error") or "No se pudo invalidar DTE."}, status=status.HTTP_400_BAD_REQUEST)
-            record.status = DTERecord.STATUS_INVALIDATED
-            record.save(update_fields=["status", "updated_at"])
-            invalidation.status = DTERecord.STATUS_INVALIDATED
-            invalidation.save(update_fields=["status", "updated_at"])
-            dte_action = {"action": "invalidate", "invalidation_id": invalidation.id}
+            dte_type = (record.dte_type or "").upper()
+            issued_at = resolve_issued_at(record)
+            should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
+
+            if should_credit_note:
+                note = CreditNote.objects.create(
+                    order=order,
+                    original_dte_record=record,
+                    motivo=reason,
+                    total=record.total_amount,
+                    dte_numero_control=record.control_number,
+                    dte_codigo_generacion=record.codigo_generacion,
+                    items=[],
+                    status=DTERecord.STATUS_PENDING,
+                )
+                send_dte_for_credit_note(note)
+                dte_action = {"action": "credit_note", "credit_note_id": note.id}
+            else:
+                invalidation = DTEInvalidation.objects.create(
+                    order=order,
+                    dte_record=record,
+                    motivo=reason,
+                    tipo_anulacion="total",
+                    status=DTERecord.STATUS_PENDING,
+                )
+                result = invalidate_dte_for_order(order, motivo=reason, responsable_dui="", solicitante_dui="")
+                if not result.get("success"):
+                    return Response({"detail": result.get("error") or "No se pudo invalidar DTE."}, status=status.HTTP_400_BAD_REQUEST)
+                record.status = DTERecord.STATUS_INVALIDATED
+                record.save(update_fields=["status", "updated_at"])
+                invalidation.status = DTERecord.STATUS_INVALIDATED
+                invalidation.save(update_fields=["status", "updated_at"])
+                dte_action = {"action": "invalidate", "invalidation_id": invalidation.id}
 
         effective_method = payment.reporting_payment_method or payment.payment_method
         refund = Refund.objects.create(

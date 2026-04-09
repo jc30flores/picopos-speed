@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from django.db import transaction
 from django.utils import timezone
 
@@ -15,6 +14,7 @@ from apps.dte.services.dte_service import (
     build_payload_cf,
     interpret_dte_response,
 )
+from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env
 from apps.orders.models import Order, OrderInvoice
 from apps.orders.services.snapshots import persist_sale_snapshot
 
@@ -22,29 +22,20 @@ DTE_LOGGER = logging.getLogger("apps.dte")
 
 
 def _normalize_ambiente(raw_value: str | None) -> str:
-    value = (raw_value or "").strip().upper()
-    if value == "01" or "01" in value or value in {"PROD", "PRODUCCION", "PRODUCTION"}:
-        return "01"
-    if value == "00" or "00" in value or value in {"TEST", "CERT", "CERTIFICACION", "DEV"}:
-        return "00"
-    return "01"
+    return normalize_ambiente(raw_value)
 
 
 def _validate_ambiente_or_raise(raw_value: str | None, normalized: str) -> None:
     if normalized not in {"00", "01"}:
         raise DTEPreflightError(f"Ambiente inválido para DTE: {normalized}")
-    raw = (raw_value or "").strip()
-    if raw and normalized not in raw and raw.upper() not in {"PROD", "PRODUCCION", "PRODUCTION", "TEST", "CERT", "CERTIFICACION", "DEV", "00", "01"}:
-        raise DTEPreflightError(f"Valor de ambiente no reconocido: {raw}")
 
 
 def _ambiente() -> str:
-    raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
-    normalized = _normalize_ambiente(raw)
-    requires_prod = str(os.environ.get("DTE_REQUIRE_AMBIENTE_01", "")).strip().lower() in {"1", "true", "yes"}
-    if requires_prod and normalized != "01":
-        normalized = "01"
-    _validate_ambiente_or_raise(raw, normalized)
+    try:
+        normalized = resolve_ambiente_from_env()
+    except ValueError as exc:
+        raise DTEPreflightError(str(exc)) from exc
+    _validate_ambiente_or_raise(None, normalized)
     return normalized
 
 
