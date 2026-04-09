@@ -426,6 +426,13 @@ export type SalesBreakdownRow = {
   transactions: number;
 };
 
+export type EmployeeWorkedHoursRow = {
+  employeeId: number;
+  employeeName: string;
+  totalMinutes: number;
+  totalHours: number;
+};
+
 export type Refund = {
   id: number;
   orderId: number;
@@ -2386,6 +2393,25 @@ export const getSalesBreakdown = async (filters: {
     .map((entry) => ({ ...entry, percentage: total > 0 ? (entry.total / total) * 100 : 0 }))
     .sort((a, b) => b.total - a.total)
     .slice(0, 10);
+};
+
+
+
+export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursRow[]> => {
+  const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+  });
+  const response = await request(`/reports/employee-worked-hours/?${params.toString()}`, { signal: filters.signal });
+  const data = await handleJson<{ employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }> }>(response);
+  return (data.employees ?? []).map((row) => ({
+    employeeId: Number(row.employee_id),
+    employeeName: row.employee_name,
+    totalMinutes: Number(row.total_minutes ?? 0),
+    totalHours: Number(row.total_hours ?? 0),
+  }));
 };
 
 export const changeInternalPaymentMethod = async (
