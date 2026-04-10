@@ -161,7 +161,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closeBillsInput, setCloseBillsInput] = useState("");
   const [closeCoinsInput, setCloseCoinsInput] = useState("");
-  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "confirm">("idle");
+  const [closePosCardsInput, setClosePosCardsInput] = useState("");
+  const [closePedidosYaInput, setClosePedidosYaInput] = useState("");
+  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "posCards" | "pedidosYa" | "confirm">("idle");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
@@ -1159,9 +1161,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     const totalBills = Number(closeBillsInput || 0);
     const totalCoins = Number(closeCoinsInput || 0);
+    const totalPosCards = Number(closePosCardsInput || 0);
+    const totalPedidosYa = Number(closePedidosYaInput || 0);
     const countedTotal = totalBills + totalCoins;
-    if (!Number.isFinite(totalBills) || totalBills < 0 || !Number.isFinite(totalCoins) || totalCoins < 0) {
-      toast.error("Ingresa montos válidos para billetes y monedas.");
+    if (
+      !Number.isFinite(totalBills) || totalBills < 0
+      || !Number.isFinite(totalCoins) || totalCoins < 0
+      || !Number.isFinite(totalPosCards) || totalPosCards < 0
+      || !Number.isFinite(totalPedidosYa) || totalPedidosYa < 0
+    ) {
+      toast.error("Ingresa montos válidos para el cierre.");
       return;
     }
     setCashCloseFlowState("closingInProgress");
@@ -1170,7 +1179,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const closeResp = await closeCashSession(
         countedTotal,
         cashNotes,
-        { bills: totalBills, coins: totalCoins },
+        { bills: totalBills, coins: totalCoins, posCards: totalPosCards, pedidosYa: totalPedidosYa },
         { sessionId: cashSnapshot.session?.id }
       );
       if (import.meta.env.DEV) {
@@ -1214,6 +1223,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCloseCashStep("idle");
       setCloseBillsInput("");
       setCloseCoinsInput("");
+      setClosePosCardsInput("");
+      setClosePedidosYaInput("");
       
     } catch (error) {
       setCashCloseFlowState("idle");
@@ -2360,7 +2371,45 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     />
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Atrás</Button>
-                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("posCards")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "posCards" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">POS tarjetas</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closePosCardsInput}
+                      onChange={(e) => setClosePosCardsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")} disabled={Number(closePosCardsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "pedidosYa" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">PedidosYa</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closePedidosYaInput}
+                      onChange={(e) => setClosePedidosYaInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("posCards")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closePedidosYaInput || 0) < 0}>Continuar</Button>
                     </div>
                   </>
                 ) : null}
@@ -2369,12 +2418,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     <div className="space-y-2 rounded-lg border p-3 text-base">
                       <div className="flex justify-between"><span>Total billetes</span><span>{formatMoney(Number(closeBillsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total POS tarjetas</span><span>{formatMoney(Number(closePosCardsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total PedidosYa</span><span>{formatMoney(Number(closePedidosYaInput || 0))}</span></div>
                       <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
                       <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
                     </div>
                   </>

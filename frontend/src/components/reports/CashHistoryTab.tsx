@@ -102,6 +102,10 @@ export const CashHistoryTab = () => {
             <div className="flex justify-between"><span>Pagos/Ingresos en efectivo</span><span>{formatMoney(selectedRow?.summary?.totalCashSales ?? 0)}</span></div>
             <div className="flex justify-between"><span>Gastos/Salidas</span><span>{formatMoney(selectedRow?.summary?.totalCashOut ?? 0)}</span></div>
             <div className="flex justify-between"><span>Efectivo esperado</span><span>{formatMoney(selectedRow?.summary?.expectedCashInDrawer ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Billetes contados</span><span>{formatMoney(selectedRow?.summary?.countedBills ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Monedas contadas</span><span>{formatMoney(selectedRow?.summary?.countedCoins ?? 0)}</span></div>
+            <div className="flex justify-between"><span>POS tarjetas contado</span><span>{formatMoney(selectedRow?.summary?.countedPosCards ?? 0)}</span></div>
+            <div className="flex justify-between"><span>PedidosYa contado</span><span>{formatMoney(selectedRow?.summary?.countedPedidosYa ?? 0)}</span></div>
             <div className="flex justify-between"><span>Efectivo contado</span><span>{formatMoney(selectedRow?.summary?.countedCash ?? 0)}</span></div>
             <div className="flex justify-between"><span>Diferencia</span><span>{formatMoney(selectedRow?.difference ?? 0)}</span></div>
             <div className="rounded-md border p-2 text-muted-foreground">{selectedRow?.notes?.trim() || "Sin notas"}</div>

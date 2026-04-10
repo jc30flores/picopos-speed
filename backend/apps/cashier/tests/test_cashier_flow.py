@@ -109,13 +109,27 @@ class CashierFlowTests(TestCase):
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00', 'total_bills': '80.00', 'total_coins': '15.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {
+                'counted_cash_amount': '95.00',
+                'total_bills': '80.00',
+                'total_coins': '15.00',
+                'total_pos_tarjetas': '42.50',
+                'total_pedidos_ya': '18.25',
+            },
+            format='json',
+        )
         self.assertEqual(close.status_code, 200)
         session_id = close.data['session']['id']
         session = CashSession.objects.get(id=session_id)
         json.dumps(session.summary_snapshot)
         self.assertEqual(str(session.closing_total_bills), "80.00")
         self.assertEqual(str(session.closing_total_coins), "15.00")
+        self.assertEqual(str(session.closing_total_pos_cards), "42.50")
+        self.assertEqual(str(session.closing_total_pedidos_ya), "18.25")
+        self.assertEqual(session.summary_snapshot.get("counted_pos_cards"), "42.50")
+        self.assertEqual(session.summary_snapshot.get("counted_pedidos_ya"), "18.25")
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')

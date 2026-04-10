@@ -311,6 +311,10 @@ export type CashSessionSnapshot = {
     totalCashOut: number;
     expectedCashInDrawer: number;
     countedCash: number;
+    countedBills: number;
+    countedCoins: number;
+    countedPosCards: number;
+    countedPedidosYa: number;
     overShortCash: number;
     methods: { cash: number; card: number; cardDebit: number; cardCredit: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
@@ -3666,6 +3670,10 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       totalCashOut: Number(data.summary?.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary?.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary?.counted_cash ?? 0),
+      countedBills: Number(data.summary?.counted_bills ?? 0),
+      countedCoins: Number(data.summary?.counted_coins ?? 0),
+      countedPosCards: Number(data.summary?.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(data.summary?.counted_pedidos_ya ?? 0),
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
@@ -3699,7 +3707,7 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 export const closeCashSession = async (
   closingCashCounted: number,
   notes?: string,
-  totals?: { bills?: number; coins?: number },
+  totals?: { bills?: number; coins?: number; posCards?: number; pedidosYa?: number },
   options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
@@ -3710,6 +3718,8 @@ export const closeCashSession = async (
       total_contado: closingCashCounted,
       total_billetes: Number(totals?.bills ?? 0),
       total_monedas: Number(totals?.coins ?? 0),
+      total_pos_tarjetas: Number(totals?.posCards ?? 0),
+      total_pedidos_ya: Number(totals?.pedidosYa ?? 0),
       notes: notes ?? '',
       ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),
@@ -3779,6 +3789,10 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       totalCashOut: Number(row.summary_snapshot?.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(row.summary_snapshot?.expected_cash_in_drawer ?? 0),
       countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
+      countedBills: Number(row.summary_snapshot?.counted_bills ?? 0),
+      countedCoins: Number(row.summary_snapshot?.counted_coins ?? 0),
+      countedPosCards: Number(row.summary_snapshot?.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(row.summary_snapshot?.counted_pedidos_ya ?? 0),
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
         cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
@@ -3808,6 +3822,10 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary.counted_cash ?? 0),
+      countedBills: Number(data.summary.counted_bills ?? 0),
+      countedCoins: Number(data.summary.counted_coins ?? 0),
+      countedPosCards: Number(data.summary.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(data.summary.counted_pedidos_ya ?? 0),
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
         cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
