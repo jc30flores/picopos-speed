@@ -352,6 +352,37 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.21)
         self.assertTrue(any(str(line.get("descripcion", "")).upper().startswith("DESECHABLE") for line in payload["dte"]["cuerpoDocumento"]))
 
+    def test_build_payload_reconciles_cent_differences_against_order_total(self):
+        category = Category.objects.create(name="RECONCILIACION")
+        product = Product.objects.create(name="Base", description="", price=Decimal("13.78"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("13.78"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="BASE-1",
+            is_custom=False,
+        )
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.21"),
+            quantity=1,
+            total_amount=Decimal("0.21"),
+        )
+        self.order.disposable_total = Decimal("0.21")
+        self.order.total = Decimal("13.99")
+        self.order.save(update_fields=["disposable_total", "total"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000205", "E" * 36, "01")
+        resumen = payload["dte"]["resumen"]
+        pagos = resumen["pagos"]
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 13.99)
+        self.assertEqual(round(float(pagos[0]["montoPago"]), 2), 13.99)
+
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
             name="CONSUMIDOR FINAL",

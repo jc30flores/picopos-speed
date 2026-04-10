@@ -352,10 +352,15 @@ def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
     pagos = resumen.get("pagos")
     if not isinstance(pagos, list) or not pagos:
         raise DTEPreflightError("resumen.pagos debe contener al menos un pago")
+    pagos_total = Decimal("0.00")
     for idx, pago in enumerate(pagos):
         monto = money((pago or {}).get("montoPago"))
         if monto <= Decimal("0.00"):
             raise DTEPreflightError(f"resumen.pagos[{idx}].montoPago inválido: {monto}")
+        pagos_total += monto
+    total_pagar = money(resumen.get("totalPagar"))
+    if not _almost_equal(pagos_total, total_pagar):
+        raise DTEPreflightError(f"Suma de pagos ({money(pagos_total)}) no coincide con totalPagar ({total_pagar})")
 
 
 def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
@@ -559,6 +564,43 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         })
         num_item += 1
 
+    target_total = money(getattr(order, "total", Decimal("0.00")))
+    gross_from_lines = money(
+        sum((money(line.get("ventaGravada")) + money(line.get("ventaExenta")) + money(line.get("ivaItem")) for line in cuerpo), Decimal("0.00"))
+    )
+    reconciliation_diff = money(target_total - gross_from_lines)
+    if reconciliation_diff != Decimal("0.00"):
+        adjusted = False
+        for line in reversed(cuerpo):
+            venta_gravada = money(line.get("ventaGravada"))
+            if not order.iva_exempt and venta_gravada > Decimal("0.00"):
+                new_iva = money(money(line.get("ivaItem")) + reconciliation_diff)
+                line["ivaItem"] = json_number(new_iva)
+                adjusted = True
+                logger.info(
+                    "dte.reconciliation.adjust_iva numItem=%s diff=%s nuevo_iva=%s",
+                    line.get("numItem"),
+                    reconciliation_diff,
+                    new_iva,
+                )
+                break
+            if order.iva_exempt:
+                new_exenta = money(money(line.get("ventaExenta")) + reconciliation_diff)
+                line["ventaExenta"] = json_number(new_exenta)
+                adjusted = True
+                logger.info(
+                    "dte.reconciliation.adjust_exenta numItem=%s diff=%s nueva_exenta=%s",
+                    line.get("numItem"),
+                    reconciliation_diff,
+                    new_exenta,
+                )
+                break
+        if not adjusted:
+            raise DTEPreflightError("No fue posible reconciliar centavos del DTE contra total real cobrado.")
+
+    total_gravada = money(sum((money(line.get("ventaGravada")) for line in cuerpo), Decimal("0.00")))
+    total_exenta = money(sum((money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00")))
+    total_iva = money(sum((money(line.get("ivaItem")) for line in cuerpo), Decimal("0.00")))
     subtotal_ventas = money(total_gravada + total_exenta)
     global_desc_no_suj = Decimal("0.00")
     global_desc_exenta = Decimal("0.00")
@@ -566,7 +608,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     global_desc_total = money(global_desc_no_suj + global_desc_exenta + global_desc_gravada)
     subtotal_final = money(subtotal_ventas - global_desc_total)
     monto_total_operacion = money(subtotal_final + (Decimal("0.00") if order.iva_exempt else total_iva))
-    total_pagar = monto_total_operacion
+    total_pagar = target_total
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -651,7 +693,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "pagos": pagos,
         "numPagoElectronico": None,
     }
-    order_total = money(getattr(order, "total", Decimal("0.00")))
+    order_total = target_total
     if not _almost_equal(money(resumen["totalPagar"]), order_total):
         diff = money(order_total - money(resumen["totalPagar"]))
         logger.error(
