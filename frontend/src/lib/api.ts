@@ -3416,7 +3416,12 @@ export const voidOrder = async (orderId: number, reason: string): Promise<{ orde
 export const refundSaleRecord = async (
   paymentId: number,
   payload?: { reason?: string }
-): Promise<{ order: Order; action: "invalidate" | "credit_note" | "internal_refund"; message?: string }> => {
+): Promise<{
+  order: Order;
+  action: "invalidate" | "credit_note" | "internal_refund";
+  message?: string;
+  fiscalResult?: { attempted: boolean; success: boolean; message: string };
+}> => {
   const response = await request(`/payments/${paymentId}/record-refund/`, {
     method: "POST",
     body: JSON.stringify({ reason: payload?.reason ?? "" }),
@@ -3425,8 +3430,9 @@ export const refundSaleRecord = async (
     order: Parameters<typeof mapOrder>[0];
     action: "invalidate" | "credit_note" | "internal_refund";
     message?: string;
+    fiscal_result?: { attempted: boolean; success: boolean; message: string };
   }>(response);
-  return { order: mapOrder(data.order), action: data.action, message: data.message };
+  return { order: mapOrder(data.order), action: data.action, message: data.message, fiscalResult: data.fiscal_result };
 };
 
 export const createPrintJob = async (payload: {

@@ -266,7 +266,8 @@ export const SalesHistoryTab = () => {
       const result = await refundSaleRecord(selectedSale.paymentId, { reason: refundReason });
       setIsRefundOpen(false);
       if (result.action === "internal_refund") {
-        toast.warning(result.message || "Reembolso interno registrado. No se modificó un DTE en Hacienda.");
+        const detail = result.fiscalResult?.message ? ` ${result.fiscalResult.message}` : "";
+        toast.warning((result.message || "Reembolso interno registrado.") + detail);
       } else if (result.action === "credit_note") {
         toast.success("Reembolso registrado con nota de crédito.");
       } else {

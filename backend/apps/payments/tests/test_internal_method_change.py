@@ -172,6 +172,7 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.assertEqual(response.data["action"], "internal_refund")
         self.assertTrue(Refund.objects.filter(original_payment=payment).exists())
         self.assertTrue(response.data["fiscal_result"]["attempted"])
+        self.assertIn("Refund interno registrado", response.data["message"])
 
     @patch("apps.payments.views.invalidate_dte_for_order")
     def test_record_refund_attempts_invalidation_when_latest_dte_rejected(self, mock_invalidate):
@@ -191,4 +192,5 @@ class PaymentInternalMethodChangeTests(TestCase):
         response = self.client.post(f"/api/payments/{payment.id}/record-refund/", {"reason": "Reembolso"}, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         self.assertTrue(response.data["fiscal_result"]["attempted"])
+        self.assertIn("Refund interno registrado", response.data["message"])
         mock_invalidate.assert_called_once()
