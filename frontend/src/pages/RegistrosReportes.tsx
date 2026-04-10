@@ -4,7 +4,7 @@ import { RegistrosReportesTab } from "@/components/reports/RegistrosReportesTab"
 
 const RegistrosReportes = () => {
   return (
-    <PageLayout title="Registros" subtitle="Análisis visual de ventas y comportamiento del negocio.">
+    <PageLayout title="Reportes" subtitle="Vista consolidada de ventas y desempeño.">
       <RegistrosTabs />
       <RegistrosReportesTab />
     </PageLayout>

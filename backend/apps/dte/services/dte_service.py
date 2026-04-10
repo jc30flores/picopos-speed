@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -10,6 +11,7 @@ from django.conf import settings
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
+from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_with_source
 from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
@@ -18,14 +20,15 @@ from apps.dte.services.payment_methods import get_cat017_code_and_label
 
 logger = logging.getLogger(__name__)
 
+TAX_RATE = Decimal("0.13")
+TAX_DIVISOR = Decimal("1.13")
+
 
 def _normalize_ambiente_value(raw: str | None) -> str:
-    value = str(raw or "").strip().lower()
-    if value in {"00", "0", "test", "prueba", "testing"}:
+    try:
+        return normalize_ambiente(raw)
+    except ValueError:
         return "00"
-    if value in {"01", "1", "prod", "produccion", "production"}:
-        return "01"
-    return "00"
 
 
 def _mask_token(token: str) -> str:
@@ -117,6 +120,57 @@ def json_number(value: str | int | float | Decimal | None) -> int | float:
     return float(dec)
 
 
+def quantize_money(value: str | int | float | Decimal | None) -> Decimal:
+    return money(value)
+
+
+def calculate_taxable_base_from_gross(gross_amount: Decimal) -> Decimal:
+    return _q2(gross_amount / TAX_DIVISOR)
+
+
+def calculate_iva_from_base(base_amount: Decimal) -> Decimal:
+    return _q2(base_amount * TAX_RATE)
+
+
+def calculate_iva_from_gross(gross_amount: Decimal) -> Decimal:
+    return _q2(gross_amount * TAX_RATE / TAX_DIVISOR)
+
+
+def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal, discount_gross: Decimal, taxable: bool) -> dict[str, Decimal]:
+    gross_line_before_discount = _q2(unit_price_gross * quantity)
+    discount_gross = _q2(min(gross_line_before_discount, discount_gross))
+    gross_line_after_discount = _q2(gross_line_before_discount - discount_gross)
+
+    if taxable:
+        if quantity == Decimal("0.00"):
+            raise DTEPreflightError("Cantidad inválida (0) para línea gravada.")
+        # Regla unificada gravada para esta integración:
+        # ventaGravada refleja monto final cobrado de la línea (con IVA incluido).
+        base_unit = _q2(unit_price_gross)
+        venta_gravada = gross_line_after_discount
+        iva_item = calculate_iva_from_gross(venta_gravada)
+        return {
+            "precio_uni": base_unit,
+            "monto_descu": discount_gross,
+            "venta_gravada": venta_gravada,
+            "venta_exenta": Decimal("0.00"),
+            "iva_item": iva_item,
+            "linea_total": venta_gravada,
+            "linea_total_objetivo": gross_line_after_discount,
+        }
+
+    venta_exenta = gross_line_after_discount
+    return {
+        "precio_uni": _q2(unit_price_gross),
+        "monto_descu": discount_gross,
+        "venta_gravada": Decimal("0.00"),
+        "venta_exenta": venta_exenta,
+        "iva_item": Decimal("0.00"),
+        "linea_total": venta_exenta,
+        "linea_total_objetivo": venta_exenta,
+    }
+
+
 def _almost_equal(a: Decimal, b: Decimal, tolerance: Decimal = Decimal("0.01")) -> bool:
     return abs(money(a) - money(b)) <= tolerance
 
@@ -128,6 +182,7 @@ def _sum_item_discounts(cuerpo: list[dict]) -> Decimal:
 def _validate_dte_totals(dte_payload: dict) -> None:
     resumen = (dte_payload.get("resumen") or {}) if isinstance(dte_payload, dict) else {}
     cuerpo = (dte_payload.get("cuerpoDocumento") or []) if isinstance(dte_payload, dict) else []
+
     total_no_suj = money(resumen.get("totalNoSuj"))
     total_exenta = money(resumen.get("totalExenta"))
     total_gravada = money(resumen.get("totalGravada"))
@@ -137,22 +192,72 @@ def _validate_dte_totals(dte_payload: dict) -> None:
     descu_gravada = money(resumen.get("descuGravada"))
     sub_total = money(resumen.get("subTotal"))
     total_descu = money(resumen.get("totalDescu"))
+    total_iva = money(resumen.get("totalIva"))
+    monto_total_operacion = money(resumen.get("montoTotalOperacion"))
+    total_pagar = money(resumen.get("totalPagar"))
+    iva_rete1 = money(resumen.get("ivaRete1"))
+    rete_renta = money(resumen.get("reteRenta"))
+
+    sum_line_gravada = Decimal("0.00")
+    sum_line_exenta = Decimal("0.00")
+    sum_line_iva = Decimal("0.00")
+    errors: list[str] = []
+
+    for line in cuerpo:
+        qty = money(line.get("cantidad"))
+        precio_uni = money(line.get("precioUni"))
+        monto_descu_line = money(line.get("montoDescu"))
+        venta_gravada_line = money(line.get("ventaGravada"))
+        venta_exenta_line = money(line.get("ventaExenta"))
+        iva_item_line = money(line.get("ivaItem"))
+        num_item = line.get("numItem")
+
+        if venta_gravada_line > Decimal("0.00"):
+            calc_venta = _q2((precio_uni * qty) - monto_descu_line)
+            calc_iva = calculate_iva_from_gross(venta_gravada_line)
+            line_total = money(venta_gravada_line)
+            calc_line_total = money(calc_venta)
+            if not _almost_equal(venta_gravada_line, calc_venta):
+                errors.append(f"item.{num_item}.ventaGravada={venta_gravada_line} calc={calc_venta}")
+            if not _almost_equal(iva_item_line, calc_iva):
+                errors.append(f"item.{num_item}.ivaItem={iva_item_line} calc={calc_iva}")
+            if not _almost_equal(line_total, calc_line_total):
+                errors.append(f"item.{num_item}.lineTotal={line_total} calc={calc_line_total}")
+
+        if venta_exenta_line > Decimal("0.00") and iva_item_line != Decimal("0.00"):
+            errors.append(f"item.{num_item}.ivaItem_debe_ser_0_para_exenta={iva_item_line}")
+
+        sum_line_gravada += venta_gravada_line
+        sum_line_exenta += venta_exenta_line
+        sum_line_iva += iva_item_line
 
     calc_sub_total_ventas = money(total_no_suj + total_exenta + total_gravada)
     calc_global_desc = money(descu_no_suj + descu_exenta + descu_gravada)
     calc_sub_total = money(calc_sub_total_ventas - calc_global_desc)
     calc_total_descu = money(_sum_item_discounts(cuerpo) + calc_global_desc)
+    calc_monto_total_operacion = money(calc_sub_total)
+    calc_total_pagar = money(calc_monto_total_operacion - iva_rete1 - rete_renta)
 
-    errors: list[str] = []
     if not _almost_equal(sub_total_ventas, calc_sub_total_ventas):
         errors.append(f"subTotalVentas={sub_total_ventas} calc={calc_sub_total_ventas}")
     if not _almost_equal(sub_total, calc_sub_total):
         errors.append(f"subTotal={sub_total} calc={calc_sub_total}")
     if not _almost_equal(total_descu, calc_total_descu):
         errors.append(f"totalDescu={total_descu} calc={calc_total_descu}")
+    if not _almost_equal(total_gravada, money(sum_line_gravada)):
+        errors.append(f"totalGravada={total_gravada} sum_items={money(sum_line_gravada)}")
+    if not _almost_equal(total_exenta, money(sum_line_exenta)):
+        errors.append(f"totalExenta={total_exenta} sum_items={money(sum_line_exenta)}")
+    if not _almost_equal(total_iva, money(sum_line_iva)):
+        errors.append(f"totalIva={total_iva} sum_items={money(sum_line_iva)}")
+    if not _almost_equal(monto_total_operacion, calc_monto_total_operacion):
+        errors.append(f"montoTotalOperacion={monto_total_operacion} calc={calc_monto_total_operacion}")
+    if not _almost_equal(total_pagar, calc_total_pagar):
+        errors.append(f"totalPagar={total_pagar} calc={calc_total_pagar}")
+
     if errors:
         logger.error("dte.validation_failed resumen_mismatch %s", " | ".join(errors))
-        raise DTEPreflightError("DTE inconsistente: resumen de totales no cuadra.")
+        raise DTEPreflightError("DTE inconsistente: resumen de totales/IVA no cuadra.")
 
 
 _NUMERIC_KEYS = {
@@ -214,6 +319,11 @@ def _has_real_dui(value: str | None) -> bool:
     return len(digits) == 9 and digits != "000000000"
 
 
+def _has_nit_14(value: str | None) -> bool:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return len(digits) == 14
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -222,6 +332,85 @@ def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     for key, value in receptor.items():
         if isinstance(value, str) and not value.strip():
             raise DTEPreflightError(f"receptor.{key} no puede ser string vacío")
+
+
+def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
+    ambiente = identificacion.get("ambiente")
+    try:
+        normalize_ambiente(ambiente)
+    except ValueError as exc:
+        raise DTEPreflightError(str(exc)) from exc
+    tipo_dte = str(identificacion.get("tipoDte") or "").strip()
+    if tipo_dte not in {"01", "03", "05", "14", "AN"}:
+        raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
+    numero_control = str(identificacion.get("numeroControl") or "").strip()
+    if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
+        logger.error("dte.preflight.invalid_numero_control numeroControl=%s identificacion=%s", numero_control, identificacion)
+        raise DTEPreflightError(f"numeroControl inválido: {numero_control}")
+    codigo_generacion = str(identificacion.get("codigoGeneracion") or "").strip().upper()
+    if not re.fullmatch(r"[A-F0-9-]{36}", codigo_generacion):
+        raise DTEPreflightError(f"codigoGeneracion inválido: {codigo_generacion}")
+
+
+def _validate_emisor_payload(emisor: dict[str, Any]) -> None:
+    missing = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not emisor.get(k)]
+    if missing:
+        raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing)}")
+    emisor_nit_digits = "".join(ch for ch in str(emisor.get("nit") or "") if ch.isdigit())
+    if len(emisor_nit_digits) != 14:
+        raise DTEPreflightError(f"NIT emisor inválido: {emisor.get('nit')}")
+
+
+def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
+    pagos = resumen.get("pagos")
+    if not isinstance(pagos, list) or not pagos:
+        raise DTEPreflightError("resumen.pagos debe contener al menos un pago")
+    pagos_total = Decimal("0.00")
+    for idx, pago in enumerate(pagos):
+        monto = money((pago or {}).get("montoPago"))
+        if monto <= Decimal("0.00"):
+            raise DTEPreflightError(f"resumen.pagos[{idx}].montoPago inválido: {monto}")
+        pagos_total += monto
+    total_pagar = money(resumen.get("totalPagar"))
+    if not _almost_equal(pagos_total, total_pagar):
+        raise DTEPreflightError(f"Suma de pagos ({money(pagos_total)}) no coincide con totalPagar ({total_pagar})")
+
+
+def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise DTEPreflightError("Payload DTE inválido: falta objeto dte/invalidacion")
+    dte = payload.get("dte")
+    if not isinstance(dte, dict):
+        dte = payload.get("invalidacion")
+    if not isinstance(dte, dict):
+        raise DTEPreflightError("Payload DTE inválido: falta objeto dte/invalidacion")
+    identificacion = dte.get("identificacion") or {}
+    emisor = dte.get("emisor") or {}
+    receptor = dte.get("receptor") or {}
+    resumen = dte.get("resumen") or {}
+    _validate_identificacion_payload(identificacion)
+    tipo_dte = str(identificacion.get("tipoDte") or "").strip().upper()
+    if tipo_dte == "AN":
+        documento = dte.get("documento") or {}
+        if not isinstance(documento, dict):
+            raise DTEPreflightError("invalidacion.documento es obligatorio.")
+        missing_documento = [
+            key
+            for key in ("tipoDte", "numeroControl", "codigoGeneracion")
+            if not str(documento.get(key) or "").strip()
+        ]
+        if missing_documento:
+            raise DTEPreflightError(
+                f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
+            )
+        _validate_emisor_payload(emisor)
+        assert_no_string_numbers(payload)
+        return
+    _validate_emisor_payload(emisor)
+    validate_receptor_payload(receptor)
+    _validate_pagos_payload(resumen)
+    _validate_dte_totals(dte)
+    assert_no_string_numbers(payload)
 
 
 def _number_to_words_es_usd(amount: Decimal) -> str:
@@ -319,10 +508,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_descuento = Decimal("0.00")
 
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
+        quantity = money(item.quantity)
         effective_unit_price = money(item.unit_price)
-        line_total_original = money(effective_unit_price * to_decimal(item.quantity or 0))
+        line_total_original = money(effective_unit_price * quantity)
         line_discount = money(min(line_total_original, money(item.discount_amount)))
-        net_line_total = _q2(line_total_original - line_discount)
         desc = item.name or "ITEM"
         free_mods = []
         paid_mods = []
@@ -334,60 +523,224 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         if free_mods:
             desc = f"{desc} ({', '.join(free_mods)})"
 
-        if order.iva_exempt:
-            venta_exenta = money(net_line_total / Decimal("1.13"))
-            venta_gravada = Decimal("0.00")
-            iva_item = Decimal("0.00")
-        else:
-            venta_exenta = Decimal("0.00")
-            venta_gravada = net_line_total
-            base = money(net_line_total / Decimal("1.13"))
-            iva_item = money(net_line_total - base)
+        line_calc = calculate_line_tax_breakdown(
+            unit_price_gross=effective_unit_price,
+            quantity=quantity,
+            discount_gross=line_discount,
+            taxable=not order.iva_exempt,
+        )
 
-        total_gravada += venta_gravada
-        total_exenta += venta_exenta
-        total_iva += iva_item
-        total_descuento += line_discount
+        total_gravada += line_calc["venta_gravada"]
+        total_exenta += line_calc["venta_exenta"]
+        total_iva += line_calc["iva_item"]
+        total_descuento += line_calc["monto_descu"]
 
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": json_number(money(item.quantity)), "uniMedida": 59, "precioUni": json_number(money(effective_unit_price)),
-            "montoDescu": json_number(money(line_discount)), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(venta_exenta)),
-            "ventaGravada": json_number(money(venta_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-            "ivaItem": json_number(money(iva_item)), "codTributo": None, "numeroDocumento": None,
+            "cantidad": json_number(quantity), "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
+            "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
+            "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+            "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
+            "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
         })
         num_item += 1
 
         for mod in paid_mods:
             mod_total = money(mod.modifier_price_snapshot)
-            if order.iva_exempt:
-                mod_exenta = money(mod_total / Decimal("1.13"))
-                mod_gravada = Decimal("0.00")
-                mod_iva = Decimal("0.00")
-            else:
-                mod_exenta = Decimal("0.00")
-                mod_gravada = mod_total
-                mod_iva = money(mod_total - money(mod_total / Decimal("1.13")))
-            total_gravada += mod_gravada
-            total_exenta += mod_exenta
-            total_iva += mod_iva
+            mod_calc = calculate_line_tax_breakdown(
+                unit_price_gross=mod_total,
+                quantity=Decimal("1.00"),
+                discount_gross=Decimal("0.00"),
+                taxable=not order.iva_exempt,
+            )
+            total_gravada += mod_calc["venta_gravada"]
+            total_exenta += mod_calc["venta_exenta"]
+            total_iva += mod_calc["iva_item"]
             cuerpo.append({
                 "numItem": num_item, "tipoItem": 1, "codigo": f"MOD-{item.id}-{num_item}", "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
-                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(money(mod_total)),
-                "montoDescu": json_number(Decimal("0.00")), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(money(mod_exenta)),
-                "ventaGravada": json_number(money(mod_gravada)), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(money(mod_iva)), "codTributo": None, "numeroDocumento": None,
+                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(mod_calc["precio_uni"]),
+                "montoDescu": json_number(mod_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(mod_calc["venta_exenta"]),
+                "ventaGravada": json_number(mod_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(mod_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
+                "_lineaObjetivo": json_number(mod_calc["linea_total_objetivo"]),
             })
             num_item += 1
 
+    for fee in order.fees.all():
+        fee_qty = money(fee.quantity or 1)
+        fee_unit = money(fee.unit_amount or Decimal("0.00"))
+        fee_calc = calculate_line_tax_breakdown(
+            unit_price_gross=fee_unit,
+            quantity=fee_qty,
+            discount_gross=Decimal("0.00"),
+            taxable=not order.iva_exempt,
+        )
+        total_gravada += fee_calc["venta_gravada"]
+        total_exenta += fee_calc["venta_exenta"]
+        total_iva += fee_calc["iva_item"]
+        cuerpo.append({
+            "numItem": num_item,
+            "tipoItem": 1,
+            "codigo": f"FEE-{fee.id}",
+            "descripcion": (fee.fee_name or "CARGO").strip()[:200],
+            "cantidad": json_number(fee_qty),
+            "uniMedida": 59,
+            "precioUni": json_number(fee_calc["precio_uni"]),
+            "montoDescu": json_number(fee_calc["monto_descu"]),
+            "ventaNoSuj": json_number(Decimal("0.00")),
+            "ventaExenta": json_number(fee_calc["venta_exenta"]),
+            "ventaGravada": json_number(fee_calc["venta_gravada"]),
+            "tributos": None,
+            "psv": json_number(Decimal("0.00")),
+            "noGravado": json_number(Decimal("0.00")),
+            "ivaItem": json_number(fee_calc["iva_item"]),
+            "codTributo": None,
+            "numeroDocumento": None,
+            "_lineaObjetivo": json_number(fee_calc["linea_total_objetivo"]),
+        })
+        num_item += 1
+
+    target_total = money(getattr(order, "total", Decimal("0.00")))
+    items_gross_total = Decimal("0.00")
+    modifiers_gross_total = Decimal("0.00")
+    item_discount_total = Decimal("0.00")
+    for item in order.items.prefetch_related("applied_modifiers"):
+        qty = money(item.quantity)
+        items_gross_total += money(money(item.unit_price) * qty)
+        item_discount_total += money(item.discount_amount)
+        for mod in item.applied_modifiers.all():
+            mod_price = money(mod.modifier_price_snapshot)
+            if mod_price > Decimal("0.00"):
+                modifiers_gross_total += mod_price
+    fees_total = money(sum((money(f.total_amount) for f in order.fees.all()), Decimal("0.00")))
+    reconstructed_order_total = money(items_gross_total + modifiers_gross_total + fees_total - item_discount_total)
+    logger.info(
+        "dte.source_totals order_id=%s order_total=%s items=%s modifiers=%s fees=%s item_discounts=%s reconstructed=%s",
+        getattr(order, "id", None),
+        target_total,
+        money(items_gross_total),
+        money(modifiers_gross_total),
+        fees_total,
+        money(item_discount_total),
+        reconstructed_order_total,
+    )
+    gross_from_lines = Decimal("0.00")
+    line_errors: list[str] = []
+    for line in cuerpo:
+        num_item_line = line.get("numItem")
+        line_total = money(money(line.get("ventaGravada")) + money(line.get("ventaExenta")))
+        gross_from_lines += line_total
+        if money(line.get("ventaGravada")) > Decimal("0.00"):
+            iva_calc = calculate_iva_from_gross(money(line.get("ventaGravada")))
+            if abs(iva_calc - money(line.get("ivaItem"))) > Decimal("0.01"):
+                line_errors.append(
+                    f"item.{num_item_line}.ivaItem={money(line.get('ivaItem'))} calc={iva_calc} ventaGravada={money(line.get('ventaGravada'))}"
+                )
+    gross_from_lines = money(gross_from_lines)
+    if line_errors:
+        logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
+        raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
+    if not _almost_equal(gross_from_lines, target_total):
+        diff = money(target_total - gross_from_lines)
+        # Reconciliación diferenciada para líneas con descuento:
+        # preserva casos sin descuento (ya correctos) y ajusta solo descuento/monto final de línea.
+        if diff > Decimal("0.00"):
+            discounted = [
+                line
+                for line in reversed(cuerpo)
+                if money(line.get("montoDescu")) > Decimal("0.00") and money(line.get("ventaGravada")) > Decimal("0.00")
+            ]
+            for line in discounted:
+                if diff <= Decimal("0.00"):
+                    break
+                max_venta = money(money(line.get("precioUni")) * money(line.get("cantidad")))
+                current_venta = money(line.get("ventaGravada"))
+                available = money(max_venta - current_venta)
+                if available <= Decimal("0.00"):
+                    continue
+                delta = available if available <= diff else diff
+                new_venta = money(current_venta + delta)
+                new_desc = money(money(line.get("montoDescu")) - delta)
+                line["ventaGravada"] = json_number(new_venta)
+                line["montoDescu"] = json_number(new_desc)
+                line["ivaItem"] = json_number(calculate_iva_from_gross(new_venta))
+                line["_lineaObjetivo"] = json_number(new_venta)
+                diff = money(diff - delta)
+                logger.info(
+                    "dte.discount_reconcile numItem=%s delta=%s ventaGravada=%s montoDescu=%s",
+                    line.get("numItem"),
+                    delta,
+                    new_venta,
+                    new_desc,
+                )
+            gross_from_lines = money(
+                sum((money(line.get("ventaGravada")) + money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00"))
+            )
+            diff = money(target_total - gross_from_lines)
+        logger.warning(
+            "dte.reconcile_needed order_id=%s total_lineas=%s total_real=%s diff=%s",
+            getattr(order, "id", None),
+            gross_from_lines,
+            target_total,
+            diff,
+        )
+        if diff > Decimal("0.00"):
+            ajuste_iva = calculate_iva_from_gross(diff) if not order.iva_exempt else Decimal("0.00")
+            cuerpo.append({
+                "numItem": num_item,
+                "tipoItem": 1,
+                "codigo": "AJUSTE-DTE",
+                "descripcion": "AJUSTE DIFERENCIA PEDIDO",
+                "cantidad": 1,
+                "uniMedida": 59,
+                "precioUni": json_number(diff),
+                "montoDescu": json_number(Decimal("0.00")),
+                "ventaNoSuj": json_number(Decimal("0.00")),
+                "ventaExenta": json_number(diff if order.iva_exempt else Decimal("0.00")),
+                "ventaGravada": json_number(diff if not order.iva_exempt else Decimal("0.00")),
+                "tributos": None,
+                "psv": json_number(Decimal("0.00")),
+                "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(ajuste_iva),
+                "codTributo": None,
+                "numeroDocumento": None,
+            })
+            num_item += 1
+            gross_from_lines = money(gross_from_lines + diff)
+            logger.warning("dte.reconcile_applied order_id=%s ajuste=%s", getattr(order, "id", None), diff)
+    objective_errors: list[str] = []
+    for line in cuerpo:
+        line_total = money(money(line.get("ventaGravada")) + money(line.get("ventaExenta")))
+        objetivo = money(line.get("_lineaObjetivo"))
+        if not _almost_equal(line_total, objetivo):
+            objective_errors.append(f"item.{line.get('numItem')}.lineTotal={line_total} objetivo={objetivo}")
+    if objective_errors:
+        logger.error("dte.line_preflight_failed %s", " | ".join(objective_errors))
+        raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
+    if not _almost_equal(gross_from_lines, target_total):
+        logger.error(
+            "dte.line_total_mismatch order_id=%s total_lineas=%s total_real=%s diff=%s",
+            getattr(order, "id", None),
+            gross_from_lines,
+            target_total,
+            money(target_total - gross_from_lines),
+        )
+        raise DTEPreflightError("DTE inconsistente: suma de líneas no coincide con total real cobrado.")
+    for line in cuerpo:
+        line.pop("_lineaObjetivo", None)
+
+    total_gravada = money(sum((money(line.get("ventaGravada")) for line in cuerpo), Decimal("0.00")))
+    total_exenta = money(sum((money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00")))
+    total_iva = money(sum((money(line.get("ivaItem")) for line in cuerpo), Decimal("0.00")))
     subtotal_ventas = money(total_gravada + total_exenta)
     global_desc_no_suj = Decimal("0.00")
     global_desc_exenta = Decimal("0.00")
     global_desc_gravada = Decimal("0.00")
     global_desc_total = money(global_desc_no_suj + global_desc_exenta + global_desc_gravada)
     subtotal_final = money(subtotal_ventas - global_desc_total)
-    total_pagar = subtotal_final
+    monto_total_operacion = money(subtotal_final)
+    total_pagar = target_total
     emisor_payload = {
         "nit": final_nit,
         "nrc": emisor.get("nrc") or "000000",
@@ -428,11 +781,16 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         is_consumer_final,
     )
     has_real_dui = _has_real_dui(getattr(customer, "dui", None)) or _has_real_dui(getattr(customer, "num_documento", None))
+    nit_value = getattr(customer, "nit", None) or getattr(customer, "num_documento", None)
+    has_nit_14 = _has_nit_14(nit_value)
     receptor_tipo_documento = None
     receptor_num_documento = None
     if has_real_dui:
         receptor_tipo_documento = "13"
         receptor_num_documento = _none_if_blank(getattr(customer, "dui", None) or getattr(customer, "num_documento", None))
+    elif has_nit_14:
+        receptor_tipo_documento = "36"
+        receptor_num_documento = "".join(ch for ch in str(nit_value) if ch.isdigit())
     elif not is_consumer_final:
         receptor_tipo_documento = _none_if_blank(getattr(customer, "tipo_documento", None))
         receptor_num_documento = _none_if_blank(getattr(customer, "num_documento", None))
@@ -461,12 +819,45 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "totalNoSuj": json_number(Decimal("0.00")), "totalExenta": json_number(money(total_exenta)), "totalGravada": json_number(money(total_gravada)),
         "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(money(global_desc_no_suj)), "descuExenta": json_number(money(global_desc_exenta)), "descuGravada": json_number(money(global_desc_gravada)),
         "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento + global_desc_total)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
-        "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(total_pagar)), "totalNoGravado": json_number(Decimal("0.00")),
+        "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(monto_total_operacion)), "totalNoGravado": json_number(Decimal("0.00")),
         "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
         "pagos": pagos,
         "numPagoElectronico": None,
     }
+    order_total = target_total
+    if not _almost_equal(money(resumen["totalPagar"]), order_total):
+        diff = money(order_total - money(resumen["totalPagar"]))
+        logger.error(
+            "dte.financial_mismatch order_id=%s order_total=%s total_pagar=%s diff=%s disposable_total=%s",
+            getattr(order, "id", None),
+            order_total,
+            money(resumen["totalPagar"]),
+            diff,
+            money(getattr(order, "disposable_total", Decimal("0.00"))),
+        )
+        raise DTEPreflightError("DTE inconsistente: totalPagar no coincide con total real cobrado.")
+
+    logger.info("dte.tax_rule precioUni/monto_final ventaGravada/monto_final ivaItem=round(ventaGravada*13/113,2)")
+    logger.info(
+        "dte.financial_compare order_id=%s order_total=%s disposable_total=%s total_pagar_dte=%s total_iva_dte=%s",
+        getattr(order, "id", None),
+        money(order.total),
+        money(getattr(order, "disposable_total", Decimal("0.00"))),
+        money(total_pagar),
+        money(total_iva),
+    )
+    for line in cuerpo:
+        logger.info(
+            "dte.preflight.line numItem=%s cantidad=%s precioUni=%s ventaGravada=%s ventaExenta=%s ivaItem=%s montoDescu=%s",
+            line.get("numItem"),
+            line.get("cantidad"),
+            line.get("precioUni"),
+            line.get("ventaGravada"),
+            line.get("ventaExenta"),
+            line.get("ivaItem"),
+            line.get("montoDescu"),
+        )
 
     payload = {"dte": {
         "identificacion": {
@@ -484,8 +875,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         },
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
-    _validate_dte_totals(payload.get("dte", {}))
-    assert_no_string_numbers(payload)
+    validate_dte_preflight_payload(payload)
+    logger.info(
+        "dte.preflight.ok ambiente=%s tipoDte=%s receptor_tipoDocumento=%s receptor_numDocumento=%s",
+        payload["dte"]["identificacion"].get("ambiente"),
+        payload["dte"]["identificacion"].get("tipoDte"),
+        payload["dte"]["receptor"].get("tipoDocumento"),
+        payload["dte"]["receptor"].get("numDocumento"),
+    )
     return payload
 
 
@@ -498,8 +895,10 @@ def send_to_bridge(
     payment_id: int | None = None,
     branch_id: int | None = None,
 ) -> dict:
-    assert_no_string_numbers(payload)
-    ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
+    validate_dte_preflight_payload(payload)
+    root_key = "invalidacion" if dte_type == "INVALIDACION" else "dte"
+    ident = payload.get(root_key, {}).get("identificacion", {})
+    ambiente = ident.get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
@@ -511,16 +910,29 @@ def send_to_bridge(
         logger.error(msg)
         print(msg)
         print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '01'))} DTE_BASE_URL={base_url}")
-        print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+        print(
+            f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente} root={root_key} numeroControl={ident.get('numeroControl')} codigoGeneracion={ident.get('codigoGeneracion')}"
+        )
         print(payload_pretty)
         return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
     print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
     print(f"[DTE] DTE ENDPOINT >>> path={DTE_ENDPOINT_BY_TYPE.get(dte_type)} url={url}")
-    print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+    print(
+        f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente} root={root_key} numeroControl={ident.get('numeroControl')} codigoGeneracion={ident.get('codigoGeneracion')}"
+    )
     print(payload_pretty)
     logger.info("DTE ENDPOINT >>> %s", url)
-    logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, ambiente, payload_pretty)
+    logger.info(
+        "DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s, root=%s, numeroControl=%s, codigoGeneracion=%s)\n%s",
+        dte_type,
+        branch_name,
+        ambiente,
+        root_key,
+        ident.get("numeroControl"),
+        ident.get("codigoGeneracion"),
+        payload_pretty,
+    )
 
     if not base_url:
         msg = "[DTE] DTE_BASE_URL no configurado"
@@ -662,13 +1074,88 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    request_dte = (record.request_payload or {}).get("dte") or {}
+    request_identificacion = (
+        request_dte.get("identificacion")
+        or (record.request_payload or {}).get("identificacion")
+        or {}
+    )
+    numero_control = (
+        str(record.control_number or "").strip()
+        or str(request_identificacion.get("numeroControl") or "").strip()
+    )
+    codigo_generacion = (
+        str(record.generation_code or "").strip()
+        or str(record.codigo_generacion or "").strip()
+        or str(request_identificacion.get("codigoGeneracion") or "").strip()
+    )
+    tipo_dte_base = (
+        str(request_identificacion.get("tipoDte") or "").strip()
+        or str(record.dte_type or "").split("_")[-1].strip()
+    )
+    sello_recibido = (
+        str((record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido") or "").strip()
+        or str(record.sello_recibido or "").strip()
+        or str(record.sello_recepcion or "").strip()
+    )
+    fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
+    hor_emi = str(request_identificacion.get("horEmi") or "").strip()
+    if not numero_control:
+        raise DTEPreflightError(
+            f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
+        )
+    if not codigo_generacion:
+        raise DTEPreflightError(
+            f"No se pudo resolver codigoGeneracion del DTE base (dte_record_id={record.id})."
+        )
+
+    emisor_from_record = request_dte.get("emisor") or {}
+    resolved_emisor_config = _resolve_branch_config(record.order)
+    resolved_emisor = {
+        "nit": emisor_from_record.get("nit") or get_emisor_nit(),
+        "nrc": emisor_from_record.get("nrc") or resolved_emisor_config.get("nrc") or "000000",
+        "nombre": emisor_from_record.get("nombre") or resolved_emisor_config.get("nombre") or "Emisor",
+        "codActividad": emisor_from_record.get("codActividad") or resolved_emisor_config.get("codActividad") or "56101",
+        "descActividad": emisor_from_record.get("descActividad") or resolved_emisor_config.get("descActividad") or "Actividad económica",
+        "nombreComercial": emisor_from_record.get("nombreComercial") or resolved_emisor_config.get("nombreComercial") or "Sucursal",
+    }
+
+    raw_ambiente, source = resolve_ambiente_with_source()
+    ambiente = _normalize_ambiente_value(raw_ambiente)
+    missing_emisor_fields = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not resolved_emisor.get(k)]
+    if missing_emisor_fields:
+        raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing_emisor_fields)}")
+    logger.info(
+        "dte.invalidation.base_resolved dte_record_id=%s order_id=%s tipo=%s numeroControl=%s codigoGeneracion=%s emisor_original_nit=%s emisor_final_nit=%s ambiente_source=%s ambiente_configured=%s ambiente_resolved=%s",
+        record.id,
+        getattr(record, "order_id", None),
+        tipo_dte_base,
+        numero_control,
+        codigo_generacion,
+        emisor_from_record.get("nit"),
+        resolved_emisor.get("nit"),
+        source,
+        raw_ambiente,
+        ambiente,
+    )
     payload = {
-        "dte": {
+        "invalidacion": {
             "identificacion": {
+                "version": 2,
+                "ambiente": ambiente,
                 "tipoDte": "AN",
-                "numeroControl": record.control_number,
-                "codigoGeneracion": record.generation_code or record.codigo_generacion,
+                "numeroControl": numero_control,
+                "codigoGeneracion": codigo_generacion,
             },
+            "documento": {
+                "tipoDte": tipo_dte_base,
+                "numeroControl": numero_control,
+                "codigoGeneracion": codigo_generacion,
+                "selloRecibido": sello_recibido,
+                "fecEmi": fec_emi,
+                "horEmi": hor_emi or None,
+            },
+            "emisor": resolved_emisor,
             "motivo": motivo,
             "responsable": responsable_dui,
             "solicitante": solicitante_dui,
@@ -678,10 +1165,29 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     return payload
 
 
-def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitante_dui: str, **kwargs) -> dict:
-    record = order.dte_records.filter(status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+def invalidate_dte_for_order(
+    order,
+    motivo: str,
+    responsable_dui: str,
+    solicitante_dui: str,
+    *,
+    dte_record: DTERecord | None = None,
+    allow_non_accepted: bool = False,
+    **kwargs,
+) -> dict:
+    record = dte_record or order.dte_records.filter(status=DTERecord.STATUS_ACCEPTED).order_by("-id").first()
+    if not record and allow_non_accepted:
+        record = order.dte_records.order_by("-id").first()
     if not record:
-        raise DTEPreflightError("No existe DTE aceptado para invalidar")
+        raise DTEPreflightError("No existe DTE base para invalidar")
+    if record.status == DTERecord.STATUS_INVALIDATED:
+        return {
+            "attempt_id": None,
+            "success": True,
+            "status": DTERecord.STATUS_INVALIDATED,
+            "error": "",
+            "already_invalidated": True,
+        }
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
@@ -701,4 +1207,12 @@ def invalidate_dte_for_order(order, motivo: str, responsable_dui: str, solicitan
     if attempt.success:
         record.status = DTERecord.STATUS_INVALIDATED
         record.save(update_fields=["status", "updated_at"])
-    return {"attempt_id": attempt.id, "success": attempt.success, "status": parsed["status"]}
+    logger.info(
+        "dte.invalidation.attempt order_id=%s dte_record_id=%s base_status=%s success=%s error=%s",
+        order.id,
+        record.id,
+        record.status,
+        attempt.success,
+        attempt.error_message,
+    )
+    return {"attempt_id": attempt.id, "success": attempt.success, "status": parsed["status"], "error": attempt.error_message}

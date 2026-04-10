@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from django.db import transaction
 from django.utils import timezone
 
@@ -15,6 +14,8 @@ from apps.dte.services.dte_service import (
     build_payload_cf,
     interpret_dte_response,
 )
+from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env, resolve_ambiente_with_source
+from apps.dte.services.delivery import deliver_dte_to_client
 from apps.orders.models import Order, OrderInvoice
 from apps.orders.services.snapshots import persist_sale_snapshot
 
@@ -22,29 +23,23 @@ DTE_LOGGER = logging.getLogger("apps.dte")
 
 
 def _normalize_ambiente(raw_value: str | None) -> str:
-    value = (raw_value or "").strip().upper()
-    if value == "01" or "01" in value or value in {"PROD", "PRODUCCION", "PRODUCTION"}:
-        return "01"
-    if value == "00" or "00" in value or value in {"TEST", "CERT", "CERTIFICACION", "DEV"}:
-        return "00"
-    return "01"
+    return normalize_ambiente(raw_value)
 
 
 def _validate_ambiente_or_raise(raw_value: str | None, normalized: str) -> None:
     if normalized not in {"00", "01"}:
         raise DTEPreflightError(f"Ambiente inválido para DTE: {normalized}")
-    raw = (raw_value or "").strip()
-    if raw and normalized not in raw and raw.upper() not in {"PROD", "PRODUCCION", "PRODUCTION", "TEST", "CERT", "CERTIFICACION", "DEV", "00", "01"}:
-        raise DTEPreflightError(f"Valor de ambiente no reconocido: {raw}")
 
 
 def _ambiente() -> str:
-    raw = os.environ.get("DTE_AMBIENTE") or os.environ.get("MH_AMBIENTE") or os.environ.get("HACIENDA_AMBIENTE")
-    normalized = _normalize_ambiente(raw)
-    requires_prod = str(os.environ.get("DTE_REQUIRE_AMBIENTE_01", "")).strip().lower() in {"1", "true", "yes"}
-    if requires_prod and normalized != "01":
-        normalized = "01"
-    _validate_ambiente_or_raise(raw, normalized)
+    configured_raw, source = resolve_ambiente_with_source()
+    try:
+        normalized = resolve_ambiente_from_env()
+    except ValueError as exc:
+        DTE_LOGGER.error("[DTE] ambiente_invalid source=%s raw=%s", source, configured_raw)
+        raise DTEPreflightError(str(exc)) from exc
+    _validate_ambiente_or_raise(None, normalized)
+    DTE_LOGGER.info("[DTE] ambiente_resolved source=%s configured=%s resolved=%s", source, configured_raw, normalized)
     return normalized
 
 
@@ -103,9 +98,9 @@ def transmit_sale_dte(
     )
 
     try:
-        preflight_control_number = numero_control or "PREFLIGHT-CHECK"
-        build_payload_cf(order, control_number=preflight_control_number, generation_code=codigo_generacion, ambiente=ambiente)
         numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
+        DTE_LOGGER.info("[DTE] preflight.validating order=%s numero_control=%s ambiente=%s", sale_id, numero_control, ambiente)
+        build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
         DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
         prebuilt_record.request_payload = {**payload, "branch": active_branch.name}
@@ -208,6 +203,12 @@ def transmit_sale_dte(
         invoice.sent_at = now
     invoice.save()
     persist_sale_snapshot(order)
+    if record.status == DTERecord.STATUS_ACCEPTED:
+        try:
+            delivery_result = deliver_dte_to_client(record, channels=("email", "whatsapp"), mode="automatic")
+            DTE_LOGGER.info("[DTE] delivery.auto order=%s dte=%s success=%s summary=%s results=%s", order.id, record.id, delivery_result.get("success"), delivery_result.get("summary"), delivery_result.get("results"))
+        except Exception as exc:  # noqa: BLE001
+            DTE_LOGGER.error("[DTE] delivery.auto_error order=%s dte=%s error=%s", order.id, record.id, exc)
     DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record

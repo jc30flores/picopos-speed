@@ -4,15 +4,15 @@ import logging
 import time
 
 import requests
-from django.conf import settings
 
 from apps.dte.models import DTERecord, DteDeliveryAttempt
+from apps.dte.services.delivery_config import resolve_delivery_config
 
 logger = logging.getLogger("apps.dte")
 
 
 def build_whatsapp_payload(record: DTERecord, to_phone: str | None = None) -> dict:
-    default_phone = getattr(settings, "WHATSAPP_DEFAULT_TO_PHONE", "") or ""
+    default_phone = resolve_delivery_config().whatsapp_default_phone
     return {
         "order_id": record.order_id,
         "dte_id": record.id,
@@ -22,9 +22,9 @@ def build_whatsapp_payload(record: DTERecord, to_phone: str | None = None) -> di
 
 
 def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeliveryAttempt:
-    base = (getattr(settings, "WHATSAPP_DTE_API_BASE", "") or "").rstrip("/")
-    key = getattr(settings, "WHATSAPP_DTE_API_KEY", "") or ""
-    endpoint = f"{base}/send" if base else ""
+    config = resolve_delivery_config()
+    endpoint = config.whatsapp_url
+    key = config.whatsapp_api_key
     payload = build_whatsapp_payload(record, to_phone=to_phone)
 
     attempt = DteDeliveryAttempt.objects.create(dte_record=record, delivery_type=DteDeliveryAttempt.TYPE_WA, status="PENDING", retries=0)
@@ -54,5 +54,13 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
     attempt.provider_status = provider_status or None
     attempt.provider_body = {**(provider_body or {}), "error": error or None}
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
-    logger.info("[DTE WA] SEND order=%s status=%s provider_status=%s error=%s", record.order_id, attempt.status, provider_status, error)
+    logger.info(
+        "[DTE WA] SEND order=%s status=%s provider_status=%s endpoint=%s has_key=%s error=%s",
+        record.order_id,
+        attempt.status,
+        provider_status,
+        endpoint,
+        bool(key),
+        error,
+    )
     return attempt
