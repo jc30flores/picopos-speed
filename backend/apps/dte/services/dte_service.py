@@ -526,6 +526,39 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
+    for fee in order.fees.all():
+        fee_qty = money(fee.quantity or 1)
+        fee_unit = money(fee.unit_amount or Decimal("0.00"))
+        fee_calc = calculate_line_tax_breakdown(
+            unit_price_gross=fee_unit,
+            quantity=fee_qty,
+            discount_gross=Decimal("0.00"),
+            taxable=not order.iva_exempt,
+        )
+        total_gravada += fee_calc["venta_gravada"]
+        total_exenta += fee_calc["venta_exenta"]
+        total_iva += fee_calc["iva_item"]
+        cuerpo.append({
+            "numItem": num_item,
+            "tipoItem": 1,
+            "codigo": f"FEE-{fee.id}",
+            "descripcion": (fee.fee_name or "CARGO").strip()[:200],
+            "cantidad": json_number(fee_qty),
+            "uniMedida": 59,
+            "precioUni": json_number(fee_calc["precio_uni"]),
+            "montoDescu": json_number(fee_calc["monto_descu"]),
+            "ventaNoSuj": json_number(Decimal("0.00")),
+            "ventaExenta": json_number(fee_calc["venta_exenta"]),
+            "ventaGravada": json_number(fee_calc["venta_gravada"]),
+            "tributos": None,
+            "psv": json_number(Decimal("0.00")),
+            "noGravado": json_number(Decimal("0.00")),
+            "ivaItem": json_number(fee_calc["iva_item"]),
+            "codTributo": None,
+            "numeroDocumento": None,
+        })
+        num_item += 1
+
     subtotal_ventas = money(total_gravada + total_exenta)
     global_desc_no_suj = Decimal("0.00")
     global_desc_exenta = Decimal("0.00")
@@ -618,8 +651,28 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "pagos": pagos,
         "numPagoElectronico": None,
     }
+    order_total = money(getattr(order, "total", Decimal("0.00")))
+    if not _almost_equal(money(resumen["totalPagar"]), order_total):
+        diff = money(order_total - money(resumen["totalPagar"]))
+        logger.error(
+            "dte.financial_mismatch order_id=%s order_total=%s total_pagar=%s diff=%s disposable_total=%s",
+            getattr(order, "id", None),
+            order_total,
+            money(resumen["totalPagar"]),
+            diff,
+            money(getattr(order, "disposable_total", Decimal("0.00"))),
+        )
+        raise DTEPreflightError("DTE inconsistente: totalPagar no coincide con total real cobrado.")
 
     logger.info("dte.tax_rule precioUni/base_sin_iva ventaGravada/base_sin_iva ivaItem=round(ventaGravada*0.13,2)")
+    logger.info(
+        "dte.financial_compare order_id=%s order_total=%s disposable_total=%s total_pagar_dte=%s total_iva_dte=%s",
+        getattr(order, "id", None),
+        money(order.total),
+        money(getattr(order, "disposable_total", Decimal("0.00"))),
+        money(total_pagar),
+        money(total_iva),
+    )
     for line in cuerpo:
         logger.info(
             "dte.preflight.line numItem=%s cantidad=%s precioUni=%s ventaGravada=%s ventaExenta=%s ivaItem=%s montoDescu=%s",

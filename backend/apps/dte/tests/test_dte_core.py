@@ -27,7 +27,7 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.orchestrator import transmit_sale_dte
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.menu.models import Category, Product
-from apps.orders.models import Order, OrderItem
+from apps.orders.models import Order, OrderFee, OrderItem
 from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
@@ -321,6 +321,36 @@ class DTECoreTests(TestCase):
     def test_preflight_accepts_standard_numero_control_patterns(self):
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000203", "C" * 36, "01")
         validate_dte_preflight_payload(payload)
+
+    def test_build_payload_includes_disposable_fees_in_totals(self):
+        category = Category.objects.create(name="CON DESECHABLE")
+        product = Product.objects.create(name="Promo", description="", price=Decimal("5.00"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Promo",
+            price_snapshot=Decimal("5.00"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="PROMO-1",
+            is_custom=False,
+        )
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.21"),
+            quantity=1,
+            total_amount=Decimal("0.21"),
+        )
+        self.order.disposable_total = Decimal("0.21")
+        self.order.total = Decimal("5.21")
+        self.order.save(update_fields=["disposable_total", "total"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000204", "D" * 36, "01")
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.21)
+        self.assertTrue(any(str(line.get("descripcion", "")).upper().startswith("DESECHABLE") for line in payload["dte"]["cuerpoDocumento"]))
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
