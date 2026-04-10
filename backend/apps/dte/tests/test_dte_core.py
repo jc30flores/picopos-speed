@@ -745,7 +745,14 @@ class DTEInvalidateEndpointTests(TestCase):
                     "identificacion": {
                         "numeroControl": "DTE-01-S001P001-000000000000357",
                         "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
-                    }
+                    },
+                    "emisor": {
+                        "nit": "12171409901063",
+                        "nrc": "123456",
+                        "nombre": "Pico Emisor",
+                        "codActividad": "56101",
+                        "descActividad": "Restaurantes",
+                    },
                 }
             },
             total_amount=Decimal("5.00"),
@@ -764,6 +771,7 @@ class DTEInvalidateEndpointTests(TestCase):
             sent_payload["dte"]["identificacion"]["numeroControl"],
             "DTE-01-S001P001-000000000000357",
         )
+        self.assertEqual(sent_payload["dte"]["emisor"]["nit"], "12171409901063")
 
     def test_invalidate_endpoint_returns_422_when_base_document_missing_control_number(self):
         self.record.request_payload = {}

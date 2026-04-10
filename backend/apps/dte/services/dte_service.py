@@ -372,6 +372,11 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
     receptor = dte.get("receptor") or {}
     resumen = dte.get("resumen") or {}
     _validate_identificacion_payload(identificacion)
+    tipo_dte = str(identificacion.get("tipoDte") or "").strip().upper()
+    if tipo_dte == "AN":
+        _validate_emisor_payload(emisor)
+        assert_no_string_numbers(payload)
+        return
     _validate_emisor_payload(emisor)
     validate_receptor_payload(receptor)
     _validate_pagos_payload(resumen)
@@ -927,8 +932,9 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    request_dte = (record.request_payload or {}).get("dte") or {}
     request_identificacion = (
-        (record.request_payload or {}).get("dte", {}).get("identificacion")
+        request_dte.get("identificacion")
         or (record.request_payload or {}).get("identificacion")
         or {}
     )
@@ -950,15 +956,31 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             f"No se pudo resolver codigoGeneracion del DTE base (dte_record_id={record.id})."
         )
 
+    emisor_from_record = request_dte.get("emisor") or {}
+    resolved_emisor_config = _resolve_branch_config(record.order)
+    resolved_emisor = {
+        "nit": emisor_from_record.get("nit") or get_emisor_nit(),
+        "nrc": emisor_from_record.get("nrc") or resolved_emisor_config.get("nrc") or "000000",
+        "nombre": emisor_from_record.get("nombre") or resolved_emisor_config.get("nombre") or "Emisor",
+        "codActividad": emisor_from_record.get("codActividad") or resolved_emisor_config.get("codActividad") or "56101",
+        "descActividad": emisor_from_record.get("descActividad") or resolved_emisor_config.get("descActividad") or "Actividad económica",
+        "nombreComercial": emisor_from_record.get("nombreComercial") or resolved_emisor_config.get("nombreComercial") or "Sucursal",
+    }
+
     raw_ambiente, source = resolve_ambiente_with_source()
     ambiente = _normalize_ambiente_value(raw_ambiente)
+    missing_emisor_fields = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not resolved_emisor.get(k)]
+    if missing_emisor_fields:
+        raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing_emisor_fields)}")
     logger.info(
-        "dte.invalidation.base_resolved dte_record_id=%s order_id=%s tipo=%s numeroControl=%s codigoGeneracion=%s ambiente_source=%s ambiente_configured=%s ambiente_resolved=%s",
+        "dte.invalidation.base_resolved dte_record_id=%s order_id=%s tipo=%s numeroControl=%s codigoGeneracion=%s emisor_original_nit=%s emisor_final_nit=%s ambiente_source=%s ambiente_configured=%s ambiente_resolved=%s",
         record.id,
         getattr(record, "order_id", None),
         record.dte_type,
         numero_control,
         codigo_generacion,
+        emisor_from_record.get("nit"),
+        resolved_emisor.get("nit"),
         source,
         raw_ambiente,
         ambiente,
@@ -972,6 +994,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
                 "numeroControl": numero_control,
                 "codigoGeneracion": codigo_generacion,
             },
+            "emisor": resolved_emisor,
             "motivo": motivo,
             "responsable": responsable_dui,
             "solicitante": solicitante_dui,
