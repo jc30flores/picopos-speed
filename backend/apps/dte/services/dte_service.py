@@ -140,11 +140,10 @@ def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal
     if taxable:
         if quantity == Decimal("0.00"):
             raise DTEPreflightError("Cantidad inválida (0) para línea gravada.")
-        # Reconstrucción consistente desde el total cobrado real de la línea.
-        # Regla: ventaGravada + ivaItem debe cerrar exactamente con el total final de la línea.
+        # Regla unificada gravada: ventaGravada es base sin IVA e ivaItem se calcula sobre esa base.
         base_line_before_discount = calculate_taxable_base_from_gross(gross_line_before_discount)
         venta_gravada = calculate_taxable_base_from_gross(gross_line_after_discount)
-        iva_item = _q2(gross_line_after_discount - venta_gravada)
+        iva_item = calculate_iva_from_base(venta_gravada)
         base_discount = _q2(base_line_before_discount - venta_gravada)
         if base_discount < Decimal("0.00"):
             base_discount = Decimal("0.00")
@@ -155,7 +154,7 @@ def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal
             "venta_gravada": venta_gravada,
             "venta_exenta": Decimal("0.00"),
             "iva_item": iva_item,
-            "linea_total": gross_line_after_discount,
+            "linea_total": _q2(venta_gravada + iva_item),
             "linea_total_objetivo": gross_line_after_discount,
         }
 
@@ -542,6 +541,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
             "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
             "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
+            "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
         })
         num_item += 1
 
@@ -562,6 +562,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
                 "montoDescu": json_number(mod_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(mod_calc["venta_exenta"]),
                 "ventaGravada": json_number(mod_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
                 "ivaItem": json_number(mod_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
+                "_lineaObjetivo": json_number(mod_calc["linea_total_objetivo"]),
             })
             num_item += 1
 
@@ -595,6 +596,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "ivaItem": json_number(fee_calc["iva_item"]),
             "codTributo": None,
             "numeroDocumento": None,
+            "_lineaObjetivo": json_number(fee_calc["linea_total_objetivo"]),
         })
         num_item += 1
 
@@ -611,6 +613,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
                 line_errors.append(
                     f"item.{num_item_line}.ivaItem={money(line.get('ivaItem'))} calc={iva_calc} ventaGravada={money(line.get('ventaGravada'))}"
                 )
+        objetivo = money(line.get("_lineaObjetivo"))
+        if not _almost_equal(line_total, objetivo):
+            line_errors.append(f"item.{num_item_line}.lineTotal={line_total} objetivo={objetivo}")
     gross_from_lines = money(gross_from_lines)
     if line_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
@@ -624,6 +629,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             money(target_total - gross_from_lines),
         )
         raise DTEPreflightError("DTE inconsistente: suma de líneas no coincide con total real cobrado.")
+    for line in cuerpo:
+        line.pop("_lineaObjetivo", None)
 
     total_gravada = money(sum((money(line.get("ventaGravada")) for line in cuerpo), Decimal("0.00")))
     total_exenta = money(sum((money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00")))
