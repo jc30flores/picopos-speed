@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 from apps.cashier.models import CashSession, Register, CashTransaction
 from apps.core.models import Branch, ServiceType
 from apps.dte.models import DTERecord
+from apps.dte.services.dte_service import DTEPreflightError
 from apps.orders.models import Order
 from apps.payments.models import Payment, PaymentMethod, PaymentMethodChangeLog, Refund
 from apps.users.models import UserProfile
@@ -194,3 +195,31 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.assertTrue(response.data["fiscal_result"]["attempted"])
         self.assertIn("Refund interno registrado", response.data["message"])
         mock_invalidate.assert_called_once()
+
+    @patch("apps.payments.views.invalidate_dte_for_order")
+    def test_record_refund_handles_invalidation_preflight_error_without_500(self, mock_invalidate):
+        mock_invalidate.side_effect = DTEPreflightError("Valor de ambiente no reconocido: None")
+        payment = self._create_paid_payment()
+        DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-01-S001P001-000000000000777",
+            generation_code="C" * 36,
+            total_amount=Decimal("10.00"),
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "Error ambiente"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["action"], "internal_refund")
+        self.assertTrue(response.data["fiscal_result"]["attempted"])
+        self.assertFalse(response.data["fiscal_result"]["success"])
+        self.assertIn("ambiente", response.data["fiscal_result"]["message"].lower())

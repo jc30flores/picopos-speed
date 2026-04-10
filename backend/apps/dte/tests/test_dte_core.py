@@ -1,6 +1,7 @@
 import json
 from decimal import Decimal
 from unittest.mock import patch
+import os
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -13,6 +14,7 @@ from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTEControlCounter, DTERecord
 from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import (
+    build_invalidation_payload,
     DTEPreflightError,
     _validate_dte_totals,
     validate_dte_preflight_payload,
@@ -177,6 +179,29 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["precioUni"], 4.25)
         self.assertEqual(first["codigo"], "MANUAL-CODE-1")
         self.assertEqual(payload["dte"]["emisor"]["nit"], "12171409901063")
+
+    def test_build_invalidation_payload_uses_resolved_ambiente(self):
+        previous_mh = os.environ.get("MH_AMBIENTE")
+        try:
+            os.environ["MH_AMBIENTE"] = "01"
+            record = DTERecord.objects.create(
+                order=self.order,
+                branch=self.branch,
+                dte_type="CF_01",
+                status=DTERecord.STATUS_ACCEPTED,
+                control_number="DTE-01-S001P001-000000000000123",
+                generation_code="A" * 36,
+                codigo_generacion="A" * 36,
+                total_amount=Decimal("10.00"),
+            )
+            payload = build_invalidation_payload(record, "Prueba", "", "")
+            self.assertEqual(payload["dte"]["identificacion"]["ambiente"], "01")
+            self.assertEqual(payload["dte"]["identificacion"]["tipoDte"], "AN")
+        finally:
+            if previous_mh is None:
+                os.environ.pop("MH_AMBIENTE", None)
+            else:
+                os.environ["MH_AMBIENTE"] = previous_mh
 
     def test_build_payload_cf_uses_unit_price_override_when_present(self):
         category = Category.objects.create(name="PRUEBA2")

@@ -11,7 +11,7 @@ from django.conf import settings
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
-from apps.dte.services.ambiente import normalize_ambiente
+from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_with_source
 from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.dte.services.dte_parser import parse_hacienda_response
@@ -328,7 +328,7 @@ def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
     except ValueError as exc:
         raise DTEPreflightError(str(exc)) from exc
     tipo_dte = str(identificacion.get("tipoDte") or "").strip()
-    if tipo_dte not in {"01", "03", "05", "14"}:
+    if tipo_dte not in {"01", "03", "05", "14", "AN"}:
         raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
     numero_control = str(identificacion.get("numeroControl") or "").strip()
     if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
@@ -927,9 +927,20 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    raw_ambiente, source = resolve_ambiente_with_source()
+    ambiente = _normalize_ambiente_value(raw_ambiente)
+    logger.info(
+        "dte.invalidation.ambiente_resolved dte_record_id=%s source=%s configured=%s resolved=%s",
+        record.id,
+        source,
+        raw_ambiente,
+        ambiente,
+    )
     payload = {
         "dte": {
             "identificacion": {
+                "version": 2,
+                "ambiente": ambiente,
                 "tipoDte": "AN",
                 "numeroControl": record.control_number,
                 "codigoGeneracion": record.generation_code or record.codigo_generacion,

@@ -26,7 +26,12 @@ from apps.payments.serializers import (
 from apps.payments.normalization import normalize_payment_method_code
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
-from apps.dte.services.dte_service import send_dte_for_order, invalidate_dte_for_order, send_dte_for_credit_note
+from apps.dte.services.dte_service import (
+    DTEPreflightError,
+    invalidate_dte_for_order,
+    send_dte_for_credit_note,
+    send_dte_for_order,
+)
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
@@ -410,6 +415,27 @@ class PaymentRecordRefundView(APIView):
         dte_action = {"action": "internal_refund"}
         fiscal_result = {"attempted": False, "success": False, "message": "Sin documento base para invalidación fiscal."}
         dte_base = record or latest_dte
+        def _attempt_invalidation(*, base_record, allow_non_accepted: bool) -> dict:
+            try:
+                return invalidate_dte_for_order(
+                    order,
+                    motivo=reason,
+                    responsable_dui="",
+                    solicitante_dui="",
+                    dte_record=base_record,
+                    allow_non_accepted=allow_non_accepted,
+                )
+            except (DTEPreflightError, ValueError) as exc:
+                logger.warning(
+                    "refund.record_refund.invalidation_preflight_failed payment_id=%s order_id=%s dte_record_id=%s status=%s error=%s",
+                    payment.id,
+                    order.id,
+                    getattr(base_record, "id", None),
+                    getattr(base_record, "status", None),
+                    str(exc),
+                )
+                return {"success": False, "status": "RECHAZADO", "error": str(exc)}
+
         if record:
             dte_type = (record.dte_type or "").upper()
             issued_at = resolve_issued_at(record)
@@ -430,14 +456,7 @@ class PaymentRecordRefundView(APIView):
                 dte_action = {"action": "credit_note", "credit_note_id": note.id}
                 fiscal_result = {"attempted": True, "success": True, "message": "Nota de crédito enviada."}
             else:
-                result = invalidate_dte_for_order(
-                    order,
-                    motivo=reason,
-                    responsable_dui="",
-                    solicitante_dui="",
-                    dte_record=record,
-                    allow_non_accepted=False,
-                )
+                result = _attempt_invalidation(base_record=record, allow_non_accepted=False)
                 invalidation = DTEInvalidation.objects.create(
                     order=order,
                     dte_record=record,
@@ -456,14 +475,7 @@ class PaymentRecordRefundView(APIView):
                     }
                     fiscal_result = {"attempted": True, "success": False, "message": result.get("error") or "Invalidación fiscal rechazada."}
         elif dte_base:
-            result = invalidate_dte_for_order(
-                order,
-                motivo=reason,
-                responsable_dui="",
-                solicitante_dui="",
-                dte_record=dte_base,
-                allow_non_accepted=True,
-            )
+            result = _attempt_invalidation(base_record=dte_base, allow_non_accepted=True)
             invalidation = DTEInvalidation.objects.create(
                 order=order,
                 dte_record=dte_base,
