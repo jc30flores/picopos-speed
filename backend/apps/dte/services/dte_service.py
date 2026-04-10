@@ -332,6 +332,7 @@ def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
         raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
     numero_control = str(identificacion.get("numeroControl") or "").strip()
     if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
+        logger.error("dte.preflight.invalid_numero_control numeroControl=%s identificacion=%s", numero_control, identificacion)
         raise DTEPreflightError(f"numeroControl inválido: {numero_control}")
     codigo_generacion = str(identificacion.get("codigoGeneracion") or "").strip().upper()
     if not re.fullmatch(r"[A-F0-9-]{36}", codigo_generacion):

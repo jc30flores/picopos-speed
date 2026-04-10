@@ -318,6 +318,10 @@ class DTECoreTests(TestCase):
         with self.assertRaises(DTEPreflightError):
             validate_dte_preflight_payload(payload)
 
+    def test_preflight_accepts_standard_numero_control_patterns(self):
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000203", "C" * 36, "01")
+        validate_dte_preflight_payload(payload)
+
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
             name="CONSUMIDOR FINAL",

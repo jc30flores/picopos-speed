@@ -2674,31 +2674,31 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="space-y-2">
               <Label>Tipo DTE</Label>
               <div className="grid grid-cols-3 gap-2">
-                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                <Button type="button" className="h-12 min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-2">
               <Label>Cliente</Label>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-12 w-full min-w-0 justify-start text-sm sm:h-14 sm:flex-1 sm:text-base"
+                  className="h-12 w-full min-w-0 justify-start overflow-hidden text-sm sm:h-14 sm:text-base"
                   onClick={() => {
                     setIsCustomerPickerOpen(true);
                     setCustomerSearch("");
                   }}
                 >
-                  <span className="min-w-0 truncate">
+                  <span className="block w-full min-w-0 truncate text-left">
                     {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
                   </span>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-12 w-full min-w-[120px] text-sm sm:h-14 sm:w-auto sm:text-base"
+                  className="h-12 w-full min-w-[120px] shrink-0 text-sm sm:h-14 sm:w-auto sm:px-5 sm:text-base"
                   onClick={() => {
                     setCustomerFormErrors({});
                     setCustomerServerErrors({});
