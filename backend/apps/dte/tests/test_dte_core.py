@@ -37,6 +37,10 @@ from apps.users.models import UserProfile
 
 @override_settings(ACTIVE_BRANCH_CODE="MAIN")
 class DTECoreTests(TestCase):
+    @staticmethod
+    def _iva_from_gross(value: float) -> float:
+        return round((value * 0.13) / 1.13, 2)
+
     def setUp(self):
         self.branch = Branch.objects.create(name="Main", code="MAIN")
         self.service_type = ServiceType.objects.create(key="dine-in", label="En local")
@@ -248,10 +252,10 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
 
         self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
-        self.assertEqual(round(linea["ivaItem"], 2), round(linea["ventaGravada"] * 0.13, 2))
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
         self.assertEqual(round(resumen["totalGravada"], 2), round(linea["ventaGravada"], 2))
         self.assertEqual(round(resumen["totalIva"], 2), round(linea["ivaItem"], 2))
-        self.assertEqual(round(resumen["montoTotalOperacion"], 2), round(resumen["subTotal"] + resumen["totalIva"], 2))
+        self.assertEqual(round(resumen["montoTotalOperacion"], 2), round(resumen["subTotal"], 2))
         self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["montoTotalOperacion"], 2))
 
     def test_build_payload_cf_single_item_discount_keeps_subtotalventas_consistent(self):
@@ -272,10 +276,10 @@ class DTECoreTests(TestCase):
         linea = payload["dte"]["cuerpoDocumento"][0]
         resumen = payload["dte"]["resumen"]
         self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
-        self.assertEqual(round(linea["ivaItem"], 2), round(linea["ventaGravada"] * 0.13, 2))
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
         self.assertEqual(round(resumen["totalGravada"], 2), round(linea["ventaGravada"], 2))
         self.assertEqual(round(resumen["totalIva"], 2), round(linea["ivaItem"], 2))
-        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"] + resumen["totalIva"], 2))
+        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"], 2))
 
     def test_build_payload_cf_with_special_price_and_global_discount_is_consistent(self):
         category = Category.objects.create(name="MIX")
@@ -291,11 +295,11 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
         for linea in cuerpo:
             self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
-            self.assertEqual(round(linea["ivaItem"], 2), round(linea["ventaGravada"] * 0.13, 2))
+            self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
         descuentos_linea = sum(float(linea["montoDescu"]) for linea in cuerpo)
         self.assertEqual(round(descuentos_linea, 2), round(float(resumen["totalDescu"]), 2))
         self.assertEqual(round(float(resumen["totalIva"]), 2), round(sum(float(linea["ivaItem"]) for linea in cuerpo), 2))
-        self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"] + resumen["totalIva"]), 2))
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"]), 2))
 
     def test_validate_dte_totals_with_global_discount_example(self):
         dte = {
@@ -317,8 +321,8 @@ class DTECoreTests(TestCase):
                 "totalIva": 75.47,
                 "ivaRete1": 0.0,
                 "reteRenta": 0.0,
-                "montoTotalOperacion": 655.97,
-                "totalPagar": 655.97,
+                "montoTotalOperacion": 580.5,
+                "totalPagar": 580.5,
             },
         }
         _validate_dte_totals(dte)
@@ -340,7 +344,7 @@ class DTECoreTests(TestCase):
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000202", "I" * 36, "00")
         resumen = payload["dte"]["resumen"]
         self.assertEqual(round(resumen["subTotalVentas"], 2), round(resumen["totalGravada"] + resumen["totalExenta"], 2))
-        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"] + resumen["totalIva"], 2))
+        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"], 2))
         self.assertEqual(resumen["totalDescu"], 0)
 
     def test_calculate_line_tax_breakdown_discounted_line_keeps_real_total(self):
@@ -351,10 +355,41 @@ class DTECoreTests(TestCase):
             taxable=True,
         )
         self.assertEqual(line["linea_total_objetivo"], Decimal("4.43"))
-        self.assertEqual(line["venta_gravada"], Decimal("3.92"))
+        self.assertEqual(line["precio_uni"], Decimal("6.19"))
+        self.assertEqual(line["monto_descu"], Decimal("1.76"))
+        self.assertEqual(line["venta_gravada"], Decimal("4.43"))
         self.assertEqual(line["iva_item"], Decimal("0.51"))
         self.assertEqual(line["linea_total"], Decimal("4.43"))
-        self.assertEqual(line["iva_item"], (line["venta_gravada"] * Decimal("0.13")).quantize(Decimal("0.01")))
+        self.assertEqual(line["iva_item"], ((line["venta_gravada"] * Decimal("0.13")) / Decimal("1.13")).quantize(Decimal("0.01")))
+
+    def test_build_payload_cf_discount_from_619_to_500_uses_final_charged_model(self):
+        category = Category.objects.create(name="DESCUENTO-500")
+        product = Product.objects.create(name="Caso 5.00", description="", price=Decimal("6.19"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Caso 6.19->5.00",
+            price_snapshot=Decimal("6.19"),
+            quantity=1,
+            discount_amount=Decimal("1.19"),
+            snapshot_sku_or_code="DISC-500",
+            is_custom=False,
+        )
+        self.order.total = Decimal("5.00")
+        self.order.subtotal = Decimal("5.00")
+        self.order.tax = Decimal("0.58")
+        self.order.save(update_fields=["total", "subtotal", "tax"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000299", "Z" * 36, "00")
+        line = payload["dte"]["cuerpoDocumento"][0]
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(round(line["precioUni"], 2), 6.19)
+        self.assertEqual(round(line["montoDescu"], 2), 1.19)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
+        self.assertEqual(round(line["ivaItem"], 2), 0.58)
+        self.assertEqual(round(resumen["subTotal"], 2), 5.00)
+        self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
+        self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
 
     def test_preflight_rejects_invalid_identificacion_fields(self):
         payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000202", "A" * 36, "01")
@@ -593,7 +628,7 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
 
         self.assertEqual(round(linea["ventaGravada"], 2), round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2))
-        self.assertEqual(round(linea["ivaItem"], 2), round(linea["ventaGravada"] * 0.13, 2))
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
         self.assertEqual(round(resumen["totalIva"], 2), round(sum(float(row["ivaItem"]) for row in payload["dte"]["cuerpoDocumento"]), 2))
 
     def test_tiny_item_keeps_iva_consistent(self):
@@ -602,7 +637,7 @@ class DTECoreTests(TestCase):
         OrderItem.objects.create(order=self.order, product=product, product_name_snapshot="Tiny", price_snapshot=Decimal("0.01"), quantity=1)
         payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000211", "M" * 36, "00")
         line = payload["dte"]["cuerpoDocumento"][0]
-        self.assertEqual(round(line["ivaItem"], 2), round(line["ventaGravada"] * 0.13, 2))
+        self.assertEqual(round(line["ivaItem"], 2), self._iva_from_gross(line["ventaGravada"]))
 
     def test_preflight_blocks_mixed_base_and_reverse_iva_case(self):
         payload = {
@@ -636,6 +671,44 @@ class DTECoreTests(TestCase):
                     "montoTotalOperacion": 5.0,
                     "totalPagar": 5.0,
                     "totalIva": 0.58,
+                },
+            }
+        }
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_preflight_blocks_total_pagar_mismatch_vs_monto_total_operacion(self):
+        payload = {
+            "dte": {
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 6.19,
+                        "montoDescu": 1.77,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 4.42,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.57,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 4.42,
+                    "subTotalVentas": 4.42,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 1.77,
+                    "subTotal": 4.42,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 4.99,
+                    "totalPagar": 5.0,
+                    "totalIva": 0.57,
                 },
             }
         }
