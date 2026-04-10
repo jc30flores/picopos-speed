@@ -197,6 +197,11 @@ class DTECoreTests(TestCase):
             payload = build_invalidation_payload(record, "Prueba", "", "")
             self.assertEqual(payload["invalidacion"]["identificacion"]["ambiente"], "01")
             self.assertEqual(payload["invalidacion"]["identificacion"]["tipoDte"], "AN")
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
+            self.assertEqual(
+                payload["invalidacion"]["documento"]["numeroControl"],
+                "DTE-01-S001P001-000000000000123",
+            )
         finally:
             if previous_mh is None:
                 os.environ.pop("MH_AMBIENTE", None)
@@ -769,6 +774,10 @@ class DTEInvalidateEndpointTests(TestCase):
         sent_payload = mock_send.call_args.kwargs["payload"]
         self.assertEqual(
             sent_payload["invalidacion"]["identificacion"]["numeroControl"],
+            "DTE-01-S001P001-000000000000357",
+        )
+        self.assertEqual(
+            sent_payload["invalidacion"]["documento"]["numeroControl"],
             "DTE-01-S001P001-000000000000357",
         )
         self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")

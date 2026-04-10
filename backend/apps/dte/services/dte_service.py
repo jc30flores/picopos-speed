@@ -378,6 +378,18 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
     _validate_identificacion_payload(identificacion)
     tipo_dte = str(identificacion.get("tipoDte") or "").strip().upper()
     if tipo_dte == "AN":
+        documento = dte.get("documento") or {}
+        if not isinstance(documento, dict):
+            raise DTEPreflightError("invalidacion.documento es obligatorio.")
+        missing_documento = [
+            key
+            for key in ("tipoDte", "numeroControl", "codigoGeneracion")
+            if not str(documento.get(key) or "").strip()
+        ]
+        if missing_documento:
+            raise DTEPreflightError(
+                f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
+            )
         _validate_emisor_payload(emisor)
         assert_no_string_numbers(payload)
         return
@@ -966,6 +978,17 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         or str(record.codigo_generacion or "").strip()
         or str(request_identificacion.get("codigoGeneracion") or "").strip()
     )
+    tipo_dte_base = (
+        str(request_identificacion.get("tipoDte") or "").strip()
+        or str(record.dte_type or "").split("_")[-1].strip()
+    )
+    sello_recibido = (
+        str((record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido") or "").strip()
+        or str(record.sello_recibido or "").strip()
+        or str(record.sello_recepcion or "").strip()
+    )
+    fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
+    hor_emi = str(request_identificacion.get("horEmi") or "").strip()
     if not numero_control:
         raise DTEPreflightError(
             f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
@@ -995,7 +1018,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         "dte.invalidation.base_resolved dte_record_id=%s order_id=%s tipo=%s numeroControl=%s codigoGeneracion=%s emisor_original_nit=%s emisor_final_nit=%s ambiente_source=%s ambiente_configured=%s ambiente_resolved=%s",
         record.id,
         getattr(record, "order_id", None),
-        record.dte_type,
+        tipo_dte_base,
         numero_control,
         codigo_generacion,
         emisor_from_record.get("nit"),
@@ -1012,6 +1035,14 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
                 "tipoDte": "AN",
                 "numeroControl": numero_control,
                 "codigoGeneracion": codigo_generacion,
+            },
+            "documento": {
+                "tipoDte": tipo_dte_base,
+                "numeroControl": numero_control,
+                "codigoGeneracion": codigo_generacion,
+                "selloRecibido": sello_recibido,
+                "fecEmi": fec_emi,
+                "horEmi": hor_emi or None,
             },
             "emisor": resolved_emisor,
             "motivo": motivo,
