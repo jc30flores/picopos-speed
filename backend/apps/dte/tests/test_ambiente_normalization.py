@@ -18,6 +18,8 @@ class AmbienteNormalizationTests(SimpleTestCase):
         self.assertEqual(_normalize_ambiente("00"), "00")
         self.assertEqual(_normalize_ambiente("01"), "01")
         self.assertEqual(_normalize_ambiente("prod"), "01")
+        with self.assertRaises(ValueError):
+            _normalize_ambiente("INVALID")
 
     def test_force_prod_flag(self):
         previous = os.environ.get("DTE_REQUIRE_AMBIENTE_01")
@@ -35,6 +37,40 @@ class AmbienteNormalizationTests(SimpleTestCase):
                 os.environ.pop("DTE_AMBIENTE", None)
             else:
                 os.environ["DTE_AMBIENTE"] = previous_env
+
+    def test_ambiente_uses_mh_when_dte_ambiente_missing(self):
+        previous_dte = os.environ.get("DTE_AMBIENTE")
+        previous_mh = os.environ.get("MH_AMBIENTE")
+        try:
+            os.environ.pop("DTE_AMBIENTE", None)
+            os.environ["MH_AMBIENTE"] = "01"
+            self.assertEqual(_ambiente(), "01")
+        finally:
+            if previous_dte is None:
+                os.environ.pop("DTE_AMBIENTE", None)
+            else:
+                os.environ["DTE_AMBIENTE"] = previous_dte
+            if previous_mh is None:
+                os.environ.pop("MH_AMBIENTE", None)
+            else:
+                os.environ["MH_AMBIENTE"] = previous_mh
+
+    def test_ambiente_prioritizes_mh_over_dte_when_both_set(self):
+        previous_dte = os.environ.get("DTE_AMBIENTE")
+        previous_mh = os.environ.get("MH_AMBIENTE")
+        try:
+            os.environ["DTE_AMBIENTE"] = "00"
+            os.environ["MH_AMBIENTE"] = "01"
+            self.assertEqual(_ambiente(), "01")
+        finally:
+            if previous_dte is None:
+                os.environ.pop("DTE_AMBIENTE", None)
+            else:
+                os.environ["DTE_AMBIENTE"] = previous_dte
+            if previous_mh is None:
+                os.environ.pop("MH_AMBIENTE", None)
+            else:
+                os.environ["MH_AMBIENTE"] = previous_mh
 
     def test_invalid_environment_value_raises_preflight(self):
         previous_env = os.environ.get("DTE_AMBIENTE")

@@ -45,6 +45,8 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "closing_counted_cash",
             "closing_total_bills",
             "closing_total_coins",
+            "closing_total_pos_cards",
+            "closing_total_pedidos_ya",
             "notes",
             "summary_snapshot",
         ]
@@ -100,16 +102,20 @@ class CashSessionSummarySerializer(serializers.Serializer):
 class CashSessionCloseSerializer(serializers.Serializer):
     total_billetes = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
     total_monedas = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
+    total_pos_tarjetas = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0"))
+    total_pedidos_ya = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0"))
     total_contado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
         total_billetes = _q2(attrs.get("total_billetes"))
         total_monedas = _q2(attrs.get("total_monedas"))
+        total_pos_tarjetas = _q2(attrs.get("total_pos_tarjetas"))
+        total_pedidos_ya = _q2(attrs.get("total_pedidos_ya"))
         total_contado = attrs.get("total_contado")
 
-        if total_billetes < 0 or total_monedas < 0:
-            raise serializers.ValidationError("Billetes y monedas deben ser montos no negativos.")
+        if total_billetes < 0 or total_monedas < 0 or total_pos_tarjetas < 0 or total_pedidos_ya < 0:
+            raise serializers.ValidationError("Los totales de cierre deben ser montos no negativos.")
 
         computed_total = _q2(total_billetes + total_monedas)
         if total_contado is None:
@@ -124,6 +130,8 @@ class CashSessionCloseSerializer(serializers.Serializer):
 
         attrs["total_billetes"] = total_billetes
         attrs["total_monedas"] = total_monedas
+        attrs["total_pos_tarjetas"] = total_pos_tarjetas
+        attrs["total_pedidos_ya"] = total_pedidos_ya
         attrs["notes"] = str(attrs.get("notes", "")).strip()
         return attrs
 
@@ -181,6 +189,8 @@ def calculate_shift_summary(session: CashSession) -> dict:
     counted_cash = _q2(session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0"))
     counted_bills = _q2(session.closing_total_bills if session.closing_total_bills is not None else Decimal("0"))
     counted_coins = _q2(session.closing_total_coins if session.closing_total_coins is not None else Decimal("0"))
+    counted_pos_cards = _q2(session.closing_total_pos_cards if session.closing_total_pos_cards is not None else Decimal("0"))
+    counted_pedidos_ya = _q2(session.closing_total_pedidos_ya if session.closing_total_pedidos_ya is not None else Decimal("0"))
     difference = _q2(counted_cash - expected_cash_in_drawer)
     order_ids = payments.values_list("order_id", flat=True).distinct()
 
@@ -192,6 +202,8 @@ def calculate_shift_summary(session: CashSession) -> dict:
         "counted_cash": f"{counted_cash:.2f}",
         "counted_bills": f"{counted_bills:.2f}",
         "counted_coins": f"{counted_coins:.2f}",
+        "counted_pos_cards": f"{counted_pos_cards:.2f}",
+        "counted_pedidos_ya": f"{counted_pedidos_ya:.2f}",
         "difference": f"{difference:.2f}",
         "totals_by_method": {k: f"{_q2(v):.2f}" for k, v in totals_by_method.items()},
         "cash_movements": cash_movements,

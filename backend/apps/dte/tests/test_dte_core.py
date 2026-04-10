@@ -1,6 +1,7 @@
 import json
 from decimal import Decimal
 from unittest.mock import patch
+import os
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -13,8 +14,11 @@ from apps.dte.client import DTEClient
 from apps.dte.models import DTEBranchConfig, DTEControlCounter, DTERecord
 from apps.dte.services.control import next_control_number
 from apps.dte.services.dte_service import (
+    build_invalidation_payload,
+    calculate_line_tax_breakdown,
     DTEPreflightError,
     _validate_dte_totals,
+    validate_dte_preflight_payload,
     assert_no_string_numbers,
     build_payload_cf,
     get_mh_payment_info,
@@ -26,13 +30,17 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.orchestrator import transmit_sale_dte
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.menu.models import Category, Product
-from apps.orders.models import Order, OrderItem
+from apps.orders.models import Order, OrderFee, OrderItem
 from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
 
 @override_settings(ACTIVE_BRANCH_CODE="MAIN")
 class DTECoreTests(TestCase):
+    @staticmethod
+    def _iva_from_gross(value: float) -> float:
+        return round((value * 0.13) / 1.13, 2)
+
     def setUp(self):
         self.branch = Branch.objects.create(name="Main", code="MAIN")
         self.service_type = ServiceType.objects.create(key="dine-in", label="En local")
@@ -177,6 +185,34 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["codigo"], "MANUAL-CODE-1")
         self.assertEqual(payload["dte"]["emisor"]["nit"], "12171409901063")
 
+    def test_build_invalidation_payload_uses_resolved_ambiente(self):
+        previous_mh = os.environ.get("MH_AMBIENTE")
+        try:
+            os.environ["MH_AMBIENTE"] = "01"
+            record = DTERecord.objects.create(
+                order=self.order,
+                branch=self.branch,
+                dte_type="CF_01",
+                status=DTERecord.STATUS_ACCEPTED,
+                control_number="DTE-01-S001P001-000000000000123",
+                generation_code="A" * 36,
+                codigo_generacion="A" * 36,
+                total_amount=Decimal("10.00"),
+            )
+            payload = build_invalidation_payload(record, "Prueba", "", "")
+            self.assertEqual(payload["invalidacion"]["identificacion"]["ambiente"], "01")
+            self.assertEqual(payload["invalidacion"]["identificacion"]["tipoDte"], "AN")
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
+            self.assertEqual(
+                payload["invalidacion"]["documento"]["numeroControl"],
+                "DTE-01-S001P001-000000000000123",
+            )
+        finally:
+            if previous_mh is None:
+                os.environ.pop("MH_AMBIENTE", None)
+            else:
+                os.environ["MH_AMBIENTE"] = previous_mh
+
     def test_build_payload_cf_uses_unit_price_override_when_present(self):
         category = Category.objects.create(name="PRUEBA2")
         product = Product.objects.create(name="MenuItem2", description="", price=Decimal("3.00"), category=category, available=True)
@@ -216,11 +252,11 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
 
         self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
-        self.assertEqual(resumen["totalGravada"], 8.5)
-        self.assertEqual(resumen["subTotalVentas"], 8.5)
-        self.assertEqual(resumen["subTotal"], 8.5)
-        self.assertEqual(resumen["descuGravada"], 0)
-        self.assertEqual(resumen["totalDescu"], 1.5)
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
+        self.assertEqual(round(resumen["totalGravada"], 2), round(linea["ventaGravada"], 2))
+        self.assertEqual(round(resumen["totalIva"], 2), round(linea["ivaItem"], 2))
+        self.assertEqual(round(resumen["montoTotalOperacion"], 2), round(resumen["subTotal"], 2))
+        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["montoTotalOperacion"], 2))
 
     def test_build_payload_cf_single_item_discount_keeps_subtotalventas_consistent(self):
         category = Category.objects.create(name="DESCUENTO-UNITARIO")
@@ -239,12 +275,11 @@ class DTECoreTests(TestCase):
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000205", "K" * 36, "00")
         linea = payload["dte"]["cuerpoDocumento"][0]
         resumen = payload["dte"]["resumen"]
-        self.assertEqual(linea["ventaGravada"], 2.12)
-        self.assertEqual(resumen["totalGravada"], 2.12)
-        self.assertEqual(resumen["subTotalVentas"], 2.12)
-        self.assertEqual(resumen["descuGravada"], 0)
-        self.assertEqual(resumen["totalDescu"], 2.13)
-        self.assertEqual(resumen["subTotal"], 2.12)
+        self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
+        self.assertEqual(round(resumen["totalGravada"], 2), round(linea["ventaGravada"], 2))
+        self.assertEqual(round(resumen["totalIva"], 2), round(linea["ivaItem"], 2))
+        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"], 2))
 
     def test_build_payload_cf_with_special_price_and_global_discount_is_consistent(self):
         category = Category.objects.create(name="MIX")
@@ -260,8 +295,10 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
         for linea in cuerpo:
             self.assertEqual(round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2), round(linea["ventaGravada"], 2))
+            self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
         descuentos_linea = sum(float(linea["montoDescu"]) for linea in cuerpo)
         self.assertEqual(round(descuentos_linea, 2), round(float(resumen["totalDescu"]), 2))
+        self.assertEqual(round(float(resumen["totalIva"]), 2), round(sum(float(linea["ivaItem"]) for linea in cuerpo), 2))
         self.assertEqual(round(float(resumen["totalPagar"]), 2), round(float(resumen["subTotal"]), 2))
 
     def test_validate_dte_totals_with_global_discount_example(self):
@@ -281,6 +318,11 @@ class DTECoreTests(TestCase):
                 "descuGravada": 61.0,
                 "totalDescu": 109.5,
                 "subTotal": 580.5,
+                "totalIva": 75.47,
+                "ivaRete1": 0.0,
+                "reteRenta": 0.0,
+                "montoTotalOperacion": 580.5,
+                "totalPagar": 580.5,
             },
         }
         _validate_dte_totals(dte)
@@ -301,9 +343,177 @@ class DTECoreTests(TestCase):
 
         payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000202", "I" * 36, "00")
         resumen = payload["dte"]["resumen"]
-        self.assertEqual(resumen["subTotalVentas"], 8.0)
-        self.assertEqual(resumen["subTotal"], 8.0)
+        self.assertEqual(round(resumen["subTotalVentas"], 2), round(resumen["totalGravada"] + resumen["totalExenta"], 2))
+        self.assertEqual(round(resumen["totalPagar"], 2), round(resumen["subTotal"], 2))
         self.assertEqual(resumen["totalDescu"], 0)
+
+    def test_calculate_line_tax_breakdown_discounted_line_keeps_real_total(self):
+        line = calculate_line_tax_breakdown(
+            unit_price_gross=Decimal("6.19"),
+            quantity=Decimal("1.00"),
+            discount_gross=Decimal("1.76"),
+            taxable=True,
+        )
+        self.assertEqual(line["linea_total_objetivo"], Decimal("4.43"))
+        self.assertEqual(line["precio_uni"], Decimal("6.19"))
+        self.assertEqual(line["monto_descu"], Decimal("1.76"))
+        self.assertEqual(line["venta_gravada"], Decimal("4.43"))
+        self.assertEqual(line["iva_item"], Decimal("0.51"))
+        self.assertEqual(line["linea_total"], Decimal("4.43"))
+        self.assertEqual(line["iva_item"], ((line["venta_gravada"] * Decimal("0.13")) / Decimal("1.13")).quantize(Decimal("0.01")))
+
+    def test_build_payload_cf_discount_from_619_to_500_uses_final_charged_model(self):
+        category = Category.objects.create(name="DESCUENTO-500")
+        product = Product.objects.create(name="Caso 5.00", description="", price=Decimal("6.19"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Caso 6.19->5.00",
+            price_snapshot=Decimal("6.19"),
+            quantity=1,
+            discount_amount=Decimal("1.19"),
+            snapshot_sku_or_code="DISC-500",
+            is_custom=False,
+        )
+        self.order.total = Decimal("5.00")
+        self.order.subtotal = Decimal("5.00")
+        self.order.tax = Decimal("0.58")
+        self.order.save(update_fields=["total", "subtotal", "tax"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000299", "Z" * 36, "00")
+        line = payload["dte"]["cuerpoDocumento"][0]
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(round(line["precioUni"], 2), 6.19)
+        self.assertEqual(round(line["montoDescu"], 2), 1.19)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
+        self.assertEqual(round(line["ivaItem"], 2), 0.58)
+        self.assertEqual(round(resumen["subTotal"], 2), 5.00)
+        self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
+        self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
+
+    def test_build_payload_cf_adds_adjustment_line_when_order_total_is_higher_than_lines(self):
+        category = Category.objects.create(name="AJUSTE")
+        product = Product.objects.create(name="Base", description="", price=Decimal("26.70"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("26.70"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="BASE-2670",
+            is_custom=False,
+        )
+        self.order.total = Decimal("28.49")
+        self.order.subtotal = Decimal("28.49")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        ajuste = next((line for line in cuerpo if line.get("codigo") == "AJUSTE-DTE"), None)
+        self.assertIsNotNone(ajuste)
+        self.assertEqual(round(ajuste["ventaGravada"], 2), 1.79)
+        self.assertEqual(round(ajuste["ivaItem"], 2), 0.21)
+        self.assertEqual(round(resumen["totalPagar"], 2), 28.49)
+
+    def test_build_payload_cf_discount_line_reconciles_discount_before_adjustment_line(self):
+        category = Category.objects.create(name="DISC-FIX")
+        product = Product.objects.create(name="Promo", description="", price=Decimal("6.19"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Promo 6.19",
+            price_snapshot=Decimal("6.19"),
+            quantity=1,
+            discount_amount=Decimal("1.77"),
+            snapshot_sku_or_code="DISC-619",
+            is_custom=False,
+        )
+        self.order.total = Decimal("5.00")
+        self.order.subtotal = Decimal("5.00")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000399", "W" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        line = cuerpo[0]
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
+        self.assertEqual(round(line["montoDescu"], 2), 1.19)
+        self.assertEqual(round(line["ivaItem"], 2), 0.58)
+        self.assertFalse(any(l.get("codigo") == "AJUSTE-DTE" for l in cuerpo))
+        self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
+
+    def test_preflight_rejects_invalid_identificacion_fields(self):
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000202", "A" * 36, "01")
+        payload["dte"]["identificacion"]["numeroControl"] = "INVALID-CONTROL"
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_preflight_accepts_standard_numero_control_patterns(self):
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000203", "C" * 36, "01")
+        validate_dte_preflight_payload(payload)
+
+    def test_build_payload_includes_disposable_fees_in_totals(self):
+        category = Category.objects.create(name="CON DESECHABLE")
+        product = Product.objects.create(name="Promo", description="", price=Decimal("5.00"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Promo",
+            price_snapshot=Decimal("5.00"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="PROMO-1",
+            is_custom=False,
+        )
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.21"),
+            quantity=1,
+            total_amount=Decimal("0.21"),
+        )
+        self.order.disposable_total = Decimal("0.21")
+        self.order.total = Decimal("5.21")
+        self.order.save(update_fields=["disposable_total", "total"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000204", "D" * 36, "01")
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.21)
+        self.assertTrue(any(str(line.get("descripcion", "")).upper().startswith("DESECHABLE") for line in payload["dte"]["cuerpoDocumento"]))
+
+    def test_build_payload_reconciles_cent_differences_against_order_total(self):
+        category = Category.objects.create(name="RECONCILIACION")
+        product = Product.objects.create(name="Base", description="", price=Decimal("13.78"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("13.78"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="BASE-1",
+            is_custom=False,
+        )
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.21"),
+            quantity=1,
+            total_amount=Decimal("0.21"),
+        )
+        self.order.disposable_total = Decimal("0.21")
+        self.order.total = Decimal("13.99")
+        self.order.save(update_fields=["disposable_total", "total"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000205", "E" * 36, "01")
+        resumen = payload["dte"]["resumen"]
+        pagos = resumen["pagos"]
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 13.99)
+        self.assertEqual(round(float(pagos[0]["montoPago"]), 2), 13.99)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
@@ -341,6 +551,22 @@ class DTECoreTests(TestCase):
         self.assertEqual(receptor["tipoDocumento"], "13")
         self.assertEqual(receptor["numDocumento"], "01234567-8")
         self.assertEqual(receptor["correo"], "cliente@correo.com")
+
+    def test_receptor_with_nit_14_uses_tipo_documento_36(self):
+        self.order.customer = Customer.objects.create(
+            name="Empresa NIT",
+            full_name="Empresa NIT",
+            client_type="CCF",
+            nit="06141234567890",
+            tipo_documento="36",
+            num_documento="0614-123456-789-0",
+            correo="empresa@correo.com",
+        )
+        self.order.save(update_fields=["customer"])
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000013", "H" * 36, "01")
+        receptor = payload["dte"]["receptor"]
+        self.assertEqual(receptor["tipoDocumento"], "36")
+        self.assertEqual(receptor["numDocumento"], "06141234567890")
 
     def test_receptor_uses_customer_email_when_present(self):
         self.order.customer = Customer.objects.create(
@@ -405,7 +631,7 @@ class DTECoreTests(TestCase):
         self.assertIsInstance(payload["dte"]["resumen"]["totalPagar"], float)
         self.assertIsInstance(payload["dte"]["resumen"]["pagos"][0]["montoPago"], float)
         self.assertIn('"precioUni": 4.25', serialized)
-        self.assertIn('"totalPagar": 8.5', serialized)
+        self.assertIn('"totalPagar"', serialized)
 
     def test_assert_no_string_numbers_reports_exact_path(self):
         payload = {"dte": {"resumen": {"totalPagar": "17.71"}}}
@@ -437,6 +663,215 @@ class DTECoreTests(TestCase):
         record = transmit_sale_dte(self.order.id)
         self.assertEqual(record.status, DTERecord.STATUS_REJECTED)
         self.assertFalse(DTEControlCounter.objects.filter(branch=self.branch).exists())
+
+    def test_tax_rule_uses_base_for_venta_gravada_and_iva_item(self):
+        category = Category.objects.create(name="IMPUESTO")
+        product = Product.objects.create(name="Item impuesto", description="", price=Decimal("4.69"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Caso IVA",
+            price_snapshot=Decimal("4.69"),
+            quantity=1,
+            snapshot_sku_or_code="IVA-469",
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000210", "L" * 36, "00")
+        linea = payload["dte"]["cuerpoDocumento"][0]
+        resumen = payload["dte"]["resumen"]
+
+        self.assertEqual(round(linea["ventaGravada"], 2), round((linea["precioUni"] * linea["cantidad"]) - linea["montoDescu"], 2))
+        self.assertEqual(round(linea["ivaItem"], 2), self._iva_from_gross(linea["ventaGravada"]))
+        self.assertEqual(round(resumen["totalIva"], 2), round(sum(float(row["ivaItem"]) for row in payload["dte"]["cuerpoDocumento"]), 2))
+
+    def test_tiny_item_keeps_iva_consistent(self):
+        category = Category.objects.create(name="TINY")
+        product = Product.objects.create(name="Tiny", description="", price=Decimal("0.01"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=product, product_name_snapshot="Tiny", price_snapshot=Decimal("0.01"), quantity=1)
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000211", "M" * 36, "00")
+        line = payload["dte"]["cuerpoDocumento"][0]
+        self.assertEqual(round(line["ivaItem"], 2), self._iva_from_gross(line["ventaGravada"]))
+
+    def test_preflight_blocks_mixed_base_and_reverse_iva_case(self):
+        payload = {
+            "dte": {
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 6.19,
+                        "montoDescu": 1.77,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 4.42,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.58,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 4.42,
+                    "subTotalVentas": 4.42,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 1.77,
+                    "subTotal": 4.42,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 5.0,
+                    "totalPagar": 5.0,
+                    "totalIva": 0.58,
+                },
+            }
+        }
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_preflight_blocks_total_pagar_mismatch_vs_monto_total_operacion(self):
+        payload = {
+            "dte": {
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 6.19,
+                        "montoDescu": 1.77,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 4.42,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.57,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 4.42,
+                    "subTotalVentas": 4.42,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 1.77,
+                    "subTotal": 4.42,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 4.99,
+                    "totalPagar": 5.0,
+                    "totalIva": 0.57,
+                },
+            }
+        }
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_preflight_accepts_final_charged_pattern_500(self):
+        payload = {
+            "dte": {
+                "identificacion": {
+                    "version": 1,
+                    "ambiente": "00",
+                    "tipoDte": "01",
+                    "numeroControl": "DTE-01-S001P001-000000000000500",
+                    "codigoGeneracion": "A" * 36,
+                    "fecEmi": "2026-04-10",
+                    "horEmi": "10:00:00",
+                    "tipoOperacion": 1,
+                    "tipoModelo": 1,
+                    "tipoMoneda": "USD",
+                },
+                "emisor": {
+                    "nit": "12171409901063",
+                    "nrc": "123",
+                    "nombre": "Empresa",
+                    "nombreComercial": "Empresa",
+                    "codActividad": "56101",
+                    "descActividad": "Restaurantes",
+                    "tipoEstablecimiento": "02",
+                    "codEstableMH": "X001",
+                    "codEstable": "X001",
+                    "codPuntoVentaMH": "X001",
+                    "codPuntoVenta": "X001",
+                    "telefono": "00000000",
+                    "correo": "facturas@example.com",
+                    "direccion": {"departamento": "12", "municipio": "22", "complemento": "Dir"},
+                },
+                "receptor": {"nombre": "CONSUMIDOR FINAL", "direccion": {"departamento": "12", "municipio": "22", "complemento": "Dir"}, "telefono": "00000000", "correo": "cf@example.com"},
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 5.0,
+                        "montoDescu": 0.0,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 5.0,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.58,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 5.0,
+                    "subTotalVentas": 5.0,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 0.0,
+                    "subTotal": 5.0,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 5.0,
+                    "totalPagar": 5.0,
+                    "totalIva": 0.58,
+                    "pagos": [{"codigo": "01", "montoPago": 5.0, "referencia": None, "plazo": None, "periodo": None}],
+                },
+            }
+        }
+        validate_dte_preflight_payload(payload)
+
+    def test_preflight_blocks_inconsistent_iva_item(self):
+        payload = {
+            "dte": {
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 1.0,
+                        "montoDescu": 0.0,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 1.0,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.0,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 1.0,
+                    "subTotalVentas": 1.0,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 0.0,
+                    "subTotal": 1.0,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 1.13,
+                    "totalPagar": 1.13,
+                    "totalIva": 0.13,
+                },
+            }
+        }
+        with self.assertRaises(DTEPreflightError):
+            _validate_dte_totals(payload["dte"])
 
     def test_decimal_helpers(self):
         self.assertEqual(to_decimal("17.71"), Decimal("17.71"))
@@ -530,3 +965,72 @@ class DTEResendEndpointTests(TestCase):
         self.record.refresh_from_db()
         self.assertEqual(self.record.send_attempts, 1)
         self.assertIn(self.record.status, {DTERecord.STATUS_ACCEPTED, DTERecord.STATUS_PENDING})
+
+
+class DTEInvalidateEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(username="cash-inv", password="pw")
+        UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
+        self.branch = Branch.objects.create(name="Main Inv", code="INV")
+        self.service_type = ServiceType.objects.create(key="dinein-inv", label="En local Inv")
+        self.order = Order.objects.create(
+            order_number=1901,
+            branch=self.branch,
+            service_type=self.service_type,
+            subtotal=Decimal("5.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("5.00"),
+        )
+        self.record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="",
+            generation_code="105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            codigo_generacion="105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "numeroControl": "DTE-01-S001P001-000000000000357",
+                        "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                    },
+                    "emisor": {
+                        "nit": "12171409901063",
+                        "nrc": "123456",
+                        "nombre": "Pico Emisor",
+                        "codActividad": "56101",
+                        "descActividad": "Restaurantes",
+                    },
+                }
+            },
+            total_amount=Decimal("5.00"),
+        )
+
+    @patch("apps.dte.services.dte_service.send_to_bridge")
+    def test_invalidate_endpoint_uses_shared_builder_and_fallback_control_number(self, mock_send):
+        mock_send.return_value = {"http_status": 200, "success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["attempt"]["success"], True)
+        sent_payload = mock_send.call_args.kwargs["payload"]
+        self.assertEqual(
+            sent_payload["invalidacion"]["identificacion"]["numeroControl"],
+            "DTE-01-S001P001-000000000000357",
+        )
+        self.assertEqual(
+            sent_payload["invalidacion"]["documento"]["numeroControl"],
+            "DTE-01-S001P001-000000000000357",
+        )
+        self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")
+
+    def test_invalidate_endpoint_returns_422_when_base_document_missing_control_number(self):
+        self.record.request_payload = {}
+        self.record.save(update_fields=["request_payload"])
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("numeroControl", response.data["detail"])

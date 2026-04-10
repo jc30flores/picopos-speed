@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -35,8 +35,24 @@ PAYMENT_METHOD_REPORT_ORDER = [
 ]
 
 
-def _money(value: Decimal | float | int | None) -> str:
-    return f"${Decimal(value or 0):.2f}"
+def _as_decimal(value: Decimal | float | int | str | None) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    cleaned = str(value).strip().replace("$", "").replace(",", "")
+    if not cleaned:
+        return Decimal("0")
+    try:
+        return Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _money(value: Decimal | float | int | str | None) -> str:
+    return f"${_as_decimal(value):.2f}"
 
 
 def _format_dt_sv(value) -> str:
@@ -210,15 +226,20 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
     cash_count = payment_map["cash"]["count"]
     cash_total = payment_map["cash"]["total"]
 
-    station_name = session.register.station_name or "POS 1"
+    register = getattr(session, "register", None)
+    register_name = getattr(register, "name", "CAJA") or "CAJA"
+    station_name = getattr(register, "station_name", "") or "POS 1"
+    session_branch = getattr(getattr(register, "branch", None), "name", "")
+    header_branch = (getattr(branch, "name", None) or session_branch or "SUCURSAL")
+
     return [
-        (getattr(branch, "name", None) or session.register.branch.name).upper(),
+        header_branch.upper(),
         SEP_HYPHEN,
         "REPORTE DE CAJA",
-        f"ESTACION {station_name} - {session.register.name}",
+        f"ESTACION {station_name} - {register_name}",
         _format_dt_sv(session.closed_at or timezone.now()),
         SEP_HYPHEN,
-        _line_item("CANTIDAD INICIAL", Decimal(summary.get("opening_cash") or 0)),
+        _line_item("CANTIDAD INICIAL", _as_decimal(summary.get("opening_cash"))),
         SEP_DOTS,
         "Resumen De Pagos (+)",
         _line_item("EFECTIVO", cash_total, cash_count),
@@ -231,7 +252,7 @@ def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch:
         _line_item("PAYPAL", payment_map["paypal"]["total"], payment_map["paypal"]["count"]),
         _line_item("PEDIDOS YA", payment_map["pedidos_ya"]["total"], payment_map["pedidos_ya"]["count"]),
         SEP_DOTS,
-        _line_item("Efectivo En Caja", Decimal(summary.get("expected_cash_in_drawer") or 0)),
+        _line_item("Efectivo En Caja", _as_decimal(summary.get("expected_cash_in_drawer"))),
         f"DRAWER RESET ID {session.id}",
         f"END OF DAY LOG ID {session.id}",
     ]
@@ -354,13 +375,20 @@ def _fallback_pdf_bytes(text: str) -> bytes:
 def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     session = CashSession.objects.select_related("register", "register__branch", "opened_by", "closed_by").get(pk=session_id)
     text = build_end_of_day_ticket(session_id)
-    branch = _resolve_branch_for_report(session)
-    branch_name = getattr(branch, "name", "Sucursal")
-    branch_address = _resolve_branch_address(branch)
+
+    branch = _resolve_pdf_branch(session)
+    profile = _resolve_branch_profile(session)
+    branch_name = (profile.get("branch_name") or getattr(branch, "name", "") or "Sucursal").strip()
+    branch_address = profile.get("direccion_complemento", "").strip()
+
     filename = f"end_of_day_{timezone.localtime(session.closed_at or timezone.now()).strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
+    center_lines = ["Pico de Gallo POS", f"Sucursal {branch_name}"]
+    if branch_address:
+        center_lines.append(branch_address)
+
     return build_receipt_pdf_from_text(
         text=text,
         filename=filename,
         logo_path=str(Path(settings.BASE_DIR) / "assets" / "receipt" / "logo_pdg.png"),
-        center_lines=["Pico de Gallo POS", f"Sucursal {branch_name}", branch_address],
+        center_lines=center_lines,
     ).pdf_bytes
