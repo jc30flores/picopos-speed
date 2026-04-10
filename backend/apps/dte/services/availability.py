@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import re
 from django.utils import timezone
 
 from apps.dte.models import DTERecord
+from apps.dte.services.delivery_config import INTERNAL_BILLING_EMAIL, resolve_delivery_config
 
 
 def resolve_issued_at(record: DTERecord):
@@ -70,17 +72,32 @@ def evaluate_record_actions(record: DTERecord) -> dict:
     customer = getattr(record.order, "customer", None)
     email = ((getattr(customer, "correo", "") or getattr(customer, "email", "") or "").strip() if customer else "")
     phone = ((getattr(customer, "telefono", "") or "").strip() if customer else "")
+    config = resolve_delivery_config()
+    fallback_phone = (config.whatsapp_default_phone or "").strip()
+    email_ok = bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
+    email_is_internal = email.lower() == INTERNAL_BILLING_EMAIL.lower() if email else False
 
-    can_send_email = bool(email)
-    can_send_whatsapp = bool(phone)
+    can_send_email = bool(email and email_ok and not email_is_internal)
+    can_send_whatsapp = bool(phone or fallback_phone)
+    missing_email_reason = ""
+    if not can_send_email:
+        if not email:
+            missing_email_reason = "Cliente sin correo"
+        elif not email_ok:
+            missing_email_reason = "Correo de cliente inválido"
+        elif email_is_internal:
+            missing_email_reason = "Correo interno no permitido para envío automático"
+        else:
+            missing_email_reason = "Correo no disponible"
+    missing_phone_reason = "" if can_send_whatsapp else "Cliente sin teléfono"
 
     return {
         "issued_at": issued_at,
         "can_resend": can_resend,
         "can_send_email": can_send_email,
-        "missing_email_reason": "Cliente sin correo" if not can_send_email else "",
+        "missing_email_reason": missing_email_reason,
         "can_send_whatsapp": can_send_whatsapp,
-        "missing_phone_reason": "Cliente sin teléfono" if not can_send_whatsapp else "",
+        "missing_phone_reason": missing_phone_reason,
         "can_credit_note": can_credit_note,
         "credit_note_reason": credit_note_reason,
         "has_credit_note": has_credit_note,
@@ -89,5 +106,5 @@ def evaluate_record_actions(record: DTERecord) -> dict:
         "invalidate_deadline": invalidate_deadline,
         "invalidate_remaining": invalidate_remaining,
         "customer_email": email,
-        "customer_phone": phone,
+        "customer_phone": phone or fallback_phone,
     }

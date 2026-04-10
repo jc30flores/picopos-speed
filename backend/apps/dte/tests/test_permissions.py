@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -50,3 +51,37 @@ class DTEPermissionsTests(TestCase):
         self.client.force_authenticate(self.user)
         res = self.client.post(f'/api/dte/issued/{self.record.id}/send-email/')
         self.assertIn(res.status_code, [200, 400])
+
+    @patch("apps.dte.views.deliver_dte_to_client")
+    def test_send_email_endpoint_uses_shared_delivery_service(self, mock_deliver):
+        mock_deliver.return_value = {
+            "success": True,
+            "order_id": self.record.order_id,
+            "issued_id": self.record.id,
+            "results": {"email": {"ok": True, "status_code": 200, "error": None}},
+            "summary": "ok",
+            "mode": "manual",
+        }
+        self.record.status = DTERecord.STATUS_ACCEPTED
+        self.record.save(update_fields=["status"])
+        self.client.force_authenticate(self.user)
+        res = self.client.post(f"/api/dte/issued/{self.record.id}/send-email/", {"email": "cliente@example.com"}, format="json")
+        self.assertEqual(res.status_code, 200)
+        mock_deliver.assert_called_once()
+
+    @patch("apps.dte.views.deliver_dte_to_client")
+    def test_send_whatsapp_endpoint_uses_shared_delivery_service(self, mock_deliver):
+        mock_deliver.return_value = {
+            "success": True,
+            "order_id": self.record.order_id,
+            "issued_id": self.record.id,
+            "results": {"whatsapp": {"ok": True, "status_code": 200, "error": None}},
+            "summary": "ok",
+            "mode": "manual",
+        }
+        self.record.status = DTERecord.STATUS_ACCEPTED
+        self.record.save(update_fields=["status"])
+        self.client.force_authenticate(self.user)
+        res = self.client.post(f"/api/dte/issued/{self.record.id}/send-whatsapp/", {"phone": "50370001111"}, format="json")
+        self.assertEqual(res.status_code, 200)
+        mock_deliver.assert_called_once()

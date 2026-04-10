@@ -311,6 +311,10 @@ export type CashSessionSnapshot = {
     totalCashOut: number;
     expectedCashInDrawer: number;
     countedCash: number;
+    countedBills: number;
+    countedCoins: number;
+    countedPosCards: number;
+    countedPedidosYa: number;
     overShortCash: number;
     methods: { cash: number; card: number; cardDebit: number; cardCredit: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
@@ -424,6 +428,13 @@ export type SalesBreakdownRow = {
   total: number;
   percentage: number;
   transactions: number;
+};
+
+export type EmployeeWorkedHoursRow = {
+  employeeId: number;
+  employeeName: string;
+  totalMinutes: number;
+  totalHours: number;
 };
 
 export type Refund = {
@@ -2388,6 +2399,25 @@ export const getSalesBreakdown = async (filters: {
     .slice(0, 10);
 };
 
+
+
+export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursRow[]> => {
+  const params = new URLSearchParams({
+    start: filters.dateFrom,
+    end: filters.dateTo,
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+  });
+  const response = await request(`/reports/employee-worked-hours/?${params.toString()}`, { signal: filters.signal });
+  const data = await handleJson<{ employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }> }>(response);
+  return (data.employees ?? []).map((row) => ({
+    employeeId: Number(row.employee_id),
+    employeeName: row.employee_name,
+    totalMinutes: Number(row.total_minutes ?? 0),
+    totalHours: Number(row.total_hours ?? 0),
+  }));
+};
+
 export const changeInternalPaymentMethod = async (
   paymentId: number,
   payload: { paymentMethodCode: string; reason?: string }
@@ -3390,16 +3420,23 @@ export const voidOrder = async (orderId: number, reason: string): Promise<{ orde
 export const refundSaleRecord = async (
   paymentId: number,
   payload?: { reason?: string }
-): Promise<{ order: Order; action: "invalidate" | "credit_note" }> => {
+): Promise<{
+  order: Order;
+  action: "invalidate" | "credit_note" | "internal_refund";
+  message?: string;
+  fiscalResult?: { attempted: boolean; success: boolean; message: string };
+}> => {
   const response = await request(`/payments/${paymentId}/record-refund/`, {
     method: "POST",
     body: JSON.stringify({ reason: payload?.reason ?? "" }),
   });
   const data = await handleJson<{
     order: Parameters<typeof mapOrder>[0];
-    action: "invalidate" | "credit_note";
+    action: "invalidate" | "credit_note" | "internal_refund";
+    message?: string;
+    fiscal_result?: { attempted: boolean; success: boolean; message: string };
   }>(response);
-  return { order: mapOrder(data.order), action: data.action };
+  return { order: mapOrder(data.order), action: data.action, message: data.message, fiscalResult: data.fiscal_result };
 };
 
 export const createPrintJob = async (payload: {
@@ -3633,6 +3670,10 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       totalCashOut: Number(data.summary?.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary?.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary?.counted_cash ?? 0),
+      countedBills: Number(data.summary?.counted_bills ?? 0),
+      countedCoins: Number(data.summary?.counted_coins ?? 0),
+      countedPosCards: Number(data.summary?.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(data.summary?.counted_pedidos_ya ?? 0),
       overShortCash: Number(data.summary?.difference ?? 0),
       methods: {
         cash: Number(data.summary?.totals_by_method?.cash ?? data.summary?.methods?.CASH?.total ?? 0),
@@ -3666,7 +3707,7 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 export const closeCashSession = async (
   closingCashCounted: number,
   notes?: string,
-  totals?: { bills?: number; coins?: number },
+  totals?: { bills?: number; coins?: number; posCards?: number; pedidosYa?: number },
   options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
@@ -3677,6 +3718,8 @@ export const closeCashSession = async (
       total_contado: closingCashCounted,
       total_billetes: Number(totals?.bills ?? 0),
       total_monedas: Number(totals?.coins ?? 0),
+      total_pos_tarjetas: Number(totals?.posCards ?? 0),
+      total_pedidos_ya: Number(totals?.pedidosYa ?? 0),
       notes: notes ?? '',
       ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),
@@ -3746,6 +3789,10 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
       totalCashOut: Number(row.summary_snapshot?.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(row.summary_snapshot?.expected_cash_in_drawer ?? 0),
       countedCash: Number(row.summary_snapshot?.counted_cash ?? 0),
+      countedBills: Number(row.summary_snapshot?.counted_bills ?? 0),
+      countedCoins: Number(row.summary_snapshot?.counted_coins ?? 0),
+      countedPosCards: Number(row.summary_snapshot?.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(row.summary_snapshot?.counted_pedidos_ya ?? 0),
       overShortCash: Number(row.summary_snapshot?.difference ?? 0),
       methods: {
         cash: Number(row.summary_snapshot?.totals_by_method?.cash ?? row.summary_snapshot?.methods?.CASH?.total ?? 0),
@@ -3775,6 +3822,10 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
       totalCashOut: Number(data.summary.cash_expenses_total ?? 0),
       expectedCashInDrawer: Number(data.summary.expected_cash_in_drawer ?? 0),
       countedCash: Number(data.summary.counted_cash ?? 0),
+      countedBills: Number(data.summary.counted_bills ?? 0),
+      countedCoins: Number(data.summary.counted_coins ?? 0),
+      countedPosCards: Number(data.summary.counted_pos_cards ?? 0),
+      countedPedidosYa: Number(data.summary.counted_pedidos_ya ?? 0),
       overShortCash: Number(data.summary.difference ?? 0),
       methods: {
         cash: Number(data.summary.totals_by_method?.cash ?? data.summary.methods?.CASH?.total ?? 0),
@@ -3805,37 +3856,41 @@ export const getCashSessionDetail = async (sessionId: number): Promise<{ summary
 
 
 export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<void> => {
-  try {
-    const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
-      headers: { Accept: "application/pdf,application/octet-stream,*/*" },
-    });
-    if (!response.ok) throw new Error(`No se pudo descargar ticket PDF (${response.status})`);
+  const response = await request(`/cashier/sessions/${sessionId}/ticket.pdf`, {
+    headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+  });
+  if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("application/pdf")) {
-      throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+    if (contentType.includes("application/json")) {
+      const payload = await response.json().catch(() => ({}));
+      const detail = String(payload?.detail ?? "").trim();
+      throw new Error(detail || `No se pudo descargar ticket PDF (${response.status})`);
     }
-    const blob = await response.blob();
-    const disposition = response.headers.get("content-disposition") || "";
-    const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const fallback = `end_of_day_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.pdf`;
-    const filename = filenameMatch?.[1] || fallback;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  } catch (error) {
-    if (import.meta.env.DEV) {
-      console.error("downloadCashSessionTicketPdf error", error);
-    }
-    throw error instanceof Error ? error : new Error("No se pudo descargar ticket PDF");
+    const raw = await response.text().catch(() => "");
+    throw new Error(raw || `No se pudo descargar ticket PDF (${response.status})`);
   }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("Respuesta inválida al descargar PDF de cierre de caja.");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const fallback = `end_of_day_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.pdf`;
+  const filename = filenameMatch?.[1] || fallback;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 };
+
 
 export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void> => {
   const response = await request(`/payments/${paymentId}/ticket.pdf`, {

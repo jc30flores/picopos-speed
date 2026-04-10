@@ -41,6 +41,7 @@ export const EmployeesTab = () => {
   const [attendanceRows, setAttendanceRows] = useState<AttendanceHistoryRow[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceEmployee, setAttendanceEmployee] = useState<Employee | null>(null);
+  const [attendanceFilters, setAttendanceFilters] = useState<{ start?: string; end?: string }>({});
 
   const loadEmployees = async () => {
     try {
@@ -141,6 +142,7 @@ export const EmployeesTab = () => {
 
   const loadAttendance = async (filters: { start?: string; end?: string } = {}) => {
     if (!attendanceEmployee) return;
+    setAttendanceFilters(filters);
     setAttendanceLoading(true);
     try {
       const rows = await getEmployeeAttendanceHistory(attendanceEmployee.id, filters);
@@ -154,12 +156,18 @@ export const EmployeesTab = () => {
   };
 
   const handleOpenAttendance = (employee: Employee) => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    const defaultFilters = { start: monthStart, end: monthEnd };
+
     setAttendanceEmployee(employee);
+    setAttendanceFilters(defaultFilters);
     setAttendanceOpen(true);
     void (async () => {
       setAttendanceLoading(true);
       try {
-        const rows = await getEmployeeAttendanceHistory(employee.id);
+        const rows = await getEmployeeAttendanceHistory(employee.id, defaultFilters);
         setAttendanceRows(rows);
       } catch (error) {
         console.error("Failed to load attendance history", error);
@@ -239,6 +247,8 @@ export const EmployeesTab = () => {
         onOpenChange={setAttendanceOpen}
         rows={attendanceRows}
         loading={attendanceLoading}
+        initialStart={attendanceFilters.start}
+        initialEnd={attendanceFilters.end}
         onApplyFilters={loadAttendance}
       />
     </div>

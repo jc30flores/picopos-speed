@@ -161,7 +161,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closeBillsInput, setCloseBillsInput] = useState("");
   const [closeCoinsInput, setCloseCoinsInput] = useState("");
-  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "confirm">("idle");
+  const [closePosCardsInput, setClosePosCardsInput] = useState("");
+  const [closePedidosYaInput, setClosePedidosYaInput] = useState("");
+  const [closeCashStep, setCloseCashStep] = useState<"idle" | "bills" | "coins" | "posCards" | "pedidosYa" | "confirm">("idle");
   const [payoutAmount, setPayoutAmount] = useState("");
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
@@ -1159,9 +1161,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     const totalBills = Number(closeBillsInput || 0);
     const totalCoins = Number(closeCoinsInput || 0);
+    const totalPosCards = Number(closePosCardsInput || 0);
+    const totalPedidosYa = Number(closePedidosYaInput || 0);
     const countedTotal = totalBills + totalCoins;
-    if (!Number.isFinite(totalBills) || totalBills < 0 || !Number.isFinite(totalCoins) || totalCoins < 0) {
-      toast.error("Ingresa montos válidos para billetes y monedas.");
+    if (
+      !Number.isFinite(totalBills) || totalBills < 0
+      || !Number.isFinite(totalCoins) || totalCoins < 0
+      || !Number.isFinite(totalPosCards) || totalPosCards < 0
+      || !Number.isFinite(totalPedidosYa) || totalPedidosYa < 0
+    ) {
+      toast.error("Ingresa montos válidos para el cierre.");
       return;
     }
     setCashCloseFlowState("closingInProgress");
@@ -1170,7 +1179,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const closeResp = await closeCashSession(
         countedTotal,
         cashNotes,
-        { bills: totalBills, coins: totalCoins },
+        { bills: totalBills, coins: totalCoins, posCards: totalPosCards, pedidosYa: totalPedidosYa },
         { sessionId: cashSnapshot.session?.id }
       );
       if (import.meta.env.DEV) {
@@ -1214,6 +1223,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCloseCashStep("idle");
       setCloseBillsInput("");
       setCloseCoinsInput("");
+      setClosePosCardsInput("");
+      setClosePedidosYaInput("");
       
     } catch (error) {
       setCashCloseFlowState("idle");
@@ -2360,7 +2371,45 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     />
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("bills")}>Atrás</Button>
-                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("posCards")} disabled={Number(closeCoinsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "posCards" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">POS tarjetas</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closePosCardsInput}
+                      onChange={(e) => setClosePosCardsInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")} disabled={Number(closePosCardsInput || 0) < 0}>Continuar</Button>
+                    </div>
+                  </>
+                ) : null}
+                {canCloseCash && closeCashStep === "pedidosYa" ? (
+                  <>
+                    <div className="text-center text-2xl font-bold">PedidosYa</div>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="h-16 text-center text-2xl font-semibold"
+                      placeholder="0.00"
+                      value={closePedidosYaInput}
+                      onChange={(e) => setClosePedidosYaInput(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("posCards")}>Atrás</Button>
+                      <Button className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("confirm")} disabled={Number(closePedidosYaInput || 0) < 0}>Continuar</Button>
                     </div>
                   </>
                 ) : null}
@@ -2369,12 +2418,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     <div className="space-y-2 rounded-lg border p-3 text-base">
                       <div className="flex justify-between"><span>Total billetes</span><span>{formatMoney(Number(closeBillsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total POS tarjetas</span><span>{formatMoney(Number(closePosCardsInput || 0))}</span></div>
+                      <div className="flex justify-between"><span>Total PedidosYa</span><span>{formatMoney(Number(closePedidosYaInput || 0))}</span></div>
                       <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("coins")}>Atrás</Button>
+                      <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
                       <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
                     </div>
                   </>
@@ -2570,10 +2621,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
-                      Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
+                      <span className="min-w-0 truncate text-left">
+                        Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                      </span>
                     </Button>
-                    <Button className="h-14 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
@@ -2664,7 +2717,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerDteOpen} onOpenChange={setIsCustomerDteOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="w-[95vw] max-w-xl">
           <DialogHeader>
             <DialogTitle>Cliente / DTE</DialogTitle>
           </DialogHeader>
@@ -2672,29 +2725,31 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="space-y-2">
               <Label>Tipo DTE</Label>
               <div className="grid grid-cols-3 gap-2">
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                <Button type="button" className="h-14 text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-2">
               <Label>Cliente</Label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-14 flex-1 justify-start text-base"
+                  className="h-12 w-full min-w-0 justify-start overflow-hidden text-sm sm:h-14 sm:text-base"
                   onClick={() => {
                     setIsCustomerPickerOpen(true);
                     setCustomerSearch("");
                   }}
                 >
-                  {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                  <span className="block w-full min-w-0 truncate text-left">
+                    {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                  </span>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-14 text-base"
+                  className="h-12 w-full min-w-[120px] shrink-0 text-sm sm:h-14 sm:w-auto sm:px-5 sm:text-base"
                   onClick={() => {
                     setCustomerFormErrors({});
                     setCustomerServerErrors({});
@@ -2710,9 +2765,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             {dteDocumentType === "CCF" ? (
               <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
             ) : null}
-            <div className="flex gap-2">
-              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
+              <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
             </div>
           </div>
         </DialogContent>
