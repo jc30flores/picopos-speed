@@ -15,6 +15,7 @@ from apps.dte.services.dte_service import (
     interpret_dte_response,
 )
 from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env, resolve_ambiente_with_source
+from apps.dte.services.delivery import deliver_dte_to_client
 from apps.orders.models import Order, OrderInvoice
 from apps.orders.services.snapshots import persist_sale_snapshot
 
@@ -202,6 +203,12 @@ def transmit_sale_dte(
         invoice.sent_at = now
     invoice.save()
     persist_sale_snapshot(order)
+    if record.status == DTERecord.STATUS_ACCEPTED:
+        try:
+            delivery_result = deliver_dte_to_client(record, channels=("email", "whatsapp"), mode="automatic")
+            DTE_LOGGER.info("[DTE] delivery.auto order=%s dte=%s success=%s summary=%s results=%s", order.id, record.id, delivery_result.get("success"), delivery_result.get("summary"), delivery_result.get("results"))
+        except Exception as exc:  # noqa: BLE001
+            DTE_LOGGER.error("[DTE] delivery.auto_error order=%s dte=%s error=%s", order.id, record.id, exc)
     DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record
