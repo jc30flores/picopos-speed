@@ -602,6 +602,29 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         num_item += 1
 
     target_total = money(getattr(order, "total", Decimal("0.00")))
+    items_gross_total = Decimal("0.00")
+    modifiers_gross_total = Decimal("0.00")
+    item_discount_total = Decimal("0.00")
+    for item in order.items.prefetch_related("applied_modifiers"):
+        qty = money(item.quantity)
+        items_gross_total += money(money(item.unit_price) * qty)
+        item_discount_total += money(item.discount_amount)
+        for mod in item.applied_modifiers.all():
+            mod_price = money(mod.modifier_price_snapshot)
+            if mod_price > Decimal("0.00"):
+                modifiers_gross_total += mod_price
+    fees_total = money(sum((money(f.total_amount) for f in order.fees.all()), Decimal("0.00")))
+    reconstructed_order_total = money(items_gross_total + modifiers_gross_total + fees_total - item_discount_total)
+    logger.info(
+        "dte.source_totals order_id=%s order_total=%s items=%s modifiers=%s fees=%s item_discounts=%s reconstructed=%s",
+        getattr(order, "id", None),
+        target_total,
+        money(items_gross_total),
+        money(modifiers_gross_total),
+        fees_total,
+        money(item_discount_total),
+        reconstructed_order_total,
+    )
     gross_from_lines = Decimal("0.00")
     line_errors: list[str] = []
     for line in cuerpo:
@@ -621,6 +644,39 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     if line_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
+    if not _almost_equal(gross_from_lines, target_total):
+        diff = money(target_total - gross_from_lines)
+        logger.warning(
+            "dte.reconcile_needed order_id=%s total_lineas=%s total_real=%s diff=%s",
+            getattr(order, "id", None),
+            gross_from_lines,
+            target_total,
+            diff,
+        )
+        if diff > Decimal("0.00"):
+            ajuste_iva = calculate_iva_from_gross(diff) if not order.iva_exempt else Decimal("0.00")
+            cuerpo.append({
+                "numItem": num_item,
+                "tipoItem": 1,
+                "codigo": "AJUSTE-DTE",
+                "descripcion": "AJUSTE DIFERENCIA PEDIDO",
+                "cantidad": 1,
+                "uniMedida": 59,
+                "precioUni": json_number(diff),
+                "montoDescu": json_number(Decimal("0.00")),
+                "ventaNoSuj": json_number(Decimal("0.00")),
+                "ventaExenta": json_number(diff if order.iva_exempt else Decimal("0.00")),
+                "ventaGravada": json_number(diff if not order.iva_exempt else Decimal("0.00")),
+                "tributos": None,
+                "psv": json_number(Decimal("0.00")),
+                "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(ajuste_iva),
+                "codTributo": None,
+                "numeroDocumento": None,
+            })
+            num_item += 1
+            gross_from_lines = money(gross_from_lines + diff)
+            logger.warning("dte.reconcile_applied order_id=%s ajuste=%s", getattr(order, "id", None), diff)
     if not _almost_equal(gross_from_lines, target_total):
         logger.error(
             "dte.line_total_mismatch order_id=%s total_lineas=%s total_real=%s diff=%s",

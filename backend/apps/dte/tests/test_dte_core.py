@@ -391,6 +391,32 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
 
+    def test_build_payload_cf_adds_adjustment_line_when_order_total_is_higher_than_lines(self):
+        category = Category.objects.create(name="AJUSTE")
+        product = Product.objects.create(name="Base", description="", price=Decimal("26.70"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("26.70"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="BASE-2670",
+            is_custom=False,
+        )
+        self.order.total = Decimal("28.49")
+        self.order.subtotal = Decimal("28.49")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        ajuste = next((line for line in cuerpo if line.get("codigo") == "AJUSTE-DTE"), None)
+        self.assertIsNotNone(ajuste)
+        self.assertEqual(round(ajuste["ventaGravada"], 2), 1.79)
+        self.assertEqual(round(ajuste["ivaItem"], 2), 0.21)
+        self.assertEqual(round(resumen["totalPagar"], 2), 28.49)
+
     def test_preflight_rejects_invalid_identificacion_fields(self):
         payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000202", "A" * 36, "01")
         payload["dte"]["identificacion"]["numeroControl"] = "INVALID-CONTROL"
