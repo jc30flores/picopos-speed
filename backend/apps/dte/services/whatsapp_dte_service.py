@@ -52,7 +52,8 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
     if attempt.status != "SENT":
         attempt.status = "FAILED"
     attempt.provider_status = provider_status or None
-    attempt.provider_body = {**(provider_body or {}), "error": error or None}
+    provider_message = str((provider_body or {}).get("message") or (provider_body or {}).get("detail") or error or "").strip()
+    attempt.provider_body = {**(provider_body or {}), "error": error or None, "provider_message": provider_message or None}
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info(
         "[DTE WA] SEND order=%s status=%s provider_status=%s endpoint=%s has_key=%s error=%s",

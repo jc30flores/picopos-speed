@@ -64,12 +64,14 @@ class DTEDeliveryServiceTests(TestCase):
         mock_whatsapp.return_value = type(
             "Attempt",
             (),
-            {"status": "FAILED", "provider_status": 500, "provider_body": {"error": "http_500"}},
+            {"status": "FAILED", "provider_status": 500, "provider_body": {"error": "http_500", "provider_message": "falló"}},
         )()
         result = deliver_dte_to_client(self.record, channels=("email", "whatsapp"))
         self.assertFalse(result["success"])
         self.assertTrue(result["results"]["email"]["ok"])
         self.assertFalse(result["results"]["whatsapp"]["ok"])
+        self.assertEqual(result["results"]["whatsapp"]["provider_status"], 500)
+        self.assertEqual(result["results"]["whatsapp"]["provider_message"], "falló")
 
     @override_settings(
         DELIVER_EMAIL_API_BASE_URL="",
@@ -104,3 +106,13 @@ class DTEDeliveryServiceTests(TestCase):
         self.assertFalse(result["success"])
         self.assertIn("interno", (result["results"]["email"]["error"] or "").lower())
         mock_email.assert_not_called()
+
+    @patch("apps.dte.services.delivery.send_dte_email")
+    def test_manual_email_override_uses_same_service_with_valid_target(self, mock_email):
+        mock_email.return_value = type("Attempt", (), {"status": "SENT", "provider_status": 202, "provider_body": {"provider_message": "queued"}})()
+        self.customer.correo = ""
+        self.customer.save(update_fields=["correo"])
+        result = deliver_dte_to_client(self.record, channels=("email",), to_email="cliente.override@example.com", mode="manual")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"]["email"]["provider_status"], 202)
+        mock_email.assert_called_once()
