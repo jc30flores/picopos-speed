@@ -21,9 +21,7 @@ from apps.dte.serializers import (
 )
 from apps.dte.services.dte_retry import resend_record
 from apps.dte.services.delivery import deliver_dte_to_client
-from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for_credit_note
-from apps.dte.services.email_dte_service import send_dte_email
-from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
+from apps.dte.services.dte_service import DTEPreflightError, invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.dte_security import redact_payload
 from apps.dte.services.availability import evaluate_record_actions
 
@@ -163,24 +161,18 @@ class DTESendEmailView(APIView):
 
     def post(self, request, pk: int):
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
-        flags = evaluate_record_actions(record)
-        if not flags["can_send_email"]:
-            return Response({"success": False, "message": flags["missing_email_reason"], "detail": "missing_email"}, status=status.HTTP_400_BAD_REQUEST)
-        to_email = request.data.get("email") or flags["customer_email"]
-        attempt = send_dte_email(record, to_email=to_email)
-        log_audit(request, "dte.send_email", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
-        logger.info("[DTE EMAIL] dte_id=%s status=%s provider_status=%s", record.id, attempt.status, attempt.provider_status)
-        return Response(
-            {
-                "success": attempt.status == "SENT",
-                "message": "Correo enviado" if attempt.status == "SENT" else "No se pudo enviar correo",
-                "status": attempt.status,
-                "provider_status": attempt.provider_status,
-                "retries": attempt.retries,
-                "body_preview": str(attempt.provider_body)[:400],
-                "record": DTERecordDetailSerializer(record).data,
-            }
+        result = deliver_dte_to_client(
+            record,
+            channels=("email",),
+            actor_user=request.user,
+            request=request,
+            to_email=request.data.get("email"),
+            mode="manual",
         )
+        status_code = status.HTTP_200_OK if result.get("results") else status.HTTP_400_BAD_REQUEST
+        if result.get("results") and not result.get("success"):
+            status_code = status.HTTP_400_BAD_REQUEST
+        return Response(result, status=status_code)
 
 
 class DTEBulkDeliveryView(APIView):
@@ -195,6 +187,7 @@ class DTEBulkDeliveryView(APIView):
             request=request,
             to_email=request.data.get("email"),
             to_phone=request.data.get("phone"),
+            mode="manual",
         )
         if not result.get("results"):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
@@ -215,6 +208,7 @@ class DTEOrderBulkDeliveryView(APIView):
             request=request,
             to_email=request.data.get("email"),
             to_phone=request.data.get("phone"),
+            mode="manual",
         )
         if not result.get("results"):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
@@ -226,24 +220,18 @@ class DTESendWhatsAppView(APIView):
 
     def post(self, request, pk: int):
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
-        flags = evaluate_record_actions(record)
-        if not flags["can_send_whatsapp"]:
-            return Response({"success": False, "message": flags["missing_phone_reason"], "detail": "missing_phone"}, status=status.HTTP_400_BAD_REQUEST)
-        to_phone = request.data.get("phone") or flags["customer_phone"]
-        attempt = send_dte_whatsapp(record, to_phone=to_phone)
-        log_audit(request, "dte.send_whatsapp", "DTERecord", record.id, {"status": attempt.status, "provider_status": attempt.provider_status})
-        logger.info("[DTE WA] dte_id=%s status=%s provider_status=%s", record.id, attempt.status, attempt.provider_status)
-        return Response(
-            {
-                "success": attempt.status == "SENT",
-                "message": "WhatsApp enviado" if attempt.status == "SENT" else "No se pudo enviar WhatsApp",
-                "status": attempt.status,
-                "provider_status": attempt.provider_status,
-                "retries": attempt.retries,
-                "body_preview": str(attempt.provider_body)[:400],
-                "record": DTERecordDetailSerializer(record).data,
-            }
+        result = deliver_dte_to_client(
+            record,
+            channels=("whatsapp",),
+            actor_user=request.user,
+            request=request,
+            to_phone=request.data.get("phone"),
+            mode="manual",
         )
+        status_code = status.HTTP_200_OK if result.get("results") else status.HTTP_400_BAD_REQUEST
+        if result.get("results") and not result.get("success"):
+            status_code = status.HTTP_400_BAD_REQUEST
+        return Response(result, status=status_code)
 
 
 class DTEInvalidateView(APIView):
@@ -254,18 +242,35 @@ class DTEInvalidateView(APIView):
         flags = evaluate_record_actions(record)
         if not flags["can_invalidate"]:
             return Response({"detail": flags["invalidate_reason"] or "No se puede invalidar"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            result = invalidate_dte_for_order(
+                record.order,
+                motivo=request.data.get("motivo", ""),
+                responsable_dui=request.data.get("responsable_dui", ""),
+                solicitante_dui=request.data.get("solicitante_dui", ""),
+                dte_record=record,
+                allow_non_accepted=True,
+            )
+        except DTEPreflightError as exc:
+            logger.warning(
+                "dte.invalidate.preflight_failed issued_id=%s order_id=%s dte_record_id=%s numeroControl=%s codigoGeneracion=%s error=%s",
+                pk,
+                record.order_id,
+                record.id,
+                record.control_number,
+                record.generation_code or record.codigo_generacion,
+                str(exc),
+            )
+            return Response(
+                {"detail": str(exc), "success": False, "fiscal_status": "FAILED", "record_id": record.id},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
         invalidation = DTEInvalidation.objects.create(
             order=record.order,
             dte_record=record,
             motivo=request.data.get("motivo", ""),
             tipo_anulacion=request.data.get("tipo_anulacion", "total"),
-            status=DTERecord.STATUS_PENDING,
-        )
-        result = invalidate_dte_for_order(
-            record.order,
-            motivo=request.data.get("motivo", ""),
-            responsable_dui=request.data.get("responsable_dui", ""),
-            solicitante_dui=request.data.get("solicitante_dui", ""),
+            status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
         )
         if result.get("success"):
             record.status = DTERecord.STATUS_INVALIDATED

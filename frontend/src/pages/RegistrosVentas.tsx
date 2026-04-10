@@ -4,7 +4,7 @@ import { PageLayout } from "@/components/layout/PageLayout";
 
 const RegistrosVentas = () => {
   return (
-    <PageLayout title="Registros" subtitle="Consulta ventas y movimientos de caja.">
+    <PageLayout title="Reportes" subtitle="Historial de ventas y movimientos de caja.">
           <RegistrosTabs />
           <SalesHistoryTab />
     </PageLayout>

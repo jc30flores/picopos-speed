@@ -26,7 +26,12 @@ from apps.payments.serializers import (
 from apps.payments.normalization import normalize_payment_method_code
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
-from apps.dte.services.dte_service import send_dte_for_order, invalidate_dte_for_order, send_dte_for_credit_note
+from apps.dte.services.dte_service import (
+    DTEPreflightError,
+    invalidate_dte_for_order,
+    send_dte_for_credit_note,
+    send_dte_for_order,
+)
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
@@ -396,50 +401,140 @@ class PaymentRecordRefundView(APIView):
 
         reason = (request.data.get("reason") or "").strip() or "Reembolso desde registros"
         record = DTERecord.objects.filter(order=order, status=DTERecord.STATUS_ACCEPTED).order_by("-created_at").first()
-        if not record:
-            return Response({"detail": "No existe DTE aceptado para esta venta."}, status=status.HTTP_400_BAD_REQUEST)
+        latest_dte = DTERecord.objects.filter(order=order).order_by("-created_at").first()
+        logger.info(
+            "refund.record_refund.precheck payment_id=%s order_id=%s accepted_dte_id=%s latest_dte_id=%s latest_dte_status=%s latest_error=%s",
+            payment.id,
+            order.id,
+            getattr(record, "id", None),
+            getattr(latest_dte, "id", None),
+            getattr(latest_dte, "status", None),
+            getattr(latest_dte, "error_message", None),
+        )
 
-        dte_type = (record.dte_type or "").upper()
-        issued_at = resolve_issued_at(record)
-        should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
+        dte_action = {"action": "internal_refund"}
+        fiscal_result = {"attempted": False, "success": False, "message": "Sin documento base para invalidación fiscal."}
+        dte_base = record or latest_dte
+        def _attempt_invalidation(*, base_record, allow_non_accepted: bool) -> dict:
+            try:
+                return invalidate_dte_for_order(
+                    order,
+                    motivo=reason,
+                    responsable_dui="",
+                    solicitante_dui="",
+                    dte_record=base_record,
+                    allow_non_accepted=allow_non_accepted,
+                )
+            except (DTEPreflightError, ValueError) as exc:
+                logger.warning(
+                    "refund.record_refund.invalidation_preflight_failed payment_id=%s order_id=%s dte_record_id=%s status=%s error=%s",
+                    payment.id,
+                    order.id,
+                    getattr(base_record, "id", None),
+                    getattr(base_record, "status", None),
+                    str(exc),
+                )
+                return {"success": False, "status": "RECHAZADO", "error": str(exc)}
 
-        if should_credit_note:
-            note = CreditNote.objects.create(
-                order=order,
-                original_dte_record=record,
-                motivo=reason,
-                total=record.total_amount,
-                dte_numero_control=record.control_number,
-                dte_codigo_generacion=record.codigo_generacion,
-                items=[],
-                status=DTERecord.STATUS_PENDING,
-            )
-            send_dte_for_credit_note(note)
-            dte_action = {"action": "credit_note", "credit_note_id": note.id}
-        else:
+        if record:
+            dte_type = (record.dte_type or "").upper()
+            issued_at = resolve_issued_at(record)
+            should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
+
+            if should_credit_note:
+                note = CreditNote.objects.create(
+                    order=order,
+                    original_dte_record=record,
+                    motivo=reason,
+                    total=record.total_amount,
+                    dte_numero_control=record.control_number,
+                    dte_codigo_generacion=record.codigo_generacion,
+                    items=[],
+                    status=DTERecord.STATUS_PENDING,
+                )
+                send_dte_for_credit_note(note)
+                dte_action = {"action": "credit_note", "credit_note_id": note.id}
+                fiscal_result = {"attempted": True, "success": True, "message": "Nota de crédito enviada."}
+            else:
+                result = _attempt_invalidation(base_record=record, allow_non_accepted=False)
+                invalidation = DTEInvalidation.objects.create(
+                    order=order,
+                    dte_record=record,
+                    motivo=reason,
+                    tipo_anulacion="total",
+                    status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
+                )
+                if result.get("success"):
+                    was_already_invalidated = bool(result.get("already_invalidated"))
+                    dte_action = {
+                        "action": "invalidate",
+                        "invalidation_id": invalidation.id,
+                        "message": "Refund interno e invalidación fiscal completados."
+                        if not was_already_invalidated
+                        else "Refund interno registrado. El DTE ya estaba invalidado fiscalmente.",
+                    }
+                    fiscal_result = {
+                        "attempted": not was_already_invalidated,
+                        "success": True,
+                        "message": "Invalidación fiscal enviada."
+                        if not was_already_invalidated
+                        else "DTE ya invalidado previamente.",
+                    }
+                else:
+                    dte_action = {
+                        "action": "internal_refund",
+                        "invalidation_id": invalidation.id,
+                        "message": "Refund interno registrado, pero la invalidación fiscal fue rechazada.",
+                    }
+                    fiscal_result = {"attempted": True, "success": False, "message": result.get("error") or "Invalidación fiscal rechazada."}
+        elif dte_base:
+            result = _attempt_invalidation(base_record=dte_base, allow_non_accepted=True)
             invalidation = DTEInvalidation.objects.create(
                 order=order,
-                dte_record=record,
+                dte_record=dte_base,
                 motivo=reason,
                 tipo_anulacion="total",
-                status=DTERecord.STATUS_PENDING,
+                status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
             )
-            result = invalidate_dte_for_order(order, motivo=reason, responsable_dui="", solicitante_dui="")
-            if not result.get("success"):
-                return Response({"detail": result.get("error") or "No se pudo invalidar DTE."}, status=status.HTTP_400_BAD_REQUEST)
-            record.status = DTERecord.STATUS_INVALIDATED
-            record.save(update_fields=["status", "updated_at"])
-            invalidation.status = DTERecord.STATUS_INVALIDATED
-            invalidation.save(update_fields=["status", "updated_at"])
-            dte_action = {"action": "invalidate", "invalidation_id": invalidation.id}
+            dte_action = {
+                "action": "internal_refund",
+                "invalidation_id": invalidation.id,
+                "message": "Refund interno registrado. Se intentó invalidación fiscal sobre DTE no aceptado.",
+            }
+            fiscal_result = {
+                "attempted": True,
+                "success": bool(result.get("success")),
+                "message": "Invalidación fiscal enviada." if result.get("success") else (result.get("error") or "Invalidación fiscal rechazada."),
+            }
+            logger.warning(
+                "refund.record_refund.internal_plus_fiscal_attempt payment_id=%s order_id=%s latest_status=%s fiscal_success=%s",
+                payment.id,
+                order.id,
+                getattr(dte_base, "status", None),
+                fiscal_result["success"],
+            )
+        else:
+            dte_action = {
+                "action": "internal_refund",
+                "message": "No existe DTE para esta venta. Se registró reembolso interno sin invalidación fiscal.",
+            }
 
         effective_method = payment.reporting_payment_method or payment.payment_method
+        cash_session = _get_open_session_for_branch(order.branch_id)
+        refund_method = payment.method if payment.method in {"cash", "card", "transfer"} else "transfer"
+        is_cash_refund = _refund_is_cash(method=refund_method, payment_method=effective_method, original_payment=payment)
+        if is_cash_refund and not cash_session:
+            return Response(
+                {"detail": "No hay caja abierta para registrar el reembolso interno.", "fiscal_result": fiscal_result, **dte_action},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         refund = Refund.objects.create(
             order=order,
             payment_method=effective_method,
             original_payment=payment,
-            cash_session=_get_open_session_for_branch(order.branch_id),
-            method=payment.method if payment.method in {"cash", "card", "transfer"} else "transfer",
+            cash_session=cash_session,
+            method=refund_method,
             amount=payment.amount,
             tip_refunded=payment.tip_amount or Decimal("0"),
             reason=reason,
@@ -447,8 +542,11 @@ class PaymentRecordRefundView(APIView):
             created_by=request.user,
         )
         order.recalculate_financials()
-        if _refund_is_cash(method=refund.method, payment_method=refund.payment_method, original_payment=payment) and refund.cash_session:
-            _create_cash_out_for_refund(refund, request.user)
+        cash_tx = None
+        if is_cash_refund:
+            cash_tx, _ = _create_cash_out_for_refund(refund, request.user)
+            if not cash_tx:
+                raise ValueError("No se pudo registrar movimiento de caja para el reembolso.")
 
         log_audit(
             request,
@@ -462,6 +560,8 @@ class PaymentRecordRefundView(APIView):
                 "detail": "Venta reembolsada correctamente.",
                 "refund_id": refund.id,
                 "order": OrderSerializer(order, context={"request": request}).data,
+                "cash_transaction_id": cash_tx.id if cash_tx else None,
+                "fiscal_result": fiscal_result,
                 **dte_action,
             },
             status=status.HTTP_201_CREATED,

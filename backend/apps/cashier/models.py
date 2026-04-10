@@ -44,6 +44,8 @@ class CashSession(models.Model):
     closing_counted_cash = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     closing_total_bills = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     closing_total_coins = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    closing_total_pos_cards = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    closing_total_pedidos_ya = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     notes = models.TextField(blank=True)
     summary_snapshot = models.JSONField(default=dict, blank=True)
 

@@ -105,5 +105,6 @@ def get_emisor_config(branch=None) -> dict[str, Any]:
 
 
 def payload_emisor_nit(payload: dict) -> str:
-    raw = _digits(((payload or {}).get("dte") or {}).get("emisor", {}).get("nit"))
+    root = ((payload or {}).get("dte") or (payload or {}).get("invalidacion") or {})
+    raw = _digits((root.get("emisor") or {}).get("nit"))
     return raw if len(raw) == 14 else ""

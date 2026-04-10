@@ -2,7 +2,7 @@ from calendar import monthrange
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Case, CharField, Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value, When
+from django.db.models import Case, CharField, Count, DecimalField, DurationField, ExpressionWrapper, F, Q, Sum, Value, When
 from django.db.models.functions import Coalesce, TruncDay, TruncHour, TruncMonth, TruncWeek, TruncYear
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -15,6 +15,7 @@ from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.core.service_types import SERVICE_TYPE_LABELS, normalize_service_type
 from apps.orders.models import OrderItem, OrderItemModifier
 from apps.payments.models import Payment, Refund
+from apps.employees.models import AttendanceRecord
 from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
 from apps.reports.serializers import SalesReportSerializer
 
@@ -543,3 +544,60 @@ class SalesBreakdownView(generics.GenericAPIView):
             payload["compare_items"] = self._breakdown(compare_qs, dimension)
             payload["compare_kpis"] = _kpis_for_queryset(compare_qs)
         return Response(payload)
+
+
+class EmployeeWorkedHoursReportView(generics.GenericAPIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request, *args, **kwargs):
+        start_date, end_date = _parse_report_dates(request)
+        rows = (
+            AttendanceRecord.objects.select_related("employee")
+            .filter(
+                date__gte=start_date,
+                date__lte=end_date,
+                employee__status="active",
+                clock_in__isnull=False,
+                clock_out__isnull=False,
+            )
+            .annotate(
+                break_duration=Case(
+                    When(
+                        break_start__isnull=False,
+                        break_end__isnull=False,
+                        then=ExpressionWrapper(F("break_end") - F("break_start"), output_field=DurationField()),
+                    ),
+                    default=Value(timedelta(0)),
+                    output_field=DurationField(),
+                ),
+                worked_duration=ExpressionWrapper(
+                    F("clock_out") - F("clock_in") - F("break_duration"),
+                    output_field=DurationField(),
+                ),
+            )
+            .values("employee_id", "employee__full_name")
+            .annotate(total_worked=Sum("worked_duration"))
+            .order_by("employee__full_name")
+        )
+
+        payload = []
+        for row in rows:
+            seconds = int((row["total_worked"] or timedelta(0)).total_seconds())
+            if seconds < 0:
+                seconds = 0
+            total_hours = (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            payload.append(
+                {
+                    "employee_id": row["employee_id"],
+                    "employee_name": row["employee__full_name"],
+                    "total_minutes": seconds // 60,
+                    "total_hours": f"{total_hours:.2f}",
+                }
+            )
+
+        return Response(
+            {
+                "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+                "employees": payload,
+            }
+        )
