@@ -364,9 +364,13 @@ def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
 
 
 def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
-    dte = payload.get("dte") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise DTEPreflightError("Payload DTE inválido: falta objeto dte/invalidacion")
+    dte = payload.get("dte")
     if not isinstance(dte, dict):
-        raise DTEPreflightError("Payload DTE inválido: falta objeto dte")
+        dte = payload.get("invalidacion")
+    if not isinstance(dte, dict):
+        raise DTEPreflightError("Payload DTE inválido: falta objeto dte/invalidacion")
     identificacion = dte.get("identificacion") or {}
     emisor = dte.get("emisor") or {}
     receptor = dte.get("receptor") or {}
@@ -769,7 +773,9 @@ def send_to_bridge(
     branch_id: int | None = None,
 ) -> dict:
     validate_dte_preflight_payload(payload)
-    ambiente = payload.get("dte", {}).get("identificacion", {}).get("ambiente")
+    root_key = "invalidacion" if dte_type == "INVALIDACION" else "dte"
+    ident = payload.get(root_key, {}).get("identificacion", {})
+    ambiente = ident.get("ambiente")
     payload_pretty = json.dumps(payload, ensure_ascii=False, indent=2)
 
     try:
@@ -781,16 +787,29 @@ def send_to_bridge(
         logger.error(msg)
         print(msg)
         print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '01'))} DTE_BASE_URL={base_url}")
-        print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+        print(
+            f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente} root={root_key} numeroControl={ident.get('numeroControl')} codigoGeneracion={ident.get('codigoGeneracion')}"
+        )
         print(payload_pretty)
         return {"success": False, "error": {"message": str(exc), "type": "NETWORK_ERROR"}, "offline": True}
 
     print(f"[DTE] MH_AMBIENTE={_get_env('MH_AMBIENTE', _get_env('DTE_AMBIENTE', '00'))} DTE_BASE_URL={base_url}")
     print(f"[DTE] DTE ENDPOINT >>> path={DTE_ENDPOINT_BY_TYPE.get(dte_type)} url={url}")
-    print(f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente}")
+    print(
+        f"[DTE] DTE SEND >>> tipo={dte_type} sucursal={branch_name} ambiente={ambiente} root={root_key} numeroControl={ident.get('numeroControl')} codigoGeneracion={ident.get('codigoGeneracion')}"
+    )
     print(payload_pretty)
     logger.info("DTE ENDPOINT >>> %s", url)
-    logger.info("DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s)\n%s", dte_type, branch_name, ambiente, payload_pretty)
+    logger.info(
+        "DTE SEND >>> (tipo=%s, sucursal=%s, ambiente=%s, root=%s, numeroControl=%s, codigoGeneracion=%s)\n%s",
+        dte_type,
+        branch_name,
+        ambiente,
+        root_key,
+        ident.get("numeroControl"),
+        ident.get("codigoGeneracion"),
+        payload_pretty,
+    )
 
     if not base_url:
         msg = "[DTE] DTE_BASE_URL no configurado"
@@ -986,7 +1005,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         ambiente,
     )
     payload = {
-        "dte": {
+        "invalidacion": {
             "identificacion": {
                 "version": 2,
                 "ambiente": ambiente,
