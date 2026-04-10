@@ -30,7 +30,7 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.orchestrator import transmit_sale_dte
 from apps.dte.services.emisor import get_emisor_config, get_emisor_nit
 from apps.menu.models import Category, Product
-from apps.orders.models import Order, OrderFee, OrderItem
+from apps.orders.models import Order, OrderFee, OrderItem, OrderItemModifier
 from apps.payments.models import Payment, PaymentMethod
 from apps.users.models import UserProfile
 
@@ -357,10 +357,10 @@ class DTECoreTests(TestCase):
         self.assertEqual(line["linea_total_objetivo"], Decimal("4.43"))
         self.assertEqual(line["precio_uni"], Decimal("6.19"))
         self.assertEqual(line["monto_descu"], Decimal("1.76"))
-        self.assertEqual(line["venta_gravada"], Decimal("4.43"))
+        self.assertEqual(line["venta_gravada"], Decimal("3.92"))
         self.assertEqual(line["iva_item"], Decimal("0.51"))
         self.assertEqual(line["linea_total"], Decimal("4.43"))
-        self.assertEqual(line["iva_item"], ((line["venta_gravada"] * Decimal("0.13")) / Decimal("1.13")).quantize(Decimal("0.01")))
+        self.assertEqual(line["venta_gravada"] + line["iva_item"], line["linea_total_objetivo"])
 
     def test_build_payload_cf_discount_from_619_to_500_uses_final_charged_model(self):
         category = Category.objects.create(name="DESCUENTO-500")
@@ -385,8 +385,9 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
         self.assertEqual(round(line["precioUni"], 2), 6.19)
         self.assertEqual(round(line["montoDescu"], 2), 1.19)
-        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
+        self.assertEqual(round(line["ventaGravada"], 2), 4.42)
         self.assertEqual(round(line["ivaItem"], 2), 0.58)
+        self.assertEqual(round(line["ventaGravada"] + line["ivaItem"], 2), 5.00)
         self.assertEqual(round(resumen["subTotal"], 2), 5.00)
         self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
@@ -438,11 +439,44 @@ class DTECoreTests(TestCase):
         cuerpo = payload["dte"]["cuerpoDocumento"]
         resumen = payload["dte"]["resumen"]
         line = cuerpo[0]
-        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
-        self.assertEqual(round(line["montoDescu"], 2), 1.19)
+        self.assertEqual(round(line["ventaGravada"], 2), 4.42)
+        self.assertEqual(round(line["montoDescu"], 2), 1.77)
         self.assertEqual(round(line["ivaItem"], 2), 0.58)
+        self.assertEqual(round(line["ventaGravada"] + line["ivaItem"], 2), 5.00)
         self.assertFalse(any(l.get("codigo") == "AJUSTE-DTE" for l in cuerpo))
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
+
+    def test_build_payload_cf_modifier_without_discount_keeps_current_line_model(self):
+        category = Category.objects.create(name="MODS")
+        product = Product.objects.create(name="Base mod", description="", price=Decimal("5.00"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base mod",
+            price_snapshot=Decimal("5.00"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="MOD-BASE",
+            is_custom=False,
+        )
+        OrderItemModifier.objects.create(
+            order_item=item,
+            modifier_name_snapshot="Queso extra",
+            modifier_price_snapshot=Decimal("1.00"),
+        )
+        self.order.total = Decimal("6.00")
+        self.order.subtotal = Decimal("6.00")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000410", "N" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        self.assertEqual(len(cuerpo), 2)
+        base_line = cuerpo[0]
+        mod_line = cuerpo[1]
+        self.assertEqual(round(base_line["ventaGravada"], 2), 5.00)
+        self.assertEqual(round(mod_line["ventaGravada"], 2), 1.00)
+        self.assertEqual(round(base_line["montoDescu"], 2), 0.00)
+        self.assertEqual(round(mod_line["montoDescu"], 2), 0.00)
 
     def test_preflight_rejects_invalid_identificacion_fields(self):
         payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000202", "A" * 36, "01")
