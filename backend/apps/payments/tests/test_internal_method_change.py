@@ -223,3 +223,35 @@ class PaymentInternalMethodChangeTests(TestCase):
         self.assertTrue(response.data["fiscal_result"]["attempted"])
         self.assertFalse(response.data["fiscal_result"]["success"])
         self.assertIn("ambiente", response.data["fiscal_result"]["message"].lower())
+
+    @patch("apps.payments.views.invalidate_dte_for_order")
+    def test_record_refund_is_idempotent_and_does_not_duplicate_cash_out(self, mock_invalidate):
+        mock_invalidate.return_value = {"success": True}
+        payment = self._create_paid_payment()
+        DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-01-S001P001-000000000000778",
+            generation_code="D" * 36,
+            total_amount=Decimal("10.00"),
+        )
+        self.client.force_authenticate(self.admin)
+
+        first = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "Refund 1"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(CashTransaction.objects.filter(refund__original_payment=payment, type="cash_out").count(), 1)
+
+        second = self.client.post(
+            f"/api/payments/{payment.id}/record-refund/",
+            {"reason": "Refund 2"},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 400, second.data)
+        self.assertEqual(CashTransaction.objects.filter(refund__original_payment=payment, type="cash_out").count(), 1)

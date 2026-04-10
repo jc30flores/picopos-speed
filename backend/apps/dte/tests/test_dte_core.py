@@ -715,3 +715,60 @@ class DTEResendEndpointTests(TestCase):
         self.record.refresh_from_db()
         self.assertEqual(self.record.send_attempts, 1)
         self.assertIn(self.record.status, {DTERecord.STATUS_ACCEPTED, DTERecord.STATUS_PENDING})
+
+
+class DTEInvalidateEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(username="cash-inv", password="pw")
+        UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
+        self.branch = Branch.objects.create(name="Main Inv", code="INV")
+        self.service_type = ServiceType.objects.create(key="dinein-inv", label="En local Inv")
+        self.order = Order.objects.create(
+            order_number=1901,
+            branch=self.branch,
+            service_type=self.service_type,
+            subtotal=Decimal("5.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("5.00"),
+        )
+        self.record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="",
+            generation_code="105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            codigo_generacion="105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "numeroControl": "DTE-01-S001P001-000000000000357",
+                        "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                    }
+                }
+            },
+            total_amount=Decimal("5.00"),
+        )
+
+    @patch("apps.dte.services.dte_service.send_to_bridge")
+    def test_invalidate_endpoint_uses_shared_builder_and_fallback_control_number(self, mock_send):
+        mock_send.return_value = {"http_status": 200, "success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["attempt"]["success"], True)
+        sent_payload = mock_send.call_args.kwargs["payload"]
+        self.assertEqual(
+            sent_payload["dte"]["identificacion"]["numeroControl"],
+            "DTE-01-S001P001-000000000000357",
+        )
+
+    def test_invalidate_endpoint_returns_422_when_base_document_missing_control_number(self):
+        self.record.request_payload = {}
+        self.record.save(update_fields=["request_payload"])
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("numeroControl", response.data["detail"])

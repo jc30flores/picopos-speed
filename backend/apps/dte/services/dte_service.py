@@ -927,11 +927,38 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    request_identificacion = (
+        (record.request_payload or {}).get("dte", {}).get("identificacion")
+        or (record.request_payload or {}).get("identificacion")
+        or {}
+    )
+    numero_control = (
+        str(record.control_number or "").strip()
+        or str(request_identificacion.get("numeroControl") or "").strip()
+    )
+    codigo_generacion = (
+        str(record.generation_code or "").strip()
+        or str(record.codigo_generacion or "").strip()
+        or str(request_identificacion.get("codigoGeneracion") or "").strip()
+    )
+    if not numero_control:
+        raise DTEPreflightError(
+            f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
+        )
+    if not codigo_generacion:
+        raise DTEPreflightError(
+            f"No se pudo resolver codigoGeneracion del DTE base (dte_record_id={record.id})."
+        )
+
     raw_ambiente, source = resolve_ambiente_with_source()
     ambiente = _normalize_ambiente_value(raw_ambiente)
     logger.info(
-        "dte.invalidation.ambiente_resolved dte_record_id=%s source=%s configured=%s resolved=%s",
+        "dte.invalidation.base_resolved dte_record_id=%s order_id=%s tipo=%s numeroControl=%s codigoGeneracion=%s ambiente_source=%s ambiente_configured=%s ambiente_resolved=%s",
         record.id,
+        getattr(record, "order_id", None),
+        record.dte_type,
+        numero_control,
+        codigo_generacion,
         source,
         raw_ambiente,
         ambiente,
@@ -942,8 +969,8 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
                 "version": 2,
                 "ambiente": ambiente,
                 "tipoDte": "AN",
-                "numeroControl": record.control_number,
-                "codigoGeneracion": record.generation_code or record.codigo_generacion,
+                "numeroControl": numero_control,
+                "codigoGeneracion": codigo_generacion,
             },
             "motivo": motivo,
             "responsable": responsable_dui,
@@ -969,6 +996,14 @@ def invalidate_dte_for_order(
         record = order.dte_records.order_by("-id").first()
     if not record:
         raise DTEPreflightError("No existe DTE base para invalidar")
+    if record.status == DTERecord.STATUS_INVALIDATED:
+        return {
+            "attempt_id": None,
+            "success": True,
+            "status": DTERecord.STATUS_INVALIDATED,
+            "error": "",
+            "already_invalidated": True,
+        }
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)

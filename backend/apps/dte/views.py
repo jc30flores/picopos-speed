@@ -21,7 +21,7 @@ from apps.dte.serializers import (
 )
 from apps.dte.services.dte_retry import resend_record
 from apps.dte.services.delivery import deliver_dte_to_client
-from apps.dte.services.dte_service import invalidate_dte_for_order, send_dte_for_credit_note
+from apps.dte.services.dte_service import DTEPreflightError, invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
 from apps.dte.services.dte_security import redact_payload
@@ -254,18 +254,35 @@ class DTEInvalidateView(APIView):
         flags = evaluate_record_actions(record)
         if not flags["can_invalidate"]:
             return Response({"detail": flags["invalidate_reason"] or "No se puede invalidar"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            result = invalidate_dte_for_order(
+                record.order,
+                motivo=request.data.get("motivo", ""),
+                responsable_dui=request.data.get("responsable_dui", ""),
+                solicitante_dui=request.data.get("solicitante_dui", ""),
+                dte_record=record,
+                allow_non_accepted=True,
+            )
+        except DTEPreflightError as exc:
+            logger.warning(
+                "dte.invalidate.preflight_failed issued_id=%s order_id=%s dte_record_id=%s numeroControl=%s codigoGeneracion=%s error=%s",
+                pk,
+                record.order_id,
+                record.id,
+                record.control_number,
+                record.generation_code or record.codigo_generacion,
+                str(exc),
+            )
+            return Response(
+                {"detail": str(exc), "success": False, "fiscal_status": "FAILED", "record_id": record.id},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
         invalidation = DTEInvalidation.objects.create(
             order=record.order,
             dte_record=record,
             motivo=request.data.get("motivo", ""),
             tipo_anulacion=request.data.get("tipo_anulacion", "total"),
-            status=DTERecord.STATUS_PENDING,
-        )
-        result = invalidate_dte_for_order(
-            record.order,
-            motivo=request.data.get("motivo", ""),
-            responsable_dui=request.data.get("responsable_dui", ""),
-            solicitante_dui=request.data.get("solicitante_dui", ""),
+            status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
         )
         if result.get("success"):
             record.status = DTERecord.STATUS_INVALIDATED

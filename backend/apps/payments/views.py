@@ -465,8 +465,21 @@ class PaymentRecordRefundView(APIView):
                     status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
                 )
                 if result.get("success"):
-                    dte_action = {"action": "invalidate", "invalidation_id": invalidation.id, "message": "Refund interno e invalidación fiscal completados."}
-                    fiscal_result = {"attempted": True, "success": True, "message": "Invalidación fiscal enviada."}
+                    was_already_invalidated = bool(result.get("already_invalidated"))
+                    dte_action = {
+                        "action": "invalidate",
+                        "invalidation_id": invalidation.id,
+                        "message": "Refund interno e invalidación fiscal completados."
+                        if not was_already_invalidated
+                        else "Refund interno registrado. El DTE ya estaba invalidado fiscalmente.",
+                    }
+                    fiscal_result = {
+                        "attempted": not was_already_invalidated,
+                        "success": True,
+                        "message": "Invalidación fiscal enviada."
+                        if not was_already_invalidated
+                        else "DTE ya invalidado previamente.",
+                    }
                 else:
                     dte_action = {
                         "action": "internal_refund",
