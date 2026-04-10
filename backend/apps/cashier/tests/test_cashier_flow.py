@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.utils import timezone
 import json
 from concurrent.futures import ThreadPoolExecutor
 from rest_framework.test import APIClient
@@ -108,13 +109,27 @@ class CashierFlowTests(TestCase):
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
-        close = self.client.post('/api/cashier/session/close/', {'counted_cash_amount': '95.00', 'total_bills': '80.00', 'total_coins': '15.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {
+                'counted_cash_amount': '95.00',
+                'total_bills': '80.00',
+                'total_coins': '15.00',
+                'total_pos_tarjetas': '42.50',
+                'total_pedidos_ya': '18.25',
+            },
+            format='json',
+        )
         self.assertEqual(close.status_code, 200)
         session_id = close.data['session']['id']
         session = CashSession.objects.get(id=session_id)
         json.dumps(session.summary_snapshot)
         self.assertEqual(str(session.closing_total_bills), "80.00")
         self.assertEqual(str(session.closing_total_coins), "15.00")
+        self.assertEqual(str(session.closing_total_pos_cards), "42.50")
+        self.assertEqual(str(session.closing_total_pedidos_ya), "18.25")
+        self.assertEqual(session.summary_snapshot.get("counted_pos_cards"), "42.50")
+        self.assertEqual(session.summary_snapshot.get("counted_pedidos_ya"), "18.25")
         pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
@@ -123,6 +138,17 @@ class CashierFlowTests(TestCase):
         self.assertIn(b"ESPERADO", pdf.content)
         self.assertIn(b"CONTADO", pdf.content)
         self.assertIn(b"DIFERENCIA", pdf.content)
+
+
+    def test_ticket_pdf_regression_no_missing_branch_helper_nameerror(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
+        self.assertEqual(close.status_code, 200)
+        session_id = close.data['session']['id']
+
+        response = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.startswith(b'%PDF'))
 
     def test_ticket_pdf_ignores_accept_header_html_and_returns_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
@@ -158,6 +184,75 @@ class CashierFlowTests(TestCase):
         self.assertIn(b"AVENIDA MONACO", pdf_upper)
         for label in [b"EFECTIVO", b"TARJETA", b"TRANSFERENCIA", b"PAYPAL", b"PEDIDOS YA"]:
             self.assertIn(label, pdf_upper)
+
+
+    def test_ticket_pdf_supports_zero_difference_and_empty_notes(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'total_billetes': '70.00', 'total_monedas': '30.00', 'total_contado': '100.00', 'notes': ''},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        session_id = close.data['session']['id']
+
+        pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.content.startswith(b'%PDF'))
+        self.assertGreater(len(pdf.content), 200)
+
+    def test_ticket_pdf_supports_positive_difference(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'total_billetes': '90.00', 'total_monedas': '20.00', 'total_contado': '110.00'},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        session_id = close.data['session']['id']
+
+        pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.content.startswith(b'%PDF'))
+
+    def test_ticket_pdf_handles_legacy_snapshot_currency_strings(self):
+        open_response = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(open_response.status_code, 201)
+        session_id = open_response.data['session']['id']
+        session = CashSession.objects.get(id=session_id)
+        session.status = 'closed'
+        session.closed_by = get_user_model().objects.get(username='cash')
+        session.closed_at = timezone.now()
+        session.summary_snapshot = {
+            'opening_cash': '$100.00',
+            'expected_cash_in_drawer': '$95.00',
+            'counted_cash': '$95.00',
+            'difference': '$0.00',
+        }
+        session.save(update_fields=['status', 'closed_by', 'closed_at', 'summary_snapshot'])
+
+        pdf = self.client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(pdf.status_code, 200)
+        self.assertEqual(pdf['Content-Type'], 'application/pdf')
+        self.assertTrue(pdf.content.startswith(b'%PDF'))
+
+    def test_ticket_pdf_returns_404_for_missing_session(self):
+        response = self.client.get('/api/cashier/sessions/999999/ticket.pdf')
+        self.assertEqual(response.status_code, 404)
+
+    def test_ticket_pdf_returns_403_for_forbidden_role(self):
+        user_model = get_user_model()
+        worker = user_model.objects.create_user(username='worker_cash', password='pw')
+        UserProfile.objects.create(user=worker, role='worker', is_active=True)
+
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
+        session_id = close.data['session']['id']
+
+        worker_client = APIClient()
+        worker_client.force_authenticate(worker)
+        response = worker_client.get(f'/api/cashier/sessions/{session_id}/ticket.pdf')
+        self.assertEqual(response.status_code, 403)
 
     def test_manager_can_close_session(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

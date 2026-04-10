@@ -97,6 +97,8 @@ def _build_close_payload(data) -> dict:
         "session_id": data.get("session_id"),
         "total_billetes": data.get("total_billetes", data.get("total_bills")),
         "total_monedas": data.get("total_monedas", data.get("total_coins")),
+        "total_pos_tarjetas": data.get("total_pos_tarjetas", data.get("total_pos_cards")),
+        "total_pedidos_ya": data.get("total_pedidos_ya", data.get("total_pedidosya")),
         "total_contado": data.get("total_contado", data.get("counted_cash_amount", data.get("closing_cash_counted"))),
         "notes": data.get("notes", ""),
     }
@@ -290,6 +292,8 @@ class CashSessionCloseView(APIView):
         counted_cash = serializer.validated_data["total_contado"]
         counted_bills = serializer.validated_data["total_billetes"]
         counted_coins = serializer.validated_data["total_monedas"]
+        counted_pos_cards = serializer.validated_data["total_pos_tarjetas"]
+        counted_pedidos_ya = serializer.validated_data["total_pedidos_ya"]
         notes = serializer.validated_data["notes"]
 
         session.status = "closed"
@@ -298,11 +302,26 @@ class CashSessionCloseView(APIView):
         session.closing_counted_cash = counted_cash
         session.closing_total_bills = counted_bills
         session.closing_total_coins = counted_coins
+        session.closing_total_pos_cards = counted_pos_cards
+        session.closing_total_pedidos_ya = counted_pedidos_ya
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
         session.summary_snapshot = _to_json_compatible(snapshot)
-        session.save(update_fields=["status", "closed_by", "closed_at", "closing_counted_cash", "closing_total_bills", "closing_total_coins", "notes", "summary_snapshot"])
+        session.save(
+            update_fields=[
+                "status",
+                "closed_by",
+                "closed_at",
+                "closing_counted_cash",
+                "closing_total_bills",
+                "closing_total_coins",
+                "closing_total_pos_cards",
+                "closing_total_pedidos_ya",
+                "notes",
+                "summary_snapshot",
+            ]
+        )
 
         ticket_text = ""
         printed = False
@@ -347,6 +366,8 @@ class CashSessionCloseView(APIView):
                 "print_error": print_error,
                 "total_billetes": f"{counted_bills:.2f}",
                 "total_monedas": f"{counted_coins:.2f}",
+                "total_pos_tarjetas": f"{counted_pos_cards:.2f}",
+                "total_pedidos_ya": f"{counted_pedidos_ya:.2f}",
                 "total_contado": f"{counted_cash:.2f}",
             }
         )
@@ -485,7 +506,7 @@ class CashSessionDetailView(APIView):
 
 
 class CashSessionTicketPDFView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsCashierOrManagerOrAdmin]
     renderer_classes = [PdfRenderer]
 
     def perform_content_negotiation(self, request, force=False):
@@ -493,10 +514,14 @@ class CashSessionTicketPDFView(APIView):
         return renderer, renderer.media_type
 
     def get(self, request, pk: int):
-        session = CashSession.objects.filter(pk=pk).first()
+        session = CashSession.objects.select_related("register", "register__branch").filter(pk=pk).first()
         if not session:
             return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
-        pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        try:
+            pdf_bytes = build_end_of_day_ticket_pdf(pk)
+        except Exception:
+            logger.exception("cashier.ticket_pdf.failed session_id=%s", pk)
+            return Response({"detail": "No se pudo generar el PDF de cierre de caja."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         ts = timezone.localtime(session.closed_at or timezone.now()).strftime("%Y-%m-%d_%H-%M-%S")
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="end_of_day_{ts}.pdf"'

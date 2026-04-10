@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from apps.core.audit import log_audit
 from apps.dte.models import DTERecord
 from apps.dte.services.availability import evaluate_record_actions
+from apps.dte.services.delivery_config import resolve_delivery_config
 from apps.dte.services.email_dte_service import send_dte_email
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp
 
@@ -26,6 +27,16 @@ def _channel_result(*, ok: bool, status_code: int | None = None, error: str | No
     }
 
 
+def _provider_message(body: dict | None) -> str:
+    if not isinstance(body, dict):
+        return ""
+    for key in ("message", "detail", "error", "raw"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def deliver_dte_to_client(
     target: DTERecord,
     *,
@@ -34,7 +45,16 @@ def deliver_dte_to_client(
     request=None,
     to_email: str | None = None,
     to_phone: str | None = None,
+    mode: str = "manual",
 ) -> dict:
+    if target.status != DTERecord.STATUS_ACCEPTED:
+        return {
+            "success": False,
+            "order_id": target.order_id,
+            "issued_id": target.id,
+            "results": {},
+            "summary": "Solo se permite delivery para DTE aceptado",
+        }
     selected_channels = _normalize_channels(channels)
     if not selected_channels:
         return {
@@ -46,6 +66,18 @@ def deliver_dte_to_client(
         }
 
     flags = evaluate_record_actions(target)
+    config = resolve_delivery_config()
+    import logging
+    logger = logging.getLogger("apps.dte")
+    logger.info(
+        "[DTE DELIVERY] mode=%s dte_id=%s email_url=%s whatsapp_url=%s has_email_key=%s has_wa_key=%s",
+        mode,
+        target.id,
+        config.email_url,
+        config.whatsapp_url,
+        bool(config.email_api_key),
+        bool(config.whatsapp_api_key),
+    )
     results: dict[str, dict] = {}
 
     for channel in selected_channels:
@@ -55,10 +87,11 @@ def deliver_dte_to_client(
             else:
                 attempt = send_dte_email(target, to_email=to_email or flags.get("customer_email"))
                 provider_error = str((attempt.provider_body or {}).get("error") or "").strip()
+                provider_message = _provider_message(attempt.provider_body)
                 results[channel] = _channel_result(
                     ok=attempt.status == "SENT",
                     status_code=attempt.provider_status,
-                    error=provider_error or ("No se pudo enviar correo" if attempt.status != "SENT" else None),
+                    error=provider_message or provider_error or ("No se pudo enviar correo" if attempt.status != "SENT" else None),
                 )
         if channel == "whatsapp":
             if not flags.get("can_send_whatsapp"):
@@ -66,10 +99,11 @@ def deliver_dte_to_client(
             else:
                 attempt = send_dte_whatsapp(target, to_phone=to_phone or flags.get("customer_phone"))
                 provider_error = str((attempt.provider_body or {}).get("error") or "").strip()
+                provider_message = _provider_message(attempt.provider_body)
                 results[channel] = _channel_result(
                     ok=attempt.status == "SENT",
                     status_code=attempt.provider_status,
-                    error=provider_error or ("No se pudo enviar WhatsApp" if attempt.status != "SENT" else None),
+                    error=provider_message or provider_error or ("No se pudo enviar WhatsApp" if attempt.status != "SENT" else None),
                 )
 
     success = bool(results) and all(bool(item.get("ok")) for item in results.values())
@@ -102,4 +136,5 @@ def deliver_dte_to_client(
         "issued_id": target.id,
         "results": results,
         "summary": summary,
+        "mode": mode,
     }

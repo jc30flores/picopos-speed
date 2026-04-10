@@ -191,7 +191,8 @@ class DTEClient:
             )
             return DTEClientResult(0, body, str(exc), False, "", "", str(exc), "CONFIG_ERROR", 0)
 
-        ident = (payload or {}).get("dte", {}).get("identificacion", {})
+        root_payload = (payload or {}).get("dte") or (payload or {}).get("invalidacion") or {}
+        ident = root_payload.get("identificacion", {})
         numero_control = str(ident.get("numeroControl") or "")
         codigo_generacion = str(ident.get("codigoGeneracion") or "")
         context = {
