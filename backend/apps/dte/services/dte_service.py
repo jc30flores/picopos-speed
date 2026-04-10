@@ -637,15 +637,47 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
                 line_errors.append(
                     f"item.{num_item_line}.ivaItem={money(line.get('ivaItem'))} calc={iva_calc} ventaGravada={money(line.get('ventaGravada'))}"
                 )
-        objetivo = money(line.get("_lineaObjetivo"))
-        if not _almost_equal(line_total, objetivo):
-            line_errors.append(f"item.{num_item_line}.lineTotal={line_total} objetivo={objetivo}")
     gross_from_lines = money(gross_from_lines)
     if line_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
     if not _almost_equal(gross_from_lines, target_total):
         diff = money(target_total - gross_from_lines)
+        # Reconciliación diferenciada para líneas con descuento:
+        # preserva casos sin descuento (ya correctos) y ajusta solo descuento/monto final de línea.
+        if diff > Decimal("0.00"):
+            discounted = [
+                line
+                for line in reversed(cuerpo)
+                if money(line.get("montoDescu")) > Decimal("0.00") and money(line.get("ventaGravada")) > Decimal("0.00")
+            ]
+            for line in discounted:
+                if diff <= Decimal("0.00"):
+                    break
+                max_venta = money(money(line.get("precioUni")) * money(line.get("cantidad")))
+                current_venta = money(line.get("ventaGravada"))
+                available = money(max_venta - current_venta)
+                if available <= Decimal("0.00"):
+                    continue
+                delta = available if available <= diff else diff
+                new_venta = money(current_venta + delta)
+                new_desc = money(money(line.get("montoDescu")) - delta)
+                line["ventaGravada"] = json_number(new_venta)
+                line["montoDescu"] = json_number(new_desc)
+                line["ivaItem"] = json_number(calculate_iva_from_gross(new_venta))
+                line["_lineaObjetivo"] = json_number(new_venta)
+                diff = money(diff - delta)
+                logger.info(
+                    "dte.discount_reconcile numItem=%s delta=%s ventaGravada=%s montoDescu=%s",
+                    line.get("numItem"),
+                    delta,
+                    new_venta,
+                    new_desc,
+                )
+            gross_from_lines = money(
+                sum((money(line.get("ventaGravada")) + money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00"))
+            )
+            diff = money(target_total - gross_from_lines)
         logger.warning(
             "dte.reconcile_needed order_id=%s total_lineas=%s total_real=%s diff=%s",
             getattr(order, "id", None),
@@ -677,6 +709,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             num_item += 1
             gross_from_lines = money(gross_from_lines + diff)
             logger.warning("dte.reconcile_applied order_id=%s ajuste=%s", getattr(order, "id", None), diff)
+    objective_errors: list[str] = []
+    for line in cuerpo:
+        line_total = money(money(line.get("ventaGravada")) + money(line.get("ventaExenta")))
+        objetivo = money(line.get("_lineaObjetivo"))
+        if not _almost_equal(line_total, objetivo):
+            objective_errors.append(f"item.{line.get('numItem')}.lineTotal={line_total} objetivo={objetivo}")
+    if objective_errors:
+        logger.error("dte.line_preflight_failed %s", " | ".join(objective_errors))
+        raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
     if not _almost_equal(gross_from_lines, target_total):
         logger.error(
             "dte.line_total_mismatch order_id=%s total_lineas=%s total_real=%s diff=%s",
