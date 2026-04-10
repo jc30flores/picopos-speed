@@ -4035,6 +4035,7 @@ export const dteDeliver = async (
       statusCode: number | null;
       providerStatus: number | null;
       providerMessage: string | null;
+      recipient: string | null;
       error: string | null;
     }
   >;
@@ -4057,6 +4058,7 @@ export const dteDeliver = async (
           statusCode: value?.status_code ?? null,
           providerStatus: value?.provider_status ?? null,
           providerMessage: value?.provider_message ?? null,
+          recipient: value?.recipient ?? null,
           error: value?.error ?? null,
         },
       ])
@@ -4079,6 +4081,7 @@ export const dteDeliverByOrder = async (
       statusCode: number | null;
       providerStatus: number | null;
       providerMessage: string | null;
+      recipient: string | null;
       error: string | null;
     }
   >;
@@ -4101,6 +4104,7 @@ export const dteDeliverByOrder = async (
           statusCode: value?.status_code ?? null,
           providerStatus: value?.provider_status ?? null,
           providerMessage: value?.provider_message ?? null,
+          recipient: value?.recipient ?? null,
           error: value?.error ?? null,
         },
       ])

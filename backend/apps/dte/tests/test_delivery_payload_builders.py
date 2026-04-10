@@ -43,16 +43,13 @@ class DTEPayloadBuildersTests(TestCase):
 
     def test_build_email_payload_exact_keys(self):
         payload = build_email_payload(self.record)
-        self.assertEqual(payload["order_id"], self.order.id)
-        self.assertEqual(payload["dte_id"], self.record.id)
         self.assertEqual(payload["to_email"], "cliente@example.com")
-        self.assertEqual(payload["email"], "cliente@example.com")
-        self.assertEqual(payload["to"], "cliente@example.com")
         self.assertEqual(payload["subject"], "DTE DTE-01-S001P001-000000000000001")
-        self.assertIn("Adjuntamos comprobante DTE", payload["body"])
+        self.assertIn("Adjuntamos comprobante DTE", payload["body_text"])
+        self.assertIn("flags", payload)
         self.assertEqual(payload["metadata"], {"dte_type": "CF_01", "status": "ACEPTADO"})
         self.assertEqual(payload["invoice_json"]["numero_control"], "DTE-01-S001P001-000000000000001")
-        self.assertEqual(payload["dte_json"]["codigo_generacion"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        self.assertEqual(payload["invoice_json"]["codigo_generacion"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
     def test_build_whatsapp_payload_exact_keys(self):
         payload = build_whatsapp_payload(self.record)

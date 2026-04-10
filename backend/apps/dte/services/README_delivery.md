@@ -38,6 +38,36 @@ Ambos usan `deliver_dte_to_client(...)` en `delivery.py`.
 - WhatsApp: `WHATSAPP_DTE_API_BASE`, `WHATSAPP_DTE_API_KEY`
 - Email: `DELIVER_EMAIL_API_BASE_URL` o `EMAIL_API_BASE_URL`; `DELIVER_EMAIL_API_KEY` o `EMAIL_API_KEY`
 
+## Contratos usados por este backend
+
+### Email (`DELIVER_EMAIL_API_BASE_URL + DELIVER_EMAIL_API_ENDPOINT`)
+Payload enviado:
+```json
+{
+  "to_email": "cliente@correo.com",
+  "subject": "DTE DTE-01-S001P001-000000000000123",
+  "body_text": "Adjuntamos comprobante DTE DTE-01-S001P001-000000000000123.",
+  "invoice_json": { "...": "..." },
+  "flags": { "source": "picopos", "channel": "email_dte" },
+  "metadata": { "dte_type": "CF_01", "status": "ACEPTADO" }
+}
+```
+- Campos requeridos: `to_email`, `subject`, `body_text`, `invoice_json`.
+- Campos opcionales: `flags`, `metadata` (y `body_html` si se necesitara agregar en el futuro).
+
+### WhatsApp (`WHATSAPP_DTE_API_BASE + WHATSAPP_DTE_API_ENDPOINT`)
+Payload enviado (gateway actual):
+```json
+{
+  "order_id": 123,
+  "dte_id": 456,
+  "to": "5037XXXXXXX",
+  "message": "DTE DTE-01-S001P001-000000000000123 estado ACEPTADO"
+}
+```
+- Este backend usa un gateway configurable vía `.env`.
+- Si el gateway cambia a contrato Meta/Graph (`/messages`, `/media`), se debe ajustar este payload a ese contrato desplegado.
+
 ## Auditoría
 Se registra un `log_audit` por canal con:
 - usuario actor,

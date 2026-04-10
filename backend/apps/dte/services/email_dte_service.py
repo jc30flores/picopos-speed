@@ -48,15 +48,11 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
         "dte_payload": record.request_payload or {},
     }
     return {
-        "order_id": record.order_id,
-        "dte_id": record.id,
         "to_email": recipient,
-        "email": recipient,
-        "to": recipient,
         "subject": f"DTE {record.control_number}",
-        "body": f"Adjuntamos comprobante DTE {record.control_number}.",
+        "body_text": f"Adjuntamos comprobante DTE {record.control_number}.",
         "invoice_json": invoice_json,
-        "dte_json": invoice_json,
+        "flags": {"source": "picopos", "channel": "email_dte"},
         "metadata": {"dte_type": record.dte_type, "status": record.status},
     }
 

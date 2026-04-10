@@ -85,6 +85,7 @@ class DTEEmailServiceTests(TestCase):
         _, kwargs = mock_post.call_args
         payload = kwargs["json"]
         self.assertEqual(payload["to_email"], "cliente@example.com")
-        self.assertEqual(payload["email"], "cliente@example.com")
+        self.assertIn("body_text", payload)
         self.assertIn("invoice_json", payload)
-        self.assertIn("dte_json", payload)
+        self.assertNotIn("dte_json", payload)
+        self.assertNotIn("email", payload)
