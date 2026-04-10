@@ -606,7 +606,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     line_errors: list[str] = []
     for line in cuerpo:
         num_item_line = line.get("numItem")
-        line_total = money(money(line.get("ventaGravada")) + money(line.get("ventaExenta")) + money(line.get("ivaItem")))
+        line_total = money(money(line.get("ventaGravada")) + money(line.get("ventaExenta")))
         gross_from_lines += line_total
         if money(line.get("ventaGravada")) > Decimal("0.00"):
             iva_calc = calculate_iva_from_gross(money(line.get("ventaGravada")))

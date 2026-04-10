@@ -715,6 +715,73 @@ class DTECoreTests(TestCase):
         with self.assertRaises(DTEPreflightError):
             validate_dte_preflight_payload(payload)
 
+    def test_preflight_accepts_final_charged_pattern_500(self):
+        payload = {
+            "dte": {
+                "identificacion": {
+                    "version": 1,
+                    "ambiente": "00",
+                    "tipoDte": "01",
+                    "numeroControl": "DTE-01-S001P001-000000000000500",
+                    "codigoGeneracion": "A" * 36,
+                    "fecEmi": "2026-04-10",
+                    "horEmi": "10:00:00",
+                    "tipoOperacion": 1,
+                    "tipoModelo": 1,
+                    "tipoMoneda": "USD",
+                },
+                "emisor": {
+                    "nit": "12171409901063",
+                    "nrc": "123",
+                    "nombre": "Empresa",
+                    "nombreComercial": "Empresa",
+                    "codActividad": "56101",
+                    "descActividad": "Restaurantes",
+                    "tipoEstablecimiento": "02",
+                    "codEstableMH": "X001",
+                    "codEstable": "X001",
+                    "codPuntoVentaMH": "X001",
+                    "codPuntoVenta": "X001",
+                    "telefono": "00000000",
+                    "correo": "facturas@example.com",
+                    "direccion": {"departamento": "12", "municipio": "22", "complemento": "Dir"},
+                },
+                "receptor": {"nombre": "CONSUMIDOR FINAL", "direccion": {"departamento": "12", "municipio": "22", "complemento": "Dir"}, "telefono": "00000000", "correo": "cf@example.com"},
+                "cuerpoDocumento": [
+                    {
+                        "numItem": 1,
+                        "cantidad": 1,
+                        "precioUni": 5.0,
+                        "montoDescu": 0.0,
+                        "ventaNoSuj": 0.0,
+                        "ventaExenta": 0.0,
+                        "ventaGravada": 5.0,
+                        "psv": 0.0,
+                        "noGravado": 0.0,
+                        "ivaItem": 0.58,
+                    }
+                ],
+                "resumen": {
+                    "totalNoSuj": 0.0,
+                    "totalExenta": 0.0,
+                    "totalGravada": 5.0,
+                    "subTotalVentas": 5.0,
+                    "descuNoSuj": 0.0,
+                    "descuExenta": 0.0,
+                    "descuGravada": 0.0,
+                    "totalDescu": 0.0,
+                    "subTotal": 5.0,
+                    "ivaRete1": 0.0,
+                    "reteRenta": 0.0,
+                    "montoTotalOperacion": 5.0,
+                    "totalPagar": 5.0,
+                    "totalIva": 0.58,
+                    "pagos": [{"codigo": "01", "montoPago": 5.0, "referencia": None, "plazo": None, "periodo": None}],
+                },
+            }
+        }
+        validate_dte_preflight_payload(payload)
+
     def test_preflight_blocks_inconsistent_iva_item(self):
         payload = {
             "dte": {
