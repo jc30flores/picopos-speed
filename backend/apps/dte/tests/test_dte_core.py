@@ -357,10 +357,10 @@ class DTECoreTests(TestCase):
         self.assertEqual(line["linea_total_objetivo"], Decimal("4.43"))
         self.assertEqual(line["precio_uni"], Decimal("6.19"))
         self.assertEqual(line["monto_descu"], Decimal("1.76"))
-        self.assertEqual(line["venta_gravada"], Decimal("3.92"))
+        self.assertEqual(line["venta_gravada"], Decimal("4.43"))
         self.assertEqual(line["iva_item"], Decimal("0.51"))
         self.assertEqual(line["linea_total"], Decimal("4.43"))
-        self.assertEqual(line["venta_gravada"] + line["iva_item"], line["linea_total_objetivo"])
+        self.assertEqual(line["venta_gravada"], line["linea_total_objetivo"])
 
     def test_build_payload_cf_discount_from_619_to_500_uses_final_charged_model(self):
         category = Category.objects.create(name="DESCUENTO-500")
@@ -385,9 +385,9 @@ class DTECoreTests(TestCase):
         resumen = payload["dte"]["resumen"]
         self.assertEqual(round(line["precioUni"], 2), 6.19)
         self.assertEqual(round(line["montoDescu"], 2), 1.19)
-        self.assertEqual(round(line["ventaGravada"], 2), 4.42)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
         self.assertEqual(round(line["ivaItem"], 2), 0.58)
-        self.assertEqual(round(line["ventaGravada"] + line["ivaItem"], 2), 5.00)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
         self.assertEqual(round(resumen["subTotal"], 2), 5.00)
         self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
@@ -439,10 +439,10 @@ class DTECoreTests(TestCase):
         cuerpo = payload["dte"]["cuerpoDocumento"]
         resumen = payload["dte"]["resumen"]
         line = cuerpo[0]
-        self.assertEqual(round(line["ventaGravada"], 2), 4.42)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
         self.assertEqual(round(line["montoDescu"], 2), 1.77)
         self.assertEqual(round(line["ivaItem"], 2), 0.58)
-        self.assertEqual(round(line["ventaGravada"] + line["ivaItem"], 2), 5.00)
+        self.assertEqual(round(line["ventaGravada"], 2), 5.00)
         self.assertFalse(any(l.get("codigo") == "AJUSTE-DTE" for l in cuerpo))
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
 
@@ -737,7 +737,7 @@ class DTECoreTests(TestCase):
         line = payload["dte"]["cuerpoDocumento"][0]
         self.assertEqual(round(line["ivaItem"], 2), self._iva_from_gross(line["ventaGravada"]))
 
-    def test_preflight_blocks_mixed_base_and_reverse_iva_case(self):
+    def test_preflight_blocks_discount_line_when_venta_gravada_is_not_final_charged(self):
         payload = {
             "dte": {
                 "cuerpoDocumento": [
@@ -766,8 +766,8 @@ class DTECoreTests(TestCase):
                     "subTotal": 4.42,
                     "ivaRete1": 0.0,
                     "reteRenta": 0.0,
-                    "montoTotalOperacion": 5.0,
-                    "totalPagar": 5.0,
+                    "montoTotalOperacion": 4.42,
+                    "totalPagar": 4.42,
                     "totalIva": 0.58,
                 },
             }

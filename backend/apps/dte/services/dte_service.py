@@ -136,22 +136,9 @@ def calculate_iva_from_gross(gross_amount: Decimal) -> Decimal:
     return _q2(gross_amount * TAX_RATE / TAX_DIVISOR)
 
 
-def _line_uses_discount_split(line: dict) -> bool:
-    return money(line.get("montoDescu")) > Decimal("0.00") and money(line.get("ventaGravada")) > Decimal("0.00")
-
-
-def _split_discounted_taxable_line_from_charged(charged_total: Decimal) -> tuple[Decimal, Decimal]:
-    venta_gravada = calculate_taxable_base_from_gross(charged_total)
-    iva_item = money(charged_total - venta_gravada)
-    return venta_gravada, iva_item
-
-
 def _line_charged_total(line: dict) -> Decimal:
     venta_gravada = money(line.get("ventaGravada"))
     venta_exenta = money(line.get("ventaExenta"))
-    iva_item = money(line.get("ivaItem"))
-    if _line_uses_discount_split(line):
-        return money(venta_gravada + venta_exenta + iva_item)
     return money(venta_gravada + venta_exenta)
 
 
@@ -163,16 +150,12 @@ def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal
     if taxable:
         if quantity == Decimal("0.00"):
             raise DTEPreflightError("Cantidad inválida (0) para línea gravada.")
-        # Regla vigente para líneas sin descuento:
-        # ventaGravada refleja monto final cobrado de la línea (con IVA incluido).
+        # Regla vigente/aceptada por integración:
+        # ventaGravada refleja SIEMPRE el monto final cobrado de la línea (con IVA incluido),
+        # tanto con descuento como sin descuento.
         base_unit = _q2(unit_price_gross)
-        if discount_gross > Decimal("0.00"):
-            # Regla diferenciada para descuentos:
-            # repartir el monto final cobrado en base + IVA para evitar desfaces de centavos.
-            venta_gravada, iva_item = _split_discounted_taxable_line_from_charged(gross_line_after_discount)
-        else:
-            venta_gravada = gross_line_after_discount
-            iva_item = calculate_iva_from_gross(venta_gravada)
+        venta_gravada = gross_line_after_discount
+        iva_item = calculate_iva_from_gross(venta_gravada)
         return {
             "precio_uni": base_unit,
             "monto_descu": discount_gross,
@@ -238,25 +221,16 @@ def _validate_dte_totals(dte_payload: dict) -> None:
 
         if venta_gravada_line > Decimal("0.00"):
             charged_calc = _q2((precio_uni * qty) - monto_descu_line)
-            if monto_descu_line > Decimal("0.00"):
-                calc_iva = money(charged_calc - venta_gravada_line)
-                line_total = money(venta_gravada_line + iva_item_line)
-                calc_line_total = money(charged_calc)
-                if not _almost_equal(iva_item_line, calc_iva):
-                    errors.append(f"item.{num_item}.ivaItem={iva_item_line} calc={calc_iva}")
-                if not _almost_equal(line_total, calc_line_total):
-                    errors.append(f"item.{num_item}.lineTotalDescuento={line_total} calc={calc_line_total}")
-            else:
-                calc_venta = charged_calc
-                calc_iva = calculate_iva_from_gross(venta_gravada_line)
-                line_total = money(venta_gravada_line)
-                calc_line_total = money(calc_venta)
-                if not _almost_equal(venta_gravada_line, calc_venta):
-                    errors.append(f"item.{num_item}.ventaGravada={venta_gravada_line} calc={calc_venta}")
-                if not _almost_equal(iva_item_line, calc_iva):
-                    errors.append(f"item.{num_item}.ivaItem={iva_item_line} calc={calc_iva}")
-                if not _almost_equal(line_total, calc_line_total):
-                    errors.append(f"item.{num_item}.lineTotal={line_total} calc={calc_line_total}")
+            calc_venta = charged_calc
+            calc_iva = calculate_iva_from_gross(venta_gravada_line)
+            line_total = money(venta_gravada_line)
+            calc_line_total = money(calc_venta)
+            if not _almost_equal(venta_gravada_line, calc_venta):
+                errors.append(f"item.{num_item}.ventaGravada={venta_gravada_line} calc={calc_venta}")
+            if not _almost_equal(iva_item_line, calc_iva):
+                errors.append(f"item.{num_item}.ivaItem={iva_item_line} calc={calc_iva}")
+            if not _almost_equal(line_total, calc_line_total):
+                errors.append(f"item.{num_item}.lineTotal={line_total} calc={calc_line_total}")
 
         if venta_exenta_line > Decimal("0.00") and iva_item_line != Decimal("0.00"):
             errors.append(f"item.{num_item}.ivaItem_debe_ser_0_para_exenta={iva_item_line}")
@@ -672,14 +646,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         line_total = _line_charged_total(line)
         gross_from_lines += line_total
         if money(line.get("ventaGravada")) > Decimal("0.00"):
-            if _line_uses_discount_split(line):
-                iva_calc = money(
-                    money(money(line.get("precioUni")) * money(line.get("cantidad")))
-                    - money(line.get("montoDescu"))
-                    - money(line.get("ventaGravada"))
-                )
-            else:
-                iva_calc = calculate_iva_from_gross(money(line.get("ventaGravada")))
+            iva_calc = calculate_iva_from_gross(money(line.get("ventaGravada")))
             if abs(iva_calc - money(line.get("ivaItem"))) > Decimal("0.01"):
                 line_errors.append(
                     f"item.{num_item_line}.ivaItem={money(line.get('ivaItem'))} calc={iva_calc} ventaGravada={money(line.get('ventaGravada'))}"
@@ -690,8 +657,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
     if not _almost_equal(gross_from_lines, target_total):
         diff = money(target_total - gross_from_lines)
-        # Reconciliación diferenciada para líneas con descuento:
-        # preserva casos sin descuento (ya correctos) y ajusta solo descuento/monto final de línea.
+        # Reconciliación enfocada en líneas con descuento:
+        # preserva casos sin descuento y ajusta solo montoDescu/ventaGravada/ivaItem del item descontado.
         if diff > Decimal("0.00"):
             discounted = [
                 line
@@ -709,11 +676,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
                 delta = available if available <= diff else diff
                 new_charged = money(current_charged + delta)
                 new_desc = money(money(line.get("montoDescu")) - delta)
-                if _line_uses_discount_split(line):
-                    new_venta, new_iva = _split_discounted_taxable_line_from_charged(new_charged)
-                else:
-                    new_venta = new_charged
-                    new_iva = calculate_iva_from_gross(new_venta)
+                new_venta = new_charged
+                new_iva = calculate_iva_from_gross(new_venta)
                 line["ventaGravada"] = json_number(new_venta)
                 line["montoDescu"] = json_number(new_desc)
                 line["ivaItem"] = json_number(new_iva)
@@ -769,6 +733,27 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         objetivo = money(line.get("_lineaObjetivo"))
         if not _almost_equal(line_total, objetivo):
             objective_errors.append(f"item.{line.get('numItem')}.lineTotal={line_total} objetivo={objetivo}")
+        if money(line.get("montoDescu")) > Decimal("0.00"):
+            precio_original = money(money(line.get("precioUni")) * money(line.get("cantidad")))
+            descuento = money(line.get("montoDescu"))
+            venta_gravada = money(line.get("ventaGravada"))
+            iva_item = money(line.get("ivaItem"))
+            esperado = money(precio_original - descuento)
+            serializado = line_total
+            if not _almost_equal(esperado, serializado):
+                logger.error(
+                    "dte.discount_line_mismatch order_id=%s item=%s precio_original=%s descuento=%s ventaGravada=%s ivaItem=%s total_esperado=%s total_serializado=%s diferencia=%s",
+                    getattr(order, "id", None),
+                    line.get("numItem"),
+                    precio_original,
+                    descuento,
+                    venta_gravada,
+                    iva_item,
+                    esperado,
+                    serializado,
+                    money(esperado - serializado),
+                )
+                objective_errors.append(f"item.{line.get('numItem')}.discountLineTotal={serializado} esperado={esperado}")
     if objective_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(objective_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
