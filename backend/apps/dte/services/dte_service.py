@@ -142,6 +142,10 @@ def _line_charged_total(line: dict) -> Decimal:
     return money(venta_gravada + venta_exenta)
 
 
+def _line_expected_total_from_price_discount(line: dict) -> Decimal:
+    return money((money(line.get("precioUni")) * money(line.get("cantidad"))) - money(line.get("montoDescu")))
+
+
 def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal, discount_gross: Decimal, taxable: bool) -> dict[str, Decimal]:
     gross_line_before_discount = _q2(unit_price_gross * quantity)
     discount_gross = _q2(min(gross_line_before_discount, discount_gross))
@@ -738,20 +742,21 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             descuento = money(line.get("montoDescu"))
             venta_gravada = money(line.get("ventaGravada"))
             iva_item = money(line.get("ivaItem"))
-            esperado = money(precio_original - descuento)
+            esperado = _line_expected_total_from_price_discount(line)
             serializado = line_total
             if not _almost_equal(esperado, serializado):
                 logger.error(
-                    "dte.discount_line_mismatch order_id=%s item=%s precio_original=%s descuento=%s ventaGravada=%s ivaItem=%s total_esperado=%s total_serializado=%s diferencia=%s",
+                    "dte.discount_line_mismatch order_id=%s item=%s precio_original=%s descuento=%s total_final_real=%s ventaGravada=%s ivaItem=%s total_serializado=%s diferencia=%s linea_dte=%s",
                     getattr(order, "id", None),
                     line.get("numItem"),
                     precio_original,
                     descuento,
+                    esperado,
                     venta_gravada,
                     iva_item,
-                    esperado,
                     serializado,
                     money(esperado - serializado),
+                    line,
                 )
                 objective_errors.append(f"item.{line.get('numItem')}.discountLineTotal={serializado} esperado={esperado}")
     if objective_errors:
