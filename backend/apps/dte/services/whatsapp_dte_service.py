@@ -20,7 +20,8 @@ def _normalize_phone(value: str | None) -> str:
 
 def validate_whatsapp_target(record: DTERecord, to_phone: str | None = None) -> tuple[bool, str, str]:
     default_phone = resolve_delivery_config().whatsapp_default_phone
-    phone = _normalize_phone(to_phone or default_phone)
+    customer_phone = _normalize_phone(getattr(getattr(record.order, "customer", None), "telefono", ""))
+    phone = _normalize_phone(to_phone) or customer_phone or _normalize_phone(default_phone)
     if not phone:
         return False, "Cliente sin teléfono", ""
     if not PHONE_RE.match(phone):
@@ -30,11 +31,42 @@ def validate_whatsapp_target(record: DTERecord, to_phone: str | None = None) -> 
 
 def build_whatsapp_payload(record: DTERecord, to_phone: str | None = None) -> dict:
     _, _, target = validate_whatsapp_target(record, to_phone=to_phone)
+    request_payload = record.request_payload or {}
+    dte = request_payload.get("dte") if isinstance(request_payload, dict) and isinstance(request_payload.get("dte"), dict) else {}
+    response_payload = record.response_payload or {}
+    tipo_dte = "01"
+    doc_type = "CF"
+    normalized = (record.dte_type or "").upper()
+    if normalized.startswith("CCF"):
+        tipo_dte, doc_type = "03", "CCF"
+    elif normalized.startswith("SE"):
+        tipo_dte, doc_type = "14", "SX"
+    elif isinstance(dte.get("identificacion"), dict) and dte["identificacion"].get("tipoDte"):
+        tipo_dte = str(dte["identificacion"]["tipoDte"])
+    empresa_nombre = (
+        (dte.get("emisor") or {}).get("nombreComercial")
+        or (dte.get("emisor") or {}).get("nombre")
+        or resolve_delivery_config().whatsapp_company_name
+        or "PicoPOS"
+    )
+    resumen = dte.get("resumen") if isinstance(dte.get("resumen"), dict) else {}
+    total = float(resumen.get("totalPagar") or record.total_amount or 0)
     return {
-        "order_id": record.order_id,
-        "dte_id": record.id,
-        "to": target,
-        "message": f"DTE {record.control_number} estado {record.status}",
+        "num_receptor": target,
+        "send_json": True,
+        "dte": dte,
+        "tipo_dte": tipo_dte,
+        "doc_type": doc_type,
+        "empresa_nombre": empresa_nombre,
+        "total": total,
+        "hacienda_response": response_payload,
+        "sello_recibido": record.sello_recibido or record.sello_recepcion or response_payload.get("sello_recibido") or "",
+        "fh_procesamiento": (
+            response_payload.get("fhProcesamiento")
+            or response_payload.get("fh_procesamiento")
+            or (record.recibido_at.isoformat() if record.recibido_at else None)
+        ),
+        "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
     }
 
 
@@ -66,6 +98,16 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         return attempt
 
     payload = build_whatsapp_payload(record, to_phone=target_phone)
+    logger.info(
+        "[DTE WA] payload_summary order=%s endpoint=%s num_receptor=%s tipo_dte=%s doc_type=%s has_dte=%s send_json=%s",
+        record.order_id,
+        endpoint,
+        payload.get("num_receptor"),
+        payload.get("tipo_dte"),
+        payload.get("doc_type"),
+        isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
+        payload.get("send_json"),
+    )
 
     for retry in range(3):
         attempt.retries = retry + 1
@@ -73,11 +115,12 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
             error = "WHATSAPP_DTE_API_BASE missing"
             break
         try:
-            response = requests.post(endpoint, json=payload, headers={"X-API-Key": key}, timeout=8)
+            response = requests.post(endpoint, json=payload, headers={"X-API-Key": key, "Content-Type": "application/json"}, timeout=8)
             provider_status = response.status_code
             provider_body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {"raw": response.text[:3000]}
             if 200 <= response.status_code < 300:
                 attempt.status = "SENT"
+                logger.info("[DTE WA] provider_success order=%s status=%s body=%s", record.order_id, response.status_code, (response.text or "")[:3000])
                 break
             error = f"http_{response.status_code}"
             logger.warning(
@@ -102,6 +145,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         "provider_message": provider_message or None,
         "request_payload": payload,
         "to_phone": target_phone,
+        "endpoint": endpoint,
     }
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info(

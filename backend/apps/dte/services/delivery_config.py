@@ -54,7 +54,7 @@ def resolve_delivery_config() -> DeliveryConfig:
         email_endpoint=_read_setting("DELIVER_EMAIL_API_ENDPOINT", "EMAIL_API_ENDPOINT") or "/send",
         email_api_key=_read_setting("DELIVER_EMAIL_API_KEY", "EMAIL_API_KEY"),
         whatsapp_base_url=_read_setting("WHATSAPP_DTE_API_BASE", "WHATSAPP_API_BASE"),
-        whatsapp_endpoint=_read_setting("WHATSAPP_DTE_API_ENDPOINT", "WHATSAPP_API_ENDPOINT") or "/send",
+        whatsapp_endpoint=_read_setting("WHATSAPP_DTE_API_ENDPOINT", "WHATSAPP_API_ENDPOINT") or "/api/send-dte-whatsapp",
         whatsapp_api_key=_read_setting("WHATSAPP_DTE_API_KEY", "WHATSAPP_API_KEY"),
         whatsapp_default_phone=_read_setting("WHATSAPP_DEFAULT_TO_PHONE"),
         whatsapp_company_name=_read_setting("WHATSAPP_EMPRESA_NOMBRE", "WHATSAPP_COMPANY_NAME"),

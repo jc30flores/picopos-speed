@@ -87,5 +87,7 @@ class DTEEmailServiceTests(TestCase):
         self.assertEqual(payload["to_email"], "cliente@example.com")
         self.assertIn("body_text", payload)
         self.assertIn("invoice_json", payload)
+        self.assertEqual(payload["flags"]["attach_pdf"], True)
+        self.assertEqual(payload["flags"]["attach_json"], True)
         self.assertNotIn("dte_json", payload)
         self.assertNotIn("email", payload)

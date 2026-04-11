@@ -36,23 +36,23 @@ def validate_delivery_email_target(record: DTERecord, to_email: str | None = Non
 
 def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
     _, _, recipient = validate_delivery_email_target(record, to_email=to_email)
-    invoice_json = {
-        "order_id": record.order_id,
-        "dte_id": record.id,
-        "dte_type": record.dte_type,
-        "status": record.status,
-        "numero_control": record.control_number,
-        "codigo_generacion": record.generation_code or record.codigo_generacion,
-        "sello_recibido": record.sello_recibido or record.sello_recepcion,
-        "hacienda_response": record.response_payload or {},
-        "dte_payload": record.request_payload or {},
-    }
+    request_payload = record.request_payload or {}
+    invoice_json = request_payload.get("dte") if isinstance(request_payload, dict) and isinstance(request_payload.get("dte"), dict) else request_payload
+    if not isinstance(invoice_json, dict) or not invoice_json:
+        invoice_json = {
+            "identificacion": {
+                "tipoDte": record.dte_type,
+                "numeroControl": record.control_number,
+                "codigoGeneracion": record.generation_code or record.codigo_generacion,
+            },
+            "resumen": {"totalPagar": float(record.total_amount or 0)},
+        }
     return {
         "to_email": recipient,
         "subject": f"DTE {record.control_number}",
         "body_text": f"Adjuntamos comprobante DTE {record.control_number}.",
         "invoice_json": invoice_json,
-        "flags": {"source": "picopos", "channel": "email_dte"},
+        "flags": {"source": "picopos", "channel": "email_dte", "attach_pdf": True, "attach_json": True},
         "metadata": {"dte_type": record.dte_type, "status": record.status},
     }
 
@@ -116,6 +116,16 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
         return attempt
 
     payload = build_email_payload(record, to_email=target_email)
+    invoice_keys = list((payload.get("invoice_json") or {}).keys()) if isinstance(payload.get("invoice_json"), dict) else []
+    logger.info(
+        "[DTE EMAIL] payload_summary order=%s to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s",
+        record.order_id,
+        payload.get("to_email"),
+        payload.get("subject"),
+        bool(payload.get("body_text")),
+        invoice_keys,
+        payload.get("flags"),
+    )
 
     for retry in range(3):
         attempt.retries = retry + 1
@@ -128,16 +138,22 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
             provider_body, raw_body = _parse_provider_body(response)
             if 200 <= response.status_code < 300:
                 attempt.status = "SENT"
-                break
-            error = f"http_{response.status_code}"
-            if response.status_code == 422:
-                logger.warning(
-                    "[DTE EMAIL] provider_422 order=%s endpoint=%s payload=%s provider_body=%s",
+                logger.info(
+                    "[DTE EMAIL] provider_success order=%s status=%s body=%s",
                     record.order_id,
-                    endpoint,
-                    payload,
+                    response.status_code,
                     raw_body or provider_body,
                 )
+                break
+            error = f"http_{response.status_code}"
+            logger.warning(
+                "[DTE EMAIL] provider_error order=%s endpoint=%s status=%s payload=%s provider_body=%s",
+                record.order_id,
+                endpoint,
+                response.status_code,
+                payload,
+                raw_body or provider_body,
+            )
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
         time.sleep(1)

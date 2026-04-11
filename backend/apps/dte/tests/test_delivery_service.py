@@ -97,7 +97,7 @@ class DTEDeliveryServiceTests(TestCase):
             self.assertEqual(cfg.email_base_url, "https://email.example")
             self.assertEqual(cfg.email_url, "https://email.example/api/email/send-invoice")
             self.assertEqual(cfg.whatsapp_base_url, "https://wa.example")
-            self.assertEqual(cfg.whatsapp_url, "https://wa.example/send")
+            self.assertEqual(cfg.whatsapp_url, "https://wa.example/api/send-dte-whatsapp")
 
     @patch("apps.dte.services.delivery.send_dte_email")
     def test_internal_billing_email_is_not_used_for_automatic_email_delivery(self, mock_email):

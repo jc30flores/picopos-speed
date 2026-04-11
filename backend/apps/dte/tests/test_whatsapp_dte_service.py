@@ -42,10 +42,11 @@ class DTEWhatsAppServiceTests(TestCase):
     @override_settings(WHATSAPP_DEFAULT_TO_PHONE="50370000000")
     def test_build_whatsapp_payload_uses_gateway_contract(self):
         payload = build_whatsapp_payload(self.record)
-        self.assertEqual(payload["order_id"], self.order.id)
-        self.assertEqual(payload["dte_id"], self.record.id)
-        self.assertEqual(payload["to"], "50370000000")
-        self.assertIn("DTE DTE-TEST-WA", payload["message"])
+        self.assertEqual(payload["num_receptor"], "50370000000")
+        self.assertTrue(payload["send_json"])
+        self.assertEqual(payload["tipo_dte"], "01")
+        self.assertEqual(payload["doc_type"], "CF")
+        self.assertIn("descripcion_msg", payload)
 
     def test_validate_whatsapp_target_rejects_invalid_number(self):
         ok, error, phone = validate_whatsapp_target(self.record, to_phone="abc")
@@ -69,5 +70,6 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(attempt.status, "SENT")
         _, kwargs = mock_post.call_args
         payload = kwargs["json"]
-        self.assertEqual(payload["to"], "50379998888")
-        self.assertIn("message", payload)
+        self.assertEqual(payload["num_receptor"], "50379998888")
+        self.assertIn("dte", payload)
+        self.assertTrue(payload["send_json"])

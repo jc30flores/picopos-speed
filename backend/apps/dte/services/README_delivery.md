@@ -25,8 +25,8 @@ Ambos usan `deliver_dte_to_client(...)` en `delivery.py`.
   "order_id": 111,
   "issued_id": 123,
   "results": {
-    "email": {"ok": true, "status_code": 200, "error": null},
-    "whatsapp": {"ok": false, "status_code": null, "error": "WHATSAPP_DTE_API_BASE missing"}
+    "email": {"ok": true, "status_code": 200, "provider_status": 200, "provider_message": "ok", "recipient": "cliente@correo.com", "error": null},
+    "whatsapp": {"ok": false, "status_code": null, "provider_status": null, "provider_message": "WHATSAPP_DTE_API_BASE missing", "recipient": null, "error": "WHATSAPP_DTE_API_BASE missing"}
   },
   "summary": "Fallo en canal(es): whatsapp"
 }
@@ -48,7 +48,7 @@ Payload enviado:
   "subject": "DTE DTE-01-S001P001-000000000000123",
   "body_text": "Adjuntamos comprobante DTE DTE-01-S001P001-000000000000123.",
   "invoice_json": { "...": "..." },
-  "flags": { "source": "picopos", "channel": "email_dte" },
+  "flags": { "source": "picopos", "channel": "email_dte", "attach_pdf": true, "attach_json": true },
   "metadata": { "dte_type": "CF_01", "status": "ACEPTADO" }
 }
 ```
@@ -59,14 +59,21 @@ Payload enviado:
 Payload enviado (gateway actual):
 ```json
 {
-  "order_id": 123,
-  "dte_id": 456,
-  "to": "5037XXXXXXX",
-  "message": "DTE DTE-01-S001P001-000000000000123 estado ACEPTADO"
+  "num_receptor": "5037XXXXXXX",
+  "send_json": true,
+  "dte": { "...": "..." },
+  "tipo_dte": "01",
+  "doc_type": "CF",
+  "empresa_nombre": "PicoPOS",
+  "total": 15.50,
+  "hacienda_response": { "...": "..." },
+  "sello_recibido": "SELLO",
+  "fh_procesamiento": "2026-04-11T10:00:00-06:00",
+  "descripcion_msg": "DTE DTE-01-S001P001-000000000000123 estado ACEPTADO"
 }
 ```
 - Este backend usa un gateway configurable vía `.env`.
-- Si el gateway cambia a contrato Meta/Graph (`/messages`, `/media`), se debe ajustar este payload a ese contrato desplegado.
+- Endpoint por defecto: `/api/send-dte-whatsapp`.
 
 ## Auditoría
 Se registra un `log_audit` por canal con:
