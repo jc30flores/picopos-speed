@@ -140,7 +140,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
             error = str(exc)
         time.sleep(1)
 
-    if attempt.status != "SENT":
+    if attempt.status not in {"SENT", "QUEUED"}:
         attempt.status = "FAILED"
     attempt.provider_status = provider_status or None
     provider_status_text = str((provider_body or {}).get("status") or "").strip().lower()
