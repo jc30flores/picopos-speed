@@ -74,6 +74,7 @@ Payload enviado (gateway actual):
 ```
 - Este backend usa un gateway configurable vía `.env`.
 - Endpoint por defecto: `/api/send-dte-whatsapp`.
+- Si el proveedor devuelve `queued=true`/`status=queued`, el intento queda `QUEUED` (encolado), no `SENT`.
 
 ## Auditoría
 Se registra un `log_audit` por canal con:

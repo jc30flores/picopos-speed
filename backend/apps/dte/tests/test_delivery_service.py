@@ -74,6 +74,18 @@ class DTEDeliveryServiceTests(TestCase):
         self.assertEqual(result["results"]["whatsapp"]["provider_message"], "falló")
         self.assertEqual(result["results"]["whatsapp"]["recipient"], "50370001111")
 
+    @patch("apps.dte.services.delivery.send_dte_whatsapp")
+    def test_whatsapp_queued_is_not_marked_as_failure(self, mock_whatsapp):
+        mock_whatsapp.return_value = type(
+            "Attempt",
+            (),
+            {"status": "QUEUED", "provider_status": 200, "provider_body": {"queued": True, "provider_message": "Job encolado", "to_phone": "50370001111"}},
+        )()
+        result = deliver_dte_to_client(self.record, channels=("whatsapp",))
+        self.assertTrue(result["success"])
+        self.assertTrue(result["results"]["whatsapp"]["ok"])
+        self.assertIn("encolado", (result["results"]["whatsapp"]["provider_message"] or "").lower())
+
     @override_settings(
         DELIVER_EMAIL_API_BASE_URL="",
         DELIVER_EMAIL_API_ENDPOINT="",

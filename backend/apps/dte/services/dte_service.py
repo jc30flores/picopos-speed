@@ -601,9 +601,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             })
             num_item += 1
 
+    fee_groups: dict[tuple[str, str], Decimal] = {}
     for fee in order.fees.all():
-        fee_qty = money(fee.quantity or 1)
-        fee_unit = money(fee.unit_amount or Decimal("0.00"))
+        fee_name = (fee.fee_name or "CARGO").strip()[:200]
+        fee_type = (fee.fee_type or "").strip().lower()
+        fee_groups[(fee_name, fee_type)] = money(fee_groups.get((fee_name, fee_type), Decimal("0.00")) + money(fee.total_amount))
+
+    for (fee_name, fee_type), fee_total in fee_groups.items():
+        fee_qty = Decimal("1.00")
+        fee_unit = money(fee_total)
         fee_calc = calculate_line_tax_breakdown(
             unit_price_gross=fee_unit,
             quantity=fee_qty,
@@ -616,8 +622,8 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         cuerpo.append({
             "numItem": num_item,
             "tipoItem": 1,
-            "codigo": f"FEE-{fee.id}",
-            "descripcion": (fee.fee_name or "CARGO").strip()[:200],
+            "codigo": f"FEE-{fee_type or 'GEN'}-{num_item}",
+            "descripcion": fee_name,
             "cantidad": json_number(fee_qty),
             "uniMedida": 59,
             "precioUni": json_number(fee_calc["precio_uni"]),

@@ -116,13 +116,14 @@ def deliver_dte_to_client(
                 attempt = send_dte_whatsapp(target, to_phone=target_phone)
                 provider_error = str((attempt.provider_body or {}).get("error") or "").strip()
                 provider_message = str((attempt.provider_body or {}).get("provider_message") or "").strip()
+                queued = bool((attempt.provider_body or {}).get("queued"))
                 results[channel] = _channel_result(
-                    ok=attempt.status == "SENT",
+                    ok=attempt.status in {"SENT", "QUEUED"},
                     status_code=attempt.provider_status,
                     provider_status=attempt.provider_status,
-                    provider_message=provider_message or None,
+                    provider_message=provider_message or ("Encolado para envío por WhatsApp" if queued else None),
                     recipient=str((attempt.provider_body or {}).get("to_phone") or target_phone or "").strip() or None,
-                    error=provider_error or ("No se pudo enviar WhatsApp" if attempt.status != "SENT" else None),
+                    error=provider_error or ("No se pudo enviar WhatsApp" if attempt.status not in {"SENT", "QUEUED"} else None),
                 )
 
     success = bool(results) and all(bool(item.get("ok")) for item in results.values())

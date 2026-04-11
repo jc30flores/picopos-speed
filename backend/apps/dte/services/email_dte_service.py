@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import os
 
 import requests
 
@@ -36,6 +37,25 @@ def validate_delivery_email_target(record: DTERecord, to_email: str | None = Non
 
 def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
     _, _, recipient = validate_delivery_email_target(record, to_email=to_email)
+    company_name = (
+        str(os.environ.get("COMPANY_NAME") or "").strip()
+        or str(os.environ.get("DTE_NOMBRE_COMERCIAL") or "").strip()
+        or "PicoPOS"
+    )
+    customer_name = str(getattr(getattr(record.order, "customer", None), "nombre", "") or "").strip()
+    greeting = f"Hola {customer_name}," if customer_name else "Hola,"
+    body_text = (
+        f"{greeting}\n\n"
+        f"Gracias por tu compra en {company_name}.\n"
+        "Adjuntamos tu DTE en PDF y JSON.\n\n"
+        f"Atentamente,\n{company_name}"
+    )
+    body_html = (
+        f"<p>{greeting}</p>"
+        f"<p>Gracias por tu compra en <strong>{company_name}</strong>.</p>"
+        "<p>Adjuntamos tu DTE en formato PDF y JSON.</p>"
+        f"<p>Atentamente,<br>{company_name}</p>"
+    )
     request_payload = record.request_payload or {}
     invoice_json = request_payload.get("dte") if isinstance(request_payload, dict) and isinstance(request_payload.get("dte"), dict) else request_payload
     if not isinstance(invoice_json, dict) or not invoice_json:
@@ -50,10 +70,11 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
     return {
         "to_email": recipient,
         "subject": f"DTE {record.control_number}",
-        "body_text": f"Adjuntamos comprobante DTE {record.control_number}.",
+        "body_text": body_text,
+        "body_html": body_html,
         "invoice_json": invoice_json,
         "flags": {"source": "picopos", "channel": "email_dte", "attach_pdf": True, "attach_json": True},
-        "metadata": {"dte_type": record.dte_type, "status": record.status},
+        "metadata": {"dte_type": record.dte_type, "status": record.status, "company_name": company_name},
     }
 
 

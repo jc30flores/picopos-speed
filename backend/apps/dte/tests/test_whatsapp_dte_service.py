@@ -73,3 +73,20 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(payload["num_receptor"], "50379998888")
         self.assertIn("dte", payload)
         self.assertTrue(payload["send_json"])
+
+    @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
+    @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
+    @patch("apps.dte.services.whatsapp_dte_service.requests.post")
+    def test_send_whatsapp_marks_queued_when_provider_is_queued(self, mock_post, _mock_sleep):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"ok": True, "queued": True, "status": "queued", "job_id": "job-123"}
+        response.text = '{"ok":true,"queued":true,"status":"queued","job_id":"job-123"}'
+        mock_post.return_value = response
+
+        attempt = send_dte_whatsapp(self.record, to_phone="50379998888")
+
+        self.assertEqual(attempt.status, "QUEUED")
+        self.assertTrue(attempt.provider_body.get("queued"))
+        self.assertEqual(attempt.provider_body.get("job_id"), "job-123")

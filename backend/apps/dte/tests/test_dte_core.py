@@ -510,13 +510,24 @@ class DTECoreTests(TestCase):
             quantity=1,
             total_amount=Decimal("0.21"),
         )
-        self.order.disposable_total = Decimal("0.21")
-        self.order.total = Decimal("5.21")
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.05"),
+            quantity=1,
+            total_amount=Decimal("0.05"),
+        )
+        self.order.disposable_total = Decimal("0.26")
+        self.order.total = Decimal("5.26")
         self.order.save(update_fields=["disposable_total", "total"])
         payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000204", "D" * 36, "01")
         resumen = payload["dte"]["resumen"]
-        self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.21)
-        self.assertTrue(any(str(line.get("descripcion", "")).upper().startswith("DESECHABLE") for line in payload["dte"]["cuerpoDocumento"]))
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.26)
+        disposable_lines = [line for line in payload["dte"]["cuerpoDocumento"] if str(line.get("descripcion", "")).upper().startswith("DESECHABLE")]
+        self.assertEqual(len(disposable_lines), 1)
+        self.assertEqual(round(float(disposable_lines[0]["ventaGravada"]), 2), 0.26)
 
     def test_build_payload_reconciles_cent_differences_against_order_total(self):
         category = Category.objects.create(name="RECONCILIACION")

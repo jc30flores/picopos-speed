@@ -89,5 +89,24 @@ class DTEEmailServiceTests(TestCase):
         self.assertIn("invoice_json", payload)
         self.assertEqual(payload["flags"]["attach_pdf"], True)
         self.assertEqual(payload["flags"]["attach_json"], True)
+        self.assertIn("Gracias por tu compra", payload["body_text"])
+        self.assertIn("PicoPOS", payload["body_text"])
         self.assertNotIn("dte_json", payload)
         self.assertNotIn("email", payload)
+
+    @override_settings(DELIVER_EMAIL_API_BASE_URL="https://email.example", DELIVER_EMAIL_API_ENDPOINT="/api/email/send-invoice", DELIVER_EMAIL_API_KEY="k1")
+    @patch.dict("os.environ", {"COMPANY_NAME": "RESTAURANTE PICO DE GALLO"}, clear=False)
+    @patch("apps.dte.services.email_dte_service.time.sleep", return_value=None)
+    @patch("apps.dte.services.email_dte_service.requests.post")
+    def test_send_email_uses_company_name_in_thanks_message(self, mock_post, _mock_sleep):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"message": "sent"}
+        response.text = '{"message":"sent"}'
+        mock_post.return_value = response
+
+        send_dte_email(self.record, to_email="cliente@example.com")
+        _, kwargs = mock_post.call_args
+        payload = kwargs["json"]
+        self.assertIn("RESTAURANTE PICO DE GALLO", payload["body_text"])

@@ -11,6 +11,7 @@ from apps.dte.services.delivery_config import resolve_delivery_config
 
 logger = logging.getLogger("apps.dte")
 PHONE_RE = re.compile(r"^\d{8,15}$")
+INVALID_PHONES = {"00000000", "000000000", "0000000000", "50300000000"}
 
 
 def _normalize_phone(value: str | None) -> str:
@@ -25,6 +26,8 @@ def validate_whatsapp_target(record: DTERecord, to_phone: str | None = None) -> 
     if not phone:
         return False, "Cliente sin teléfono", ""
     if not PHONE_RE.match(phone):
+        return False, "Teléfono inválido para WhatsApp", phone
+    if phone in INVALID_PHONES or set(phone) == {"0"}:
         return False, "Teléfono inválido para WhatsApp", phone
     return True, "", phone
 
@@ -119,7 +122,9 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
             provider_status = response.status_code
             provider_body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {"raw": response.text[:3000]}
             if 200 <= response.status_code < 300:
-                attempt.status = "SENT"
+                provider_status_text = str((provider_body or {}).get("status") or "").strip().lower()
+                is_queued = bool((provider_body or {}).get("queued")) or provider_status_text == "queued"
+                attempt.status = "QUEUED" if is_queued else "SENT"
                 logger.info("[DTE WA] provider_success order=%s status=%s body=%s", record.order_id, response.status_code, (response.text or "")[:3000])
                 break
             error = f"http_{response.status_code}"
@@ -138,7 +143,9 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
     if attempt.status != "SENT":
         attempt.status = "FAILED"
     attempt.provider_status = provider_status or None
-    provider_message = str((provider_body or {}).get("message") or (provider_body or {}).get("detail") or error or "").strip()
+    provider_status_text = str((provider_body or {}).get("status") or "").strip().lower()
+    queued = attempt.status == "QUEUED" or bool((provider_body or {}).get("queued")) or provider_status_text == "queued"
+    provider_message = str((provider_body or {}).get("message") or (provider_body or {}).get("detail") or ("Job encolado para envío por WhatsApp" if queued else error) or "").strip()
     attempt.provider_body = {
         **(provider_body or {}),
         "error": error or None,
@@ -146,6 +153,8 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         "request_payload": payload,
         "to_phone": target_phone,
         "endpoint": endpoint,
+        "queued": queued,
+        "job_id": (provider_body or {}).get("job_id"),
     }
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info(
