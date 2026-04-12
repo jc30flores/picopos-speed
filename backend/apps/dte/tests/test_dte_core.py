@@ -392,7 +392,7 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
 
-    def test_build_payload_cf_adds_adjustment_line_when_order_total_is_higher_than_lines(self):
+    def test_build_payload_cf_rejects_when_source_totals_do_not_match_order_total(self):
         category = Category.objects.create(name="AJUSTE")
         product = Product.objects.create(name="Base", description="", price=Decimal("26.70"), category=category, available=True)
         OrderItem.objects.create(
@@ -409,14 +409,8 @@ class DTECoreTests(TestCase):
         self.order.subtotal = Decimal("28.49")
         self.order.save(update_fields=["total", "subtotal"])
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
-        cuerpo = payload["dte"]["cuerpoDocumento"]
-        resumen = payload["dte"]["resumen"]
-        ajuste = next((line for line in cuerpo if line.get("codigo") == "AJUSTE-DTE"), None)
-        self.assertIsNotNone(ajuste)
-        self.assertEqual(round(ajuste["ventaGravada"], 2), 1.79)
-        self.assertEqual(round(ajuste["ivaItem"], 2), 0.21)
-        self.assertEqual(round(resumen["totalPagar"], 2), 28.49)
+        with self.assertRaises(DTEPreflightError):
+            build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
 
     def test_build_payload_cf_discount_line_reconciles_discount_before_adjustment_line(self):
         category = Category.objects.create(name="DISC-FIX")
@@ -627,6 +621,88 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(float(resumen["totalPagar"]), 2), 11.26)
         self.assertEqual(round(float(resumen["totalIva"]), 2), round(sum(float(line["ivaItem"]) for line in cuerpo), 2))
         self.assertFalse(any(line.get("codigo") == "AJUSTE-DTE" for line in cuerpo))
+
+    def test_regression_630_631_discounted_shell_plus_modifier_collapses_and_matches_total(self):
+        category = Category.objects.create(name="REG-630")
+        product = Product.objects.create(name="Chips and Guac", description="", price=Decimal("0.01"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Chips and Guac",
+            price_snapshot=Decimal("0.01"),
+            quantity=1,
+            discount_amount=Decimal("2.35"),
+            snapshot_sku_or_code="SHELL-001",
+            is_custom=False,
+        )
+        OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot="4OZ", modifier_price_snapshot=Decimal("4.69"))
+        self.order.total = Decimal("2.35")
+        self.order.subtotal = Decimal("2.35")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000630", "6" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        self.assertEqual(len(cuerpo), 1)
+        line = cuerpo[0]
+        self.assertEqual(round(line["precioUni"], 2), 4.70)
+        self.assertEqual(round(line["montoDescu"], 2), 2.35)
+        self.assertEqual(round(line["ventaGravada"], 2), 2.35)
+        self.assertEqual(round(payload["dte"]["resumen"]["totalPagar"], 2), 2.35)
+
+    def test_regression_633_simple_discount_keeps_final_model(self):
+        category = Category.objects.create(name="REG-633")
+        product = Product.objects.create(name="Promo 6.99", description="", price=Decimal("6.99"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Promo 6.99",
+            price_snapshot=Decimal("6.99"),
+            quantity=1,
+            discount_amount=Decimal("3.50"),
+            snapshot_sku_or_code="DISC-699",
+            is_custom=False,
+        )
+        self.order.total = Decimal("3.49")
+        self.order.subtotal = Decimal("3.49")
+        self.order.save(update_fields=["total", "subtotal"])
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000633", "3" * 36, "00")
+        line = payload["dte"]["cuerpoDocumento"][0]
+        self.assertEqual(round(line["ventaGravada"], 2), 3.49)
+        self.assertEqual(round(line["ivaItem"], 2), 0.40)
+
+    def test_regression_635_placeholder_not_emitted_as_001_line(self):
+        category = Category.objects.create(name="REG-635")
+        coca = Product.objects.create(name="Coca Cola", description="", price=Decimal("1.29"), category=category, available=True)
+        chips = Product.objects.create(name="Chips and Guac", description="", price=Decimal("0.01"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=coca,
+            product_name_snapshot="Coca Cola",
+            price_snapshot=Decimal("1.29"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="COKE",
+            is_custom=False,
+        )
+        chips_item = OrderItem.objects.create(
+            order=self.order,
+            product=chips,
+            product_name_snapshot="Chips and Guac",
+            price_snapshot=Decimal("0.01"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="CHIPS",
+            is_custom=False,
+        )
+        OrderItemModifier.objects.create(order_item=chips_item, modifier_name_snapshot="4OZ", modifier_price_snapshot=Decimal("3.28"))
+        self.order.total = Decimal("4.58")
+        self.order.subtotal = Decimal("4.58")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000635", "5" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        self.assertFalse(any(round(line["precioUni"], 2) == 0.01 for line in cuerpo))
+        self.assertEqual(round(sum(line["ventaGravada"] + line["ventaExenta"] for line in cuerpo), 2), 4.58)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(

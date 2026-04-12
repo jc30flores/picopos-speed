@@ -128,10 +128,6 @@ def calculate_taxable_base_from_gross(gross_amount: Decimal) -> Decimal:
     return _q2(gross_amount / TAX_DIVISOR)
 
 
-def calculate_iva_from_base(base_amount: Decimal) -> Decimal:
-    return _q2(base_amount * TAX_RATE)
-
-
 def calculate_iva_from_gross(gross_amount: Decimal) -> Decimal:
     return _q2(gross_amount * TAX_RATE / TAX_DIVISOR)
 
@@ -144,6 +140,11 @@ def _line_charged_total(line: dict) -> Decimal:
 
 def _line_expected_total_from_price_discount(line: dict) -> Decimal:
     return money((money(line.get("precioUni")) * money(line.get("cantidad"))) - money(line.get("montoDescu")))
+
+
+def _is_placeholder_shell(item, paid_mods_total: Decimal) -> bool:
+    unit_price = money(item.unit_price)
+    return unit_price <= Decimal("0.01") and paid_mods_total > Decimal("0.00")
 
 
 def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal, discount_gross: Decimal, taxable: bool) -> dict[str, Decimal]:
@@ -212,6 +213,7 @@ def _validate_dte_totals(dte_payload: dict) -> None:
     sum_line_gravada = Decimal("0.00")
     sum_line_exenta = Decimal("0.00")
     sum_line_iva = Decimal("0.00")
+    sum_line_total = Decimal("0.00")
     errors: list[str] = []
 
     for line in cuerpo:
@@ -242,6 +244,7 @@ def _validate_dte_totals(dte_payload: dict) -> None:
         sum_line_gravada += venta_gravada_line
         sum_line_exenta += venta_exenta_line
         sum_line_iva += iva_item_line
+        sum_line_total += money(venta_gravada_line + venta_exenta_line + money(line.get("ventaNoSuj")))
 
     calc_sub_total_ventas = money(total_no_suj + total_exenta + total_gravada)
     calc_global_desc = money(descu_no_suj + descu_exenta + descu_gravada)
@@ -262,6 +265,8 @@ def _validate_dte_totals(dte_payload: dict) -> None:
         errors.append(f"totalExenta={total_exenta} sum_items={money(sum_line_exenta)}")
     if not _almost_equal(total_iva, money(sum_line_iva)):
         errors.append(f"totalIva={total_iva} sum_items={money(sum_line_iva)}")
+    if not _almost_equal(total_pagar, money(sum_line_total)):
+        errors.append(f"totalPagar={total_pagar} sum_lineas={money(sum_line_total)}")
     if not _almost_equal(monto_total_operacion, calc_monto_total_operacion):
         errors.append(f"montoTotalOperacion={monto_total_operacion} calc={calc_monto_total_operacion}")
     if not _almost_equal(total_pagar, calc_total_pagar):
@@ -519,34 +524,77 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_iva = Decimal("0.00")
     total_descuento = Decimal("0.00")
 
+    commercial_groups: list[dict[str, Any]] = []
+    placeholder_items_detected: list[int] = []
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         quantity = money(item.quantity)
-        effective_unit_price = money(item.unit_price)
-        line_total_original = money(effective_unit_price * quantity)
-        line_discount = money(min(line_total_original, money(item.discount_amount)))
+        base_total = money(money(item.unit_price) * quantity)
+        line_discount = money(item.discount_amount)
         desc = item.name or "ITEM"
-        free_mods = []
+        free_mods: list[str] = []
         paid_mods = []
+        paid_mods_total = Decimal("0.00")
         for mod in item.applied_modifiers.all():
-            if Decimal(mod.modifier_price_snapshot or 0) > 0:
+            mod_price = money(mod.modifier_price_snapshot)
+            if mod_price > Decimal("0.00"):
                 paid_mods.append(mod)
+                paid_mods_total += mod_price
             else:
                 free_mods.append(mod.modifier_name_snapshot)
+        paid_mods_total = money(paid_mods_total)
         if free_mods:
             desc = f"{desc} ({', '.join(free_mods)})"
+        if paid_mods:
+            desc = f"{desc} + {' + '.join(m.modifier_name_snapshot for m in paid_mods)}"
+
+        group_gross = money(base_total + paid_mods_total)
+        is_shell = _is_placeholder_shell(item, paid_mods_total)
+        if is_shell:
+            placeholder_items_detected.append(item.id)
+        collapse_group = is_shell or line_discount > Decimal("0.00")
+        group_discount = money(min(group_gross, line_discount))
+
+        if collapse_group:
+            line_calc = calculate_line_tax_breakdown(
+                unit_price_gross=group_gross,
+                quantity=Decimal("1.00"),
+                discount_gross=group_discount,
+                taxable=not order.iva_exempt,
+            )
+            total_gravada += line_calc["venta_gravada"]
+            total_exenta += line_calc["venta_exenta"]
+            total_iva += line_calc["iva_item"]
+            total_descuento += line_calc["monto_descu"]
+            sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
+            cuerpo.append({
+                "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
+                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
+                "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
+                "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
+                "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
+            })
+            commercial_groups.append({
+                "order_item_id": item.id,
+                "collapsed": True,
+                "placeholder_shell": is_shell,
+                "gross_before_discount": group_gross,
+                "discount_original": line_discount,
+                "discount_applied": group_discount,
+                "total_emitted": line_calc["linea_total_objetivo"],
+            })
+            num_item += 1
+            continue
 
         line_calc = calculate_line_tax_breakdown(
-            unit_price_gross=effective_unit_price,
+            unit_price_gross=money(item.unit_price),
             quantity=quantity,
-            discount_gross=line_discount,
+            discount_gross=Decimal("0.00"),
             taxable=not order.iva_exempt,
         )
-
         total_gravada += line_calc["venta_gravada"]
         total_exenta += line_calc["venta_exenta"]
         total_iva += line_calc["iva_item"]
-        total_descuento += line_calc["monto_descu"]
-
         sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
         cuerpo.append({
             "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
@@ -557,7 +605,6 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
         })
         num_item += 1
-
         for mod in paid_mods:
             mod_total = money(mod.modifier_price_snapshot)
             mod_calc = calculate_line_tax_breakdown(
@@ -578,6 +625,15 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
                 "_lineaObjetivo": json_number(mod_calc["linea_total_objetivo"]),
             })
             num_item += 1
+        commercial_groups.append({
+            "order_item_id": item.id,
+            "collapsed": False,
+            "placeholder_shell": is_shell,
+            "gross_before_discount": group_gross,
+            "discount_original": line_discount,
+            "discount_applied": Decimal("0.00"),
+            "total_emitted": group_gross,
+        })
 
     fee_groups: dict[tuple[str, str], Decimal] = {}
     for fee in order.fees.all():
@@ -659,78 +715,13 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     if line_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
-    if not _almost_equal(gross_from_lines, target_total):
-        diff = money(target_total - gross_from_lines)
-        # Reconciliación enfocada en líneas con descuento:
-        # preserva casos sin descuento y ajusta solo montoDescu/ventaGravada/ivaItem del item descontado.
-        if diff > Decimal("0.00"):
-            discounted = [
-                line
-                for line in reversed(cuerpo)
-                if money(line.get("montoDescu")) > Decimal("0.00") and money(line.get("ventaGravada")) > Decimal("0.00")
-            ]
-            for line in discounted:
-                if diff <= Decimal("0.00"):
-                    break
-                max_venta = money(money(line.get("precioUni")) * money(line.get("cantidad")))
-                current_charged = _line_charged_total(line)
-                available = money(max_venta - current_charged)
-                if available <= Decimal("0.00"):
-                    continue
-                delta = available if available <= diff else diff
-                new_charged = money(current_charged + delta)
-                new_desc = money(money(line.get("montoDescu")) - delta)
-                new_venta = new_charged
-                new_iva = calculate_iva_from_gross(new_venta)
-                line["ventaGravada"] = json_number(new_venta)
-                line["montoDescu"] = json_number(new_desc)
-                line["ivaItem"] = json_number(new_iva)
-                line["_lineaObjetivo"] = json_number(new_charged)
-                diff = money(diff - delta)
-                logger.info(
-                    "dte.discount_reconcile numItem=%s delta=%s totalCobrado=%s ventaGravada=%s ivaItem=%s montoDescu=%s",
-                    line.get("numItem"),
-                    delta,
-                    new_charged,
-                    new_venta,
-                    new_iva,
-                    new_desc,
-                )
-            gross_from_lines = money(
-                sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00"))
-            )
-            diff = money(target_total - gross_from_lines)
-        logger.warning(
-            "dte.reconcile_needed order_id=%s total_lineas=%s total_real=%s diff=%s",
-            getattr(order, "id", None),
-            gross_from_lines,
-            target_total,
-            diff,
-        )
-        if diff > Decimal("0.00"):
-            ajuste_iva = calculate_iva_from_gross(diff) if not order.iva_exempt else Decimal("0.00")
-            cuerpo.append({
-                "numItem": num_item,
-                "tipoItem": 1,
-                "codigo": "AJUSTE-DTE",
-                "descripcion": "AJUSTE DIFERENCIA PEDIDO",
-                "cantidad": 1,
-                "uniMedida": 59,
-                "precioUni": json_number(diff),
-                "montoDescu": json_number(Decimal("0.00")),
-                "ventaNoSuj": json_number(Decimal("0.00")),
-                "ventaExenta": json_number(diff if order.iva_exempt else Decimal("0.00")),
-                "ventaGravada": json_number(diff if not order.iva_exempt else Decimal("0.00")),
-                "tributos": None,
-                "psv": json_number(Decimal("0.00")),
-                "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(ajuste_iva),
-                "codTributo": None,
-                "numeroDocumento": None,
-            })
-            num_item += 1
-            gross_from_lines = money(gross_from_lines + diff)
-            logger.warning("dte.reconcile_applied order_id=%s ajuste=%s", getattr(order, "id", None), diff)
+
+    logger.info(
+        "dte.commercial_groups order_id=%s fiscal_rule=precioUni/monto_final+iva13_113 groups=%s placeholders=%s",
+        getattr(order, "id", None),
+        commercial_groups,
+        placeholder_items_detected,
+    )
     objective_errors: list[str] = []
     for line in cuerpo:
         line_total = _line_charged_total(line)
@@ -764,8 +755,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
     if not _almost_equal(gross_from_lines, target_total):
         logger.error(
-            "dte.line_total_mismatch order_id=%s total_lineas=%s total_real=%s diff=%s",
+            "dte.line_total_mismatch order_id=%s fiscal_rule=precioUni/monto_final+iva13_113 groups=%s placeholders=%s total_lineas=%s total_real=%s diff=%s",
             getattr(order, "id", None),
+            commercial_groups,
+            placeholder_items_detected,
             gross_from_lines,
             target_total,
             money(target_total - gross_from_lines),
