@@ -162,9 +162,10 @@ export default function DTEPage() {
       if (action === "email") {
         const result = await dteDeliver(row.id, ["email"]);
         const channel = result.results?.email;
+        const failureMessage = channel?.error || row.missing_email_reason || "No se pudo enviar el DTE por correo.";
         toast({
           title: "Correo",
-          description: channel?.ok ? "Correo enviado correctamente." : (channel?.error || result.summary),
+          description: channel?.ok ? "Correo enviado correctamente." : failureMessage,
           variant: channel?.ok ? "default" : "destructive",
         });
       }

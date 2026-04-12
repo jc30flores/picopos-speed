@@ -4028,7 +4028,17 @@ export const dteDeliver = async (
   summary: string;
   orderId?: number;
   issuedId?: number;
-  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+  results: Record<
+    string,
+    {
+      ok: boolean;
+      statusCode: number | null;
+      providerStatus: number | null;
+      providerMessage: string | null;
+      recipient: string | null;
+      error: string | null;
+    }
+  >;
 }> => {
   const res = await request(`/dte/issued/${id}/deliver/`, {
     method: "POST",
@@ -4043,7 +4053,14 @@ export const dteDeliver = async (
     results: Object.fromEntries(
       Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
         key,
-        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+        {
+          ok: Boolean(value?.ok),
+          statusCode: value?.status_code ?? null,
+          providerStatus: value?.provider_status ?? null,
+          providerMessage: value?.provider_message ?? null,
+          recipient: value?.recipient ?? null,
+          error: value?.error ?? null,
+        },
       ])
     ),
   };
@@ -4057,7 +4074,17 @@ export const dteDeliverByOrder = async (
   summary: string;
   orderId?: number;
   issuedId?: number;
-  results: Record<string, { ok: boolean; statusCode: number | null; error: string | null }>;
+  results: Record<
+    string,
+    {
+      ok: boolean;
+      statusCode: number | null;
+      providerStatus: number | null;
+      providerMessage: string | null;
+      recipient: string | null;
+      error: string | null;
+    }
+  >;
 }> => {
   const res = await request(`/dte/orders/${orderId}/deliver/`, {
     method: "POST",
@@ -4072,7 +4099,14 @@ export const dteDeliverByOrder = async (
     results: Object.fromEntries(
       Object.entries(payload.results ?? {}).map(([key, value]: [string, any]) => [
         key,
-        { ok: Boolean(value?.ok), statusCode: value?.status_code ?? null, error: value?.error ?? null },
+        {
+          ok: Boolean(value?.ok),
+          statusCode: value?.status_code ?? null,
+          providerStatus: value?.provider_status ?? null,
+          providerMessage: value?.provider_message ?? null,
+          recipient: value?.recipient ?? null,
+          error: value?.error ?? null,
+        },
       ])
     ),
   };
