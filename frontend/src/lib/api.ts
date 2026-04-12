@@ -236,6 +236,9 @@ export type Order = {
   subtotalAfterDiscounts?: number;
   taxTotal?: number;
   totalPayable?: number;
+  isPending?: boolean;
+  pendingState?: "none" | "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
+  pendingMarkedAt?: string | null;
 };
 
 export type EmployeeStats = {
@@ -1735,6 +1738,9 @@ const mapOrder = (order: {
   subtotal_after_discounts?: string;
   tax_total?: string;
   total_payable?: string;
+  is_pending?: boolean;
+  pending_state?: Order["pendingState"];
+  pending_marked_at?: string | null;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1798,7 +1804,41 @@ const mapOrder = (order: {
     subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
     taxTotal: Number(order.tax_total ?? 0),
     totalPayable: Number(order.total_payable ?? order.total),
+    isPending: Boolean(order.is_pending),
+    pendingState: (order.pending_state ?? "none") as Order["pendingState"],
+    pendingMarkedAt: order.pending_marked_at ?? null,
   };
+};
+
+export const getPendingOrders = async (params?: { branchId?: number }): Promise<{ count: number; results: Order[] }> => {
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  const response = await request(`/orders/pending/${qs.toString() ? `?${qs.toString()}` : ""}`);
+  const data = await handleJson<{ count: number; results: any[] }>(response);
+  return {
+    count: Number(data.count ?? 0),
+    results: (data.results ?? []).map((row) => mapOrder(row)),
+  };
+};
+
+export const setOrderPending = async (
+  orderId: number,
+  payload: {
+    isPending: boolean;
+    pendingState?: "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
+    authorizationPin?: string;
+  }
+): Promise<Order> => {
+  const response = await request(`/orders/${orderId}/pending/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      is_pending: payload.isPending,
+      pending_state: payload.pendingState,
+      authorization_pin: payload.authorizationPin ?? "",
+    }),
+  });
+  return mapOrder(await handleJson<any>(response));
 };
 
 export const createOrder = async (payload: {

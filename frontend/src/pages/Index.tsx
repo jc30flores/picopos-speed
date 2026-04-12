@@ -60,6 +60,8 @@ import {
   downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
+  getPendingOrders,
+  setOrderPending,
   printPaymentTicket,
   getPrintingStatus,
   Category,
@@ -78,7 +80,7 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
 
@@ -144,6 +146,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
@@ -155,6 +158,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
+  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+  const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
@@ -231,6 +236,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const previousCartLengthRef = useRef(0);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
@@ -331,6 +337,30 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         console.error("Failed to load tax config", error);
       });
   }, []);
+
+  useEffect(() => {
+    getPendingOrders()
+      .then((res) => {
+        setPendingOrdersCount(res.count);
+        setIsPendingChoiceOpen(res.count > 0);
+      })
+      .catch(() => {
+        setPendingOrdersCount(0);
+      });
+  }, []);
+
+  useEffect(() => {
+    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
+    if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
+    getOrderById(pendingOrderId)
+      .then((order) => {
+        setActiveOrder(order);
+        setCreatedOrderId(order.id);
+        setCreatedOrderNumber(order.orderNumber);
+        setCart([]);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
+  }, [searchParams]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -1159,6 +1189,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No tienes permisos para cerrar caja.");
       return;
     }
+    if (pendingOrdersCount > 0) {
+      toast.error(`No puedes cerrar caja porque hay ${pendingOrdersCount} órdenes pendientes.`);
+      return;
+    }
     const totalBills = Number(closeBillsInput || 0);
     const totalCoins = Number(closeCoinsInput || 0);
     const totalPosCards = Number(closePosCardsInput || 0);
@@ -1231,6 +1265,49 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
       setIsSavingCashAction(false);
+    }
+  };
+
+  const handleSendOrderToPending = async () => {
+    if (isSendingToPending) return;
+    setIsSendingToPending(true);
+    try {
+      let order = activeOrder;
+      if (!order) {
+        order = await createOrder({
+          serviceType,
+          customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
+          customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+          dteDocumentType,
+          ivaExempt,
+          source: "pos",
+          channel: "pos",
+          items: cart.map((item) => ({
+            productId: item.productId,
+            productName: item.name,
+            price: getItemBaseEffective(item),
+            quantity: item.quantity,
+            isCustom: Boolean(item.isCustom),
+            type: item.isCustom ? "manual" : "menu",
+            unitPriceOverride: item.unitPriceOverride ?? null,
+            customCode: item.customCode,
+            assignedName: item.assignedName,
+            modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+          })),
+        });
+      }
+      const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
+      await setOrderPending(order.id, { isPending: true, pendingState });
+      toast.success("Orden enviada a Pendientes.");
+      setPendingOrdersCount((current) => current + 1);
+      setCart([]);
+      setActiveOrder(null);
+      setCheckoutDraft(null);
+      navigate("/pendientes");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo enviar a Pendientes.");
+    } finally {
+      setIsSendingToPending(false);
     }
   };
 
@@ -2139,6 +2216,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   Cobrar {formatMoney(total)}
                 </Button>
                 <Button
+                  variant="secondary"
+                  className="h-14 w-full text-base"
+                  onClick={() => void handleSendOrderToPending()}
+                  disabled={(cart.length === 0 && !activeOrder) || isSendingToPending}
+                >
+                  {isSendingToPending ? "Guardando..." : "Enviar a Pendientes"}
+                </Button>
+                <Button
                   variant="outline"
                   className="h-14 w-full text-base"
                   onClick={() => {
@@ -2155,6 +2240,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         </div>
       </div>
 
+      <Dialog open={isPendingChoiceOpen} onOpenChange={setIsPendingChoiceOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Órdenes pendientes detectadas</DialogTitle>
+            <DialogDescription>
+              Hay {pendingOrdersCount} órdenes pendientes activas. ¿Deseas ir al POS o revisar Pendientes?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Ir al POS</Button>
+            <Button onClick={() => navigate("/pendientes")}>Ir a Pendientes</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isDiscountDialogOpen}
@@ -2424,9 +2523,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    {pendingOrdersCount > 0 ? (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
+                        No puedes cerrar caja porque hay {pendingOrdersCount} órdenes pendientes. Ve a la sección Pendientes para resolverlas.
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || pendingOrdersCount > 0}>Confirmar cierre</Button>
                     </div>
                   </>
                 ) : null}

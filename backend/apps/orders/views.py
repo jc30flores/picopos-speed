@@ -47,6 +47,22 @@ def _apply_common_filters(request, queryset):
     return queryset, branch_id, service_type
 
 
+def _require_manager_pin_for_cashier(request, pin: str) -> bool:
+    profile = UserProfile.objects.filter(user=request.user, is_active=True).first()
+    if getattr(request.user, "is_superuser", False) or (profile and profile.role in {"admin", "manager"}):
+        return True
+    if not profile or profile.role != "cashier":
+        return False
+    if not is_valid_pin_format(pin):
+        return False
+    privileged_profiles = UserProfile.objects.select_related("user").filter(
+        is_active=True,
+        role__in=["admin", "manager"],
+        user__is_active=True,
+    )
+    return any(user_matches_pin(p.user, pin) for p in privileged_profiles)
+
+
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
     order_number = serializers.IntegerField()
     customer_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -317,3 +333,63 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
         return response
+
+
+class PendingOrderListView(generics.ListAPIView):
+    serializer_class = OrderSerializer
+    permission_classes = [IsCashierOrManagerOrAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = (
+            Order.objects.filter(is_pending=True)
+            .exclude(status__in=["canceled", "delivered"])
+            .prefetch_related("items__applied_modifiers")
+            .order_by("pending_marked_at", "created_at")
+        )
+        queryset, _, _ = _apply_common_filters(self.request, queryset)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        data = self.get_serializer(queryset, many=True).data
+        return Response({"count": len(data), "results": data}, status=status.HTTP_200_OK)
+
+
+class PendingOrderToggleView(generics.GenericAPIView):
+    queryset = Order.objects.all()
+    serializer_class = OrderSerializer
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        order = Order.objects.select_for_update().get(pk=kwargs["pk"])
+        is_pending = bool(request.data.get("is_pending", True))
+        pending_state = str(request.data.get("pending_state") or "").strip().lower()
+        auth_pin = str(request.data.get("authorization_pin") or "").strip()
+
+        if order.status in {"canceled", "delivered"}:
+            return Response({"detail": "La orden no está activa para Pendientes."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        if not is_pending and not _require_manager_pin_for_cashier(request, auth_pin):
+            return Response(
+                {"detail": "Autorización requerida de gerente/admin para retirar de Pendientes."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if is_pending:
+            if pending_state not in {"pending_payment", "paid_pending_delivery", "in_kitchen", "ready"}:
+                pending_state = "paid_pending_delivery" if order.payment_status == "paid" else "pending_payment"
+            order.is_pending = True
+            order.pending_state = pending_state
+            order.pending_marked_at = timezone.localtime(timezone.now())
+            action = "order.pending.mark"
+        else:
+            order.is_pending = False
+            order.pending_state = "none"
+            order.pending_marked_at = None
+            action = "order.pending.unmark"
+
+        order.save(update_fields=["is_pending", "pending_state", "pending_marked_at", "updated_at"])
+        log_audit(request, action, "Order", order.id, {"pending_state": order.pending_state, "is_pending": order.is_pending})
+        return Response(OrderSerializer(order, context={"request": request}).data, status=status.HTTP_200_OK)

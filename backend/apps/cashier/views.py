@@ -26,6 +26,7 @@ from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, I
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
 from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id, resolve_open_cash_session
+from apps.orders.models import Order
 
 logger = logging.getLogger(__name__)
 
@@ -163,13 +164,22 @@ class CashSessionCurrentView(APIView):
         include_sensitive = _can_view_sensitive_cash_data(request)
         logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
-            return Response({"has_open_session": False, "session": None, "summary": None}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "has_open_session": False,
+                    "session": None,
+                    "summary": None,
+                    "business_date": str(timezone.localdate()),
+                },
+                status=status.HTTP_200_OK,
+            )
         summary = calculate_shift_summary(session) if include_sensitive else None
         return Response(
             {
                 "has_open_session": True,
                 "session": _session_contract_payload(session, include_sensitive=include_sensitive),
                 "summary": CashSessionSummarySerializer(summary).data if summary else None,
+                "business_date": str(timezone.localdate()),
             },
             status=status.HTTP_200_OK,
         )
@@ -214,11 +224,30 @@ class CashSessionOpenView(APIView):
             logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
             return Response(
                 {
+                    "code": "CASH_SESSION_ALREADY_OPEN",
+                    "detail": "Ya existe una caja abierta para esta sucursal.",
                     "has_open_session": True,
-                    "already_open": True,
                     "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
                 },
-                status=status.HTTP_200_OK,
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        today_sv = timezone.localdate()
+        existing_today = (
+            CashSession.objects.select_for_update()
+            .filter(register__branch_id=scope_branch_id, opened_at__date=today_sv)
+            .order_by("-opened_at")
+            .first()
+        )
+        if existing_today:
+            return Response(
+                {
+                    "code": "CASH_SESSION_ALREADY_OPENED_TODAY",
+                    "detail": "Ya se realizó apertura de caja hoy en esta sucursal (hora local El Salvador).",
+                    "business_date": str(today_sv),
+                    "last_session_id": existing_today.id,
+                },
+                status=status.HTTP_409_CONFLICT,
             )
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
@@ -278,6 +307,19 @@ class CashSessionCloseView(APIView):
                 request.query_params.get("branch_id"),
             )
             return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
+        pending_count = Order.objects.filter(
+            branch_id=session.register.branch_id,
+            is_pending=True,
+        ).exclude(status__in=["canceled", "delivered"]).count()
+        if pending_count > 0:
+            return Response(
+                {
+                    "code": "PENDING_ORDERS_BLOCK_CASH_CLOSE",
+                    "detail": "No puedes cerrar caja porque hay órdenes pendientes.",
+                    "pending_orders": pending_count,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         serializer = CashSessionCloseSerializer(data=raw_payload)
         if not serializer.is_valid():
             logger.warning(

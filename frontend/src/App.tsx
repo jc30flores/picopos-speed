@@ -17,6 +17,7 @@ import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import DTEPage from "./pages/DTE";
 import CustomersPage from "./pages/Customers";
+import PendientesPage from "./pages/Pendientes";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { InactivityGuard } from "./components/auth/InactivityGuard";
 
@@ -44,6 +45,14 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
                   <Index />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/pendientes"
+              element={
+                <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
+                  <PendientesPage />
                 </ProtectedRoute>
               }
             />
