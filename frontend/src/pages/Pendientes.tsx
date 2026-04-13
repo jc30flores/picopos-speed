@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { CreditCard, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,18 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { formatMoney } from "@/lib/money";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { getPendingOrders, setOrderPending, verifyPrivilegedPin, type Order } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
 
-const stateLabel: Record<string, string> = {
-  pending_payment: "Pending payment",
-  paid_pending_delivery: "Paid pending delivery",
-  in_kitchen: "In kitchen",
-  ready: "Ready",
-  none: "No state",
+const getEstadoLabel = (row: Order): string => {
+  if (row.status === "canceled") return "Cancelada";
+  if (!row.isPending) return "Removida";
+  if (row.paymentStatus === "paid") return "Pagada";
+  return "Pendiente de pago";
 };
 
 const PendientesPage = () => {
@@ -39,7 +40,7 @@ const PendientesPage = () => {
       const data = await getPendingOrders({ branchId: selectedBranchId || undefined, tab, query });
       setRows(data.results);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load Open Orders.");
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar Open Orders.");
     } finally {
       setLoading(false);
     }
@@ -57,15 +58,15 @@ const PendientesPage = () => {
   const handleRemovePending = async (order: Order, authorizationPin = "") => {
     try {
       if (!removalReason.trim()) {
-        toast.error("Removal reason is required.");
+        toast.error("El motivo es obligatorio.");
         return;
       }
       await setOrderPending(order.id, { isPending: false, authorizationPin, removalReason: removalReason.trim() });
-      toast.success("Order removed from Open Orders.");
+      toast.success("Orden removida de Open Orders.");
       setRemovalReason("");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not remove the order.");
+      toast.error(error instanceof Error ? error.message : "No se pudo remover la orden.");
     }
   };
 
@@ -76,13 +77,13 @@ const PendientesPage = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold">Open Orders</h1>
-              <p className="text-sm text-muted-foreground">Saved orders to resume, edit or charge.</p>
+              <p className="text-sm text-muted-foreground">Órdenes guardadas para retomar, editar o cobrar.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="secondary">{summary.total} orders</Badge>
+              <Badge variant="secondary">{summary.total} órdenes</Badge>
               <Badge variant="outline">{formatMoney(summary.totalAmount)}</Badge>
-              <Button variant="outline" onClick={() => navigate("/")}>Menu</Button>
-              <Button onClick={() => navigate("/pos")}>Go to POS</Button>
+              <Button variant="outline" onClick={() => navigate("/")}>Menú</Button>
+              <Button onClick={() => navigate("/pos")}>Ir al POS</Button>
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -108,48 +109,69 @@ const PendientesPage = () => {
                 <TableRow>
                   <TableHead># Orden</TableHead>
                   <TableHead>Cliente</TableHead>
-                  <TableHead>Service</TableHead>
-                  <TableHead>Payment</TableHead>
-                  <TableHead>Operational state</TableHead>
-                  <TableHead>Reference</TableHead>
+                  <TableHead>Servicio</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead>Referencia</TableHead>
                   <TableHead>Total</TableHead>
-                  <TableHead>Date/Time</TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead>Fecha/Hora</TableHead>
+                  <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="font-semibold">#{row.orderNumber}</TableCell>
-                    <TableCell>{row.customerName || "Consumer final"}</TableCell>
+                    <TableCell>{row.customerName || "Consumidor final"}</TableCell>
                     <TableCell>{row.serviceType || "-"}</TableCell>
-                    <TableCell>{row.paymentStatus === "paid" ? "Paid" : "Pending"}</TableCell>
                     <TableCell>
-                      <Badge variant={row.paymentStatus === "paid" ? "default" : "secondary"}>
-                        {stateLabel[row.pendingState || "none"]}
+                      <Badge variant={row.paymentStatus === "paid" ? "default" : "secondary"} className="whitespace-nowrap">
+                        {getEstadoLabel(row)}
                       </Badge>
                     </TableCell>
                     <TableCell>{row.pendingReference || "-"}</TableCell>
                     <TableCell>{formatMoney(row.totalPayable ?? row.total)}</TableCell>
                     <TableCell>{formatDateTimeSV((row.pendingMarkedAt || row.createdAt) as string | Date)}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" onClick={() => goToPos(row.id, "edit")}>Edit</Button>
-                        <Button size="sm" onClick={() => goToPos(row.id, "pay")}>Pay</Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setPendingPinOrderId(row.id)}
-                        >
-                          Remove
-                        </Button>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => goToPos(row.id, "edit")} aria-label="Editar">
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Editar</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => goToPos(row.id, "pay")} aria-label="Cobrar">
+                                <CreditCard className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Cobrar</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-9 w-9 text-destructive hover:text-destructive"
+                                onClick={() => setPendingPinOrderId(row.id)}
+                                aria-label="Remover"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Remover</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       </div>
                     </TableCell>
                   </TableRow>
                 ))}
                 {!loading && rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">No open orders.</TableCell>
+                    <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No hay órdenes en Open Orders.</TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -161,13 +183,13 @@ const PendientesPage = () => {
       <Dialog open={Boolean(pendingPinOrderId)} onOpenChange={(open) => { if (!open) { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Authorization required</DialogTitle>
-            <DialogDescription>{canAutoUnmark ? "Add a reason to remove this order from Open Orders." : "Enter manager/admin PIN to remove from Open Orders."}</DialogDescription>
+            <DialogTitle>Autorización requerida</DialogTitle>
+            <DialogDescription>{canAutoUnmark ? "Ingresa el motivo para remover la orden de Open Orders." : "Ingresa PIN de gerente/admin para remover de Open Orders."}</DialogDescription>
           </DialogHeader>
-          <Input placeholder="Removal reason" value={removalReason} onChange={(e) => setRemovalReason(e.target.value)} />
+          <Input placeholder="Motivo de remoción" value={removalReason} onChange={(e) => setRemovalReason(e.target.value)} />
           {!canAutoUnmark && <Input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D+/g, "").slice(0, 6))} maxLength={6} autoFocus />}
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); }}>Cancelar</Button>
             <Button
               onClick={async () => {
                 if (!pendingPinOrderId) return;
@@ -182,11 +204,11 @@ const PendientesPage = () => {
                   setPin("");
                   setRemovalReason("");
                 } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "Invalid PIN.");
+                  toast.error(error instanceof Error ? error.message : "PIN inválido.");
                 }
               }}
             >
-              Authorize
+              Autorizar
             </Button>
           </DialogFooter>
         </DialogContent>

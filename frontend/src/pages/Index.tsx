@@ -16,6 +16,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -119,6 +120,27 @@ const getPaidExtrasLines = (item: CartItem) =>
     name: modifier.name,
     price: modifier.price,
   }));
+
+const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
+  const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
+  const modifiers = Array.isArray(item.modifiers)
+    ? item.modifiers.map((name) => ({ name, price: 0 }))
+    : [];
+  return {
+    id: `order-item-${item.id}`,
+    productId: item.productId ?? null,
+    name: item.assignedName || item.productName,
+    basePrice,
+    originalBasePrice: item.unitPriceBeforeDiscount ?? basePrice,
+    price: basePrice,
+    quantity: item.quantity,
+    isCustom: Boolean(item.isCustom),
+    customCode: item.code,
+    assignedName: item.assignedName,
+    unitPriceOverride: item.unitPriceOverride ?? null,
+    modifiers,
+  };
+};
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -363,10 +385,21 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
     getOrderById(pendingOrderId)
       .then((order) => {
+        const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
         setActiveOrder(order);
         setCreatedOrderId(order.id);
         setCreatedOrderNumber(order.orderNumber);
-        setCart([]);
+        setCart(restoredCart);
+        setCheckoutDraft({
+          items: restoredCart,
+          subtotal: order.subtotalBeforeDiscounts ?? order.total,
+          tax: order.taxTotal ?? 0,
+          total: order.totalPayable ?? order.total,
+          taxRate,
+          serviceType: order.serviceType || serviceType,
+          createdAt: Date.now(),
+        });
+        setServiceType(order.serviceType || serviceType);
         if (mode === "pay") {
           setIsPaymentOpen(true);
         } else {
@@ -375,7 +408,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
-  }, [searchParams]);
+  }, [searchParams, serviceType, taxRate]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -2247,15 +2280,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   variant="secondary"
                   className="h-14 w-full text-base"
                   onClick={() => {
+                    if (cart.length === 0 && !activeOrder) {
+                      navigate("/open-orders");
+                      return;
+                    }
                     if (activeOrder?.isPending) {
                       navigate("/open-orders");
                       return;
                     }
                     void handleSendOrderToPending();
                   }}
-                  disabled={(cart.length === 0 && !activeOrder) || isSendingToPending}
+                  disabled={isSendingToPending}
                 >
-                  {isSendingToPending ? "Saving..." : activeOrder?.isPending ? "Open Orders" : "Send to Open Orders"}
+                  {isSendingToPending
+                    ? "Guardando..."
+                    : (cart.length === 0 && !activeOrder) || activeOrder?.isPending
+                      ? "Open Orders"
+                      : "Enviar a Open Orders"}
                 </Button>
                 <Button
                   variant="outline"
