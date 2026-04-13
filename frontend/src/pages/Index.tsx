@@ -81,7 +81,7 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
 
@@ -168,6 +168,7 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -290,6 +291,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
   const hardReloadTriggeredRef = useRef(false);
+  const hydratedPendingOrderIdRef = useRef<number | null>(null);
+  const consumedNavSourceRef = useRef(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
     items: CartItem[];
     subtotal: number;
@@ -364,11 +367,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
-    const cameFromOpenOrder = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
+    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
+    const cameFromPendingParams = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
+    const cameFromOpenOrdersNavigation = Boolean((location.state as { fromOpenOrders?: boolean } | null)?.fromOpenOrders);
+    const shouldSuppressPendingChoice = cameFromPendingParams || mode === "edit" || mode === "pay" || cameFromOpenOrdersNavigation;
     getPendingOrders({ branchId: selectedBranchId || undefined })
       .then((res) => {
         setPendingOrdersCount(res.count);
-        if (!cameFromOpenOrder) {
+        if (!shouldSuppressPendingChoice) {
           setIsPendingChoiceOpen(res.count > 0);
         } else {
           setIsPendingChoiceOpen(false);
@@ -377,12 +383,21 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, [searchParams, selectedBranchId]);
+  }, [location.state, searchParams, selectedBranchId]);
+
+  useEffect(() => {
+    const cameFromOpenOrdersNavigation = Boolean((location.state as { fromOpenOrders?: boolean } | null)?.fromOpenOrders);
+    if (!cameFromOpenOrdersNavigation || consumedNavSourceRef.current) return;
+    consumedNavSourceRef.current = true;
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
     const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
+    if (hydratedPendingOrderIdRef.current === pendingOrderId) return;
+    hydratedPendingOrderIdRef.current = pendingOrderId;
     getOrderById(pendingOrderId)
       .then((order) => {
         const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
@@ -406,9 +421,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           setIsPaymentOpen(false);
           setIsPaymentMethodOpen(false);
         }
+        navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
-  }, [searchParams, serviceType, taxRate]);
+  }, [navigate, searchParams, serviceType, taxRate]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -1472,6 +1488,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const finalizePaidSale = () => {
     setIsPaymentOpen(false);
+    setIsPaymentMethodOpen(false);
     setActiveOrder(null);
     setCart([]);
     setSelectedDiscount(null);
@@ -1488,7 +1505,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     } else {
       setSelectedCustomerId("");
     }
+    hydratedPendingOrderIdRef.current = null;
     clearPersistedDraft();
+    navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
   };
 
   const scheduleReload = () => {
@@ -1704,6 +1723,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
+        if (refreshed.isPending) {
+          try {
+            const finalizedOrder = await setOrderPending(refreshed.id, {
+              isPending: false,
+              removalReason: "Pagada en POS",
+              completionType: "paid",
+            });
+            setActiveOrder(finalizedOrder);
+          } catch (pendingError) {
+            console.error("Failed to finalize open order state after payment", pendingError);
+          }
+        }
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {
           toast.success("Pago y factura registrados. Enviado a cocina.");

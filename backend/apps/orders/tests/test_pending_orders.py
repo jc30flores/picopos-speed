@@ -75,7 +75,8 @@ class PendingOrdersTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.order.refresh_from_db()
         self.assertFalse(self.order.is_pending)
-        self.assertEqual(self.order.pending_reference, "")
+        self.assertEqual(self.order.pending_completion_type, "removed")
+        self.assertTrue(self.order.pending_completed_at is not None)
 
     def test_remove_pending_requires_reason(self):
         self.order.is_pending = True
@@ -135,6 +136,14 @@ class PendingOrdersTests(TestCase):
         self.order.payment_status = "paid"
         self.order.pending_reference = "DELIV-777"
         self.order.save(update_fields=["is_pending", "pending_state", "payment_status", "pending_reference", "updated_at"])
+
+        manager_client = APIClient()
+        manager_client.force_authenticate(self.manager)
+        manager_client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {"is_pending": False, "removal_reason": "Pagada en POS", "completion_type": "paid"},
+            format="json",
+        )
 
         res_finalized = self.client.get("/api/orders/pending/?tab=finalized&q=777")
         self.assertEqual(res_finalized.status_code, 200)

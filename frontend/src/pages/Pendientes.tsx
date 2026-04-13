@@ -16,10 +16,18 @@ import { getPendingOrders, setOrderPending, verifyPrivilegedPin, type Order } fr
 import { useAuth } from "@/context/useAuth";
 
 const getEstadoLabel = (row: Order): string => {
-  if (row.status === "canceled") return "Cancelada";
-  if (!row.isPending) return "Removida";
+  if (row.pendingCompletionType === "paid") return "Pagada";
+  if (row.pendingCompletionType === "canceled" || row.status === "canceled") return "Cancelada";
+  if (row.pendingCompletionType === "removed" || !row.isPending) return "Removida";
   if (row.paymentStatus === "paid") return "Pagada";
   return "Pendiente de pago";
+};
+
+const getEstadoBadgeClass = (row: Order): string => {
+  const label = getEstadoLabel(row);
+  if (label === "Pendiente de pago") return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300";
+  if (label === "Pagada") return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300";
+  return "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300";
 };
 
 const PendientesPage = () => {
@@ -53,7 +61,8 @@ const PendientesPage = () => {
   const canAutoUnmark = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const summary = useMemo(() => ({ total: rows.length, totalAmount: rows.reduce((acc, row) => acc + (row.totalPayable ?? row.total), 0) }), [rows]);
 
-  const goToPos = (orderId: number, mode: "edit" | "pay") => navigate(`/pos?pending_order_id=${orderId}&mode=${mode}`);
+  const goToPos = (orderId: number, mode: "edit" | "pay") =>
+    navigate(`/pos?pending_order_id=${orderId}&mode=${mode}`, { state: { fromOpenOrders: true } });
 
   const handleRemovePending = async (order: Order, authorizationPin = "") => {
     try {
@@ -74,7 +83,8 @@ const PendientesPage = () => {
     <div className="min-h-screen bg-background p-4 md:p-6">
       <div className="mx-auto max-w-6xl space-y-4">
         <Card className="p-4 md:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <Button variant="ghost" onClick={() => navigate("/")} className="h-11 px-3 text-base">Menú</Button>
             <div>
               <h1 className="text-2xl font-semibold">Open Orders</h1>
               <p className="text-sm text-muted-foreground">Órdenes guardadas para retomar, editar o cobrar.</p>
@@ -82,8 +92,7 @@ const PendientesPage = () => {
             <div className="flex items-center gap-2">
               <Badge variant="secondary">{summary.total} órdenes</Badge>
               <Badge variant="outline">{formatMoney(summary.totalAmount)}</Badge>
-              <Button variant="outline" onClick={() => navigate("/")}>Menú</Button>
-              <Button onClick={() => navigate("/pos")}>Ir al POS</Button>
+              <Button className="h-11 px-6 text-base font-semibold" onClick={() => navigate("/pos", { state: { fromOpenOrders: true } })}>POS</Button>
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -124,13 +133,13 @@ const PendientesPage = () => {
                     <TableCell>{row.customerName || "Consumidor final"}</TableCell>
                     <TableCell>{row.serviceType || "-"}</TableCell>
                     <TableCell>
-                      <Badge variant={row.paymentStatus === "paid" ? "default" : "secondary"} className="whitespace-nowrap">
+                      <Badge className={`whitespace-nowrap border-0 ${getEstadoBadgeClass(row)}`}>
                         {getEstadoLabel(row)}
                       </Badge>
                     </TableCell>
                     <TableCell>{row.pendingReference || "-"}</TableCell>
                     <TableCell>{formatMoney(row.totalPayable ?? row.total)}</TableCell>
-                    <TableCell>{formatDateTimeSV((row.pendingMarkedAt || row.createdAt) as string | Date)}</TableCell>
+                    <TableCell>{formatDateTimeSV((row.pendingCompletedAt || row.pendingMarkedAt || row.createdAt) as string | Date)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                         <TooltipProvider>

@@ -350,20 +350,24 @@ class PendingOrderListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        queryset = (
-            Order.objects.filter(is_pending=True)
-            .exclude(status__in=["canceled", "delivered"])
-            .prefetch_related("items__applied_modifiers")
-            .order_by("pending_marked_at", "created_at")
-        )
+        tab = str(self.request.query_params.get("tab") or "pending").strip().lower()
+        if tab == "finalized":
+            queryset = (
+                Order.objects.filter(is_pending=False)
+                .exclude(pending_completion_type="none")
+                .prefetch_related("items__applied_modifiers")
+                .order_by("-pending_completed_at", "-updated_at")
+            )
+        else:
+            queryset = (
+                Order.objects.filter(is_pending=True)
+                .exclude(status__in=["canceled", "delivered"])
+                .prefetch_related("items__applied_modifiers")
+                .order_by("pending_marked_at", "created_at")
+            )
         branch_id = _selected_branch_id_optional(self.request)
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
-        tab = str(self.request.query_params.get("tab") or "all").strip().lower()
-        if tab == "finalized":
-            queryset = queryset.filter(payment_status="paid")
-        elif tab == "pending":
-            queryset = queryset.exclude(payment_status="paid")
         query = str(self.request.query_params.get("q") or "").strip()
         if query:
             search_filter = (
@@ -394,6 +398,7 @@ class PendingOrderToggleView(generics.GenericAPIView):
         auth_pin = str(request.data.get("authorization_pin") or "").strip()
         pending_reference = str(request.data.get("pending_reference") or "").strip()
         removal_reason = str(request.data.get("removal_reason") or "").strip()
+        completion_type = str(request.data.get("completion_type") or "").strip().lower()
 
         if order.status in {"canceled", "delivered"}:
             return Response({"detail": "La orden no está activa para Pendientes."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
@@ -413,17 +418,35 @@ class PendingOrderToggleView(generics.GenericAPIView):
             order.pending_state = pending_state
             order.pending_reference = pending_reference[:120]
             order.pending_marked_at = timezone.localtime(timezone.now())
+            order.pending_completed_at = None
+            order.pending_completion_type = "none"
+            order.pending_completion_note = ""
             action = "order.pending.mark"
         else:
             if not removal_reason:
                 return Response({"detail": "Motivo requerido para retirar de Pendientes."}, status=status.HTTP_400_BAD_REQUEST)
             order.is_pending = False
             order.pending_state = "none"
-            order.pending_reference = ""
             order.pending_marked_at = None
+            order.pending_completed_at = timezone.localtime(timezone.now())
+            if completion_type not in {"paid", "removed", "canceled"}:
+                completion_type = "paid" if order.payment_status == "paid" else "removed"
+            order.pending_completion_type = completion_type
+            order.pending_completion_note = removal_reason[:160]
             action = "order.pending.unmark"
 
-        order.save(update_fields=["is_pending", "pending_state", "pending_reference", "pending_marked_at", "updated_at"])
+        order.save(
+            update_fields=[
+                "is_pending",
+                "pending_state",
+                "pending_reference",
+                "pending_marked_at",
+                "pending_completed_at",
+                "pending_completion_type",
+                "pending_completion_note",
+                "updated_at",
+            ]
+        )
         log_audit(
             request,
             action,
@@ -434,6 +457,7 @@ class PendingOrderToggleView(generics.GenericAPIView):
                 "is_pending": order.is_pending,
                 "pending_reference": order.pending_reference,
                 "removal_reason": removal_reason or None,
+                "completion_type": order.pending_completion_type,
             },
         )
         return Response(OrderSerializer(order, context={"request": request}).data, status=status.HTTP_200_OK)

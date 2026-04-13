@@ -240,6 +240,9 @@ export type Order = {
   pendingState?: "none" | "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
   pendingReference?: string;
   pendingMarkedAt?: string | null;
+  pendingCompletedAt?: string | null;
+  pendingCompletionType?: "none" | "paid" | "removed" | "canceled";
+  pendingCompletionNote?: string;
 };
 
 export type EmployeeStats = {
@@ -1743,6 +1746,9 @@ const mapOrder = (order: {
   pending_state?: Order["pendingState"];
   pending_reference?: string;
   pending_marked_at?: string | null;
+  pending_completed_at?: string | null;
+  pending_completion_type?: Order["pendingCompletionType"];
+  pending_completion_note?: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1810,6 +1816,9 @@ const mapOrder = (order: {
     pendingState: (order.pending_state ?? "none") as Order["pendingState"],
     pendingReference: order.pending_reference ?? "",
     pendingMarkedAt: order.pending_marked_at ?? null,
+    pendingCompletedAt: order.pending_completed_at ?? null,
+    pendingCompletionType: (order.pending_completion_type ?? "none") as Order["pendingCompletionType"],
+    pendingCompletionNote: order.pending_completion_note ?? "",
   };
 };
 
@@ -1834,6 +1843,7 @@ export const setOrderPending = async (
     authorizationPin?: string;
     pendingReference?: string;
     removalReason?: string;
+    completionType?: "paid" | "removed" | "canceled";
   }
 ): Promise<Order> => {
   const response = await request(`/orders/${orderId}/pending/`, {
@@ -1845,6 +1855,7 @@ export const setOrderPending = async (
       authorization_pin: payload.authorizationPin ?? "",
       pending_reference: payload.pendingReference ?? "",
       removal_reason: payload.removalReason ?? "",
+      completion_type: payload.completionType ?? "",
     }),
   });
   return mapOrder(await handleJson<any>(response));
