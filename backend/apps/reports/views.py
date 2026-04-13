@@ -233,12 +233,16 @@ class SalesReportListView(generics.ListAPIView):
                 | Q(order__invoice__numero_control__icontains=search)
             )
         queryset = _apply_common_filters(queryset, self.request)
-        return queryset.order_by("-created_at")
+        return queryset.order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         rows = []
+        seen_payment_ids: set[int] = set()
         for payment in queryset:
+            if payment.id in seen_payment_ids:
+                continue
+            seen_payment_ids.add(payment.id)
             order = payment.order
             pm_code = payment_code_from_payment(payment)
             st_code = normalize_service_type(order.service_type.key if order.service_type_id else None)

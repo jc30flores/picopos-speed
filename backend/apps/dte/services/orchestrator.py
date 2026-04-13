@@ -5,7 +5,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from apps.dte.models import DTERecord
+from apps.dte.models import DTERecord, DteDeliveryAttempt
 from apps.dte.outbox import send_or_queue_dte
 from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.control import build_generation_code, next_control_number
@@ -16,10 +16,52 @@ from apps.dte.services.dte_service import (
 )
 from apps.dte.services.ambiente import normalize_ambiente, resolve_ambiente_from_env, resolve_ambiente_with_source
 from apps.dte.services.delivery import deliver_dte_to_client
+from apps.dte.services.delivery_config import INTERNAL_BILLING_EMAIL
+from apps.dte.services.availability import evaluate_record_actions
 from apps.orders.models import Order, OrderInvoice
 from apps.orders.services.snapshots import persist_sale_snapshot
 
 DTE_LOGGER = logging.getLogger("apps.dte")
+
+
+def _normalize_email(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _maybe_auto_send_email(record: DTERecord) -> None:
+    flags = evaluate_record_actions(record)
+    raw_email = str(flags.get("customer_email") or "").strip()
+    normalized_email = _normalize_email(raw_email)
+    DTE_LOGGER.info("dte.auto_email.check dte_id=%s order_id=%s", record.id, record.order_id)
+    if not normalized_email:
+        DTE_LOGGER.info("dte.auto_email.skip reason=empty_email dte_id=%s order_id=%s", record.id, record.order_id)
+        return
+    if normalized_email == INTERNAL_BILLING_EMAIL.strip().lower():
+        DTE_LOGGER.info("dte.auto_email.skip reason=system_email dte_id=%s order_id=%s", record.id, record.order_id)
+        return
+    already_sent = DteDeliveryAttempt.objects.filter(
+        dte_record=record,
+        delivery_type=DteDeliveryAttempt.TYPE_EMAIL,
+        status="SENT",
+    ).exists()
+    if already_sent:
+        DTE_LOGGER.info("dte.auto_email.skip reason=already_sent dte_id=%s order_id=%s", record.id, record.order_id)
+        return
+    try:
+        DTE_LOGGER.info("dte.auto_email.dispatch dte_id=%s order_id=%s", record.id, record.order_id)
+        result = deliver_dte_to_client(record, channels=("email",), mode="automatic")
+        email_result = (result.get("results") or {}).get("email") or {}
+        if email_result.get("ok"):
+            DTE_LOGGER.info("dte.auto_email.sent dte_id=%s order_id=%s", record.id, record.order_id)
+        else:
+            DTE_LOGGER.warning(
+                "dte.auto_email.failed dte_id=%s order_id=%s error=%s",
+                record.id,
+                record.order_id,
+                email_result.get("error") or result.get("summary"),
+            )
+    except Exception as exc:  # noqa: BLE001
+        DTE_LOGGER.error("dte.auto_email.failed dte_id=%s order_id=%s error=%s", record.id, record.order_id, exc)
 
 
 def _normalize_ambiente(raw_value: str | None) -> str:
@@ -204,11 +246,7 @@ def transmit_sale_dte(
     invoice.save()
     persist_sale_snapshot(order)
     if record.status == DTERecord.STATUS_ACCEPTED:
-        try:
-            delivery_result = deliver_dte_to_client(record, channels=("email", "whatsapp"), mode="automatic")
-            DTE_LOGGER.info("[DTE] delivery.auto order=%s dte=%s success=%s summary=%s results=%s", order.id, record.id, delivery_result.get("success"), delivery_result.get("summary"), delivery_result.get("results"))
-        except Exception as exc:  # noqa: BLE001
-            DTE_LOGGER.error("[DTE] delivery.auto_error order=%s dte=%s error=%s", order.id, record.id, exc)
+        _maybe_auto_send_email(record)
     DTE_LOGGER.info("[DTE] send_dte.done order=%s payment=%s record_status=%s", sale_id, payment_id, record.status)
 
     return record
