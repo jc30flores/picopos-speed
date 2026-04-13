@@ -1,7 +1,7 @@
 from decimal import Decimal
 import logging
 from django.db import transaction
-from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.views import APIView
@@ -359,6 +359,20 @@ class PendingOrderListView(generics.ListAPIView):
         branch_id = _selected_branch_id_optional(self.request)
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
+        tab = str(self.request.query_params.get("tab") or "all").strip().lower()
+        if tab == "finalized":
+            queryset = queryset.filter(payment_status="paid")
+        elif tab == "pending":
+            queryset = queryset.exclude(payment_status="paid")
+        query = str(self.request.query_params.get("q") or "").strip()
+        if query:
+            search_filter = (
+                Q(customer_name__icontains=query)
+                | Q(pending_reference__icontains=query)
+            )
+            if query.isdigit():
+                search_filter = search_filter | Q(order_number=int(query))
+            queryset = queryset.filter(search_filter)
         return queryset
 
     def list(self, request, *args, **kwargs):
@@ -378,6 +392,8 @@ class PendingOrderToggleView(generics.GenericAPIView):
         is_pending = bool(request.data.get("is_pending", True))
         pending_state = str(request.data.get("pending_state") or "").strip().lower()
         auth_pin = str(request.data.get("authorization_pin") or "").strip()
+        pending_reference = str(request.data.get("pending_reference") or "").strip()
+        removal_reason = str(request.data.get("removal_reason") or "").strip()
 
         if order.status in {"canceled", "delivered"}:
             return Response({"detail": "La orden no está activa para Pendientes."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
@@ -389,18 +405,35 @@ class PendingOrderToggleView(generics.GenericAPIView):
             )
 
         if is_pending:
+            if not pending_reference:
+                return Response({"detail": "Referencia requerida para enviar a Pendientes."}, status=status.HTTP_400_BAD_REQUEST)
             if pending_state not in {"pending_payment", "paid_pending_delivery", "in_kitchen", "ready"}:
                 pending_state = "paid_pending_delivery" if order.payment_status == "paid" else "pending_payment"
             order.is_pending = True
             order.pending_state = pending_state
+            order.pending_reference = pending_reference[:120]
             order.pending_marked_at = timezone.localtime(timezone.now())
             action = "order.pending.mark"
         else:
+            if not removal_reason:
+                return Response({"detail": "Motivo requerido para retirar de Pendientes."}, status=status.HTTP_400_BAD_REQUEST)
             order.is_pending = False
             order.pending_state = "none"
+            order.pending_reference = ""
             order.pending_marked_at = None
             action = "order.pending.unmark"
 
-        order.save(update_fields=["is_pending", "pending_state", "pending_marked_at", "updated_at"])
-        log_audit(request, action, "Order", order.id, {"pending_state": order.pending_state, "is_pending": order.is_pending})
+        order.save(update_fields=["is_pending", "pending_state", "pending_reference", "pending_marked_at", "updated_at"])
+        log_audit(
+            request,
+            action,
+            "Order",
+            order.id,
+            {
+                "pending_state": order.pending_state,
+                "is_pending": order.is_pending,
+                "pending_reference": order.pending_reference,
+                "removal_reason": removal_reason or None,
+            },
+        )
         return Response(OrderSerializer(order, context={"request": request}).data, status=status.HTTP_200_OK)

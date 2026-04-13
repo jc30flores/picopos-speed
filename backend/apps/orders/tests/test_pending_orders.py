@@ -32,13 +32,22 @@ class PendingOrdersTests(TestCase):
     def test_cashier_can_mark_order_as_pending(self):
         res = self.client.post(
             f"/api/orders/{self.order.id}/pending/",
-            {"is_pending": True, "pending_state": "pending_payment"},
+            {"is_pending": True, "pending_state": "pending_payment", "pending_reference": "Mesa 4"},
             format="json",
         )
         self.assertEqual(res.status_code, 200)
         self.order.refresh_from_db()
         self.assertTrue(self.order.is_pending)
         self.assertEqual(self.order.pending_state, "pending_payment")
+        self.assertEqual(self.order.pending_reference, "Mesa 4")
+
+    def test_pending_mark_requires_reference(self):
+        res = self.client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {"is_pending": True, "pending_state": "pending_payment"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
 
     def test_cashier_cannot_remove_pending_without_manager_pin(self):
         self.order.is_pending = True
@@ -54,7 +63,25 @@ class PendingOrdersTests(TestCase):
     def test_manager_can_remove_pending_without_pin(self):
         self.order.is_pending = True
         self.order.pending_state = "pending_payment"
-        self.order.save(update_fields=["is_pending", "pending_state", "updated_at"])
+        self.order.pending_reference = "ORD-123"
+        self.order.save(update_fields=["is_pending", "pending_state", "pending_reference", "updated_at"])
+        manager_client = APIClient()
+        manager_client.force_authenticate(self.manager)
+        res = manager_client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {"is_pending": False, "removal_reason": "Cobrado en caja"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.order.refresh_from_db()
+        self.assertFalse(self.order.is_pending)
+        self.assertEqual(self.order.pending_reference, "")
+
+    def test_remove_pending_requires_reason(self):
+        self.order.is_pending = True
+        self.order.pending_state = "pending_payment"
+        self.order.pending_reference = "ORD-999"
+        self.order.save(update_fields=["is_pending", "pending_state", "pending_reference", "updated_at"])
         manager_client = APIClient()
         manager_client.force_authenticate(self.manager)
         res = manager_client.post(
@@ -62,9 +89,7 @@ class PendingOrdersTests(TestCase):
             {"is_pending": False},
             format="json",
         )
-        self.assertEqual(res.status_code, 200)
-        self.order.refresh_from_db()
-        self.assertFalse(self.order.is_pending)
+        self.assertEqual(res.status_code, 400)
 
     def test_pending_list_returns_only_pending(self):
         self.order.is_pending = True
@@ -87,10 +112,12 @@ class PendingOrdersTests(TestCase):
             total="8.00",
             is_pending=True,
             pending_state="pending_payment",
+            pending_reference="APP-01",
         )
         self.order.is_pending = True
         self.order.pending_state = "pending_payment"
-        self.order.save(update_fields=["is_pending", "pending_state", "updated_at"])
+        self.order.pending_reference = "APP-02"
+        self.order.save(update_fields=["is_pending", "pending_state", "pending_reference", "updated_at"])
 
         res_main = self.client.get(f"/api/orders/pending/?branch_id={self.branch.id}")
         self.assertEqual(res_main.status_code, 200)
@@ -101,3 +128,18 @@ class PendingOrdersTests(TestCase):
         self.assertEqual(res_other.status_code, 200)
         self.assertEqual(res_other.data["count"], 1)
         self.assertEqual(res_other.data["results"][0]["id"], other_order.id)
+
+    def test_pending_list_filters_by_tab_and_reference_query(self):
+        self.order.is_pending = True
+        self.order.pending_state = "paid_pending_delivery"
+        self.order.payment_status = "paid"
+        self.order.pending_reference = "DELIV-777"
+        self.order.save(update_fields=["is_pending", "pending_state", "payment_status", "pending_reference", "updated_at"])
+
+        res_finalized = self.client.get("/api/orders/pending/?tab=finalized&q=777")
+        self.assertEqual(res_finalized.status_code, 200)
+        self.assertEqual(res_finalized.data["count"], 1)
+
+        res_pending = self.client.get("/api/orders/pending/?tab=pending&q=777")
+        self.assertEqual(res_pending.status_code, 200)
+        self.assertEqual(res_pending.data["count"], 0)

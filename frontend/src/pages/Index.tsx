@@ -237,6 +237,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isSendingToPending, setIsSendingToPending] = useState(false);
+  const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
+  const [pendingReferenceDraft, setPendingReferenceDraft] = useState("");
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
@@ -339,18 +341,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   }, []);
 
   useEffect(() => {
+    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
+    const cameFromOpenOrder = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
     getPendingOrders({ branchId: selectedBranchId || undefined })
       .then((res) => {
         setPendingOrdersCount(res.count);
-        setIsPendingChoiceOpen(res.count > 0);
+        if (!cameFromOpenOrder) {
+          setIsPendingChoiceOpen(res.count > 0);
+        } else {
+          setIsPendingChoiceOpen(false);
+        }
       })
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, [selectedBranchId]);
+  }, [searchParams, selectedBranchId]);
 
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
+    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
     getOrderById(pendingOrderId)
       .then((order) => {
@@ -358,6 +367,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setCreatedOrderId(order.id);
         setCreatedOrderNumber(order.orderNumber);
         setCart([]);
+        if (mode === "pay") {
+          setIsPaymentOpen(true);
+        } else {
+          setIsPaymentOpen(false);
+          setIsPaymentMethodOpen(false);
+        }
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
   }, [searchParams]);
@@ -1270,6 +1285,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleSendOrderToPending = async () => {
     if (isSendingToPending) return;
+    if (!pendingReferenceDraft.trim()) {
+      setIsPendingReferenceDialogOpen(true);
+      return;
+    }
     setIsSendingToPending(true);
     try {
       let order = activeOrder;
@@ -1297,7 +1316,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
       }
       const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
-      const saved = await setOrderPending(order.id, { isPending: true, pendingState });
+      const saved = await setOrderPending(order.id, { isPending: true, pendingState, pendingReference: pendingReferenceDraft.trim() });
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
       }
@@ -1309,6 +1328,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCheckoutDraft(null);
       setCreatedOrderId(null);
       setCreatedOrderNumber(null);
+      setPendingReferenceDraft("");
+      setIsPendingReferenceDialogOpen(false);
       clearPersistedDraft();
       navigate("/open-orders");
     } catch (error) {
@@ -2225,10 +2246,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button
                   variant="secondary"
                   className="h-14 w-full text-base"
-                  onClick={() => void handleSendOrderToPending()}
+                  onClick={() => {
+                    if (activeOrder?.isPending) {
+                      navigate("/open-orders");
+                      return;
+                    }
+                    void handleSendOrderToPending();
+                  }}
                   disabled={(cart.length === 0 && !activeOrder) || isSendingToPending}
                 >
-                  {isSendingToPending ? "Saving..." : "Send to Open Orders"}
+                  {isSendingToPending ? "Saving..." : activeOrder?.isPending ? "Open Orders" : "Send to Open Orders"}
                 </Button>
                 <Button
                   variant="outline"
@@ -2246,6 +2273,28 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           </Card>
         </div>
       </div>
+
+      <Dialog open={isPendingReferenceDialogOpen} onOpenChange={setIsPendingReferenceDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Referencia requerida</DialogTitle>
+            <DialogDescription>Ingresa una referencia para enviar la orden a Open Orders.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={pendingReferenceDraft}
+            onChange={(event) => setPendingReferenceDraft(event.target.value)}
+            placeholder="Ej: Mesa 4 / Nombre cliente"
+            maxLength={120}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPendingReferenceDialogOpen(false)}>Cancelar</Button>
+            <Button onClick={() => void handleSendOrderToPending()} disabled={!pendingReferenceDraft.trim()}>
+              Enviar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isPendingChoiceOpen} onOpenChange={setIsPendingChoiceOpen}>
         <DialogContent>

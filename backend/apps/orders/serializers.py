@@ -147,6 +147,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "financial_status",
             "is_pending",
             "pending_state",
+            "pending_reference",
             "pending_marked_at",
             "total_paid",
             "remaining",

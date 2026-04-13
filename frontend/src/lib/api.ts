@@ -238,6 +238,7 @@ export type Order = {
   totalPayable?: number;
   isPending?: boolean;
   pendingState?: "none" | "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
+  pendingReference?: string;
   pendingMarkedAt?: string | null;
 };
 
@@ -1740,6 +1741,7 @@ const mapOrder = (order: {
   total_payable?: string;
   is_pending?: boolean;
   pending_state?: Order["pendingState"];
+  pending_reference?: string;
   pending_marked_at?: string | null;
 }): Order => {
   const createdAt = new Date(order.created_at);
@@ -1806,13 +1808,16 @@ const mapOrder = (order: {
     totalPayable: Number(order.total_payable ?? order.total),
     isPending: Boolean(order.is_pending),
     pendingState: (order.pending_state ?? "none") as Order["pendingState"],
+    pendingReference: order.pending_reference ?? "",
     pendingMarkedAt: order.pending_marked_at ?? null,
   };
 };
 
-export const getPendingOrders = async (params?: { branchId?: number }): Promise<{ count: number; results: Order[] }> => {
+export const getPendingOrders = async (params?: { branchId?: number; tab?: "pending" | "finalized"; query?: string }): Promise<{ count: number; results: Order[] }> => {
   const qs = new URLSearchParams();
   if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.tab) qs.set("tab", params.tab);
+  if (params?.query) qs.set("q", params.query);
   const response = await request(`/orders/pending/${qs.toString() ? `?${qs.toString()}` : ""}`);
   const data = await handleJson<{ count: number; results: any[] }>(response);
   return {
@@ -1827,6 +1832,8 @@ export const setOrderPending = async (
     isPending: boolean;
     pendingState?: "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
     authorizationPin?: string;
+    pendingReference?: string;
+    removalReason?: string;
   }
 ): Promise<Order> => {
   const response = await request(`/orders/${orderId}/pending/`, {
@@ -1836,6 +1843,8 @@ export const setOrderPending = async (
       is_pending: payload.isPending,
       pending_state: payload.pendingState,
       authorization_pin: payload.authorizationPin ?? "",
+      pending_reference: payload.pendingReference ?? "",
+      removal_reason: payload.removalReason ?? "",
     }),
   });
   return mapOrder(await handleJson<any>(response));
