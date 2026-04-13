@@ -24,7 +24,7 @@ export type RoleAccessUser = Pick<AuthUser, "role" | "isSuperuser"> | null;
 
 export const appModules: AppModuleConfig[] = [
   { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
-  { key: "pending", label: "PENDIENTES", path: "/pendientes", requiredRoles: ["admin", "manager", "cashier"] },
+  { key: "pending", label: "OPEN ORDERS", path: "/open-orders", requiredRoles: ["admin", "manager", "cashier"] },
   { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin", "kiosk"] },
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
@@ -45,9 +45,9 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/pos", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
-  manager: ["/", "/pos", "/pendientes", "/menu", "/clientes"],
-  cashier: ["/", "/pos", "/pendientes"],
+  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
+  manager: ["/", "/pos", "/open-orders", "/pendientes", "/menu", "/clientes"],
+  cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   kitchen: ["/kitchen"],
   kiosk: ["/kiosk"],
   worker: ["/"],
@@ -57,7 +57,7 @@ export const allowedRoutesByRole: Record<AppRole, string[]> = {
 export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path: string }>> = {
   admin: [
     { label: "POS", path: "/" },
-    { label: "Pendientes", path: "/pendientes" },
+    { label: "Open Orders", path: "/open-orders" },
     { label: "Kiosk", path: "/kiosk" },
     { label: "Cocina", path: "/kitchen" },
     { label: "Pedidos Clientes", path: "/customer-display" },
@@ -69,13 +69,13 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
   ],
   manager: [
     { label: "POS", path: "/" },
-    { label: "Pendientes", path: "/pendientes" },
+    { label: "Open Orders", path: "/open-orders" },
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Clientes", path: "/clientes" },
   ],
   cashier: [
     { label: "POS", path: "/pos" },
-    { label: "Pendientes", path: "/pendientes" },
+    { label: "Open Orders", path: "/open-orders" },
   ],
   kitchen: [{ label: "Cocina", path: "/kitchen" }],
   kiosk: [{ label: "Kiosk", path: "/kiosk" }],

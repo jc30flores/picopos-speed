@@ -49,13 +49,14 @@ const App = () => (
               }
             />
             <Route
-              path="/pendientes"
+              path="/open-orders"
               element={
                 <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
                   <PendientesPage />
                 </ProtectedRoute>
               }
             />
+            <Route path="/pendientes" element={<Navigate to="/open-orders" replace />} />
             <Route
               path="/kiosk"
               element={

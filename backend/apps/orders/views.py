@@ -37,6 +37,15 @@ def _selected_branch_id(request):
     return resolve_branch_id(raw, fallback_to_default=True)
 
 
+def _selected_branch_id_optional(request):
+    raw = (
+        request.query_params.get("branch_id")
+        or request.headers.get("X-Branch-Id")
+        or request.headers.get("x-branch-id")
+    )
+    return resolve_branch_id(raw, fallback_to_default=False)
+
+
 def _apply_common_filters(request, queryset):
     branch_id = _selected_branch_id(request)
     if branch_id:
@@ -347,7 +356,9 @@ class PendingOrderListView(generics.ListAPIView):
             .prefetch_related("items__applied_modifiers")
             .order_by("pending_marked_at", "created_at")
         )
-        queryset, _, _ = _apply_common_filters(self.request, queryset)
+        branch_id = _selected_branch_id_optional(self.request)
+        if branch_id:
+            queryset = queryset.filter(branch_id=branch_id)
         return queryset
 
     def list(self, request, *args, **kwargs):

@@ -73,3 +73,31 @@ class PendingOrdersTests(TestCase):
         res = self.client.get("/api/orders/pending/")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["count"], 1)
+
+    def test_pending_list_respects_branch_filter(self):
+        other_branch = Branch.objects.create(name="Other", code="OTHER")
+        other_order = Order.objects.create(
+            order_number=124,
+            branch=other_branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            payment_status="unpaid",
+            subtotal="8.00",
+            tax="0.00",
+            total="8.00",
+            is_pending=True,
+            pending_state="pending_payment",
+        )
+        self.order.is_pending = True
+        self.order.pending_state = "pending_payment"
+        self.order.save(update_fields=["is_pending", "pending_state", "updated_at"])
+
+        res_main = self.client.get(f"/api/orders/pending/?branch_id={self.branch.id}")
+        self.assertEqual(res_main.status_code, 200)
+        self.assertEqual(res_main.data["count"], 1)
+        self.assertEqual(res_main.data["results"][0]["id"], self.order.id)
+
+        res_other = self.client.get(f"/api/orders/pending/?branch_id={other_branch.id}")
+        self.assertEqual(res_other.status_code, 200)
+        self.assertEqual(res_other.data["count"], 1)
+        self.assertEqual(res_other.data["results"][0]["id"], other_order.id)

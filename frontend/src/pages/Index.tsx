@@ -339,7 +339,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   }, []);
 
   useEffect(() => {
-    getPendingOrders()
+    getPendingOrders({ branchId: selectedBranchId || undefined })
       .then((res) => {
         setPendingOrdersCount(res.count);
         setIsPendingChoiceOpen(res.count > 0);
@@ -347,7 +347,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, []);
+  }, [selectedBranchId]);
 
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
@@ -1190,7 +1190,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       return;
     }
     if (pendingOrdersCount > 0) {
-      toast.error(`No puedes cerrar caja porque hay ${pendingOrdersCount} órdenes pendientes.`);
+      toast.error(`You cannot close the register because there are ${pendingOrdersCount} open orders.`);
       return;
     }
     const totalBills = Number(closeBillsInput || 0);
@@ -1297,15 +1297,22 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
       }
       const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
-      await setOrderPending(order.id, { isPending: true, pendingState });
-      toast.success("Orden enviada a Pendientes.");
-      setPendingOrdersCount((current) => current + 1);
+      const saved = await setOrderPending(order.id, { isPending: true, pendingState });
+      if (!saved.isPending) {
+        throw new Error("Order was not persisted as Open Order.");
+      }
+      toast.success("Order sent to Open Orders");
+      const latestPending = await getPendingOrders({ branchId: selectedBranchId || undefined });
+      setPendingOrdersCount(latestPending.count);
       setCart([]);
       setActiveOrder(null);
       setCheckoutDraft(null);
-      navigate("/pendientes");
+      setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
+      clearPersistedDraft();
+      navigate("/open-orders");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo enviar a Pendientes.");
+      toast.error(error instanceof Error ? error.message : "Could not send order to Open Orders.");
     } finally {
       setIsSendingToPending(false);
     }
@@ -2221,7 +2228,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   onClick={() => void handleSendOrderToPending()}
                   disabled={(cart.length === 0 && !activeOrder) || isSendingToPending}
                 >
-                  {isSendingToPending ? "Guardando..." : "Enviar a Pendientes"}
+                  {isSendingToPending ? "Saving..." : "Send to Open Orders"}
                 </Button>
                 <Button
                   variant="outline"
@@ -2243,14 +2250,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog open={isPendingChoiceOpen} onOpenChange={setIsPendingChoiceOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Órdenes pendientes detectadas</DialogTitle>
+            <DialogTitle>Open orders detected</DialogTitle>
             <DialogDescription>
-              Hay {pendingOrdersCount} órdenes pendientes activas. ¿Deseas ir al POS o revisar Pendientes?
+              There are {pendingOrdersCount} active open orders. Do you want to continue to POS or review Open Orders?
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Ir al POS</Button>
-            <Button onClick={() => navigate("/pendientes")}>Ir a Pendientes</Button>
+            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Go to POS</Button>
+            <Button onClick={() => navigate("/open-orders")}>Open Orders</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -2525,7 +2532,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     {pendingOrdersCount > 0 ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
-                        No puedes cerrar caja porque hay {pendingOrdersCount} órdenes pendientes. Ve a la sección Pendientes para resolverlas.
+                        You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
                       </div>
                     ) : null}
                     <div className="flex items-center gap-2">

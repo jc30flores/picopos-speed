@@ -13,11 +13,11 @@ import { getPendingOrders, setOrderPending, verifyPrivilegedPin, type Order } fr
 import { useAuth } from "@/context/useAuth";
 
 const stateLabel: Record<string, string> = {
-  pending_payment: "Pendiente de pago",
-  paid_pending_delivery: "Pagada pendiente entrega",
-  in_kitchen: "En cocina",
-  ready: "Lista",
-  none: "Sin estado",
+  pending_payment: "Pending payment",
+  paid_pending_delivery: "Paid pending delivery",
+  in_kitchen: "In kitchen",
+  ready: "Ready",
+  none: "No state",
 };
 
 const PendientesPage = () => {
@@ -25,16 +25,17 @@ const PendientesPage = () => {
   const [loading, setLoading] = useState(false);
   const [pendingPinOrderId, setPendingPinOrderId] = useState<number | null>(null);
   const [pin, setPin] = useState("");
+  const selectedBranchId = Number(localStorage.getItem("selected_branch_id") || "0") || 0;
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const load = async () => {
     setLoading(true);
     try {
-      const data = await getPendingOrders();
+      const data = await getPendingOrders({ branchId: selectedBranchId || undefined });
       setRows(data.results);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo cargar Pendientes.");
+      toast.error(error instanceof Error ? error.message : "Failed to load Open Orders.");
     } finally {
       setLoading(false);
     }
@@ -42,7 +43,7 @@ const PendientesPage = () => {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [selectedBranchId]);
 
   const canAutoUnmark = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const summary = useMemo(() => ({ total: rows.length, totalAmount: rows.reduce((acc, row) => acc + (row.totalPayable ?? row.total), 0) }), [rows]);
@@ -52,10 +53,10 @@ const PendientesPage = () => {
   const handleRemovePending = async (order: Order, authorizationPin = "") => {
     try {
       await setOrderPending(order.id, { isPending: false, authorizationPin });
-      toast.success("Orden retirada de Pendientes.");
+      toast.success("Order removed from Open Orders.");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo retirar la orden.");
+      toast.error(error instanceof Error ? error.message : "Could not remove the order.");
     }
   };
 
@@ -65,14 +66,14 @@ const PendientesPage = () => {
         <Card className="p-4 md:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-semibold">Pendientes</h1>
-              <p className="text-sm text-muted-foreground">Órdenes guardadas para retomar, editar o cobrar.</p>
+              <h1 className="text-2xl font-semibold">Open Orders</h1>
+              <p className="text-sm text-muted-foreground">Saved orders to resume, edit or charge.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="secondary">{summary.total} órdenes</Badge>
+              <Badge variant="secondary">{summary.total} orders</Badge>
               <Badge variant="outline">{formatMoney(summary.totalAmount)}</Badge>
-              <Button variant="outline" onClick={() => navigate("/")}>Menú</Button>
-              <Button onClick={() => navigate("/pos")}>Ir al POS</Button>
+              <Button variant="outline" onClick={() => navigate("/")}>Menu</Button>
+              <Button onClick={() => navigate("/pos")}>Go to POS</Button>
             </div>
           </div>
         </Card>
@@ -84,28 +85,28 @@ const PendientesPage = () => {
                 <TableRow>
                   <TableHead># Orden</TableHead>
                   <TableHead>Cliente</TableHead>
-                  <TableHead>Servicio</TableHead>
-                  <TableHead>Pago</TableHead>
-                  <TableHead>Estado operativo</TableHead>
+                  <TableHead>Service</TableHead>
+                  <TableHead>Payment</TableHead>
+                  <TableHead>Operational state</TableHead>
                   <TableHead>Total</TableHead>
-                  <TableHead>Fecha/Hora</TableHead>
-                  <TableHead>Acciones</TableHead>
+                  <TableHead>Date/Time</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="font-semibold">#{row.orderNumber}</TableCell>
-                    <TableCell>{row.customerName || "Consumidor final"}</TableCell>
+                    <TableCell>{row.customerName || "Consumer final"}</TableCell>
                     <TableCell>{row.serviceType || "-"}</TableCell>
-                    <TableCell>{row.paymentStatus === "paid" ? "Pagada" : "Pendiente"}</TableCell>
+                    <TableCell>{row.paymentStatus === "paid" ? "Paid" : "Pending"}</TableCell>
                     <TableCell>{stateLabel[row.pendingState || "none"]}</TableCell>
                     <TableCell>{formatMoney(row.totalPayable ?? row.total)}</TableCell>
                     <TableCell>{formatDateTimeSV((row.pendingMarkedAt || row.createdAt) as string | Date)}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" onClick={() => goToPos(row.id, "edit")}>Editar</Button>
-                        <Button size="sm" onClick={() => goToPos(row.id, "pay")}>Pagar</Button>
+                        <Button size="sm" variant="outline" onClick={() => goToPos(row.id, "edit")}>Edit</Button>
+                        <Button size="sm" onClick={() => goToPos(row.id, "pay")}>Pay</Button>
                         <Button
                           size="sm"
                           variant="secondary"
@@ -117,7 +118,7 @@ const PendientesPage = () => {
                             }
                           }}
                         >
-                          Quitar de pendientes
+                          Remove
                         </Button>
                       </div>
                     </TableCell>
@@ -125,7 +126,7 @@ const PendientesPage = () => {
                 ))}
                 {!loading && rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No hay órdenes pendientes.</TableCell>
+                    <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No open orders.</TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -137,12 +138,12 @@ const PendientesPage = () => {
       <Dialog open={Boolean(pendingPinOrderId)} onOpenChange={(open) => { if (!open) { setPendingPinOrderId(null); setPin(""); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Autorización requerida</DialogTitle>
-            <DialogDescription>Ingresa PIN de gerente/admin para retirar de pendientes.</DialogDescription>
+            <DialogTitle>Authorization required</DialogTitle>
+            <DialogDescription>Enter manager/admin PIN to remove from Open Orders.</DialogDescription>
           </DialogHeader>
           <Input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D+/g, "").slice(0, 6))} maxLength={6} autoFocus />
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setPendingPinOrderId(null); setPin(""); }}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setPendingPinOrderId(null); setPin(""); }}>Cancel</Button>
             <Button
               onClick={async () => {
                 if (!pendingPinOrderId) return;
@@ -152,11 +153,11 @@ const PendientesPage = () => {
                   setPendingPinOrderId(null);
                   setPin("");
                 } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "PIN inválido.");
+                  toast.error(error instanceof Error ? error.message : "Invalid PIN.");
                 }
               }}
             >
-              Autorizar
+              Authorize
             </Button>
           </DialogFooter>
         </DialogContent>
