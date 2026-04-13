@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CreditCard, Pencil, Trash2 } from "lucide-react";
+import { CreditCard, LayoutGrid, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -80,11 +80,22 @@ const PendientesPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background p-4 md:p-6">
-      <div className="mx-auto max-w-6xl space-y-4">
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto bg-background">
+      <div className="h-full px-2 pb-4 pt-4 lg:px-4">
+        <div className="flex h-full min-h-0 flex-col gap-4">
         <Card className="p-4 md:p-6">
           <div className="flex items-start justify-between gap-3">
-            <Button variant="ghost" onClick={() => navigate("/")} className="h-11 px-3 text-base">Menú</Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="h-12 w-12 shrink-0 rounded-full"
+              onClick={() => navigate("/")}
+              aria-label="Menú principal"
+              title="Menú principal"
+            >
+              <LayoutGrid className="h-5 w-5" />
+            </Button>
             <div>
               <h1 className="text-2xl font-semibold">Open Orders</h1>
               <p className="text-sm text-muted-foreground">Órdenes guardadas para retomar, editar o cobrar.</p>
@@ -103,7 +114,7 @@ const PendientesPage = () => {
               </TabsList>
             </Tabs>
             <Input
-              className="md:max-w-xs"
+              className="h-11 md:max-w-md"
               placeholder="Buscar por referencia, cliente u orden..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -111,8 +122,8 @@ const PendientesPage = () => {
           </div>
         </Card>
 
-        <Card className="p-0">
-          <div className="overflow-auto">
+        <Card className="min-h-0 flex-1 p-0">
+          <div className="h-full overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -187,6 +198,7 @@ const PendientesPage = () => {
             </Table>
           </div>
         </Card>
+        </div>
       </div>
 
       <Dialog open={Boolean(pendingPinOrderId)} onOpenChange={(open) => { if (!open) { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); } }}>

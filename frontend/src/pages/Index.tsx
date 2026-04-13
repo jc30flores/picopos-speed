@@ -1369,7 +1369,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
       }
-      toast.success("Order sent to Open Orders");
+      toast.success("Orden guardada en Open Orders");
       const latestPending = await getPendingOrders({ branchId: selectedBranchId || undefined });
       setPendingOrdersCount(latestPending.count);
       setCart([]);
@@ -1382,7 +1382,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       clearPersistedDraft();
       navigate("/open-orders");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send order to Open Orders.");
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden en Open Orders.");
     } finally {
       setIsSendingToPending(false);
     }
@@ -2311,11 +2311,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   variant="secondary"
                   className="h-14 w-full text-base"
                   onClick={() => {
-                    if (cart.length === 0 && !activeOrder) {
-                      navigate("/open-orders");
-                      return;
-                    }
-                    if (activeOrder?.isPending) {
+                    const isCurrentOrderEmpty = cart.length === 0;
+                    if (isCurrentOrderEmpty) {
                       navigate("/open-orders");
                       return;
                     }
@@ -2325,9 +2322,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 >
                   {isSendingToPending
                     ? "Guardando..."
-                    : (cart.length === 0 && !activeOrder) || activeOrder?.isPending
-                      ? "Open Orders"
-                      : "Enviar a Open Orders"}
+                    : cart.length === 0
+                      ? "Guardadas"
+                      : "Guardar"}
                 </Button>
                 <Button
                   variant="outline"
