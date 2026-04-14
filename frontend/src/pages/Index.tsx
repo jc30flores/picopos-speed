@@ -401,7 +401,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
     if (hydratedPendingOrderIdRef.current === pendingOrderId) return;
     hydratedPendingOrderIdRef.current = pendingOrderId;
-    console.info("open_orders.load", { pending_order_id: pendingOrderId, mode });
+    setCart([]);
+    setCheckoutDraft(null);
+    setSelectedDiscount(null);
+    setActiveOrder(null);
+    console.info("open_order.load", { id: pendingOrderId, mode, total_db: null, items: 0 });
     getOrderById(pendingOrderId)
       .then((order) => {
         const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
@@ -413,13 +417,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           selectedDiscount: null,
           availableDiscounts: [],
         });
-        console.info("open_orders.hydrate", {
-          order_id: order.id,
-          pending_order_id: pendingOrderId,
-          subtotal: hydratedPricing.subtotal,
-          discount_total: hydratedPricing.discountTotal,
-          fees_total: hydratedPricing.disposableTotal,
-          total: hydratedPricing.total,
+        console.info("open_order.load", {
+          id: order.id,
+          mode,
+          total_db: order.totalPayable ?? order.total,
+          items: restoredCart.length,
+        });
+        console.info("open_order.rehydrate", {
+          id: order.id,
+          total_rebuilt: hydratedPricing.total,
+          discounts: hydratedPricing.discountTotal,
+          fees: hydratedPricing.disposableTotal,
         });
         setActiveOrder(order);
         setCreatedOrderId(order.id);
@@ -427,6 +435,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setPendingReferenceDraft(order.pendingReference || "");
         setPendingEditAuthorizationPin("");
         setSelectedDiscount(null);
+        setSelectedCustomerId(order.customerId ? String(order.customerId) : "");
         setCart(restoredCart);
         setCheckoutDraft({
           items: restoredCart,
@@ -439,6 +448,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
         setServiceType(order.serviceType || serviceType);
         if (mode === "pay") {
+          console.info("open_order.pay.load", {
+            id: order.id,
+            total_db: order.totalPayable ?? order.total,
+            total_rebuilt: hydratedPricing.total,
+          });
           setIsPaymentOpen(true);
         } else {
           setIsPaymentOpen(false);
@@ -884,13 +898,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     if (!isPaymentOpen) return;
-    console.info("open_orders.payment_modal_summary", {
-      order_id: activeOrder?.id ?? null,
-      pending_order_id: activeOrder?.isPending ? activeOrder.id : null,
-      subtotal: checkoutSummarySubtotalBefore,
-      discount_total: checkoutSummaryDiscount,
-      fees_total: checkoutDisposableTotal,
-      total: checkoutSummaryTotal,
+    console.info("open_order.pay.modal", {
+      id: activeOrder?.id ?? null,
+      total_shown: checkoutSummaryTotal,
+      discount_shown: checkoutSummaryDiscount,
+      subtotal_shown: checkoutSummarySubtotalBefore,
+      fees_shown: checkoutDisposableTotal,
     });
   }, [activeOrder?.id, activeOrder?.isPending, checkoutDisposableTotal, checkoutSummaryDiscount, checkoutSummarySubtotalBefore, checkoutSummaryTotal, isPaymentOpen]);
 
@@ -956,7 +969,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setActiveOrder(order);
       setCreatedOrderId(order.id);
       setCreatedOrderNumber(order.orderNumber ?? null);
-      console.info("open_orders.create_new", { order_id: order.id, pending_order_id: null, operation: "create" });
+      console.info("open_order.save.start", { id: order.id, is_update: false });
     } else {
       order = await getOrderById(order.id);
       setActiveOrder(order);
@@ -1407,13 +1420,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       selectedDiscount: null,
       availableDiscounts,
     });
-    console.info("open_orders.reprice_before", {
-      order_id: order.id,
-      pending_order_id: order.id,
-      subtotal: pricing.subtotal,
-      discount_total: pricing.discountTotal,
-      fees_total: pricing.disposableTotal,
-      total: pricing.total,
+    console.info("open_order.save.start", { id: order.id, is_update: true });
+    console.info("open_order.save.payload", {
+      id: order.id,
+      total_front: pricing.total,
+      items: cart.length,
+      subtotal_front: pricing.subtotal,
+      discount_front: pricing.discountTotal,
+      fees_front: pricing.disposableTotal,
     });
     const saved = await setOrderPending(order.id, {
       isPending: true,
@@ -1422,15 +1436,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       authorizationPin: pendingEditAuthorizationPin,
       items: buildPendingPayloadItems(cart),
     });
-    console.info("open_orders.reprice_after", {
-      order_id: saved.id,
-      pending_order_id: saved.id,
-      subtotal: saved.subtotalBeforeDiscounts,
-      discount_total: saved.discountTotal,
-      fees_total: saved.disposableTotal,
-      total: saved.totalPayable,
+    console.info("open_order.save.done", {
+      id: saved.id,
+      total_saved: saved.totalPayable,
+      subtotal_saved: saved.subtotalBeforeDiscounts,
+      discount_saved: saved.discountTotal,
+      fees_saved: saved.disposableTotal,
     });
-    console.info("open_orders.save_existing", { order_id: saved.id, pending_order_id: saved.id, operation: "update" });
     return saved;
   };
 
@@ -1477,7 +1489,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             items: buildPendingPayloadItems(cart),
           });
       if (!activeOrder?.isPending) {
-        console.info("open_orders.create_new", { order_id: saved.id, pending_order_id: saved.id, operation: "create" });
+        console.info("open_order.save.start", { id: saved.id, is_update: false });
       }
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
@@ -1844,9 +1856,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               removalReason: "Pagada en POS",
               completionType: "paid",
             });
-            console.info("open_orders.finalize_paid", {
-              order_id: finalizedOrder.id,
-              pending_order_id: refreshed.id,
+            console.info("open_order.finalize_paid", {
+              id: finalizedOrder.id,
               subtotal: finalizedOrder.subtotalBeforeDiscounts,
               discount_total: finalizedOrder.discountTotal,
               fees_total: finalizedOrder.disposableTotal,

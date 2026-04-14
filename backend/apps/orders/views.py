@@ -156,13 +156,12 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
     order.amount_due_cents = int((total * 100).to_integral_value(rounding=ROUND_HALF_UP))
     order.requires_kitchen = requires_kitchen
     logger.info(
-        "open_orders.reprice_after order_id=%s pending_order_id=%s subtotal=%s discount_total=%s fees_total=%s total=%s previous_total=%s",
+        "open_order.save.server_recalc id=%s total_server=%s subtotal_server=%s discount_server=%s fees_server=%s previous_total=%s",
         order.id,
-        order.id,
+        order.total,
         order.subtotal,
         order.discount_total,
         order.disposable_total,
-        order.total,
         previous_total,
     )
 
@@ -481,12 +480,7 @@ class PendingOrderListView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         data = self.get_serializer(queryset, many=True).data
-        logger.info(
-            "open_orders.load tab=%s count=%s branch_id=%s",
-            str(request.query_params.get("tab") or "pending").strip().lower(),
-            len(data),
-            _selected_branch_id_optional(request),
-        )
+        logger.info("open_order.list tab=%s count=%s branch_id=%s", str(request.query_params.get("tab") or "pending").strip().lower(), len(data), _selected_branch_id_optional(request))
         return Response({"count": len(data), "results": data}, status=status.HTTP_200_OK)
 
 
@@ -521,17 +515,15 @@ class PendingOrderToggleView(generics.GenericAPIView):
             if pending_state not in {"pending_payment", "paid_pending_delivery", "in_kitchen", "ready"}:
                 pending_state = "paid_pending_delivery" if order.payment_status == "paid" else "pending_payment"
             if isinstance(items_data, list):
+                logger.info("open_order.save.start id=%s is_update=%s", order.id, True)
                 logger.info(
-                    "open_orders.reprice_before order_id=%s pending_order_id=%s subtotal=%s discount_total=%s fees_total=%s total=%s",
+                    "open_order.save.payload id=%s total_front=%s items=%s",
                     order.id,
-                    order.id,
-                    order.subtotal,
-                    order.discount_total,
-                    order.disposable_total,
-                    order.total,
+                    request.data.get("total") if isinstance(request.data, dict) else None,
+                    len(items_data),
                 )
                 _sync_pending_order_lines(order, items_data, request, auth_pin)
-                logger.info("open_orders.save_existing order_id=%s pending_order_id=%s operation=update", order.id, order.id)
+                logger.info("open_order.save.done id=%s total_saved=%s", order.id, order.total)
             order.is_pending = True
             order.pending_state = pending_state
             if not order.pending_reference:
@@ -554,9 +546,9 @@ class PendingOrderToggleView(generics.GenericAPIView):
             order.pending_completion_note = removal_reason[:160]
             action = "order.pending.unmark"
             if completion_type == "paid":
-                logger.info("open_orders.finalize_paid order_id=%s pending_order_id=%s", order.id, order.id)
+                logger.info("open_order.finalize_paid id=%s", order.id)
             else:
-                logger.info("open_orders.finalize_removed order_id=%s pending_order_id=%s completion_type=%s", order.id, order.id, completion_type)
+                logger.info("open_order.finalize_removed id=%s completion_type=%s", order.id, completion_type)
 
         order.save(
             update_fields=[
