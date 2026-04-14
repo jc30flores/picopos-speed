@@ -405,7 +405,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setCheckoutDraft(null);
     setSelectedDiscount(null);
     setActiveOrder(null);
-    console.info("open_order.load", { id: pendingOrderId, mode, total_db: null, items: 0 });
+    console.info("open_order.pos_loader.source", { order_id: pendingOrderId, mode, total_db: null, items: 0 });
     getOrderById(pendingOrderId)
       .then((order) => {
         const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
@@ -417,17 +417,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           selectedDiscount: null,
           availableDiscounts: [],
         });
-        console.info("open_order.load", {
-          id: order.id,
+        console.info("open_order.pos_loader.source", {
+          order_id: order.id,
           mode,
           total_db: order.totalPayable ?? order.total,
           items: restoredCart.length,
         });
-        console.info("open_order.rehydrate", {
-          id: order.id,
-          total_rebuilt: hydratedPricing.total,
+        console.info("open_order.pos_loader.recomputed_totals", {
+          order_id: order.id,
+          subtotal: hydratedPricing.subtotal,
           discounts: hydratedPricing.discountTotal,
           fees: hydratedPricing.disposableTotal,
+          total: hydratedPricing.total,
+          items: restoredCart.length,
         });
         setActiveOrder(order);
         setCreatedOrderId(order.id);
@@ -449,7 +451,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setServiceType(order.serviceType || serviceType);
         if (mode === "pay") {
           console.info("open_order.pay.load", {
-            id: order.id,
+            order_id: order.id,
             total_db: order.totalPayable ?? order.total,
             total_rebuilt: hydratedPricing.total,
           });
@@ -898,12 +900,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     if (!isPaymentOpen) return;
-    console.info("open_order.pay.modal", {
-      id: activeOrder?.id ?? null,
-      total_shown: checkoutSummaryTotal,
-      discount_shown: checkoutSummaryDiscount,
-      subtotal_shown: checkoutSummarySubtotalBefore,
-      fees_shown: checkoutDisposableTotal,
+    console.info("open_order.pay.modal_totals", {
+      order_id: activeOrder?.id ?? null,
+      subtotal: checkoutSummarySubtotalBefore,
+      discounts: checkoutSummaryDiscount,
+      fees: checkoutDisposableTotal,
+      total: checkoutSummaryTotal,
     });
   }, [activeOrder?.id, activeOrder?.isPending, checkoutDisposableTotal, checkoutSummaryDiscount, checkoutSummarySubtotalBefore, checkoutSummaryTotal, isPaymentOpen]);
 
@@ -1420,7 +1422,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       selectedDiscount: null,
       availableDiscounts,
     });
-    console.info("open_order.save.start", { id: order.id, is_update: true });
+    console.info("open_order.update.request", { order_id: order.id, is_update: true });
     console.info("open_order.save.payload", {
       id: order.id,
       total_front: pricing.total,

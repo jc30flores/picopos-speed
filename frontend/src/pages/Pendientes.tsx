@@ -108,9 +108,9 @@ const PendientesPage = () => {
           </div>
           <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <Tabs value={tab} onValueChange={(value) => setTab(value as "pending" | "finalized")}>
-              <TabsList>
-                <TabsTrigger value="pending">Pendientes</TabsTrigger>
-                <TabsTrigger value="finalized">Finalizadas</TabsTrigger>
+              <TabsList className="h-12">
+                <TabsTrigger value="pending" className="min-h-12 px-5 text-base">Pendientes</TabsTrigger>
+                <TabsTrigger value="finalized" className="min-h-12 px-5 text-base">Finalizadas</TabsTrigger>
               </TabsList>
             </Tabs>
             <Input
@@ -156,16 +156,16 @@ const PendientesPage = () => {
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => goToPos(row.id, "edit")} aria-label="Editar">
-                                <Pencil className="h-4 w-4" />
+                              <Button size="icon" variant="ghost" className="h-12 w-12" onClick={() => goToPos(row.id, "edit")} aria-label="Editar">
+                                <Pencil className="h-5 w-5" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Editar</TooltipContent>
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => goToPos(row.id, "pay")} aria-label="Cobrar">
-                                <CreditCard className="h-4 w-4" />
+                              <Button size="icon" variant="ghost" className="h-12 w-12" onClick={() => goToPos(row.id, "pay")} aria-label="Cobrar">
+                                <CreditCard className="h-5 w-5" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Cobrar</TooltipContent>
@@ -175,11 +175,11 @@ const PendientesPage = () => {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="h-9 w-9 text-destructive hover:text-destructive"
+                                className="h-12 w-12 text-destructive hover:text-destructive"
                                 onClick={() => setPendingPinOrderId(row.id)}
                                 aria-label="Remover"
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <Trash2 className="h-5 w-5" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Remover</TooltipContent>
