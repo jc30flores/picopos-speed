@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
@@ -8,10 +8,12 @@ from rest_framework.views import APIView
 from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework import status
-from apps.orders.models import Order
+from apps.orders.models import AppliedDiscount, Order, OrderFee, OrderItem, OrderItemModifier
+from apps.menu.models import Modifier, Product
 from apps.orders.serializers import OrderSerializer, OrderCreateSerializer, OrderCustomerUpdateSerializer
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import PermissionDenied
 from apps.core.audit import log_audit
 from apps.core.permissions import (
     IsAuthenticatedAndActive,
@@ -70,6 +72,88 @@ def _require_manager_pin_for_cashier(request, pin: str) -> bool:
         user__is_active=True,
     )
     return any(user_matches_pin(p.user, pin) for p in privileged_profiles)
+
+
+def _is_privileged_user(user) -> bool:
+    profile = UserProfile.objects.filter(user=user, is_active=True).first()
+    return bool(getattr(user, "is_superuser", False) or (profile and profile.role in {"admin", "manager"}))
+
+
+def _to_money(value: Decimal | int | float | str) -> Decimal:
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _sync_pending_order_lines(order: Order, items_data: list[dict], request, authorization_pin: str) -> None:
+    existing_ids = set(order.items.values_list("id", flat=True))
+    requested_ids = {
+        int(str(item.get("source_order_item_id")))
+        for item in items_data
+        if str(item.get("source_order_item_id") or "").isdigit()
+    }
+    removed_ids = existing_ids - requested_ids if requested_ids else set()
+    if removed_ids:
+        if order.send_to_kitchen or order.status in {"preparing", "ready", "delivered"}:
+            raise PermissionDenied("No se pueden eliminar productos: la orden ya fue enviada a cocina.")
+        if not _is_privileged_user(request.user) and not _require_manager_pin_for_cashier(request, authorization_pin):
+            raise PermissionDenied("Autorización de gerente/admin requerida para eliminar productos.")
+
+    AppliedDiscount.objects.filter(order=order).delete()
+    OrderFee.objects.filter(order=order).delete()
+    order.items.all().delete()
+
+    subtotal = Decimal("0.00")
+    requires_kitchen = False
+    for idx, raw in enumerate(items_data, start=1):
+        product_id = raw.get("product_id")
+        product = Product.objects.filter(id=product_id).first() if product_id else None
+        quantity = int(raw.get("quantity") or 1)
+        quantity = max(1, quantity)
+        base_price = _to_money(raw.get("price_snapshot") or raw.get("unit_price_override") or raw.get("price") or 0)
+        override = raw.get("unit_price_override")
+        override_decimal = _to_money(override) if override is not None else None
+        is_custom = bool(raw.get("is_custom"))
+        product_name = str(raw.get("product_name_snapshot") or raw.get("product_name") or (product.name if product else f"Item {idx}")).strip()
+        code = str(raw.get("snapshot_sku_or_code") or raw.get("custom_code") or "").strip()
+        assigned_name = str(raw.get("assigned_name") or "").strip()
+        item = OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name_snapshot=product_name[:160],
+            price_snapshot=base_price,
+            unit_price_override=override_decimal,
+            snapshot_sku_or_code=code[:80],
+            is_custom=is_custom,
+            quantity=quantity,
+            assigned_name=assigned_name[:80],
+        )
+        line_modifier_total = Decimal("0.00")
+        for raw_mod in (raw.get("modifiers") or []):
+            mod_name = str(raw_mod.get("name") or "").strip()
+            mod_price = _to_money(raw_mod.get("price") or 0)
+            if not mod_name and raw_mod.get("id"):
+                db_mod = Modifier.objects.filter(id=raw_mod.get("id")).first()
+                if db_mod:
+                    mod_name = db_mod.name
+                    mod_price = _to_money(db_mod.price)
+            if not mod_name:
+                continue
+            OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot=mod_name[:120], modifier_price_snapshot=mod_price)
+            line_modifier_total += mod_price
+        line_total = (base_price + line_modifier_total) * Decimal(quantity)
+        subtotal += _to_money(line_total)
+        requires_kitchen = requires_kitchen or bool(getattr(product, "requires_kitchen", False))
+
+    total = _to_money(subtotal)
+    tax = _to_money(total - (total / Decimal("1.13"))) if total > Decimal("0.00") else Decimal("0.00")
+    order.subtotal = total
+    order.tax = tax
+    order.total = total
+    order.discount_total = Decimal("0.00")
+    order.discount_snapshot = {}
+    order.disposable_total = Decimal("0.00")
+    order.iva_exempt_discount = Decimal("0.00")
+    order.amount_due_cents = int((total * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    order.requires_kitchen = requires_kitchen
 
 
 class CustomerDisplayOrderSerializer(serializers.ModelSerializer):
@@ -354,7 +438,11 @@ class PendingOrderListView(generics.ListAPIView):
         if tab == "finalized":
             queryset = (
                 Order.objects.filter(is_pending=False)
-                .exclude(pending_completion_type="none")
+                .filter(
+                    Q(pending_completion_type__in=["paid", "removed", "canceled"])
+                    | Q(pending_reference__gt="")
+                )
+                .exclude(pending_completion_type="none", payment_status="unpaid", status__in=["waiting_payment", "new", "preparing", "ready"])
                 .prefetch_related("items__applied_modifiers")
                 .order_by("-pending_completed_at", "-updated_at")
             )
@@ -397,6 +485,7 @@ class PendingOrderToggleView(generics.GenericAPIView):
         pending_state = str(request.data.get("pending_state") or "").strip().lower()
         auth_pin = str(request.data.get("authorization_pin") or "").strip()
         pending_reference = str(request.data.get("pending_reference") or "").strip()
+        items_data = request.data.get("items") if isinstance(request.data, dict) else None
         removal_reason = str(request.data.get("removal_reason") or "").strip()
         completion_type = str(request.data.get("completion_type") or "").strip().lower()
 
@@ -410,14 +499,17 @@ class PendingOrderToggleView(generics.GenericAPIView):
             )
 
         if is_pending:
-            if not pending_reference:
+            if not pending_reference and not order.pending_reference:
                 return Response({"detail": "Referencia requerida para enviar a Pendientes."}, status=status.HTTP_400_BAD_REQUEST)
             if pending_state not in {"pending_payment", "paid_pending_delivery", "in_kitchen", "ready"}:
                 pending_state = "paid_pending_delivery" if order.payment_status == "paid" else "pending_payment"
+            if isinstance(items_data, list):
+                _sync_pending_order_lines(order, items_data, request, auth_pin)
             order.is_pending = True
             order.pending_state = pending_state
-            order.pending_reference = pending_reference[:120]
-            order.pending_marked_at = timezone.localtime(timezone.now())
+            if not order.pending_reference:
+                order.pending_reference = pending_reference[:120]
+            order.pending_marked_at = order.pending_marked_at or timezone.localtime(timezone.now())
             order.pending_completed_at = None
             order.pending_completion_type = "none"
             order.pending_completion_note = ""

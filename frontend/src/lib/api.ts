@@ -1844,6 +1844,18 @@ export const setOrderPending = async (
     pendingReference?: string;
     removalReason?: string;
     completionType?: "paid" | "removed" | "canceled";
+    items?: Array<{
+      sourceOrderItemId?: number;
+      productId?: number | null;
+      productName: string;
+      quantity: number;
+      price: number;
+      isCustom?: boolean;
+      unitPriceOverride?: number | null;
+      customCode?: string;
+      assignedName?: string;
+      modifiers: Array<{ id?: number; name: string; price: number }>;
+    }>;
   }
 ): Promise<Order> => {
   const response = await request(`/orders/${orderId}/pending/`, {
@@ -1856,6 +1868,18 @@ export const setOrderPending = async (
       pending_reference: payload.pendingReference ?? "",
       removal_reason: payload.removalReason ?? "",
       completion_type: payload.completionType ?? "",
+      items: (payload.items ?? []).map((item) => ({
+        source_order_item_id: item.sourceOrderItemId ?? null,
+        product_id: item.productId ?? null,
+        product_name_snapshot: item.productName,
+        quantity: item.quantity,
+        price_snapshot: item.price,
+        is_custom: Boolean(item.isCustom),
+        unit_price_override: item.unitPriceOverride ?? null,
+        snapshot_sku_or_code: item.customCode ?? "",
+        assigned_name: item.assignedName ?? "",
+        modifiers: (item.modifiers ?? []).map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      })),
     }),
   });
   return mapOrder(await handleJson<any>(response));

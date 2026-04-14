@@ -87,6 +87,7 @@ import { ClockSV } from "@/components/ClockSV";
 
 interface CartItem {
   id: string;
+  sourceOrderItemId?: number;
   productId: number | null;
   name: string;
   basePrice: number;
@@ -128,6 +129,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     : [];
   return {
     id: `order-item-${item.id}`,
+    sourceOrderItemId: item.id,
     productId: item.productId ?? null,
     name: item.assignedName || item.productName,
     basePrice,
@@ -262,6 +264,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
   const [pendingReferenceDraft, setPendingReferenceDraft] = useState("");
+  const [pendingEditAuthorizationPin, setPendingEditAuthorizationPin] = useState("");
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
@@ -404,6 +407,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setActiveOrder(order);
         setCreatedOrderId(order.id);
         setCreatedOrderNumber(order.orderNumber);
+        setPendingReferenceDraft(order.pendingReference || "");
+        setPendingEditAuthorizationPin("");
         setCart(restoredCart);
         setCheckoutDraft({
           items: restoredCart,
@@ -715,6 +720,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const removeItem = (itemId: string) => {
+    if (activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || "")))) {
+      toast.error("No se pueden eliminar productos: la orden ya fue enviada a cocina.");
+      return;
+    }
+    const isPrivileged = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+    const requiresPinForPendingEdit = Boolean(activeOrder?.isPending && !isPrivileged);
+    if (requiresPinForPendingEdit && !pendingEditAuthorizationPin) {
+      privilegedGuard.requirePrivilege("removePendingItem", () => {
+        setCart((prev) => prev.filter((item) => item.id !== itemId));
+      });
+      return;
+    }
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
@@ -1365,7 +1382,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
       }
       const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
-      const saved = await setOrderPending(order.id, { isPending: true, pendingState, pendingReference: pendingReferenceDraft.trim() });
+      const pendingPayloadItems = cart.map((item) => ({
+        sourceOrderItemId: item.sourceOrderItemId,
+        productId: item.productId,
+        productName: item.name,
+        price: getItemBaseEffective(item),
+        quantity: item.quantity,
+        isCustom: Boolean(item.isCustom),
+        unitPriceOverride: item.unitPriceOverride ?? null,
+        customCode: item.customCode,
+        assignedName: item.assignedName,
+        modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      }));
+      const saved = await setOrderPending(order.id, {
+        isPending: true,
+        pendingState,
+        pendingReference: pendingReferenceDraft.trim(),
+        authorizationPin: pendingEditAuthorizationPin,
+        items: pendingPayloadItems,
+      });
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
       }
@@ -1378,6 +1413,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCreatedOrderId(null);
       setCreatedOrderNumber(null);
       setPendingReferenceDraft("");
+      setPendingEditAuthorizationPin("");
       setIsPendingReferenceDialogOpen(false);
       clearPersistedDraft();
       navigate("/open-orders");
@@ -2238,6 +2274,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             size="icon"
                             onClick={() => removeItem(item.id)}
                             className="h-10 w-10 text-danger"
+                            disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
+                            title={activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))) ? "Orden enviada a cocina: no se puede eliminar." : "Eliminar producto"}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -3333,7 +3371,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <PrivilegePinModal
         open={Boolean(privilegedGuard.pendingAction)}
         onCancel={() => privilegedGuard.setPendingAction(null)}
-        onSuccess={() =>
+        onSuccess={(pin) =>
           privilegedGuard.onPinSuccess({
             manualProduct: () => setIsManualProductOpen(true),
             discounts: () => setIsDiscountDialogOpen(true),
@@ -3341,7 +3379,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               setIsCashDialogOpen(true);
               loadCashData().catch(() => undefined);
             },
-          })
+            removePendingItem: (approvedPin) => {
+              if (!approvedPin) return;
+              setPendingEditAuthorizationPin(approvedPin);
+            },
+          }, pin)
         }
       />
 

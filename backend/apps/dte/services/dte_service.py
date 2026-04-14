@@ -446,6 +446,26 @@ def _validate_emisor_payload(emisor: dict[str, Any]) -> None:
         raise DTEPreflightError(f"NIT emisor inválido: {emisor.get('nit')}")
 
 
+def _validate_invalidation_emisor_payload(emisor: dict[str, Any]) -> None:
+    required = (
+        "nit",
+        "nombre",
+        "tipoEstablecimiento",
+        "telefono",
+        "correo",
+        "codEstable",
+        "codPuntoVenta",
+        "nomEstablecimiento",
+    )
+    missing = [k for k in required if not str(emisor.get(k) or "").strip()]
+    if missing:
+        raise DTEPreflightError(f"invalidacion.emisor incompleto: faltan {', '.join(missing)}")
+    prohibited = ("nrc", "codActividad", "descActividad", "nombreComercial")
+    prohibited_found = [k for k in prohibited if k in emisor]
+    if prohibited_found:
+        raise DTEPreflightError(f"invalidacion.emisor contiene campos no permitidos: {', '.join(prohibited_found)}")
+
+
 def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
     pagos = resumen.get("pagos")
     if not isinstance(pagos, list) or not pagos:
@@ -481,12 +501,17 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             raise DTEPreflightError("invalidacion.documento es obligatorio.")
         missing_documento = [
             key
-            for key in ("tipoDte", "numeroControl", "codigoGeneracion")
+            for key in ("tipoDocumento", "numDocumento", "codigoGeneracionR", "selloRecibido", "montoIva", "nombre")
             if not str(documento.get(key) or "").strip()
         ]
         if missing_documento:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
+            )
+        prohibited_documento = [k for k in ("horEmi",) if k in documento]
+        if prohibited_documento:
+            raise DTEPreflightError(
+                f"invalidacion.documento contiene campos no permitidos: {', '.join(prohibited_documento)}"
             )
         motivo = dte.get("motivo") or {}
         if not isinstance(motivo, dict):
@@ -507,7 +532,12 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
         ]
         if missing_motivo:
             raise DTEPreflightError(f"invalidacion.motivo incompleto: faltan {', '.join(missing_motivo)}")
-        _validate_emisor_payload(emisor)
+        _validate_invalidation_emisor_payload(emisor)
+        prohibited_root = [k for k in ("responsable", "solicitante", "extra") if k in dte]
+        if prohibited_root:
+            raise DTEPreflightError(
+                f"invalidacion contiene campos no permitidos: {', '.join(prohibited_root)}"
+            )
         assert_no_string_numbers(payload)
         return
     _validate_emisor_payload(emisor)
@@ -1230,7 +1260,6 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         or str(record.sello_recepcion or "").strip()
     )
     fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
-    hor_emi = str(request_identificacion.get("horEmi") or "").strip()
     if not numero_control:
         raise DTEPreflightError(
             f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
@@ -1241,6 +1270,8 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         )
 
     emisor_from_record = request_dte.get("emisor") or {}
+    receptor_origen = request_dte.get("receptor") or {}
+    resumen_origen = request_dte.get("resumen") or {}
     resolved_emisor_config = _resolve_branch_config(record.order)
     resolved_emisor = {
         "nit": emisor_from_record.get("nit") or get_emisor_nit(),
@@ -1253,7 +1284,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
 
     raw_ambiente, source = resolve_ambiente_with_source()
     ambiente = _normalize_ambiente_value(raw_ambiente)
-    missing_emisor_fields = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not resolved_emisor.get(k)]
+    missing_emisor_fields = [k for k in ("nit", "nombre") if not resolved_emisor.get(k)]
     if missing_emisor_fields:
         raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing_emisor_fields)}")
     logger.info(
@@ -1272,23 +1303,22 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     now = timezone.localtime(timezone.now())
     emisor_full = {
         "nit": resolved_emisor.get("nit"),
-        "nrc": resolved_emisor.get("nrc"),
         "nombre": resolved_emisor.get("nombre"),
-        "nombreComercial": resolved_emisor.get("nombreComercial"),
-        "codActividad": resolved_emisor.get("codActividad"),
-        "descActividad": resolved_emisor.get("descActividad"),
+        "nomEstablecimiento": resolved_emisor_config.get("nomEstablecimiento") or resolved_emisor.get("nombreComercial") or "Sucursal",
         "tipoEstablecimiento": resolved_emisor_config.get("tipoEstablecimiento") or "02",
-        "codEstableMH": resolved_emisor_config.get("codEstableMH") or "X001",
         "codEstable": resolved_emisor_config.get("codEstable") or "X001",
-        "codPuntoVentaMH": resolved_emisor_config.get("codPuntoVentaMH") or "X001",
         "codPuntoVenta": resolved_emisor_config.get("codPuntoVenta") or "X001",
         "telefono": resolved_emisor_config.get("telefono") or "00000000",
         "correo": resolved_emisor_config.get("correo") or "facturas@example.com",
-        "direccion": {
-            "departamento": resolved_emisor_config.get("departamento") or "12",
-            "municipio": resolved_emisor_config.get("municipio") or "22",
-            "complemento": resolved_emisor_config.get("complemento") or "Direccion emisor pendiente",
-        },
+    }
+    documento = {
+        "tipoDocumento": tipo_dte_base,
+        "numDocumento": numero_control,
+        "codigoGeneracionR": codigo_generacion,
+        "selloRecibido": sello_recibido,
+        "montoIva": str(money(resumen_origen.get("totalIva") or Decimal("0.00"))),
+        "nombre": str(receptor_origen.get("nombre") or record.order.customer_name or "CONSUMIDOR FINAL").strip() or "CONSUMIDOR FINAL",
+        "fecEmi": fec_emi,
     }
     payload = {
         "invalidacion": {
@@ -1300,14 +1330,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
                 "fecAnula": now.date().isoformat(),
                 "horAnula": now.strftime("%H:%M:%S"),
             },
-            "documento": {
-                "tipoDte": tipo_dte_base,
-                "codigoGeneracion": codigo_generacion,
-                "numeroControl": numero_control,
-                "selloRecibido": sello_recibido,
-                "fecEmi": fec_emi,
-                "horEmi": hor_emi or None,
-            },
+            "documento": documento,
             "emisor": emisor_full,
             "motivo": {
                 "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
@@ -1322,11 +1345,15 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         }
     }
     logger.info(
-        "dte.invalidation.payload_summary dte_record_id=%s order_id=%s keys=%s",
+        "dte.invalidation.payload_summary dte_record_id=%s order_id=%s identificacion=%s documento_keys=%s emisor_keys=%s motivo_keys=%s",
         record.id,
         getattr(record, "order_id", None),
-        list((payload.get("invalidacion") or {}).keys()),
+        payload["invalidacion"]["identificacion"],
+        list(payload["invalidacion"]["documento"].keys()),
+        list(payload["invalidacion"]["emisor"].keys()),
+        list(payload["invalidacion"]["motivo"].keys()),
     )
+    logger.info("dte.invalidation.payload_full dte_record_id=%s payload=%s", record.id, payload)
     return payload
 
 
@@ -1354,8 +1381,14 @@ def invalidate_dte_for_order(
             "already_invalidated": True,
         }
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
+    try:
+        validate_dte_preflight_payload(payload)
+    except DTEPreflightError:
+        logger.exception("dte.invalidation.schema_error order_id=%s dte_record_id=%s", order.id, record.id)
+        raise
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
+    logger.info("dte.invalidation.bridge_response order_id=%s dte_record_id=%s response=%s", order.id, record.id, response)
     parsed = interpret_dte_response(response)
     attempt = DteInvalidationAttempt.objects.create(
         order=order,

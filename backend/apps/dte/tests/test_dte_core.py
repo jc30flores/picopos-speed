@@ -205,9 +205,9 @@ class DTECoreTests(TestCase):
             self.assertIn("fecAnula", payload["invalidacion"]["identificacion"])
             self.assertIn("horAnula", payload["invalidacion"]["identificacion"])
             self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
-            self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "01")
             self.assertEqual(
-                payload["invalidacion"]["documento"]["numeroControl"],
+                payload["invalidacion"]["documento"]["numDocumento"],
                 "DTE-01-S001P001-000000000000123",
             )
             self.assertNotIn("responsable", payload["invalidacion"])
@@ -1250,10 +1250,21 @@ class DTEInvalidateEndpointTests(TestCase):
         sent_payload = mock_send.call_args.kwargs["payload"]
         self.assertNotIn("numeroControl", sent_payload["invalidacion"]["identificacion"])
         self.assertEqual(
-            sent_payload["invalidacion"]["documento"]["numeroControl"],
+            sent_payload["invalidacion"]["documento"]["numDocumento"],
             "DTE-01-S001P001-000000000000357",
         )
+        self.assertEqual(
+            sent_payload["invalidacion"]["documento"]["codigoGeneracionR"],
+            "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+        )
         self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")
+        self.assertNotIn("nrc", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("codActividad", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("descActividad", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("nombreComercial", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("responsable", sent_payload["invalidacion"])
+        self.assertNotIn("solicitante", sent_payload["invalidacion"])
+        self.assertNotIn("extra", sent_payload["invalidacion"])
 
     def test_invalidate_endpoint_returns_422_when_base_document_missing_control_number(self):
         self.record.request_payload = {}
@@ -1261,4 +1272,36 @@ class DTEInvalidateEndpointTests(TestCase):
         self.client.force_authenticate(self.user)
         response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
         self.assertEqual(response.status_code, 422, response.data)
-        self.assertIn("numeroControl", response.data["detail"])
+        self.assertIn("numDocumento", response.data["detail"])
+
+    def test_build_invalidation_payload_requires_sello_recibido(self):
+        self.record.response_payload = {}
+        self.record.sello_recibido = ""
+        self.record.sello_recepcion = ""
+        self.record.save(update_fields=["response_payload", "sello_recibido", "sello_recepcion"])
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_requires_numdocresponsable(self):
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "", "01234567-8", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_requires_numdocsolicita(self):
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_invalidation_schema_rejects_prohibited_fields(self):
+        payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+        payload["invalidacion"]["responsable"] = {"x": "1"}
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_snapshot(self):
+        payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+        normalized = json.dumps(payload["invalidacion"], sort_keys=True, ensure_ascii=False)
+        self.assertIn("\"tipoDocumento\": \"01\"", normalized)
+        self.assertIn("\"numDocResponsable\": \"01234567-8\"", normalized)
+        self.assertIn("\"numDocSolicita\": \"01234567-8\"", normalized)
