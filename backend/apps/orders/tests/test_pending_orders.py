@@ -256,6 +256,63 @@ class PendingOrdersTests(TestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.order.items.count(), 0)
 
+    def test_resave_existing_pending_updates_same_order_without_creating_new(self):
+        self.order.is_pending = True
+        self.order.pending_reference = "Mesa 11"
+        self.order.pending_state = "pending_payment"
+        self.order.total = "8.99"
+        self.order.subtotal = "8.99"
+        self.order.discount_total = "1.00"
+        self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "total", "subtotal", "discount_total", "updated_at"])
+        before_count = Order.objects.count()
+
+        res = self.client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {
+                "is_pending": True,
+                "pending_reference": "Mesa 11",
+                "items": [
+                    {
+                        "source_order_item_id": None,
+                        "product_id": self.product.id,
+                        "product_name_snapshot": "Soda",
+                        "quantity": 3,
+                        "price_snapshot": "7.49",
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(Order.objects.count(), before_count)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.id, res.data["id"])
+        self.assertEqual(str(self.order.total), "22.47")
+        self.assertEqual(str(self.order.discount_total), "0.00")
+        self.assertEqual(self.order.pending_reference, "Mesa 11")
+
+    def test_finalize_paid_moves_order_out_of_pending_and_into_finalized(self):
+        self.order.is_pending = True
+        self.order.pending_reference = "Mesa 15"
+        self.order.pending_state = "pending_payment"
+        self.order.payment_status = "paid"
+        self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "payment_status", "updated_at"])
+        manager_client = APIClient()
+        manager_client.force_authenticate(self.manager)
+        res = manager_client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {"is_pending": False, "removal_reason": "Pagada en POS", "completion_type": "paid"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        pending_res = self.client.get("/api/orders/pending/?tab=pending&q=Mesa 15")
+        finalized_res = self.client.get("/api/orders/pending/?tab=finalized&q=Mesa 15")
+        self.assertEqual(pending_res.status_code, 200)
+        self.assertEqual(finalized_res.status_code, 200)
+        self.assertEqual(pending_res.data["count"], 0)
+        self.assertEqual(finalized_res.data["count"], 1)
+
     def test_cannot_remove_items_when_order_already_sent_to_kitchen(self):
         kitchen_product = Product.objects.create(
             name="Hamburguesa",
