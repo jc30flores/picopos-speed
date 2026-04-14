@@ -202,11 +202,17 @@ class DTECoreTests(TestCase):
             payload = build_invalidation_payload(record, "Prueba", "", "")
             self.assertEqual(payload["invalidacion"]["identificacion"]["ambiente"], "01")
             self.assertEqual(payload["invalidacion"]["identificacion"]["tipoDte"], "AN")
+            self.assertIn("fecAnula", payload["invalidacion"]["identificacion"])
+            self.assertIn("horAnula", payload["invalidacion"]["identificacion"])
+            self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
             self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
             self.assertEqual(
                 payload["invalidacion"]["documento"]["numeroControl"],
                 "DTE-01-S001P001-000000000000123",
             )
+            self.assertNotIn("responsable", payload["invalidacion"])
+            self.assertNotIn("solicitante", payload["invalidacion"])
+            self.assertNotIn("extra", payload["invalidacion"])
         finally:
             if previous_mh is None:
                 os.environ.pop("MH_AMBIENTE", None)
@@ -232,6 +238,42 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_build_payload_cf_reconciles_modifier_totals_with_quantity(self):
+        category = Category.objects.create(name="MODQTY")
+        product = Product.objects.create(name="Base", description="", price=Decimal("0.01"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("0.01"),
+            quantity=3,
+            discount_amount=Decimal("0.00"),
+        )
+        OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot="Extra", modifier_price_snapshot=Decimal("0.99"))
+        self.order.total = Decimal("3.00")
+        self.order.save(update_fields=["total", "updated_at"])
+
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000312", "B" * 36, "00")
+        total_lineas = sum(Decimal(str(line["ventaGravada"])) + Decimal(str(line["ventaExenta"])) for line in payload["dte"]["cuerpoDocumento"])
+        self.assertEqual(total_lineas.quantize(Decimal("0.01")), Decimal("3.00"))
+
+    def test_build_payload_cf_preserves_fee_buckets(self):
+        category = Category.objects.create(name="FEE")
+        product = Product.objects.create(name="Producto", description="", price=Decimal("1.00"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=product, product_name_snapshot="Producto", price_snapshot=Decimal("1.00"), quantity=1)
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable A", unit_amount=Decimal("0.21"), quantity=5, total_amount=Decimal("1.05"))
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable B", unit_amount=Decimal("0.05"), quantity=3, total_amount=Decimal("0.15"))
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable C", unit_amount=Decimal("0.05"), quantity=2, total_amount=Decimal("0.10"))
+        self.order.total = Decimal("2.30")
+        self.order.save(update_fields=["total", "updated_at"])
+
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000313", "C" * 36, "00")
+        fee_lines = [line for line in payload["dte"]["cuerpoDocumento"] if str(line.get("codigo", "")).startswith("FEE-")]
+        qty_unit_pairs = {(Decimal(str(line["cantidad"])), Decimal(str(line["precioUni"]))) for line in fee_lines}
+        self.assertIn((Decimal("5"), Decimal("0.21")), qty_unit_pairs)
+        self.assertIn((Decimal("3"), Decimal("0.05")), qty_unit_pairs)
+        self.assertIn((Decimal("2"), Decimal("0.05")), qty_unit_pairs)
 
     def test_build_payload_cf_sets_discount_summary_from_item_discounts(self):
         category = Category.objects.create(name="DESCUENTOS")
@@ -1206,10 +1248,7 @@ class DTEInvalidateEndpointTests(TestCase):
         self.assertTrue(response.data["success"])
         self.assertEqual(response.data["attempt"]["success"], True)
         sent_payload = mock_send.call_args.kwargs["payload"]
-        self.assertEqual(
-            sent_payload["invalidacion"]["identificacion"]["numeroControl"],
-            "DTE-01-S001P001-000000000000357",
-        )
+        self.assertNotIn("numeroControl", sent_payload["invalidacion"]["identificacion"])
         self.assertEqual(
             sent_payload["invalidacion"]["documento"]["numeroControl"],
             "DTE-01-S001P001-000000000000357",

@@ -4,10 +4,12 @@ import json
 import logging
 import os
 import re
+import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from django.conf import settings
+from django.utils import timezone
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
@@ -191,6 +193,64 @@ def _sum_item_discounts(cuerpo: list[dict]) -> Decimal:
     return money(sum((money(line.get("montoDescu")) for line in cuerpo), Decimal("0.00")))
 
 
+def _allocate_discount_by_weight(components: list[dict[str, Any]], total_discount: Decimal) -> list[Decimal]:
+    target = money(min(total_discount, sum((money(c.get("gross")) for c in components), Decimal("0.00"))))
+    if target <= Decimal("0.00"):
+        return [Decimal("0.00") for _ in components]
+    gross_cents = [to_cents(money(component.get("gross"))) for component in components]
+    total_gross_cents = sum(gross_cents)
+    if total_gross_cents <= 0:
+        return [Decimal("0.00") for _ in components]
+    target_cents = to_cents(target)
+    raw_alloc = [(target_cents * cents) / total_gross_cents for cents in gross_cents]
+    alloc_cents = [int(value) for value in raw_alloc]
+    residual = target_cents - sum(alloc_cents)
+    remainders = sorted(
+        [(idx, raw_alloc[idx] - alloc_cents[idx]) for idx in range(len(alloc_cents))],
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for idx, _ in remainders:
+        if residual <= 0:
+            break
+        alloc_cents[idx] += 1
+        residual -= 1
+    return [money(Decimal(cents) / Decimal("100")) for cents in alloc_cents]
+
+
+def _reconcile_line_residual(cuerpo: list[dict[str, Any]], target_total: Decimal, *, taxable: bool, order_id: int | None) -> None:
+    emitted_total = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    residual = money(target_total - emitted_total)
+    logger.info("dte.reconciliation.residual_before order_id=%s residual=%s", order_id, residual)
+    if residual == Decimal("0.00"):
+        logger.info("dte.reconciliation.residual_after order_id=%s residual=%s", order_id, residual)
+        return
+    candidate = next((line for line in cuerpo if money(line.get("ventaGravada")) > Decimal("0.00")), None)
+    if candidate is None and cuerpo:
+        candidate = cuerpo[0]
+    if candidate is None:
+        logger.info("dte.reconciliation.residual_after order_id=%s residual=%s", order_id, residual)
+        return
+    if taxable and money(candidate.get("ventaGravada")) > Decimal("0.00"):
+        adjusted_gross = money(money(candidate.get("ventaGravada")) + residual)
+        if adjusted_gross <= Decimal("0.00"):
+            return
+        candidate["ventaGravada"] = json_number(adjusted_gross)
+        candidate["ivaItem"] = json_number(calculate_iva_from_gross(adjusted_gross))
+    elif money(candidate.get("ventaExenta")) > Decimal("0.00"):
+        adjusted_exempt = money(money(candidate.get("ventaExenta")) + residual)
+        if adjusted_exempt <= Decimal("0.00"):
+            return
+        candidate["ventaExenta"] = json_number(adjusted_exempt)
+        candidate["ivaItem"] = json_number(Decimal("0.00"))
+    emitted_after = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    logger.info(
+        "dte.reconciliation.residual_after order_id=%s residual=%s",
+        order_id,
+        money(target_total - emitted_after),
+    )
+
+
 def _validate_dte_totals(dte_payload: dict) -> None:
     resumen = (dte_payload.get("resumen") or {}) if isinstance(dte_payload, dict) else {}
     cuerpo = (dte_payload.get("cuerpoDocumento") or []) if isinstance(dte_payload, dict) else []
@@ -360,6 +420,14 @@ def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
     tipo_dte = str(identificacion.get("tipoDte") or "").strip()
     if tipo_dte not in {"01", "03", "05", "14", "AN"}:
         raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
+    if tipo_dte == "AN":
+        fec_anula = str(identificacion.get("fecAnula") or "").strip()
+        hor_anula = str(identificacion.get("horAnula") or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fec_anula):
+            raise DTEPreflightError("invalidacion.identificacion.fecAnula es obligatorio (YYYY-MM-DD).")
+        if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", hor_anula):
+            raise DTEPreflightError("invalidacion.identificacion.horAnula es obligatorio (HH:MM:SS).")
+        return
     numero_control = str(identificacion.get("numeroControl") or "").strip()
     if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
         logger.error("dte.preflight.invalid_numero_control numeroControl=%s identificacion=%s", numero_control, identificacion)
@@ -420,6 +488,25 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
             )
+        motivo = dte.get("motivo") or {}
+        if not isinstance(motivo, dict):
+            raise DTEPreflightError("invalidacion.motivo es obligatorio.")
+        missing_motivo = [
+            key
+            for key in (
+                "tipoAnulacion",
+                "motivoAnulacion",
+                "nombreResponsable",
+                "tipDocResponsable",
+                "numDocResponsable",
+                "nombreSolicita",
+                "tipDocSolicita",
+                "numDocSolicita",
+            )
+            if not str(motivo.get(key) or "").strip()
+        ]
+        if missing_motivo:
+            raise DTEPreflightError(f"invalidacion.motivo incompleto: faltan {', '.join(missing_motivo)}")
         _validate_emisor_payload(emisor)
         assert_no_string_numbers(payload)
         return
@@ -526,124 +613,71 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     commercial_groups: list[dict[str, Any]] = []
     placeholder_items_detected: list[int] = []
+    ledger_lines: list[dict[str, Any]] = []
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         quantity = money(item.quantity)
-        base_total = money(money(item.unit_price) * quantity)
-        line_discount = money(item.discount_amount)
-        desc = item.name or "ITEM"
-        free_mods: list[str] = []
-        paid_mods = []
+        base_gross = money(money(item.unit_price) * quantity)
+        components: list[dict[str, Any]] = [
+            {
+                "codigo": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
+                "descripcion": item.name or "ITEM",
+                "quantity": quantity,
+                "gross": base_gross,
+            }
+        ]
         paid_mods_total = Decimal("0.00")
+        free_mods: list[str] = []
         for mod in item.applied_modifiers.all():
             mod_price = money(mod.modifier_price_snapshot)
             if mod_price > Decimal("0.00"):
-                paid_mods.append(mod)
-                paid_mods_total += mod_price
+                mod_gross = money(mod_price * quantity)
+                paid_mods_total += mod_gross
+                components.append(
+                    {
+                        "codigo": f"MOD-{item.id}-{mod.id or len(components)}",
+                        "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
+                        "quantity": quantity,
+                        "gross": mod_gross,
+                    }
+                )
             else:
                 free_mods.append(mod.modifier_name_snapshot)
-        paid_mods_total = money(paid_mods_total)
         if free_mods:
-            desc = f"{desc} ({', '.join(free_mods)})"
-        if paid_mods:
-            desc = f"{desc} + {' + '.join(m.modifier_name_snapshot for m in paid_mods)}"
-
-        group_gross = money(base_total + paid_mods_total)
+            components[0]["descripcion"] = f"{components[0]['descripcion']} ({', '.join(free_mods)})"
+        group_gross = money(sum((money(c["gross"]) for c in components), Decimal("0.00")))
+        discounts = _allocate_discount_by_weight(components, money(item.discount_amount))
         is_shell = _is_placeholder_shell(item, paid_mods_total)
         if is_shell:
             placeholder_items_detected.append(item.id)
-        collapse_group = is_shell or line_discount > Decimal("0.00")
-        group_discount = money(min(group_gross, line_discount))
-
-        if collapse_group:
-            line_calc = calculate_line_tax_breakdown(
-                unit_price_gross=group_gross,
-                quantity=Decimal("1.00"),
-                discount_gross=group_discount,
-                taxable=not order.iva_exempt,
+        for idx, component in enumerate(components):
+            component_discount = discounts[idx]
+            ledger_lines.append(
+                {
+                    "codigo": component["codigo"],
+                    "descripcion": component["descripcion"],
+                    "quantity": component["quantity"],
+                    "gross": money(component["gross"]),
+                    "discount": money(component_discount),
+                }
             )
-            total_gravada += line_calc["venta_gravada"]
-            total_exenta += line_calc["venta_exenta"]
-            total_iva += line_calc["iva_item"]
-            total_descuento += line_calc["monto_descu"]
-            sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
-            cuerpo.append({
-                "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
-                "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
-                "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
-                "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
-            })
-            commercial_groups.append({
+        commercial_groups.append(
+            {
                 "order_item_id": item.id,
-                "collapsed": True,
                 "placeholder_shell": is_shell,
                 "gross_before_discount": group_gross,
-                "discount_original": line_discount,
-                "discount_applied": group_discount,
-                "total_emitted": line_calc["linea_total_objetivo"],
-            })
-            num_item += 1
-            continue
-
-        line_calc = calculate_line_tax_breakdown(
-            unit_price_gross=money(item.unit_price),
-            quantity=quantity,
-            discount_gross=Decimal("0.00"),
-            taxable=not order.iva_exempt,
+                "discount_original": money(item.discount_amount),
+                "discount_allocated": money(sum(discounts, Decimal("0.00"))),
+                "components": len(components),
+            }
         )
-        total_gravada += line_calc["venta_gravada"]
-        total_exenta += line_calc["venta_exenta"]
-        total_iva += line_calc["iva_item"]
-        sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
-        cuerpo.append({
-            "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": json_number(quantity), "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
-            "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
-            "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-            "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
-            "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
-        })
-        num_item += 1
-        for mod in paid_mods:
-            mod_total = money(mod.modifier_price_snapshot)
-            mod_calc = calculate_line_tax_breakdown(
-                unit_price_gross=mod_total,
-                quantity=Decimal("1.00"),
-                discount_gross=Decimal("0.00"),
-                taxable=not order.iva_exempt,
-            )
-            total_gravada += mod_calc["venta_gravada"]
-            total_exenta += mod_calc["venta_exenta"]
-            total_iva += mod_calc["iva_item"]
-            cuerpo.append({
-                "numItem": num_item, "tipoItem": 1, "codigo": f"MOD-{item.id}-{num_item}", "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
-                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(mod_calc["precio_uni"]),
-                "montoDescu": json_number(mod_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(mod_calc["venta_exenta"]),
-                "ventaGravada": json_number(mod_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(mod_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
-                "_lineaObjetivo": json_number(mod_calc["linea_total_objetivo"]),
-            })
-            num_item += 1
-        commercial_groups.append({
-            "order_item_id": item.id,
-            "collapsed": False,
-            "placeholder_shell": is_shell,
-            "gross_before_discount": group_gross,
-            "discount_original": line_discount,
-            "discount_applied": Decimal("0.00"),
-            "total_emitted": group_gross,
-        })
 
-    fee_groups: dict[tuple[str, str], Decimal] = {}
     for fee in order.fees.all():
         fee_name = (fee.fee_name or "CARGO").strip()[:200]
-        fee_type = (fee.fee_type or "").strip().lower()
-        fee_groups[(fee_name, fee_type)] = money(fee_groups.get((fee_name, fee_type), Decimal("0.00")) + money(fee.total_amount))
-
-    for (fee_name, fee_type), fee_total in fee_groups.items():
-        fee_qty = Decimal("1.00")
-        fee_unit = money(fee_total)
+        fee_qty = money(fee.quantity or 1)
+        fee_unit = money(fee.unit_amount if fee.unit_amount is not None else (money(fee.total_amount) / fee_qty))
+        fee_total = money(fee.total_amount)
+        if not _almost_equal(money(fee_unit * fee_qty), fee_total):
+            fee_unit = money(fee_total / fee_qty) if fee_qty > Decimal("0.00") else fee_total
         fee_calc = calculate_line_tax_breakdown(
             unit_price_gross=fee_unit,
             quantity=fee_qty,
@@ -656,7 +690,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         cuerpo.append({
             "numItem": num_item,
             "tipoItem": 1,
-            "codigo": f"FEE-{fee_type or 'GEN'}-{num_item}",
+            "codigo": f"FEE-{(fee.fee_type or 'GEN').strip().upper()}-{num_item}",
             "descripcion": fee_name,
             "cantidad": json_number(fee_qty),
             "uniMedida": 59,
@@ -674,6 +708,55 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "_lineaObjetivo": json_number(fee_calc["linea_total_objetivo"]),
         })
         num_item += 1
+        commercial_groups.append(
+            {
+                "fee_id": fee.id,
+                "fee_type": fee.fee_type,
+                "gross_before_discount": fee_total,
+                "discount_allocated": Decimal("0.00"),
+                "components": 1,
+            }
+        )
+
+    for ledger in ledger_lines:
+        qty = money(ledger["quantity"])
+        gross = money(ledger["gross"])
+        discount = money(ledger["discount"])
+        if qty <= Decimal("0.00") or gross <= Decimal("0.00"):
+            continue
+        line_calc = calculate_line_tax_breakdown(
+            unit_price_gross=money(gross / qty),
+            quantity=qty,
+            discount_gross=discount,
+            taxable=not order.iva_exempt,
+        )
+        total_gravada += line_calc["venta_gravada"]
+        total_exenta += line_calc["venta_exenta"]
+        total_iva += line_calc["iva_item"]
+        total_descuento += line_calc["monto_descu"]
+        cuerpo.append(
+            {
+                "numItem": num_item,
+                "tipoItem": 1,
+                "codigo": ledger["codigo"],
+                "descripcion": ledger["descripcion"],
+                "cantidad": json_number(qty),
+                "uniMedida": 59,
+                "precioUni": json_number(line_calc["precio_uni"]),
+                "montoDescu": json_number(line_calc["monto_descu"]),
+                "ventaNoSuj": json_number(Decimal("0.00")),
+                "ventaExenta": json_number(line_calc["venta_exenta"]),
+                "ventaGravada": json_number(line_calc["venta_gravada"]),
+                "tributos": None,
+                "psv": json_number(Decimal("0.00")),
+                "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(line_calc["iva_item"]),
+                "codTributo": None,
+                "numeroDocumento": None,
+                "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
+            }
+        )
+        num_item += 1
 
     target_total = money(getattr(order, "total", Decimal("0.00")))
     items_gross_total = Decimal("0.00")
@@ -686,7 +769,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         for mod in item.applied_modifiers.all():
             mod_price = money(mod.modifier_price_snapshot)
             if mod_price > Decimal("0.00"):
-                modifiers_gross_total += mod_price
+                modifiers_gross_total += money(mod_price * qty)
     fees_total = money(sum((money(f.total_amount) for f in order.fees.all()), Decimal("0.00")))
     reconstructed_order_total = money(items_gross_total + modifiers_gross_total + fees_total - item_discount_total)
     logger.info(
@@ -754,6 +837,9 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         logger.error("dte.line_preflight_failed %s", " | ".join(objective_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
     if not _almost_equal(gross_from_lines, target_total):
+        _reconcile_line_residual(cuerpo, target_total, taxable=not order.iva_exempt, order_id=getattr(order, "id", None))
+        gross_from_lines = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    if not _almost_equal(gross_from_lines, target_total):
         logger.error(
             "dte.line_total_mismatch order_id=%s fiscal_rule=precioUni/monto_final+iva13_113 groups=%s placeholders=%s total_lineas=%s total_real=%s diff=%s",
             getattr(order, "id", None),
@@ -770,6 +856,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_gravada = money(sum((money(line.get("ventaGravada")) for line in cuerpo), Decimal("0.00")))
     total_exenta = money(sum((money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00")))
     total_iva = money(sum((money(line.get("ivaItem")) for line in cuerpo), Decimal("0.00")))
+    logger.info(
+        "dte.final_payload_summary order_id=%s total_lineas=%s total_real=%s total_iva=%s total_desc=%s",
+        getattr(order, "id", None),
+        gross_from_lines,
+        target_total,
+        total_iva,
+        _sum_item_discounts(cuerpo),
+    )
     subtotal_ventas = money(total_gravada + total_exenta)
     global_desc_no_suj = Decimal("0.00")
     global_desc_exenta = Decimal("0.00")
@@ -1175,30 +1269,64 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         raw_ambiente,
         ambiente,
     )
+    now = timezone.localtime(timezone.now())
+    emisor_full = {
+        "nit": resolved_emisor.get("nit"),
+        "nrc": resolved_emisor.get("nrc"),
+        "nombre": resolved_emisor.get("nombre"),
+        "nombreComercial": resolved_emisor.get("nombreComercial"),
+        "codActividad": resolved_emisor.get("codActividad"),
+        "descActividad": resolved_emisor.get("descActividad"),
+        "tipoEstablecimiento": resolved_emisor_config.get("tipoEstablecimiento") or "02",
+        "codEstableMH": resolved_emisor_config.get("codEstableMH") or "X001",
+        "codEstable": resolved_emisor_config.get("codEstable") or "X001",
+        "codPuntoVentaMH": resolved_emisor_config.get("codPuntoVentaMH") or "X001",
+        "codPuntoVenta": resolved_emisor_config.get("codPuntoVenta") or "X001",
+        "telefono": resolved_emisor_config.get("telefono") or "00000000",
+        "correo": resolved_emisor_config.get("correo") or "facturas@example.com",
+        "direccion": {
+            "departamento": resolved_emisor_config.get("departamento") or "12",
+            "municipio": resolved_emisor_config.get("municipio") or "22",
+            "complemento": resolved_emisor_config.get("complemento") or "Direccion emisor pendiente",
+        },
+    }
     payload = {
         "invalidacion": {
             "identificacion": {
                 "version": 2,
                 "ambiente": ambiente,
                 "tipoDte": "AN",
-                "numeroControl": numero_control,
-                "codigoGeneracion": codigo_generacion,
+                "codigoGeneracion": str(uuid.uuid4()).upper(),
+                "fecAnula": now.date().isoformat(),
+                "horAnula": now.strftime("%H:%M:%S"),
             },
             "documento": {
                 "tipoDte": tipo_dte_base,
-                "numeroControl": numero_control,
                 "codigoGeneracion": codigo_generacion,
+                "numeroControl": numero_control,
                 "selloRecibido": sello_recibido,
                 "fecEmi": fec_emi,
                 "horEmi": hor_emi or None,
             },
-            "emisor": resolved_emisor,
-            "motivo": motivo,
-            "responsable": responsable_dui,
-            "solicitante": solicitante_dui,
-            "extra": extra or {},
+            "emisor": emisor_full,
+            "motivo": {
+                "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
+                "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
+                "nombreResponsable": str((extra or {}).get("nombreResponsable") or "Responsable").strip(),
+                "tipDocResponsable": "13",
+                "numDocResponsable": str(responsable_dui or "").strip(),
+                "nombreSolicita": str((extra or {}).get("nombreSolicita") or "Solicitante").strip(),
+                "tipDocSolicita": "13",
+                "numDocSolicita": str(solicitante_dui or "").strip(),
+            },
         }
     }
+    logger.info(
+        "dte.invalidation.payload_summary dte_record_id=%s order_id=%s keys=%s",
+        record.id,
+        getattr(record, "order_id", None),
+        list((payload.get("invalidacion") or {}).keys()),
+    )
     return payload
 
 
