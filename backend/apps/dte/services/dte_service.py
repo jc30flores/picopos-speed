@@ -402,6 +402,21 @@ def _has_nit_14(value: str | None) -> bool:
     return len(digits) == 14
 
 
+def _resolve_tip_doc(value: str) -> str:
+    if _has_real_dui(value):
+        return "13"
+    if _has_nit_14(value):
+        return "36"
+    return "13"
+
+
+def _mask_document(value: str) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) <= 4:
+        return "*" * len(digits)
+    return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -1314,6 +1329,16 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     )
     if not num_doc_solicita:
         raise DTEPreflightError("No se puede invalidar: falta configurar numDocSolicita")
+    tip_doc_responsable = _resolve_tip_doc(num_doc_responsable)
+    tip_doc_solicita = _resolve_tip_doc(num_doc_solicita)
+    logger.info(
+        "dte.invalidation.document_resolved dte_record_id=%s num_doc_responsable=%s num_doc_solicita=%s tip_doc_responsable=%s tip_doc_solicita=%s",
+        record.id,
+        _mask_document(num_doc_responsable),
+        _mask_document(num_doc_solicita),
+        tip_doc_responsable,
+        tip_doc_solicita,
+    )
 
     emisor_from_record = request_dte.get("emisor") or {}
     receptor_origen = request_dte.get("receptor") or {}
@@ -1388,10 +1413,10 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
                 "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
                 "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
                 "nombreResponsable": str(extra.get("nombreResponsable") or "Responsable").strip(),
-                "tipDocResponsable": "13",
+                "tipDocResponsable": tip_doc_responsable,
                 "numDocResponsable": num_doc_responsable,
                 "nombreSolicita": str(extra.get("nombreSolicita") or "Solicitante").strip(),
-                "tipDocSolicita": "13",
+                "tipDocSolicita": tip_doc_solicita,
                 "numDocSolicita": num_doc_solicita,
             },
         }

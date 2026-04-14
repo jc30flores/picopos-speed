@@ -1272,6 +1272,10 @@ class DTEInvalidateEndpointTests(TestCase):
         self.assertNotIn("codActividad", sent_payload["invalidacion"]["emisor"])
         self.assertNotIn("descActividad", sent_payload["invalidacion"]["emisor"])
         self.assertNotIn("nombreComercial", sent_payload["invalidacion"]["emisor"])
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["numDocResponsable"], "01234567-8")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["numDocSolicita"], "01234567-8")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["tipDocResponsable"], "13")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["tipDocSolicita"], "13")
         self.assertNotIn("responsable", sent_payload["invalidacion"])
         self.assertNotIn("solicitante", sent_payload["invalidacion"])
         self.assertNotIn("extra", sent_payload["invalidacion"])
@@ -1287,6 +1291,26 @@ class DTEInvalidateEndpointTests(TestCase):
         )
         self.assertEqual(response.status_code, 422, response.data)
         self.assertIn("numDocumento", response.data["detail"])
+
+    def test_invalidate_endpoint_returns_422_when_num_doc_responsable_missing(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo_anulacion": "Prueba", "num_doc_responsable": ""},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("número de documento responsable", response.data["detail"])
+
+    def test_invalidate_endpoint_returns_422_when_motivo_anulacion_missing(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo_anulacion": "", "num_doc_responsable": "01234567-8"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("motivo de invalidación", response.data["detail"])
 
     def test_build_invalidation_payload_requires_sello_recibido(self):
         self.record.response_payload = {}

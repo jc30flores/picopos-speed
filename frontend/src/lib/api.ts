@@ -4196,13 +4196,19 @@ export const dteDeliverByOrder = async (
   };
 };
 
-export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
+export const dteInvalidate = async (
+  id: number,
+  payload: { motivoAnulacion: string; numDocResponsable: string }
+): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
-    body: JSON.stringify({ motivo }),
+    body: JSON.stringify({
+      motivo_anulacion: payload.motivoAnulacion,
+      num_doc_responsable: payload.numDocResponsable,
+    }),
   });
-  const payload = await handleJson<any>(res);
-  return { message: payload.message ?? "DTE invalidado", record: payload.record };
+  const data = await handleJson<any>(res);
+  return { message: data.message ?? "DTE invalidado", record: data.record };
 };
 
 export const dteCreateCreditNote = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
