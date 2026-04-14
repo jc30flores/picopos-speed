@@ -7,6 +7,7 @@ import re
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.utils import timezone
@@ -493,9 +494,23 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
     emisor = dte.get("emisor") or {}
     receptor = dte.get("receptor") or {}
     resumen = dte.get("resumen") or {}
-    _validate_identificacion_payload(identificacion)
-    tipo_dte = str(identificacion.get("tipoDte") or "").strip().upper()
-    if tipo_dte == "AN":
+    if isinstance(payload.get("invalidacion"), dict):
+        ambiente = identificacion.get("ambiente")
+        try:
+            normalize_ambiente(ambiente)
+        except ValueError as exc:
+            raise DTEPreflightError(str(exc)) from exc
+        fec_anula = str(identificacion.get("fecAnula") or "").strip()
+        hor_anula = str(identificacion.get("horAnula") or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fec_anula):
+            raise DTEPreflightError("invalidacion.identificacion.fecAnula es obligatorio (YYYY-MM-DD).")
+        if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", hor_anula):
+            raise DTEPreflightError("invalidacion.identificacion.horAnula es obligatorio (HH:MM:SS).")
+        prohibited_ident = [k for k in ("numeroControl", "tipoDte") if k in identificacion]
+        if prohibited_ident:
+            raise DTEPreflightError(
+                f"invalidacion.identificacion contiene campos no permitidos: {', '.join(prohibited_ident)}"
+            )
         documento = dte.get("documento") or {}
         if not isinstance(documento, dict):
             raise DTEPreflightError("invalidacion.documento es obligatorio.")
@@ -540,6 +555,7 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             )
         assert_no_string_numbers(payload)
         return
+    _validate_identificacion_payload(identificacion)
     _validate_emisor_payload(emisor)
     validate_receptor_payload(receptor)
     _validate_pagos_payload(resumen)
@@ -1262,12 +1278,20 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
     if not numero_control:
         raise DTEPreflightError(
-            f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
+            f"No se pudo resolver numDocumento/numeroControl del DTE base (dte_record_id={record.id})."
         )
     if not codigo_generacion:
         raise DTEPreflightError(
             f"No se pudo resolver codigoGeneracion del DTE base (dte_record_id={record.id})."
         )
+    if not sello_recibido:
+        raise DTEPreflightError(
+            f"No se pudo resolver selloRecibido del DTE base (dte_record_id={record.id})."
+        )
+    if not str(responsable_dui or "").strip():
+        raise DTEPreflightError("invalidacion.motivo.numDocResponsable es obligatorio y no puede ir vacío.")
+    if not str(solicitante_dui or "").strip():
+        raise DTEPreflightError("invalidacion.motivo.numDocSolicita es obligatorio y no puede ir vacío.")
 
     emisor_from_record = request_dte.get("emisor") or {}
     receptor_origen = request_dte.get("receptor") or {}
@@ -1300,7 +1324,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         raw_ambiente,
         ambiente,
     )
-    now = timezone.localtime(timezone.now())
+    now_sv = timezone.now().astimezone(ZoneInfo("America/El_Salvador"))
     emisor_full = {
         "nit": resolved_emisor.get("nit"),
         "nombre": resolved_emisor.get("nombre"),
@@ -1325,10 +1349,9 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             "identificacion": {
                 "version": 2,
                 "ambiente": ambiente,
-                "tipoDte": "AN",
                 "codigoGeneracion": str(uuid.uuid4()).upper(),
-                "fecAnula": now.date().isoformat(),
-                "horAnula": now.strftime("%H:%M:%S"),
+                "fecAnula": now_sv.date().isoformat(),
+                "horAnula": now_sv.strftime("%H:%M:%S"),
             },
             "documento": documento,
             "emisor": emisor_full,
@@ -1383,7 +1406,9 @@ def invalidate_dte_for_order(
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
     try:
         validate_dte_preflight_payload(payload)
+        logger.info("dte.invalidation.preflight_ok order_id=%s dte_record_id=%s", order.id, record.id)
     except DTEPreflightError:
+        logger.exception("dte.invalidation.preflight_failed order_id=%s dte_record_id=%s", order.id, record.id)
         logger.exception("dte.invalidation.schema_error order_id=%s dte_record_id=%s", order.id, record.id)
         raise
     active_branch = get_active_branch()
@@ -1405,6 +1430,15 @@ def invalidate_dte_for_order(
     if attempt.success:
         record.status = DTERecord.STATUS_INVALIDATED
         record.save(update_fields=["status", "updated_at"])
+        logger.info("dte.invalidation.success order_id=%s dte_record_id=%s attempt_id=%s", order.id, record.id, attempt.id)
+    else:
+        logger.error(
+            "dte.invalidation.failure order_id=%s dte_record_id=%s attempt_id=%s error=%s",
+            order.id,
+            record.id,
+            attempt.id,
+            attempt.error_message,
+        )
     logger.info(
         "dte.invalidation.attempt order_id=%s dte_record_id=%s base_status=%s success=%s error=%s",
         order.id,

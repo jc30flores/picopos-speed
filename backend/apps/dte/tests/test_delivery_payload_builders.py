@@ -38,6 +38,15 @@ class DTEPayloadBuildersTests(TestCase):
             control_number="DTE-01-S001P001-000000000000001",
             generation_code="A" * 36,
             codigo_generacion="A" * 36,
+            request_payload={
+                "dte": {
+                    "identificacion": {"tipoDte": "01", "fecEmi": "2026-01-10"},
+                    "receptor": {"nombre": "Cliente DTE"},
+                    "resumen": {"totalIva": 1.30},
+                }
+            },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-X"}},
+            sello_recibido="SELLO-X",
             total_amount=Decimal("10.00"),
         )
 
@@ -70,16 +79,34 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertEqual(
             payload,
             {
-                "dte": {
+                "invalidacion": {
                     "identificacion": {
-                        "tipoDte": "AN",
-                        "numeroControl": "DTE-01-S001P001-000000000000001",
-                        "codigoGeneracion": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "version": 2,
+                        "ambiente": payload["invalidacion"]["identificacion"]["ambiente"],
+                        "codigoGeneracion": payload["invalidacion"]["identificacion"]["codigoGeneracion"],
+                        "fecAnula": payload["invalidacion"]["identificacion"]["fecAnula"],
+                        "horAnula": payload["invalidacion"]["identificacion"]["horAnula"],
                     },
-                    "motivo": "Cliente solicita anulación",
-                    "responsable": "01234567-8",
-                    "solicitante": "98765432-1",
-                    "extra": {"source": "registros"},
+                    "documento": {
+                        "tipoDocumento": "01",
+                        "numDocumento": "DTE-01-S001P001-000000000000001",
+                        "codigoGeneracionR": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "selloRecibido": "SELLO-X",
+                        "montoIva": "1.30",
+                        "nombre": "Cliente DTE",
+                        "fecEmi": "2026-01-10",
+                    },
+                    "emisor": payload["invalidacion"]["emisor"],
+                    "motivo": {
+                        "tipoAnulacion": 2,
+                        "motivoAnulacion": "Cliente solicita anulación",
+                        "nombreResponsable": "Responsable",
+                        "tipDocResponsable": "13",
+                        "numDocResponsable": "01234567-8",
+                        "nombreSolicita": "Solicitante",
+                        "tipDocSolicita": "13",
+                        "numDocSolicita": "98765432-1",
+                    },
                 }
             },
         )

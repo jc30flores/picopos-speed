@@ -197,14 +197,15 @@ class DTECoreTests(TestCase):
                 control_number="DTE-01-S001P001-000000000000123",
                 generation_code="A" * 36,
                 codigo_generacion="A" * 36,
+                sello_recibido="SELLO123",
                 total_amount=Decimal("10.00"),
             )
-            payload = build_invalidation_payload(record, "Prueba", "", "")
+            payload = build_invalidation_payload(record, "Prueba", "01234567-8", "98765432-1")
             self.assertEqual(payload["invalidacion"]["identificacion"]["ambiente"], "01")
-            self.assertEqual(payload["invalidacion"]["identificacion"]["tipoDte"], "AN")
             self.assertIn("fecAnula", payload["invalidacion"]["identificacion"])
             self.assertIn("horAnula", payload["invalidacion"]["identificacion"])
             self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
+            self.assertNotIn("tipoDte", payload["invalidacion"]["identificacion"])
             self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "01")
             self.assertEqual(
                 payload["invalidacion"]["documento"]["numDocumento"],
@@ -1226,6 +1227,7 @@ class DTEInvalidateEndpointTests(TestCase):
                     "identificacion": {
                         "numeroControl": "DTE-01-S001P001-000000000000357",
                         "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                        "fecEmi": "2026-01-01",
                     },
                     "emisor": {
                         "nit": "12171409901063",
@@ -1234,8 +1236,12 @@ class DTEInvalidateEndpointTests(TestCase):
                         "codActividad": "56101",
                         "descActividad": "Restaurantes",
                     },
+                    "receptor": {"nombre": "Cliente Demo"},
+                    "resumen": {"totalIva": 0.57},
                 }
             },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-BASE-01"}},
+            sello_recibido="SELLO-BASE-01",
             total_amount=Decimal("5.00"),
         )
 
@@ -1243,7 +1249,11 @@ class DTEInvalidateEndpointTests(TestCase):
     def test_invalidate_endpoint_uses_shared_builder_and_fallback_control_number(self, mock_send):
         mock_send.return_value = {"http_status": 200, "success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}
         self.client.force_authenticate(self.user)
-        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo": "Prueba", "responsable_dui": "01234567-8", "solicitante_dui": "98765432-1"},
+            format="json",
+        )
         self.assertEqual(response.status_code, 201, response.data)
         self.assertTrue(response.data["success"])
         self.assertEqual(response.data["attempt"]["success"], True)
@@ -1270,7 +1280,11 @@ class DTEInvalidateEndpointTests(TestCase):
         self.record.request_payload = {}
         self.record.save(update_fields=["request_payload"])
         self.client.force_authenticate(self.user)
-        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo": "Prueba", "responsable_dui": "01234567-8", "solicitante_dui": "98765432-1"},
+            format="json",
+        )
         self.assertEqual(response.status_code, 422, response.data)
         self.assertIn("numDocumento", response.data["detail"])
 
