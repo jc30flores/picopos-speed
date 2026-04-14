@@ -539,13 +539,28 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             raise DTEPreflightError("invalidacion.documento es obligatorio.")
         missing_documento = [
             key
-            for key in ("tipoDocumento", "numDocumento", "codigoGeneracionR", "selloRecibido", "montoIva", "nombre")
+            for key in (
+                "tipoDte",
+                "numeroControl",
+                "codigoGeneracion",
+                "tipoDocumento",
+                "numDocumento",
+                "codigoGeneracionR",
+                "selloRecibido",
+                "montoIva",
+                "nombre",
+                "fecEmi",
+            )
             if not str(documento.get(key) or "").strip()
         ]
         if missing_documento:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
             )
+        try:
+            float(documento.get("montoIva"))
+        except (TypeError, ValueError):
+            raise DTEPreflightError("invalidacion.documento.montoIva debe ser numérico.")
         prohibited_documento = [k for k in ("horEmi",) if k in documento]
         if prohibited_documento:
             raise DTEPreflightError(
@@ -1387,17 +1402,55 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         raise DTEPreflightError("No se puede invalidar: falta montoIva del DTE original")
     receptor_nombre, receptor_nombre_source = _resolve_non_empty(
         ("request_payload.dte.receptor.nombre", receptor_origen.get("nombre")),
+        ("order.customer.name", getattr(getattr(record.order, "customer", None), "name", "")),
         ("order.customer_name", getattr(record.order, "customer_name", "")),
     )
+    receptor_tipo_documento, receptor_tipo_documento_source = _resolve_non_empty(
+        ("request_payload.dte.receptor.tipoDocumento", receptor_origen.get("tipoDocumento")),
+        ("order.customer.tipo_documento", getattr(getattr(record.order, "customer", None), "tipo_documento", "")),
+    )
+    receptor_num_documento, receptor_num_documento_source = _resolve_non_empty(
+        ("request_payload.dte.receptor.numDocumento", receptor_origen.get("numDocumento")),
+        ("order.customer.num_documento", getattr(getattr(record.order, "customer", None), "num_documento", "")),
+        ("order.customer.dui", getattr(getattr(record.order, "customer", None), "dui", "")),
+        ("order.customer.nit", getattr(getattr(record.order, "customer", None), "nit", "")),
+    )
+    if not receptor_tipo_documento:
+        receptor_tipo_documento = "13"
+        receptor_tipo_documento_source = "fallback.consumer_final.tipo_documento"
+    if not receptor_num_documento:
+        receptor_num_documento = "00000000-0"
+        receptor_num_documento_source = "fallback.consumer_final.num_documento"
+    if not receptor_nombre:
+        receptor_nombre = "CONSUMIDOR FINAL"
+        receptor_nombre_source = "fallback.consumer_final.nombre"
+    monto_iva = float(money(monto_iva_raw))
     documento = {
-        "tipoDocumento": tipo_dte_base,
-        "numDocumento": numero_control,
+        "tipoDte": tipo_dte_base,
+        "numeroControl": numero_control,
+        "codigoGeneracion": codigo_generacion,
+        "tipoDocumento": receptor_tipo_documento,
+        "numDocumento": receptor_num_documento,
         "codigoGeneracionR": codigo_generacion,
         "selloRecibido": sello_recibido,
-        "montoIva": str(money(monto_iva_raw)),
+        "montoIva": monto_iva,
         "nombre": receptor_nombre,
         "fecEmi": fec_emi,
     }
+    logger.info(
+        "dte.invalidation.document_sources dte_record_id=%s original_tipo_dte=%s original_numero_control=%s original_codigo_generacion=%s original_sello=%s original_fec_emi=%s original_total_iva=%s original_receptor_tipo_documento=%s original_receptor_num_documento=%s original_receptor_nombre=%s final_invalidacion_documento=%s",
+        record.id,
+        tipo_dte_base,
+        numero_control,
+        codigo_generacion,
+        sello_recibido,
+        fec_emi,
+        monto_iva,
+        receptor_tipo_documento,
+        _mask_document(receptor_num_documento),
+        receptor_nombre,
+        documento,
+    )
     payload = {
         "invalidacion": {
             "identificacion": {
@@ -1425,8 +1478,11 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         "dte.invalidation.field_sources dte_record_id=%s sources=%s",
         record.id,
         {
-            "tipoDocumento": tipo_dte_source,
-            "numDocumento": numero_control_source,
+            "tipoDte": tipo_dte_source,
+            "numeroControl": numero_control_source,
+            "codigoGeneracion": codigo_generacion_source,
+            "tipoDocumento": receptor_tipo_documento_source,
+            "numDocumento": receptor_num_documento_source,
             "codigoGeneracionR": codigo_generacion_source,
             "selloRecibido": sello_source,
             "montoIva": "request_payload.dte.resumen.totalIva",

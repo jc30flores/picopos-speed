@@ -88,11 +88,14 @@ class DTEPayloadBuildersTests(TestCase):
                         "horAnula": payload["invalidacion"]["identificacion"]["horAnula"],
                     },
                     "documento": {
-                        "tipoDocumento": "01",
-                        "numDocumento": "DTE-01-S001P001-000000000000001",
+                        "tipoDte": "01",
+                        "numeroControl": "DTE-01-S001P001-000000000000001",
+                        "codigoGeneracion": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "tipoDocumento": "13",
+                        "numDocumento": "00000000-0",
                         "codigoGeneracionR": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                         "selloRecibido": "SELLO-X",
-                        "montoIva": "1.30",
+                        "montoIva": 1.3,
                         "nombre": "Cliente DTE",
                         "fecEmi": "2026-01-10",
                     },
@@ -110,3 +113,26 @@ class DTEPayloadBuildersTests(TestCase):
                 }
             },
         )
+
+    def test_build_invalidation_payload_regression_consumer_final_documento_mapping(self):
+        payload = build_invalidation_payload(
+            self.record,
+            motivo="Cliente solicita anulación",
+            responsable_dui="01234567-8",
+            solicitante_dui="98765432-1",
+            extra={"source": "dte_panel"},
+        )
+        invalidacion = payload["invalidacion"]
+        self.assertIn("fecAnula", invalidacion["identificacion"])
+        self.assertIn("horAnula", invalidacion["identificacion"])
+        self.assertEqual(invalidacion["documento"]["tipoDte"], "01")
+        self.assertEqual(invalidacion["documento"]["numeroControl"], "DTE-01-S001P001-000000000000001")
+        self.assertEqual(invalidacion["documento"]["codigoGeneracion"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        self.assertIsInstance(invalidacion["documento"]["montoIva"], float)
+        self.assertEqual(invalidacion["documento"]["tipoDocumento"], "13")
+        self.assertLessEqual(len(invalidacion["documento"]["numDocumento"]), 20)
+        self.assertEqual(invalidacion["documento"]["numDocumento"], "00000000-0")
+        self.assertEqual(invalidacion["documento"]["nombre"], "Cliente DTE")
+        self.assertIn("nomEstablecimiento", invalidacion["emisor"])
+        self.assertEqual(invalidacion["motivo"]["numDocResponsable"], "01234567-8")
+        self.assertEqual(invalidacion["motivo"]["numDocSolicita"], "98765432-1")
