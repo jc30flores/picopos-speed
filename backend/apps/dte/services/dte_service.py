@@ -467,6 +467,14 @@ def _validate_invalidation_emisor_payload(emisor: dict[str, Any]) -> None:
         raise DTEPreflightError(f"invalidacion.emisor contiene campos no permitidos: {', '.join(prohibited_found)}")
 
 
+def _resolve_non_empty(*candidates: tuple[str, Any]) -> tuple[str, str]:
+    for source, value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text, source
+    return "", ""
+
+
 def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
     pagos = resumen.get("pagos")
     if not isinstance(pagos, list) or not pagos:
@@ -555,6 +563,8 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             )
         assert_no_string_numbers(payload)
         return
+    if str(identificacion.get("tipoDte") or "").strip().upper() == "AN":
+        raise DTEPreflightError("Payload legacy inválido: use wrapper 'invalidacion' (no 'dte') para anulaciones.")
     _validate_identificacion_payload(identificacion)
     _validate_emisor_payload(emisor)
     validate_receptor_payload(receptor)
@@ -1251,31 +1261,35 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    extra = extra or {}
     request_dte = (record.request_payload or {}).get("dte") or {}
     request_identificacion = (
         request_dte.get("identificacion")
         or (record.request_payload or {}).get("identificacion")
         or {}
     )
-    numero_control = (
-        str(record.control_number or "").strip()
-        or str(request_identificacion.get("numeroControl") or "").strip()
+    numero_control, numero_control_source = _resolve_non_empty(
+        ("dte_record.control_number", record.control_number),
+        ("request_payload.dte.identificacion.numeroControl", request_identificacion.get("numeroControl")),
     )
-    codigo_generacion = (
-        str(record.generation_code or "").strip()
-        or str(record.codigo_generacion or "").strip()
-        or str(request_identificacion.get("codigoGeneracion") or "").strip()
+    codigo_generacion, codigo_generacion_source = _resolve_non_empty(
+        ("dte_record.generation_code", record.generation_code),
+        ("dte_record.codigo_generacion", record.codigo_generacion),
+        ("request_payload.dte.identificacion.codigoGeneracion", request_identificacion.get("codigoGeneracion")),
     )
-    tipo_dte_base = (
-        str(request_identificacion.get("tipoDte") or "").strip()
-        or str(record.dte_type or "").split("_")[-1].strip()
+    tipo_dte_base, tipo_dte_source = _resolve_non_empty(
+        ("request_payload.dte.identificacion.tipoDte", request_identificacion.get("tipoDte")),
+        ("dte_record.dte_type", str(record.dte_type or "").split("_")[-1].strip()),
     )
-    sello_recibido = (
-        str((record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido") or "").strip()
-        or str(record.sello_recibido or "").strip()
-        or str(record.sello_recepcion or "").strip()
+    sello_recibido, sello_source = _resolve_non_empty(
+        ("response_payload.respuesta_hacienda.selloRecibido", (record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido")),
+        ("dte_record.sello_recibido", record.sello_recibido),
+        ("dte_record.sello_recepcion", record.sello_recepcion),
     )
-    fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
+    fec_emi, fec_emi_source = _resolve_non_empty(
+        ("request_payload.dte.identificacion.fecEmi", request_identificacion.get("fecEmi")),
+        ("dte_record.issue_date", record.issue_date),
+    )
     if not numero_control:
         raise DTEPreflightError(
             f"No se pudo resolver numDocumento/numeroControl del DTE base (dte_record_id={record.id})."
@@ -1288,10 +1302,18 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         raise DTEPreflightError(
             f"No se pudo resolver selloRecibido del DTE base (dte_record_id={record.id})."
         )
-    if not str(responsable_dui or "").strip():
-        raise DTEPreflightError("invalidacion.motivo.numDocResponsable es obligatorio y no puede ir vacío.")
-    if not str(solicitante_dui or "").strip():
-        raise DTEPreflightError("invalidacion.motivo.numDocSolicita es obligatorio y no puede ir vacío.")
+    num_doc_responsable, num_doc_responsable_source = _resolve_non_empty(
+        ("request.responsable_dui", responsable_dui),
+        ("kwargs.numDocResponsable", extra.get("numDocResponsable")),
+    )
+    if not num_doc_responsable:
+        raise DTEPreflightError("No se puede invalidar: falta configurar numDocResponsable")
+    num_doc_solicita, num_doc_solicita_source = _resolve_non_empty(
+        ("request.solicitante_dui", solicitante_dui),
+        ("kwargs.numDocSolicita", extra.get("numDocSolicita")),
+    )
+    if not num_doc_solicita:
+        raise DTEPreflightError("No se puede invalidar: falta configurar numDocSolicita")
 
     emisor_from_record = request_dte.get("emisor") or {}
     receptor_origen = request_dte.get("receptor") or {}
@@ -1335,13 +1357,20 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         "telefono": resolved_emisor_config.get("telefono") or "00000000",
         "correo": resolved_emisor_config.get("correo") or "facturas@example.com",
     }
+    monto_iva_raw = resumen_origen.get("totalIva")
+    if monto_iva_raw in (None, ""):
+        raise DTEPreflightError("No se puede invalidar: falta montoIva del DTE original")
+    receptor_nombre, receptor_nombre_source = _resolve_non_empty(
+        ("request_payload.dte.receptor.nombre", receptor_origen.get("nombre")),
+        ("order.customer_name", getattr(record.order, "customer_name", "")),
+    )
     documento = {
         "tipoDocumento": tipo_dte_base,
         "numDocumento": numero_control,
         "codigoGeneracionR": codigo_generacion,
         "selloRecibido": sello_recibido,
-        "montoIva": str(money(resumen_origen.get("totalIva") or Decimal("0.00"))),
-        "nombre": str(receptor_origen.get("nombre") or record.order.customer_name or "CONSUMIDOR FINAL").strip() or "CONSUMIDOR FINAL",
+        "montoIva": str(money(monto_iva_raw)),
+        "nombre": receptor_nombre,
         "fecEmi": fec_emi,
     }
     payload = {
@@ -1358,15 +1387,38 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             "motivo": {
                 "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
                 "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
-                "nombreResponsable": str((extra or {}).get("nombreResponsable") or "Responsable").strip(),
+                "nombreResponsable": str(extra.get("nombreResponsable") or "Responsable").strip(),
                 "tipDocResponsable": "13",
-                "numDocResponsable": str(responsable_dui or "").strip(),
-                "nombreSolicita": str((extra or {}).get("nombreSolicita") or "Solicitante").strip(),
+                "numDocResponsable": num_doc_responsable,
+                "nombreSolicita": str(extra.get("nombreSolicita") or "Solicitante").strip(),
                 "tipDocSolicita": "13",
-                "numDocSolicita": str(solicitante_dui or "").strip(),
+                "numDocSolicita": num_doc_solicita,
             },
         }
     }
+    logger.info(
+        "dte.invalidation.field_sources dte_record_id=%s sources=%s",
+        record.id,
+        {
+            "tipoDocumento": tipo_dte_source,
+            "numDocumento": numero_control_source,
+            "codigoGeneracionR": codigo_generacion_source,
+            "selloRecibido": sello_source,
+            "montoIva": "request_payload.dte.resumen.totalIva",
+            "nombre": receptor_nombre_source,
+            "fecEmi": fec_emi_source,
+            "emisor.nit": "request_payload.dte.emisor.nit|config",
+            "emisor.nombre": "request_payload.dte.emisor.nombre|config",
+            "emisor.nomEstablecimiento": "branch_config.nomEstablecimiento|nombreComercial",
+            "emisor.tipoEstablecimiento": "branch_config.tipoEstablecimiento",
+            "emisor.codEstable": "branch_config.codEstable",
+            "emisor.codPuntoVenta": "branch_config.codPuntoVenta",
+            "emisor.telefono": "branch_config.telefono",
+            "emisor.correo": "branch_config.correo",
+            "numDocResponsable": num_doc_responsable_source,
+            "numDocSolicita": num_doc_solicita_source,
+        },
+    )
     logger.info(
         "dte.invalidation.payload_summary dte_record_id=%s order_id=%s identificacion=%s documento_keys=%s emisor_keys=%s motivo_keys=%s",
         record.id,

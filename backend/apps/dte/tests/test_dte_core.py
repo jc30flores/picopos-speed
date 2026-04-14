@@ -1297,6 +1297,18 @@ class DTEInvalidateEndpointTests(TestCase):
             payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
             validate_dte_preflight_payload(payload)
 
+    def test_build_invalidation_payload_requires_monto_iva(self):
+        self.record.request_payload = {
+            "dte": {
+                "identificacion": {"numeroControl": "DTE-01-S001P001-000000000000357", "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810"},
+                "receptor": {"nombre": "Cliente Demo"},
+                "resumen": {},
+            }
+        }
+        self.record.save(update_fields=["request_payload"])
+        with self.assertRaises(DTEPreflightError):
+            build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+
     def test_build_invalidation_payload_requires_numdocresponsable(self):
         with self.assertRaises(DTEPreflightError):
             payload = build_invalidation_payload(self.record, "Prueba", "", "01234567-8", {})
@@ -1310,6 +1322,21 @@ class DTEInvalidateEndpointTests(TestCase):
     def test_invalidation_schema_rejects_prohibited_fields(self):
         payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
         payload["invalidacion"]["responsable"] = {"x": "1"}
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_invalidation_schema_rejects_legacy_dte_wrapper(self):
+        payload = {
+            "dte": {
+                "identificacion": {
+                    "tipoDte": "AN",
+                    "ambiente": "00",
+                    "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                    "fecAnula": "2026-01-10",
+                    "horAnula": "10:00:00",
+                }
+            }
+        }
         with self.assertRaises(DTEPreflightError):
             validate_dte_preflight_payload(payload)
 
