@@ -13,6 +13,7 @@ const MainMenu = () => {
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
   const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
     pos: ShoppingCart,
+    pending: ClipboardList,
     kiosk: Store,
     kitchen: ChefHat,
     orders_customers: ClipboardList,

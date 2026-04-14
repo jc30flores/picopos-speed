@@ -236,6 +236,7 @@ export const CashHistoryTab = () => {
                 <div><p className="text-xs text-muted-foreground">Usuario cierre</p><p className="font-medium">{selectedRow?.closedByUsername || "-"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Fecha apertura</p><p className="font-medium">{selectedRow?.openedAt ? formatDateTimeSV(selectedRow.openedAt) : "-"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Fecha cierre</p><p className="font-medium">{selectedRow?.closedAt ? formatDateTimeSV(selectedRow.closedAt) : "-"}</p></div>
+                <div><p className="text-xs text-muted-foreground">Monto de apertura</p><p className="font-semibold">{formatMoney(selectedRow?.summary?.openingCash ?? 0)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Total ventas</p><p className="font-semibold">{formatMoney(selectedAudit.totalSales)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Diferencia final</p><p className={`font-semibold ${differenceTextClass(selectedAudit.overallDiff)}`}>{formatMoney(selectedAudit.overallDiff)}</p></div>
               </div>
@@ -252,6 +253,9 @@ export const CashHistoryTab = () => {
                   <div className="flex items-center justify-between font-semibold">
                     <span>Diferencia efectivo</span>
                     <span className={differenceTextClass(selectedAudit.effectiveDiff)}>{formatMoney(selectedAudit.effectiveDiff)}</span>
+                  </div>
+                  <div className={`rounded-md px-2 py-1 text-sm font-semibold ${selectedAudit.effectiveDiff >= 0 ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-red-500/15 text-red-700 dark:text-red-300"}`}>
+                    {selectedAudit.effectiveDiff >= 0 ? "Sobrante" : "Faltante"}: {formatMoney(Math.abs(selectedAudit.effectiveDiff))}
                   </div>
                 </div>
               </Card>

@@ -16,6 +16,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -60,6 +61,8 @@ import {
   downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
+  getPendingOrders,
+  setOrderPending,
   printPaymentTicket,
   getPrintingStatus,
   Category,
@@ -78,12 +81,13 @@ import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
 
 interface CartItem {
   id: string;
+  sourceOrderItemId?: number;
   productId: number | null;
   name: string;
   basePrice: number;
@@ -118,6 +122,28 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
+const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
+  const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
+  const modifiers = Array.isArray(item.modifiers)
+    ? item.modifiers.map((name) => ({ name, price: 0 }))
+    : [];
+  return {
+    id: `order-item-${item.id}`,
+    sourceOrderItemId: item.id,
+    productId: item.productId ?? null,
+    name: item.assignedName || item.productName,
+    basePrice,
+    originalBasePrice: item.unitPriceBeforeDiscount ?? basePrice,
+    price: basePrice,
+    quantity: item.quantity,
+    isCustom: Boolean(item.isCustom),
+    customCode: item.code,
+    assignedName: item.assignedName,
+    unitPriceOverride: item.unitPriceOverride ?? null,
+    modifiers,
+  };
+};
+
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
@@ -144,6 +170,8 @@ const DrawerIcon = ({ className }: { className?: string }) => (
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
@@ -155,6 +183,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isCashDialogOpen, setIsCashDialogOpen] = useState(false);
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
+  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+  const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
@@ -231,6 +261,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const previousCartLengthRef = useRef(0);
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isSendingToPending, setIsSendingToPending] = useState(false);
+  const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
+  const [pendingReferenceDraft, setPendingReferenceDraft] = useState("");
+  const [pendingEditAuthorizationPin, setPendingEditAuthorizationPin] = useState("");
   const [isKitchenPromptOpen, setIsKitchenPromptOpen] = useState(false);
   const [kitchenPromptOrderId, setKitchenPromptOrderId] = useState<number | null>(null);
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
@@ -260,6 +294,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
   const hardReloadTriggeredRef = useRef(false);
+  const hydratedPendingOrderIdRef = useRef<number | null>(null);
+  const consumedNavSourceRef = useRef(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
     items: CartItem[];
     subtotal: number;
@@ -331,6 +367,69 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         console.error("Failed to load tax config", error);
       });
   }, []);
+
+  useEffect(() => {
+    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
+    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
+    const cameFromPendingParams = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
+    const cameFromOpenOrdersNavigation = Boolean((location.state as { fromOpenOrders?: boolean } | null)?.fromOpenOrders);
+    const shouldSuppressPendingChoice = cameFromPendingParams || mode === "edit" || mode === "pay" || cameFromOpenOrdersNavigation;
+    getPendingOrders({ branchId: selectedBranchId || undefined })
+      .then((res) => {
+        setPendingOrdersCount(res.count);
+        if (!shouldSuppressPendingChoice) {
+          setIsPendingChoiceOpen(res.count > 0);
+        } else {
+          setIsPendingChoiceOpen(false);
+        }
+      })
+      .catch(() => {
+        setPendingOrdersCount(0);
+      });
+  }, [location.state, searchParams, selectedBranchId]);
+
+  useEffect(() => {
+    const cameFromOpenOrdersNavigation = Boolean((location.state as { fromOpenOrders?: boolean } | null)?.fromOpenOrders);
+    if (!cameFromOpenOrdersNavigation || consumedNavSourceRef.current) return;
+    consumedNavSourceRef.current = true;
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  useEffect(() => {
+    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
+    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
+    if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
+    if (hydratedPendingOrderIdRef.current === pendingOrderId) return;
+    hydratedPendingOrderIdRef.current = pendingOrderId;
+    getOrderById(pendingOrderId)
+      .then((order) => {
+        const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
+        setActiveOrder(order);
+        setCreatedOrderId(order.id);
+        setCreatedOrderNumber(order.orderNumber);
+        setPendingReferenceDraft(order.pendingReference || "");
+        setPendingEditAuthorizationPin("");
+        setCart(restoredCart);
+        setCheckoutDraft({
+          items: restoredCart,
+          subtotal: order.subtotalBeforeDiscounts ?? order.total,
+          tax: order.taxTotal ?? 0,
+          total: order.totalPayable ?? order.total,
+          taxRate,
+          serviceType: order.serviceType || serviceType,
+          createdAt: Date.now(),
+        });
+        setServiceType(order.serviceType || serviceType);
+        if (mode === "pay") {
+          setIsPaymentOpen(true);
+        } else {
+          setIsPaymentOpen(false);
+          setIsPaymentMethodOpen(false);
+        }
+        navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
+  }, [navigate, searchParams, serviceType, taxRate]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -621,6 +720,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const removeItem = (itemId: string) => {
+    if (activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || "")))) {
+      toast.error("No se pueden eliminar productos: la orden ya fue enviada a cocina.");
+      return;
+    }
+    const isPrivileged = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+    const requiresPinForPendingEdit = Boolean(activeOrder?.isPending && !isPrivileged);
+    if (requiresPinForPendingEdit && !pendingEditAuthorizationPin) {
+      privilegedGuard.requirePrivilege("removePendingItem", () => {
+        setCart((prev) => prev.filter((item) => item.id !== itemId));
+      });
+      return;
+    }
     setCart(cart.filter((item) => item.id !== itemId));
   };
 
@@ -1159,6 +1270,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No tienes permisos para cerrar caja.");
       return;
     }
+    if (pendingOrdersCount > 0) {
+      toast.error(`You cannot close the register because there are ${pendingOrdersCount} open orders.`);
+      return;
+    }
     const totalBills = Number(closeBillsInput || 0);
     const totalCoins = Number(closeCoinsInput || 0);
     const totalPosCards = Number(closePosCardsInput || 0);
@@ -1231,6 +1346,81 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
       setIsSavingCashAction(false);
+    }
+  };
+
+  const handleSendOrderToPending = async () => {
+    if (isSendingToPending) return;
+    if (!pendingReferenceDraft.trim()) {
+      setIsPendingReferenceDialogOpen(true);
+      return;
+    }
+    setIsSendingToPending(true);
+    try {
+      let order = activeOrder;
+      if (!order) {
+        order = await createOrder({
+          serviceType,
+          customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
+          customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+          dteDocumentType,
+          ivaExempt,
+          source: "pos",
+          channel: "pos",
+          items: cart.map((item) => ({
+            productId: item.productId,
+            productName: item.name,
+            price: getItemBaseEffective(item),
+            quantity: item.quantity,
+            isCustom: Boolean(item.isCustom),
+            type: item.isCustom ? "manual" : "menu",
+            unitPriceOverride: item.unitPriceOverride ?? null,
+            customCode: item.customCode,
+            assignedName: item.assignedName,
+            modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+          })),
+        });
+      }
+      const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
+      const pendingPayloadItems = cart.map((item) => ({
+        sourceOrderItemId: item.sourceOrderItemId,
+        productId: item.productId,
+        productName: item.name,
+        price: getItemBaseEffective(item),
+        quantity: item.quantity,
+        isCustom: Boolean(item.isCustom),
+        unitPriceOverride: item.unitPriceOverride ?? null,
+        customCode: item.customCode,
+        assignedName: item.assignedName,
+        modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      }));
+      const saved = await setOrderPending(order.id, {
+        isPending: true,
+        pendingState,
+        pendingReference: pendingReferenceDraft.trim(),
+        authorizationPin: pendingEditAuthorizationPin,
+        items: pendingPayloadItems,
+      });
+      if (!saved.isPending) {
+        throw new Error("Order was not persisted as Open Order.");
+      }
+      toast.success("Orden guardada en Open Orders");
+      const latestPending = await getPendingOrders({ branchId: selectedBranchId || undefined });
+      setPendingOrdersCount(latestPending.count);
+      setCart([]);
+      setActiveOrder(null);
+      setCheckoutDraft(null);
+      setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
+      setPendingReferenceDraft("");
+      setPendingEditAuthorizationPin("");
+      setIsPendingReferenceDialogOpen(false);
+      clearPersistedDraft();
+      navigate("/open-orders");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden en Open Orders.");
+    } finally {
+      setIsSendingToPending(false);
     }
   };
 
@@ -1334,6 +1524,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const finalizePaidSale = () => {
     setIsPaymentOpen(false);
+    setIsPaymentMethodOpen(false);
     setActiveOrder(null);
     setCart([]);
     setSelectedDiscount(null);
@@ -1350,7 +1541,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     } else {
       setSelectedCustomerId("");
     }
+    hydratedPendingOrderIdRef.current = null;
     clearPersistedDraft();
+    navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
   };
 
   const scheduleReload = () => {
@@ -1566,6 +1759,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
+        if (refreshed.isPending) {
+          try {
+            const finalizedOrder = await setOrderPending(refreshed.id, {
+              isPending: false,
+              removalReason: "Pagada en POS",
+              completionType: "paid",
+            });
+            setActiveOrder(finalizedOrder);
+          } catch (pendingError) {
+            console.error("Failed to finalize open order state after payment", pendingError);
+          }
+        }
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
         if (isKiosk) {
           toast.success("Pago y factura registrados. Enviado a cocina.");
@@ -2069,6 +2274,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             size="icon"
                             onClick={() => removeItem(item.id)}
                             className="h-10 w-10 text-danger"
+                            disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
+                            title={activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))) ? "Orden enviada a cocina: no se puede eliminar." : "Eliminar producto"}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -2139,6 +2346,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   Cobrar {formatMoney(total)}
                 </Button>
                 <Button
+                  variant="secondary"
+                  className="h-14 w-full text-base"
+                  onClick={() => {
+                    const isCurrentOrderEmpty = cart.length === 0;
+                    if (isCurrentOrderEmpty) {
+                      navigate("/open-orders");
+                      return;
+                    }
+                    void handleSendOrderToPending();
+                  }}
+                  disabled={isSendingToPending}
+                >
+                  {isSendingToPending
+                    ? "Guardando..."
+                    : cart.length === 0
+                      ? "Guardadas"
+                      : "Guardar"}
+                </Button>
+                <Button
                   variant="outline"
                   className="h-14 w-full text-base"
                   onClick={() => {
@@ -2155,6 +2381,42 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         </div>
       </div>
 
+      <Dialog open={isPendingReferenceDialogOpen} onOpenChange={setIsPendingReferenceDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Referencia requerida</DialogTitle>
+            <DialogDescription>Ingresa una referencia para enviar la orden a Open Orders.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={pendingReferenceDraft}
+            onChange={(event) => setPendingReferenceDraft(event.target.value)}
+            placeholder="Ej: Mesa 4 / Nombre cliente"
+            maxLength={120}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPendingReferenceDialogOpen(false)}>Cancelar</Button>
+            <Button onClick={() => void handleSendOrderToPending()} disabled={!pendingReferenceDraft.trim()}>
+              Enviar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPendingChoiceOpen} onOpenChange={setIsPendingChoiceOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Open orders detected</DialogTitle>
+            <DialogDescription>
+              There are {pendingOrdersCount} active open orders. Do you want to continue to POS or review Open Orders?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Go to POS</Button>
+            <Button onClick={() => navigate("/open-orders")}>Open Orders</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isDiscountDialogOpen}
@@ -2424,9 +2686,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    {pendingOrdersCount > 0 ? (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
+                        You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || pendingOrdersCount > 0}>Confirmar cierre</Button>
                     </div>
                   </>
                 ) : null}
@@ -3104,7 +3371,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <PrivilegePinModal
         open={Boolean(privilegedGuard.pendingAction)}
         onCancel={() => privilegedGuard.setPendingAction(null)}
-        onSuccess={() =>
+        onSuccess={(pin) =>
           privilegedGuard.onPinSuccess({
             manualProduct: () => setIsManualProductOpen(true),
             discounts: () => setIsDiscountDialogOpen(true),
@@ -3112,7 +3379,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               setIsCashDialogOpen(true);
               loadCashData().catch(() => undefined);
             },
-          })
+            removePendingItem: (approvedPin) => {
+              if (!approvedPin) return;
+              setPendingEditAuthorizationPin(approvedPin);
+            },
+          }, pin)
         }
       />
 

@@ -54,7 +54,8 @@ type ServiceTypeFilter = "all" | string;
 type PaymentMethodFilter = "all" | "cash" | "card" | "transfer" | "pedidos_ya" | "paypal";
 
 interface Sale {
-  id: string;
+  rowKey: string;
+  orderId: number;
   paymentId: number;
   date: Date;
   orderNumber: string;
@@ -163,7 +164,8 @@ export const SalesHistoryTab = () => {
       .then((report) => {
         if (currentRequest !== requestSequence.current) return;
         const mapped = report.rows.map((row) => ({
-          id: String(row.orderId),
+          rowKey: `${row.paymentId}-${row.orderId}`,
+          orderId: row.orderId,
           paymentId: row.paymentId,
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
@@ -183,7 +185,11 @@ export const SalesHistoryTab = () => {
           refundTotal: 0,
           netPaid: row.total,
         }));
-        setSales(mapped);
+        const uniqueByKey = new Map<string, (typeof mapped)[number]>();
+        mapped.forEach((item) => {
+          if (!uniqueByKey.has(item.rowKey)) uniqueByKey.set(item.rowKey, item);
+        });
+        setSales(Array.from(uniqueByKey.values()));
       })
       .catch((error) => {
         console.error("Failed to load sales history", error);
@@ -283,9 +289,9 @@ export const SalesHistoryTab = () => {
   };
 
   const handleSendDteToCustomer = async (sale: Sale) => {
-    setSendingByOrderId(Number(sale.id));
+    setSendingByOrderId(sale.orderId);
     try {
-      const result = await dteDeliverByOrder(Number(sale.id), ["whatsapp", "email"]);
+      const result = await dteDeliverByOrder(sale.orderId, ["whatsapp", "email"]);
       const wa = result.results?.whatsapp;
       const email = result.results?.email;
       if (result.success) {
@@ -525,7 +531,7 @@ export const SalesHistoryTab = () => {
                   </TableRow>
                 ) : (
                   filteredSales.map((sale) => (
-                    <TableRow key={sale.id} className="h-14 hover:bg-muted/40">
+                    <TableRow key={sale.rowKey} className="h-14 hover:bg-muted/40">
                       <TableCell className="font-medium">
                         {formatDateTimeSV(sale.date)}
                       </TableCell>
@@ -575,10 +581,10 @@ export const SalesHistoryTab = () => {
                             title="Enviar DTE a Cliente"
                             aria-label="Enviar DTE a Cliente"
                             onClick={() => void handleSendDteToCustomer(sale)}
-                            disabled={sendingByOrderId === Number(sale.id)}
+                            disabled={sendingByOrderId === sale.orderId}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            {sendingByOrderId === Number(sale.id) ? "Enviando..." : "Enviar DTE a Cliente"}
+                            {sendingByOrderId === sale.orderId ? "Enviando..." : "Enviar DTE a Cliente"}
                           </Button>
                         </div>
                       </TableCell>

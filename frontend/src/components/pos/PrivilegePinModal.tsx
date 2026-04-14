@@ -12,7 +12,7 @@ export const PrivilegePinModal = ({
 }: {
   open: boolean;
   onCancel: () => void;
-  onSuccess: () => void;
+  onSuccess: (pin: string) => void;
 }) => {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
@@ -30,8 +30,9 @@ export const PrivilegePinModal = ({
         setError("Código inválido");
         return;
       }
+      const approvedPin = pin;
       setPin("");
-      onSuccess();
+      onSuccess(approvedPin);
     } catch {
       setError("Código inválido");
     } finally {

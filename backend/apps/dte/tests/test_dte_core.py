@@ -197,16 +197,23 @@ class DTECoreTests(TestCase):
                 control_number="DTE-01-S001P001-000000000000123",
                 generation_code="A" * 36,
                 codigo_generacion="A" * 36,
+                sello_recibido="SELLO123",
                 total_amount=Decimal("10.00"),
             )
-            payload = build_invalidation_payload(record, "Prueba", "", "")
+            payload = build_invalidation_payload(record, "Prueba", "01234567-8", "98765432-1")
             self.assertEqual(payload["invalidacion"]["identificacion"]["ambiente"], "01")
-            self.assertEqual(payload["invalidacion"]["identificacion"]["tipoDte"], "AN")
-            self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
+            self.assertIn("fecAnula", payload["invalidacion"]["identificacion"])
+            self.assertIn("horAnula", payload["invalidacion"]["identificacion"])
+            self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
+            self.assertNotIn("tipoDte", payload["invalidacion"]["identificacion"])
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "01")
             self.assertEqual(
-                payload["invalidacion"]["documento"]["numeroControl"],
+                payload["invalidacion"]["documento"]["numDocumento"],
                 "DTE-01-S001P001-000000000000123",
             )
+            self.assertNotIn("responsable", payload["invalidacion"])
+            self.assertNotIn("solicitante", payload["invalidacion"])
+            self.assertNotIn("extra", payload["invalidacion"])
         finally:
             if previous_mh is None:
                 os.environ.pop("MH_AMBIENTE", None)
@@ -232,6 +239,42 @@ class DTECoreTests(TestCase):
         self.assertEqual(first["descripcion"], "Producto con ajuste")
         self.assertEqual(first["precioUni"], 2.1)
         self.assertEqual(first["codigo"], "PROD-OVERRIDE")
+
+    def test_build_payload_cf_reconciles_modifier_totals_with_quantity(self):
+        category = Category.objects.create(name="MODQTY")
+        product = Product.objects.create(name="Base", description="", price=Decimal("0.01"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base",
+            price_snapshot=Decimal("0.01"),
+            quantity=3,
+            discount_amount=Decimal("0.00"),
+        )
+        OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot="Extra", modifier_price_snapshot=Decimal("0.99"))
+        self.order.total = Decimal("3.00")
+        self.order.save(update_fields=["total", "updated_at"])
+
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000312", "B" * 36, "00")
+        total_lineas = sum(Decimal(str(line["ventaGravada"])) + Decimal(str(line["ventaExenta"])) for line in payload["dte"]["cuerpoDocumento"])
+        self.assertEqual(total_lineas.quantize(Decimal("0.01")), Decimal("3.00"))
+
+    def test_build_payload_cf_preserves_fee_buckets(self):
+        category = Category.objects.create(name="FEE")
+        product = Product.objects.create(name="Producto", description="", price=Decimal("1.00"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=product, product_name_snapshot="Producto", price_snapshot=Decimal("1.00"), quantity=1)
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable A", unit_amount=Decimal("0.21"), quantity=5, total_amount=Decimal("1.05"))
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable B", unit_amount=Decimal("0.05"), quantity=3, total_amount=Decimal("0.15"))
+        OrderFee.objects.create(order=self.order, fee_type="disposable", fee_name="Desechable C", unit_amount=Decimal("0.05"), quantity=2, total_amount=Decimal("0.10"))
+        self.order.total = Decimal("2.30")
+        self.order.save(update_fields=["total", "updated_at"])
+
+        payload = build_payload_cf(self.order, "DTE-01-X001X001-000000000000313", "C" * 36, "00")
+        fee_lines = [line for line in payload["dte"]["cuerpoDocumento"] if str(line.get("codigo", "")).startswith("FEE-")]
+        qty_unit_pairs = {(Decimal(str(line["cantidad"])), Decimal(str(line["precioUni"]))) for line in fee_lines}
+        self.assertIn((Decimal("5"), Decimal("0.21")), qty_unit_pairs)
+        self.assertIn((Decimal("3"), Decimal("0.05")), qty_unit_pairs)
+        self.assertIn((Decimal("2"), Decimal("0.05")), qty_unit_pairs)
 
     def test_build_payload_cf_sets_discount_summary_from_item_discounts(self):
         category = Category.objects.create(name="DESCUENTOS")
@@ -392,7 +435,7 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(resumen["montoTotalOperacion"], 2), 5.00)
         self.assertEqual(round(resumen["totalPagar"], 2), 5.00)
 
-    def test_build_payload_cf_adds_adjustment_line_when_order_total_is_higher_than_lines(self):
+    def test_build_payload_cf_rejects_when_source_totals_do_not_match_order_total(self):
         category = Category.objects.create(name="AJUSTE")
         product = Product.objects.create(name="Base", description="", price=Decimal("26.70"), category=category, available=True)
         OrderItem.objects.create(
@@ -409,14 +452,8 @@ class DTECoreTests(TestCase):
         self.order.subtotal = Decimal("28.49")
         self.order.save(update_fields=["total", "subtotal"])
 
-        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
-        cuerpo = payload["dte"]["cuerpoDocumento"]
-        resumen = payload["dte"]["resumen"]
-        ajuste = next((line for line in cuerpo if line.get("codigo") == "AJUSTE-DTE"), None)
-        self.assertIsNotNone(ajuste)
-        self.assertEqual(round(ajuste["ventaGravada"], 2), 1.79)
-        self.assertEqual(round(ajuste["ivaItem"], 2), 0.21)
-        self.assertEqual(round(resumen["totalPagar"], 2), 28.49)
+        with self.assertRaises(DTEPreflightError):
+            build_payload_cf(self.order, "DTE-01-S001P001-000000000000398", "Y" * 36, "00")
 
     def test_build_payload_cf_discount_line_reconciles_discount_before_adjustment_line(self):
         category = Category.objects.create(name="DISC-FIX")
@@ -627,6 +664,88 @@ class DTECoreTests(TestCase):
         self.assertEqual(round(float(resumen["totalPagar"]), 2), 11.26)
         self.assertEqual(round(float(resumen["totalIva"]), 2), round(sum(float(line["ivaItem"]) for line in cuerpo), 2))
         self.assertFalse(any(line.get("codigo") == "AJUSTE-DTE" for line in cuerpo))
+
+    def test_regression_630_631_discounted_shell_plus_modifier_collapses_and_matches_total(self):
+        category = Category.objects.create(name="REG-630")
+        product = Product.objects.create(name="Chips and Guac", description="", price=Decimal("0.01"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Chips and Guac",
+            price_snapshot=Decimal("0.01"),
+            quantity=1,
+            discount_amount=Decimal("2.35"),
+            snapshot_sku_or_code="SHELL-001",
+            is_custom=False,
+        )
+        OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot="4OZ", modifier_price_snapshot=Decimal("4.69"))
+        self.order.total = Decimal("2.35")
+        self.order.subtotal = Decimal("2.35")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000630", "6" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        self.assertEqual(len(cuerpo), 1)
+        line = cuerpo[0]
+        self.assertEqual(round(line["precioUni"], 2), 4.70)
+        self.assertEqual(round(line["montoDescu"], 2), 2.35)
+        self.assertEqual(round(line["ventaGravada"], 2), 2.35)
+        self.assertEqual(round(payload["dte"]["resumen"]["totalPagar"], 2), 2.35)
+
+    def test_regression_633_simple_discount_keeps_final_model(self):
+        category = Category.objects.create(name="REG-633")
+        product = Product.objects.create(name="Promo 6.99", description="", price=Decimal("6.99"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Promo 6.99",
+            price_snapshot=Decimal("6.99"),
+            quantity=1,
+            discount_amount=Decimal("3.50"),
+            snapshot_sku_or_code="DISC-699",
+            is_custom=False,
+        )
+        self.order.total = Decimal("3.49")
+        self.order.subtotal = Decimal("3.49")
+        self.order.save(update_fields=["total", "subtotal"])
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000633", "3" * 36, "00")
+        line = payload["dte"]["cuerpoDocumento"][0]
+        self.assertEqual(round(line["ventaGravada"], 2), 3.49)
+        self.assertEqual(round(line["ivaItem"], 2), 0.40)
+
+    def test_regression_635_placeholder_not_emitted_as_001_line(self):
+        category = Category.objects.create(name="REG-635")
+        coca = Product.objects.create(name="Coca Cola", description="", price=Decimal("1.29"), category=category, available=True)
+        chips = Product.objects.create(name="Chips and Guac", description="", price=Decimal("0.01"), category=category, available=True)
+        OrderItem.objects.create(
+            order=self.order,
+            product=coca,
+            product_name_snapshot="Coca Cola",
+            price_snapshot=Decimal("1.29"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="COKE",
+            is_custom=False,
+        )
+        chips_item = OrderItem.objects.create(
+            order=self.order,
+            product=chips,
+            product_name_snapshot="Chips and Guac",
+            price_snapshot=Decimal("0.01"),
+            quantity=1,
+            discount_amount=Decimal("0.00"),
+            snapshot_sku_or_code="CHIPS",
+            is_custom=False,
+        )
+        OrderItemModifier.objects.create(order_item=chips_item, modifier_name_snapshot="4OZ", modifier_price_snapshot=Decimal("3.28"))
+        self.order.total = Decimal("4.58")
+        self.order.subtotal = Decimal("4.58")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000635", "5" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        self.assertFalse(any(round(line["precioUni"], 2) == 0.01 for line in cuerpo))
+        self.assertEqual(round(sum(line["ventaGravada"] + line["ventaExenta"] for line in cuerpo), 2), 4.58)
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
@@ -1108,6 +1227,7 @@ class DTEInvalidateEndpointTests(TestCase):
                     "identificacion": {
                         "numeroControl": "DTE-01-S001P001-000000000000357",
                         "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                        "fecEmi": "2026-01-01",
                     },
                     "emisor": {
                         "nit": "12171409901063",
@@ -1116,8 +1236,12 @@ class DTEInvalidateEndpointTests(TestCase):
                         "codActividad": "56101",
                         "descActividad": "Restaurantes",
                     },
+                    "receptor": {"nombre": "Cliente Demo"},
+                    "resumen": {"totalIva": 0.57},
                 }
             },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-BASE-01"}},
+            sello_recibido="SELLO-BASE-01",
             total_amount=Decimal("5.00"),
         )
 
@@ -1125,25 +1249,124 @@ class DTEInvalidateEndpointTests(TestCase):
     def test_invalidate_endpoint_uses_shared_builder_and_fallback_control_number(self, mock_send):
         mock_send.return_value = {"http_status": 200, "success": True, "respuesta_hacienda": {"estado": "PROCESADO"}}
         self.client.force_authenticate(self.user)
-        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo": "Prueba", "responsable_dui": "01234567-8", "solicitante_dui": "98765432-1"},
+            format="json",
+        )
         self.assertEqual(response.status_code, 201, response.data)
         self.assertTrue(response.data["success"])
         self.assertEqual(response.data["attempt"]["success"], True)
         sent_payload = mock_send.call_args.kwargs["payload"]
+        self.assertNotIn("numeroControl", sent_payload["invalidacion"]["identificacion"])
         self.assertEqual(
-            sent_payload["invalidacion"]["identificacion"]["numeroControl"],
+            sent_payload["invalidacion"]["documento"]["numDocumento"],
             "DTE-01-S001P001-000000000000357",
         )
         self.assertEqual(
-            sent_payload["invalidacion"]["documento"]["numeroControl"],
-            "DTE-01-S001P001-000000000000357",
+            sent_payload["invalidacion"]["documento"]["codigoGeneracionR"],
+            "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
         )
         self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")
+        self.assertNotIn("nrc", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("codActividad", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("descActividad", sent_payload["invalidacion"]["emisor"])
+        self.assertNotIn("nombreComercial", sent_payload["invalidacion"]["emisor"])
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["numDocResponsable"], "01234567-8")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["numDocSolicita"], "01234567-8")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["tipDocResponsable"], "13")
+        self.assertEqual(sent_payload["invalidacion"]["motivo"]["tipDocSolicita"], "13")
+        self.assertNotIn("responsable", sent_payload["invalidacion"])
+        self.assertNotIn("solicitante", sent_payload["invalidacion"])
+        self.assertNotIn("extra", sent_payload["invalidacion"])
 
     def test_invalidate_endpoint_returns_422_when_base_document_missing_control_number(self):
         self.record.request_payload = {}
         self.record.save(update_fields=["request_payload"])
         self.client.force_authenticate(self.user)
-        response = self.client.post(f"/api/dte/issued/{self.record.id}/invalidate/", {"motivo": "Prueba"}, format="json")
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo": "Prueba", "responsable_dui": "01234567-8", "solicitante_dui": "98765432-1"},
+            format="json",
+        )
         self.assertEqual(response.status_code, 422, response.data)
-        self.assertIn("numeroControl", response.data["detail"])
+        self.assertIn("numDocumento", response.data["detail"])
+
+    def test_invalidate_endpoint_returns_422_when_num_doc_responsable_missing(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo_anulacion": "Prueba", "num_doc_responsable": ""},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("número de documento responsable", response.data["detail"])
+
+    def test_invalidate_endpoint_returns_422_when_motivo_anulacion_missing(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            f"/api/dte/issued/{self.record.id}/invalidate/",
+            {"motivo_anulacion": "", "num_doc_responsable": "01234567-8"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 422, response.data)
+        self.assertIn("motivo de invalidación", response.data["detail"])
+
+    def test_build_invalidation_payload_requires_sello_recibido(self):
+        self.record.response_payload = {}
+        self.record.sello_recibido = ""
+        self.record.sello_recepcion = ""
+        self.record.save(update_fields=["response_payload", "sello_recibido", "sello_recepcion"])
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_requires_monto_iva(self):
+        self.record.request_payload = {
+            "dte": {
+                "identificacion": {"numeroControl": "DTE-01-S001P001-000000000000357", "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810"},
+                "receptor": {"nombre": "Cliente Demo"},
+                "resumen": {},
+            }
+        }
+        self.record.save(update_fields=["request_payload"])
+        with self.assertRaises(DTEPreflightError):
+            build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+
+    def test_build_invalidation_payload_requires_numdocresponsable(self):
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "", "01234567-8", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_requires_numdocsolicita(self):
+        with self.assertRaises(DTEPreflightError):
+            payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "", {})
+            validate_dte_preflight_payload(payload)
+
+    def test_invalidation_schema_rejects_prohibited_fields(self):
+        payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+        payload["invalidacion"]["responsable"] = {"x": "1"}
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_invalidation_schema_rejects_legacy_dte_wrapper(self):
+        payload = {
+            "dte": {
+                "identificacion": {
+                    "tipoDte": "AN",
+                    "ambiente": "00",
+                    "codigoGeneracion": "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+                    "fecAnula": "2026-01-10",
+                    "horAnula": "10:00:00",
+                }
+            }
+        }
+        with self.assertRaises(DTEPreflightError):
+            validate_dte_preflight_payload(payload)
+
+    def test_build_invalidation_payload_snapshot(self):
+        payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+        normalized = json.dumps(payload["invalidacion"], sort_keys=True, ensure_ascii=False)
+        self.assertIn("\"tipoDocumento\": \"01\"", normalized)
+        self.assertIn("\"numDocResponsable\": \"01234567-8\"", normalized)
+        self.assertIn("\"numDocSolicita\": \"01234567-8\"", normalized)

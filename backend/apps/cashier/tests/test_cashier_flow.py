@@ -8,8 +8,10 @@ from rest_framework.test import APIClient
 from apps.core.models import Branch
 from apps.users.models import UserProfile
 from apps.cashier.models import CashSession, Register
+from apps.orders.models import Order
 from apps.cashier.printing import build_end_of_day_ticket_pdf
 from apps.dte.models import DTEBranchConfig
+from apps.core.models import ServiceType
 
 
 class CashierFlowTests(TestCase):
@@ -23,6 +25,7 @@ class CashierFlowTests(TestCase):
         UserProfile.objects.create(user=self.admin, role='admin', is_active=True)
         UserProfile.objects.create(user=self.manager, role='manager', is_active=True)
         Branch.objects.create(name='Main', code='MAIN')
+        self.service_type = ServiceType.objects.create(key="dine-in", label="En local")
         self.client.force_authenticate(user)
 
     def test_open_session_ok(self):
@@ -31,13 +34,13 @@ class CashierFlowTests(TestCase):
         self.assertEqual(res.data.get('has_open_session'), True)
         self.assertIsNone(res.data.get('session', {}).get('opening_amount'))
 
-    def test_open_session_is_idempotent_for_same_user(self):
+    def test_open_session_rejects_second_open_for_same_day(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         second = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '50.00'}, format='json')
 
         self.assertEqual(first.status_code, 201)
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(first.data['session']['id'], second.data['session']['id'])
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data.get("code"), "CASH_SESSION_ALREADY_OPEN")
         self.assertEqual(CashSession.objects.filter(opened_by_id=first.data['session']['opened_by'], status='open').count(), 1)
 
     def test_open_session_concurrent_requests_create_only_one_open_session(self):
@@ -54,7 +57,7 @@ class CashierFlowTests(TestCase):
             statuses = list(pool.map(open_once, range(8)))
 
         self.assertEqual(statuses.count(201), 1)
-        self.assertEqual(statuses.count(200), 7)
+        self.assertEqual(statuses.count(409), 7)
         self.assertEqual(CashSession.objects.filter(opened_by=user, status='open').count(), 1)
 
     def test_current_session_hides_sensitive_summary_for_cashier(self):
@@ -88,7 +91,7 @@ class CashierFlowTests(TestCase):
         self.assertEqual(current.data.get('has_open_session'), False)
         self.assertIsNone(current.data.get('session'))
 
-    def test_open_session_returns_200_if_register_already_open(self):
+    def test_open_session_returns_409_if_register_already_open(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         self.assertEqual(first.status_code, 201)
 
@@ -99,8 +102,28 @@ class CashierFlowTests(TestCase):
         second_client.force_authenticate(user2)
         second = second_client.post('/api/cashier/session/open/', {'opening_cash_amount': '10.00'}, format='json')
 
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.data.get('already_open'), True)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data.get('code'), "CASH_SESSION_ALREADY_OPEN")
+
+    def test_close_session_blocked_when_pending_orders_exist(self):
+        open_res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(open_res.status_code, 201)
+        session_branch_id = open_res.data["session"]["branch"]
+        Order.objects.create(
+            order_number=999,
+            branch_id=session_branch_id,
+            service_type=self.service_type,
+            status="waiting_payment",
+            payment_status="unpaid",
+            subtotal="5.00",
+            tax="0.00",
+            total="5.00",
+            is_pending=True,
+            pending_state="pending_payment",
+        )
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
+        self.assertEqual(close.status_code, 409)
+        self.assertEqual(close.data.get("code"), "PENDING_ORDERS_BLOCK_CASH_CLOSE")
 
     def test_create_expense_ok(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

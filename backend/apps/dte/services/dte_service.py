@@ -4,10 +4,13 @@ import json
 import logging
 import os
 import re
+import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.utils import timezone
 
 from apps.dte.client import DTEClient
 from apps.dte.models import CreditNote, DTERecord, DteInvalidationAttempt
@@ -128,10 +131,6 @@ def calculate_taxable_base_from_gross(gross_amount: Decimal) -> Decimal:
     return _q2(gross_amount / TAX_DIVISOR)
 
 
-def calculate_iva_from_base(base_amount: Decimal) -> Decimal:
-    return _q2(base_amount * TAX_RATE)
-
-
 def calculate_iva_from_gross(gross_amount: Decimal) -> Decimal:
     return _q2(gross_amount * TAX_RATE / TAX_DIVISOR)
 
@@ -144,6 +143,11 @@ def _line_charged_total(line: dict) -> Decimal:
 
 def _line_expected_total_from_price_discount(line: dict) -> Decimal:
     return money((money(line.get("precioUni")) * money(line.get("cantidad"))) - money(line.get("montoDescu")))
+
+
+def _is_placeholder_shell(item, paid_mods_total: Decimal) -> bool:
+    unit_price = money(item.unit_price)
+    return unit_price <= Decimal("0.01") and paid_mods_total > Decimal("0.00")
 
 
 def calculate_line_tax_breakdown(*, unit_price_gross: Decimal, quantity: Decimal, discount_gross: Decimal, taxable: bool) -> dict[str, Decimal]:
@@ -190,6 +194,64 @@ def _sum_item_discounts(cuerpo: list[dict]) -> Decimal:
     return money(sum((money(line.get("montoDescu")) for line in cuerpo), Decimal("0.00")))
 
 
+def _allocate_discount_by_weight(components: list[dict[str, Any]], total_discount: Decimal) -> list[Decimal]:
+    target = money(min(total_discount, sum((money(c.get("gross")) for c in components), Decimal("0.00"))))
+    if target <= Decimal("0.00"):
+        return [Decimal("0.00") for _ in components]
+    gross_cents = [to_cents(money(component.get("gross"))) for component in components]
+    total_gross_cents = sum(gross_cents)
+    if total_gross_cents <= 0:
+        return [Decimal("0.00") for _ in components]
+    target_cents = to_cents(target)
+    raw_alloc = [(target_cents * cents) / total_gross_cents for cents in gross_cents]
+    alloc_cents = [int(value) for value in raw_alloc]
+    residual = target_cents - sum(alloc_cents)
+    remainders = sorted(
+        [(idx, raw_alloc[idx] - alloc_cents[idx]) for idx in range(len(alloc_cents))],
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for idx, _ in remainders:
+        if residual <= 0:
+            break
+        alloc_cents[idx] += 1
+        residual -= 1
+    return [money(Decimal(cents) / Decimal("100")) for cents in alloc_cents]
+
+
+def _reconcile_line_residual(cuerpo: list[dict[str, Any]], target_total: Decimal, *, taxable: bool, order_id: int | None) -> None:
+    emitted_total = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    residual = money(target_total - emitted_total)
+    logger.info("dte.reconciliation.residual_before order_id=%s residual=%s", order_id, residual)
+    if residual == Decimal("0.00"):
+        logger.info("dte.reconciliation.residual_after order_id=%s residual=%s", order_id, residual)
+        return
+    candidate = next((line for line in cuerpo if money(line.get("ventaGravada")) > Decimal("0.00")), None)
+    if candidate is None and cuerpo:
+        candidate = cuerpo[0]
+    if candidate is None:
+        logger.info("dte.reconciliation.residual_after order_id=%s residual=%s", order_id, residual)
+        return
+    if taxable and money(candidate.get("ventaGravada")) > Decimal("0.00"):
+        adjusted_gross = money(money(candidate.get("ventaGravada")) + residual)
+        if adjusted_gross <= Decimal("0.00"):
+            return
+        candidate["ventaGravada"] = json_number(adjusted_gross)
+        candidate["ivaItem"] = json_number(calculate_iva_from_gross(adjusted_gross))
+    elif money(candidate.get("ventaExenta")) > Decimal("0.00"):
+        adjusted_exempt = money(money(candidate.get("ventaExenta")) + residual)
+        if adjusted_exempt <= Decimal("0.00"):
+            return
+        candidate["ventaExenta"] = json_number(adjusted_exempt)
+        candidate["ivaItem"] = json_number(Decimal("0.00"))
+    emitted_after = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    logger.info(
+        "dte.reconciliation.residual_after order_id=%s residual=%s",
+        order_id,
+        money(target_total - emitted_after),
+    )
+
+
 def _validate_dte_totals(dte_payload: dict) -> None:
     resumen = (dte_payload.get("resumen") or {}) if isinstance(dte_payload, dict) else {}
     cuerpo = (dte_payload.get("cuerpoDocumento") or []) if isinstance(dte_payload, dict) else []
@@ -212,6 +274,7 @@ def _validate_dte_totals(dte_payload: dict) -> None:
     sum_line_gravada = Decimal("0.00")
     sum_line_exenta = Decimal("0.00")
     sum_line_iva = Decimal("0.00")
+    sum_line_total = Decimal("0.00")
     errors: list[str] = []
 
     for line in cuerpo:
@@ -242,6 +305,7 @@ def _validate_dte_totals(dte_payload: dict) -> None:
         sum_line_gravada += venta_gravada_line
         sum_line_exenta += venta_exenta_line
         sum_line_iva += iva_item_line
+        sum_line_total += money(venta_gravada_line + venta_exenta_line + money(line.get("ventaNoSuj")))
 
     calc_sub_total_ventas = money(total_no_suj + total_exenta + total_gravada)
     calc_global_desc = money(descu_no_suj + descu_exenta + descu_gravada)
@@ -262,6 +326,8 @@ def _validate_dte_totals(dte_payload: dict) -> None:
         errors.append(f"totalExenta={total_exenta} sum_items={money(sum_line_exenta)}")
     if not _almost_equal(total_iva, money(sum_line_iva)):
         errors.append(f"totalIva={total_iva} sum_items={money(sum_line_iva)}")
+    if not _almost_equal(total_pagar, money(sum_line_total)):
+        errors.append(f"totalPagar={total_pagar} sum_lineas={money(sum_line_total)}")
     if not _almost_equal(monto_total_operacion, calc_monto_total_operacion):
         errors.append(f"montoTotalOperacion={monto_total_operacion} calc={calc_monto_total_operacion}")
     if not _almost_equal(total_pagar, calc_total_pagar):
@@ -336,6 +402,21 @@ def _has_nit_14(value: str | None) -> bool:
     return len(digits) == 14
 
 
+def _resolve_tip_doc(value: str) -> str:
+    if _has_real_dui(value):
+        return "13"
+    if _has_nit_14(value):
+        return "36"
+    return "13"
+
+
+def _mask_document(value: str) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) <= 4:
+        return "*" * len(digits)
+    return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -355,6 +436,14 @@ def _validate_identificacion_payload(identificacion: dict[str, Any]) -> None:
     tipo_dte = str(identificacion.get("tipoDte") or "").strip()
     if tipo_dte not in {"01", "03", "05", "14", "AN"}:
         raise DTEPreflightError(f"tipoDte inválido: {tipo_dte}")
+    if tipo_dte == "AN":
+        fec_anula = str(identificacion.get("fecAnula") or "").strip()
+        hor_anula = str(identificacion.get("horAnula") or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fec_anula):
+            raise DTEPreflightError("invalidacion.identificacion.fecAnula es obligatorio (YYYY-MM-DD).")
+        if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", hor_anula):
+            raise DTEPreflightError("invalidacion.identificacion.horAnula es obligatorio (HH:MM:SS).")
+        return
     numero_control = str(identificacion.get("numeroControl") or "").strip()
     if not re.fullmatch(r"DTE-\d{2}-[A-Z0-9]{4}[A-Z0-9]{4}-\d{15}", numero_control):
         logger.error("dte.preflight.invalid_numero_control numeroControl=%s identificacion=%s", numero_control, identificacion)
@@ -371,6 +460,34 @@ def _validate_emisor_payload(emisor: dict[str, Any]) -> None:
     emisor_nit_digits = "".join(ch for ch in str(emisor.get("nit") or "") if ch.isdigit())
     if len(emisor_nit_digits) != 14:
         raise DTEPreflightError(f"NIT emisor inválido: {emisor.get('nit')}")
+
+
+def _validate_invalidation_emisor_payload(emisor: dict[str, Any]) -> None:
+    required = (
+        "nit",
+        "nombre",
+        "tipoEstablecimiento",
+        "telefono",
+        "correo",
+        "codEstable",
+        "codPuntoVenta",
+        "nomEstablecimiento",
+    )
+    missing = [k for k in required if not str(emisor.get(k) or "").strip()]
+    if missing:
+        raise DTEPreflightError(f"invalidacion.emisor incompleto: faltan {', '.join(missing)}")
+    prohibited = ("nrc", "codActividad", "descActividad", "nombreComercial")
+    prohibited_found = [k for k in prohibited if k in emisor]
+    if prohibited_found:
+        raise DTEPreflightError(f"invalidacion.emisor contiene campos no permitidos: {', '.join(prohibited_found)}")
+
+
+def _resolve_non_empty(*candidates: tuple[str, Any]) -> tuple[str, str]:
+    for source, value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text, source
+    return "", ""
 
 
 def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
@@ -400,24 +517,70 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
     emisor = dte.get("emisor") or {}
     receptor = dte.get("receptor") or {}
     resumen = dte.get("resumen") or {}
-    _validate_identificacion_payload(identificacion)
-    tipo_dte = str(identificacion.get("tipoDte") or "").strip().upper()
-    if tipo_dte == "AN":
+    if isinstance(payload.get("invalidacion"), dict):
+        ambiente = identificacion.get("ambiente")
+        try:
+            normalize_ambiente(ambiente)
+        except ValueError as exc:
+            raise DTEPreflightError(str(exc)) from exc
+        fec_anula = str(identificacion.get("fecAnula") or "").strip()
+        hor_anula = str(identificacion.get("horAnula") or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fec_anula):
+            raise DTEPreflightError("invalidacion.identificacion.fecAnula es obligatorio (YYYY-MM-DD).")
+        if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", hor_anula):
+            raise DTEPreflightError("invalidacion.identificacion.horAnula es obligatorio (HH:MM:SS).")
+        prohibited_ident = [k for k in ("numeroControl", "tipoDte") if k in identificacion]
+        if prohibited_ident:
+            raise DTEPreflightError(
+                f"invalidacion.identificacion contiene campos no permitidos: {', '.join(prohibited_ident)}"
+            )
         documento = dte.get("documento") or {}
         if not isinstance(documento, dict):
             raise DTEPreflightError("invalidacion.documento es obligatorio.")
         missing_documento = [
             key
-            for key in ("tipoDte", "numeroControl", "codigoGeneracion")
+            for key in ("tipoDocumento", "numDocumento", "codigoGeneracionR", "selloRecibido", "montoIva", "nombre")
             if not str(documento.get(key) or "").strip()
         ]
         if missing_documento:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
             )
-        _validate_emisor_payload(emisor)
+        prohibited_documento = [k for k in ("horEmi",) if k in documento]
+        if prohibited_documento:
+            raise DTEPreflightError(
+                f"invalidacion.documento contiene campos no permitidos: {', '.join(prohibited_documento)}"
+            )
+        motivo = dte.get("motivo") or {}
+        if not isinstance(motivo, dict):
+            raise DTEPreflightError("invalidacion.motivo es obligatorio.")
+        missing_motivo = [
+            key
+            for key in (
+                "tipoAnulacion",
+                "motivoAnulacion",
+                "nombreResponsable",
+                "tipDocResponsable",
+                "numDocResponsable",
+                "nombreSolicita",
+                "tipDocSolicita",
+                "numDocSolicita",
+            )
+            if not str(motivo.get(key) or "").strip()
+        ]
+        if missing_motivo:
+            raise DTEPreflightError(f"invalidacion.motivo incompleto: faltan {', '.join(missing_motivo)}")
+        _validate_invalidation_emisor_payload(emisor)
+        prohibited_root = [k for k in ("responsable", "solicitante", "extra") if k in dte]
+        if prohibited_root:
+            raise DTEPreflightError(
+                f"invalidacion contiene campos no permitidos: {', '.join(prohibited_root)}"
+            )
         assert_no_string_numbers(payload)
         return
+    if str(identificacion.get("tipoDte") or "").strip().upper() == "AN":
+        raise DTEPreflightError("Payload legacy inválido: use wrapper 'invalidacion' (no 'dte') para anulaciones.")
+    _validate_identificacion_payload(identificacion)
     _validate_emisor_payload(emisor)
     validate_receptor_payload(receptor)
     _validate_pagos_payload(resumen)
@@ -519,75 +682,73 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_iva = Decimal("0.00")
     total_descuento = Decimal("0.00")
 
+    commercial_groups: list[dict[str, Any]] = []
+    placeholder_items_detected: list[int] = []
+    ledger_lines: list[dict[str, Any]] = []
     for item in order.items.select_related("product").prefetch_related("applied_modifiers"):
         quantity = money(item.quantity)
-        effective_unit_price = money(item.unit_price)
-        line_total_original = money(effective_unit_price * quantity)
-        line_discount = money(min(line_total_original, money(item.discount_amount)))
-        desc = item.name or "ITEM"
-        free_mods = []
-        paid_mods = []
+        base_gross = money(money(item.unit_price) * quantity)
+        components: list[dict[str, Any]] = [
+            {
+                "codigo": item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}"),
+                "descripcion": item.name or "ITEM",
+                "quantity": quantity,
+                "gross": base_gross,
+            }
+        ]
+        paid_mods_total = Decimal("0.00")
+        free_mods: list[str] = []
         for mod in item.applied_modifiers.all():
-            if Decimal(mod.modifier_price_snapshot or 0) > 0:
-                paid_mods.append(mod)
+            mod_price = money(mod.modifier_price_snapshot)
+            if mod_price > Decimal("0.00"):
+                mod_gross = money(mod_price * quantity)
+                paid_mods_total += mod_gross
+                components.append(
+                    {
+                        "codigo": f"MOD-{item.id}-{mod.id or len(components)}",
+                        "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
+                        "quantity": quantity,
+                        "gross": mod_gross,
+                    }
+                )
             else:
                 free_mods.append(mod.modifier_name_snapshot)
         if free_mods:
-            desc = f"{desc} ({', '.join(free_mods)})"
-
-        line_calc = calculate_line_tax_breakdown(
-            unit_price_gross=effective_unit_price,
-            quantity=quantity,
-            discount_gross=line_discount,
-            taxable=not order.iva_exempt,
+            components[0]["descripcion"] = f"{components[0]['descripcion']} ({', '.join(free_mods)})"
+        group_gross = money(sum((money(c["gross"]) for c in components), Decimal("0.00")))
+        discounts = _allocate_discount_by_weight(components, money(item.discount_amount))
+        is_shell = _is_placeholder_shell(item, paid_mods_total)
+        if is_shell:
+            placeholder_items_detected.append(item.id)
+        for idx, component in enumerate(components):
+            component_discount = discounts[idx]
+            ledger_lines.append(
+                {
+                    "codigo": component["codigo"],
+                    "descripcion": component["descripcion"],
+                    "quantity": component["quantity"],
+                    "gross": money(component["gross"]),
+                    "discount": money(component_discount),
+                }
+            )
+        commercial_groups.append(
+            {
+                "order_item_id": item.id,
+                "placeholder_shell": is_shell,
+                "gross_before_discount": group_gross,
+                "discount_original": money(item.discount_amount),
+                "discount_allocated": money(sum(discounts, Decimal("0.00"))),
+                "components": len(components),
+            }
         )
 
-        total_gravada += line_calc["venta_gravada"]
-        total_exenta += line_calc["venta_exenta"]
-        total_iva += line_calc["iva_item"]
-        total_descuento += line_calc["monto_descu"]
-
-        sku = item.snapshot_sku_or_code or (f"PROD-{item.product_id}" if item.product_id else f"MANUAL-{item.id}")
-        cuerpo.append({
-            "numItem": num_item, "tipoItem": 1, "codigo": sku, "descripcion": desc,
-            "cantidad": json_number(quantity), "uniMedida": 59, "precioUni": json_number(line_calc["precio_uni"]),
-            "montoDescu": json_number(line_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(line_calc["venta_exenta"]),
-            "ventaGravada": json_number(line_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-            "ivaItem": json_number(line_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
-            "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
-        })
-        num_item += 1
-
-        for mod in paid_mods:
-            mod_total = money(mod.modifier_price_snapshot)
-            mod_calc = calculate_line_tax_breakdown(
-                unit_price_gross=mod_total,
-                quantity=Decimal("1.00"),
-                discount_gross=Decimal("0.00"),
-                taxable=not order.iva_exempt,
-            )
-            total_gravada += mod_calc["venta_gravada"]
-            total_exenta += mod_calc["venta_exenta"]
-            total_iva += mod_calc["iva_item"]
-            cuerpo.append({
-                "numItem": num_item, "tipoItem": 1, "codigo": f"MOD-{item.id}-{num_item}", "descripcion": f"EXTRA: {mod.modifier_name_snapshot}",
-                "cantidad": 1, "uniMedida": 59, "precioUni": json_number(mod_calc["precio_uni"]),
-                "montoDescu": json_number(mod_calc["monto_descu"]), "ventaNoSuj": json_number(Decimal("0.00")), "ventaExenta": json_number(mod_calc["venta_exenta"]),
-                "ventaGravada": json_number(mod_calc["venta_gravada"]), "tributos": None, "psv": json_number(Decimal("0.00")), "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(mod_calc["iva_item"]), "codTributo": None, "numeroDocumento": None,
-                "_lineaObjetivo": json_number(mod_calc["linea_total_objetivo"]),
-            })
-            num_item += 1
-
-    fee_groups: dict[tuple[str, str], Decimal] = {}
     for fee in order.fees.all():
         fee_name = (fee.fee_name or "CARGO").strip()[:200]
-        fee_type = (fee.fee_type or "").strip().lower()
-        fee_groups[(fee_name, fee_type)] = money(fee_groups.get((fee_name, fee_type), Decimal("0.00")) + money(fee.total_amount))
-
-    for (fee_name, fee_type), fee_total in fee_groups.items():
-        fee_qty = Decimal("1.00")
-        fee_unit = money(fee_total)
+        fee_qty = money(fee.quantity or 1)
+        fee_unit = money(fee.unit_amount if fee.unit_amount is not None else (money(fee.total_amount) / fee_qty))
+        fee_total = money(fee.total_amount)
+        if not _almost_equal(money(fee_unit * fee_qty), fee_total):
+            fee_unit = money(fee_total / fee_qty) if fee_qty > Decimal("0.00") else fee_total
         fee_calc = calculate_line_tax_breakdown(
             unit_price_gross=fee_unit,
             quantity=fee_qty,
@@ -600,7 +761,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         cuerpo.append({
             "numItem": num_item,
             "tipoItem": 1,
-            "codigo": f"FEE-{fee_type or 'GEN'}-{num_item}",
+            "codigo": f"FEE-{(fee.fee_type or 'GEN').strip().upper()}-{num_item}",
             "descripcion": fee_name,
             "cantidad": json_number(fee_qty),
             "uniMedida": 59,
@@ -618,6 +779,55 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             "_lineaObjetivo": json_number(fee_calc["linea_total_objetivo"]),
         })
         num_item += 1
+        commercial_groups.append(
+            {
+                "fee_id": fee.id,
+                "fee_type": fee.fee_type,
+                "gross_before_discount": fee_total,
+                "discount_allocated": Decimal("0.00"),
+                "components": 1,
+            }
+        )
+
+    for ledger in ledger_lines:
+        qty = money(ledger["quantity"])
+        gross = money(ledger["gross"])
+        discount = money(ledger["discount"])
+        if qty <= Decimal("0.00") or gross <= Decimal("0.00"):
+            continue
+        line_calc = calculate_line_tax_breakdown(
+            unit_price_gross=money(gross / qty),
+            quantity=qty,
+            discount_gross=discount,
+            taxable=not order.iva_exempt,
+        )
+        total_gravada += line_calc["venta_gravada"]
+        total_exenta += line_calc["venta_exenta"]
+        total_iva += line_calc["iva_item"]
+        total_descuento += line_calc["monto_descu"]
+        cuerpo.append(
+            {
+                "numItem": num_item,
+                "tipoItem": 1,
+                "codigo": ledger["codigo"],
+                "descripcion": ledger["descripcion"],
+                "cantidad": json_number(qty),
+                "uniMedida": 59,
+                "precioUni": json_number(line_calc["precio_uni"]),
+                "montoDescu": json_number(line_calc["monto_descu"]),
+                "ventaNoSuj": json_number(Decimal("0.00")),
+                "ventaExenta": json_number(line_calc["venta_exenta"]),
+                "ventaGravada": json_number(line_calc["venta_gravada"]),
+                "tributos": None,
+                "psv": json_number(Decimal("0.00")),
+                "noGravado": json_number(Decimal("0.00")),
+                "ivaItem": json_number(line_calc["iva_item"]),
+                "codTributo": None,
+                "numeroDocumento": None,
+                "_lineaObjetivo": json_number(line_calc["linea_total_objetivo"]),
+            }
+        )
+        num_item += 1
 
     target_total = money(getattr(order, "total", Decimal("0.00")))
     items_gross_total = Decimal("0.00")
@@ -630,7 +840,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         for mod in item.applied_modifiers.all():
             mod_price = money(mod.modifier_price_snapshot)
             if mod_price > Decimal("0.00"):
-                modifiers_gross_total += mod_price
+                modifiers_gross_total += money(mod_price * qty)
     fees_total = money(sum((money(f.total_amount) for f in order.fees.all()), Decimal("0.00")))
     reconstructed_order_total = money(items_gross_total + modifiers_gross_total + fees_total - item_discount_total)
     logger.info(
@@ -659,78 +869,13 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     if line_errors:
         logger.error("dte.line_preflight_failed %s", " | ".join(line_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con IVA/base gravada incompatibles.")
-    if not _almost_equal(gross_from_lines, target_total):
-        diff = money(target_total - gross_from_lines)
-        # Reconciliación enfocada en líneas con descuento:
-        # preserva casos sin descuento y ajusta solo montoDescu/ventaGravada/ivaItem del item descontado.
-        if diff > Decimal("0.00"):
-            discounted = [
-                line
-                for line in reversed(cuerpo)
-                if money(line.get("montoDescu")) > Decimal("0.00") and money(line.get("ventaGravada")) > Decimal("0.00")
-            ]
-            for line in discounted:
-                if diff <= Decimal("0.00"):
-                    break
-                max_venta = money(money(line.get("precioUni")) * money(line.get("cantidad")))
-                current_charged = _line_charged_total(line)
-                available = money(max_venta - current_charged)
-                if available <= Decimal("0.00"):
-                    continue
-                delta = available if available <= diff else diff
-                new_charged = money(current_charged + delta)
-                new_desc = money(money(line.get("montoDescu")) - delta)
-                new_venta = new_charged
-                new_iva = calculate_iva_from_gross(new_venta)
-                line["ventaGravada"] = json_number(new_venta)
-                line["montoDescu"] = json_number(new_desc)
-                line["ivaItem"] = json_number(new_iva)
-                line["_lineaObjetivo"] = json_number(new_charged)
-                diff = money(diff - delta)
-                logger.info(
-                    "dte.discount_reconcile numItem=%s delta=%s totalCobrado=%s ventaGravada=%s ivaItem=%s montoDescu=%s",
-                    line.get("numItem"),
-                    delta,
-                    new_charged,
-                    new_venta,
-                    new_iva,
-                    new_desc,
-                )
-            gross_from_lines = money(
-                sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00"))
-            )
-            diff = money(target_total - gross_from_lines)
-        logger.warning(
-            "dte.reconcile_needed order_id=%s total_lineas=%s total_real=%s diff=%s",
-            getattr(order, "id", None),
-            gross_from_lines,
-            target_total,
-            diff,
-        )
-        if diff > Decimal("0.00"):
-            ajuste_iva = calculate_iva_from_gross(diff) if not order.iva_exempt else Decimal("0.00")
-            cuerpo.append({
-                "numItem": num_item,
-                "tipoItem": 1,
-                "codigo": "AJUSTE-DTE",
-                "descripcion": "AJUSTE DIFERENCIA PEDIDO",
-                "cantidad": 1,
-                "uniMedida": 59,
-                "precioUni": json_number(diff),
-                "montoDescu": json_number(Decimal("0.00")),
-                "ventaNoSuj": json_number(Decimal("0.00")),
-                "ventaExenta": json_number(diff if order.iva_exempt else Decimal("0.00")),
-                "ventaGravada": json_number(diff if not order.iva_exempt else Decimal("0.00")),
-                "tributos": None,
-                "psv": json_number(Decimal("0.00")),
-                "noGravado": json_number(Decimal("0.00")),
-                "ivaItem": json_number(ajuste_iva),
-                "codTributo": None,
-                "numeroDocumento": None,
-            })
-            num_item += 1
-            gross_from_lines = money(gross_from_lines + diff)
-            logger.warning("dte.reconcile_applied order_id=%s ajuste=%s", getattr(order, "id", None), diff)
+
+    logger.info(
+        "dte.commercial_groups order_id=%s fiscal_rule=precioUni/monto_final+iva13_113 groups=%s placeholders=%s",
+        getattr(order, "id", None),
+        commercial_groups,
+        placeholder_items_detected,
+    )
     objective_errors: list[str] = []
     for line in cuerpo:
         line_total = _line_charged_total(line)
@@ -763,9 +908,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         logger.error("dte.line_preflight_failed %s", " | ".join(objective_errors))
         raise DTEPreflightError("DTE inconsistente: líneas con descuento/final no cuadran.")
     if not _almost_equal(gross_from_lines, target_total):
+        _reconcile_line_residual(cuerpo, target_total, taxable=not order.iva_exempt, order_id=getattr(order, "id", None))
+        gross_from_lines = money(sum((_line_charged_total(line) for line in cuerpo), Decimal("0.00")))
+    if not _almost_equal(gross_from_lines, target_total):
         logger.error(
-            "dte.line_total_mismatch order_id=%s total_lineas=%s total_real=%s diff=%s",
+            "dte.line_total_mismatch order_id=%s fiscal_rule=precioUni/monto_final+iva13_113 groups=%s placeholders=%s total_lineas=%s total_real=%s diff=%s",
             getattr(order, "id", None),
+            commercial_groups,
+            placeholder_items_detected,
             gross_from_lines,
             target_total,
             money(target_total - gross_from_lines),
@@ -777,6 +927,14 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
     total_gravada = money(sum((money(line.get("ventaGravada")) for line in cuerpo), Decimal("0.00")))
     total_exenta = money(sum((money(line.get("ventaExenta")) for line in cuerpo), Decimal("0.00")))
     total_iva = money(sum((money(line.get("ivaItem")) for line in cuerpo), Decimal("0.00")))
+    logger.info(
+        "dte.final_payload_summary order_id=%s total_lineas=%s total_real=%s total_iva=%s total_desc=%s",
+        getattr(order, "id", None),
+        gross_from_lines,
+        target_total,
+        total_iva,
+        _sum_item_discounts(cuerpo),
+    )
     subtotal_ventas = money(total_gravada + total_exenta)
     global_desc_no_suj = Decimal("0.00")
     global_desc_exenta = Decimal("0.00")
@@ -1118,42 +1276,73 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
+    extra = extra or {}
     request_dte = (record.request_payload or {}).get("dte") or {}
     request_identificacion = (
         request_dte.get("identificacion")
         or (record.request_payload or {}).get("identificacion")
         or {}
     )
-    numero_control = (
-        str(record.control_number or "").strip()
-        or str(request_identificacion.get("numeroControl") or "").strip()
+    numero_control, numero_control_source = _resolve_non_empty(
+        ("dte_record.control_number", record.control_number),
+        ("request_payload.dte.identificacion.numeroControl", request_identificacion.get("numeroControl")),
     )
-    codigo_generacion = (
-        str(record.generation_code or "").strip()
-        or str(record.codigo_generacion or "").strip()
-        or str(request_identificacion.get("codigoGeneracion") or "").strip()
+    codigo_generacion, codigo_generacion_source = _resolve_non_empty(
+        ("dte_record.generation_code", record.generation_code),
+        ("dte_record.codigo_generacion", record.codigo_generacion),
+        ("request_payload.dte.identificacion.codigoGeneracion", request_identificacion.get("codigoGeneracion")),
     )
-    tipo_dte_base = (
-        str(request_identificacion.get("tipoDte") or "").strip()
-        or str(record.dte_type or "").split("_")[-1].strip()
+    tipo_dte_base, tipo_dte_source = _resolve_non_empty(
+        ("request_payload.dte.identificacion.tipoDte", request_identificacion.get("tipoDte")),
+        ("dte_record.dte_type", str(record.dte_type or "").split("_")[-1].strip()),
     )
-    sello_recibido = (
-        str((record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido") or "").strip()
-        or str(record.sello_recibido or "").strip()
-        or str(record.sello_recepcion or "").strip()
+    sello_recibido, sello_source = _resolve_non_empty(
+        ("response_payload.respuesta_hacienda.selloRecibido", (record.response_payload or {}).get("respuesta_hacienda", {}).get("selloRecibido")),
+        ("dte_record.sello_recibido", record.sello_recibido),
+        ("dte_record.sello_recepcion", record.sello_recepcion),
     )
-    fec_emi = str(request_identificacion.get("fecEmi") or "").strip() or str(record.issue_date or "")
-    hor_emi = str(request_identificacion.get("horEmi") or "").strip()
+    fec_emi, fec_emi_source = _resolve_non_empty(
+        ("request_payload.dte.identificacion.fecEmi", request_identificacion.get("fecEmi")),
+        ("dte_record.issue_date", record.issue_date),
+    )
     if not numero_control:
         raise DTEPreflightError(
-            f"No se pudo resolver numeroControl del DTE base (dte_record_id={record.id})."
+            f"No se pudo resolver numDocumento/numeroControl del DTE base (dte_record_id={record.id})."
         )
     if not codigo_generacion:
         raise DTEPreflightError(
             f"No se pudo resolver codigoGeneracion del DTE base (dte_record_id={record.id})."
         )
+    if not sello_recibido:
+        raise DTEPreflightError(
+            f"No se pudo resolver selloRecibido del DTE base (dte_record_id={record.id})."
+        )
+    num_doc_responsable, num_doc_responsable_source = _resolve_non_empty(
+        ("request.responsable_dui", responsable_dui),
+        ("kwargs.numDocResponsable", extra.get("numDocResponsable")),
+    )
+    if not num_doc_responsable:
+        raise DTEPreflightError("No se puede invalidar: falta configurar numDocResponsable")
+    num_doc_solicita, num_doc_solicita_source = _resolve_non_empty(
+        ("request.solicitante_dui", solicitante_dui),
+        ("kwargs.numDocSolicita", extra.get("numDocSolicita")),
+    )
+    if not num_doc_solicita:
+        raise DTEPreflightError("No se puede invalidar: falta configurar numDocSolicita")
+    tip_doc_responsable = _resolve_tip_doc(num_doc_responsable)
+    tip_doc_solicita = _resolve_tip_doc(num_doc_solicita)
+    logger.info(
+        "dte.invalidation.document_resolved dte_record_id=%s num_doc_responsable=%s num_doc_solicita=%s tip_doc_responsable=%s tip_doc_solicita=%s",
+        record.id,
+        _mask_document(num_doc_responsable),
+        _mask_document(num_doc_solicita),
+        tip_doc_responsable,
+        tip_doc_solicita,
+    )
 
     emisor_from_record = request_dte.get("emisor") or {}
+    receptor_origen = request_dte.get("receptor") or {}
+    resumen_origen = request_dte.get("resumen") or {}
     resolved_emisor_config = _resolve_branch_config(record.order)
     resolved_emisor = {
         "nit": emisor_from_record.get("nit") or get_emisor_nit(),
@@ -1166,7 +1355,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
 
     raw_ambiente, source = resolve_ambiente_with_source()
     ambiente = _normalize_ambiente_value(raw_ambiente)
-    missing_emisor_fields = [k for k in ("nit", "nrc", "nombre", "codActividad", "descActividad") if not resolved_emisor.get(k)]
+    missing_emisor_fields = [k for k in ("nit", "nombre") if not resolved_emisor.get(k)]
     if missing_emisor_fields:
         raise DTEPreflightError(f"Emisor incompleto: faltan {', '.join(missing_emisor_fields)}")
     logger.info(
@@ -1182,30 +1371,89 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         raw_ambiente,
         ambiente,
     )
+    now_sv = timezone.now().astimezone(ZoneInfo("America/El_Salvador"))
+    emisor_full = {
+        "nit": resolved_emisor.get("nit"),
+        "nombre": resolved_emisor.get("nombre"),
+        "nomEstablecimiento": resolved_emisor_config.get("nomEstablecimiento") or resolved_emisor.get("nombreComercial") or "Sucursal",
+        "tipoEstablecimiento": resolved_emisor_config.get("tipoEstablecimiento") or "02",
+        "codEstable": resolved_emisor_config.get("codEstable") or "X001",
+        "codPuntoVenta": resolved_emisor_config.get("codPuntoVenta") or "X001",
+        "telefono": resolved_emisor_config.get("telefono") or "00000000",
+        "correo": resolved_emisor_config.get("correo") or "facturas@example.com",
+    }
+    monto_iva_raw = resumen_origen.get("totalIva")
+    if monto_iva_raw in (None, ""):
+        raise DTEPreflightError("No se puede invalidar: falta montoIva del DTE original")
+    receptor_nombre, receptor_nombre_source = _resolve_non_empty(
+        ("request_payload.dte.receptor.nombre", receptor_origen.get("nombre")),
+        ("order.customer_name", getattr(record.order, "customer_name", "")),
+    )
+    documento = {
+        "tipoDocumento": tipo_dte_base,
+        "numDocumento": numero_control,
+        "codigoGeneracionR": codigo_generacion,
+        "selloRecibido": sello_recibido,
+        "montoIva": str(money(monto_iva_raw)),
+        "nombre": receptor_nombre,
+        "fecEmi": fec_emi,
+    }
     payload = {
         "invalidacion": {
             "identificacion": {
                 "version": 2,
                 "ambiente": ambiente,
-                "tipoDte": "AN",
-                "numeroControl": numero_control,
-                "codigoGeneracion": codigo_generacion,
+                "codigoGeneracion": str(uuid.uuid4()).upper(),
+                "fecAnula": now_sv.date().isoformat(),
+                "horAnula": now_sv.strftime("%H:%M:%S"),
             },
-            "documento": {
-                "tipoDte": tipo_dte_base,
-                "numeroControl": numero_control,
-                "codigoGeneracion": codigo_generacion,
-                "selloRecibido": sello_recibido,
-                "fecEmi": fec_emi,
-                "horEmi": hor_emi or None,
+            "documento": documento,
+            "emisor": emisor_full,
+            "motivo": {
+                "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
+                "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
+                "nombreResponsable": str(extra.get("nombreResponsable") or "Responsable").strip(),
+                "tipDocResponsable": tip_doc_responsable,
+                "numDocResponsable": num_doc_responsable,
+                "nombreSolicita": str(extra.get("nombreSolicita") or "Solicitante").strip(),
+                "tipDocSolicita": tip_doc_solicita,
+                "numDocSolicita": num_doc_solicita,
             },
-            "emisor": resolved_emisor,
-            "motivo": motivo,
-            "responsable": responsable_dui,
-            "solicitante": solicitante_dui,
-            "extra": extra or {},
         }
     }
+    logger.info(
+        "dte.invalidation.field_sources dte_record_id=%s sources=%s",
+        record.id,
+        {
+            "tipoDocumento": tipo_dte_source,
+            "numDocumento": numero_control_source,
+            "codigoGeneracionR": codigo_generacion_source,
+            "selloRecibido": sello_source,
+            "montoIva": "request_payload.dte.resumen.totalIva",
+            "nombre": receptor_nombre_source,
+            "fecEmi": fec_emi_source,
+            "emisor.nit": "request_payload.dte.emisor.nit|config",
+            "emisor.nombre": "request_payload.dte.emisor.nombre|config",
+            "emisor.nomEstablecimiento": "branch_config.nomEstablecimiento|nombreComercial",
+            "emisor.tipoEstablecimiento": "branch_config.tipoEstablecimiento",
+            "emisor.codEstable": "branch_config.codEstable",
+            "emisor.codPuntoVenta": "branch_config.codPuntoVenta",
+            "emisor.telefono": "branch_config.telefono",
+            "emisor.correo": "branch_config.correo",
+            "numDocResponsable": num_doc_responsable_source,
+            "numDocSolicita": num_doc_solicita_source,
+        },
+    )
+    logger.info(
+        "dte.invalidation.payload_summary dte_record_id=%s order_id=%s identificacion=%s documento_keys=%s emisor_keys=%s motivo_keys=%s",
+        record.id,
+        getattr(record, "order_id", None),
+        payload["invalidacion"]["identificacion"],
+        list(payload["invalidacion"]["documento"].keys()),
+        list(payload["invalidacion"]["emisor"].keys()),
+        list(payload["invalidacion"]["motivo"].keys()),
+    )
+    logger.info("dte.invalidation.payload_full dte_record_id=%s payload=%s", record.id, payload)
     return payload
 
 
@@ -1233,8 +1481,16 @@ def invalidate_dte_for_order(
             "already_invalidated": True,
         }
     payload = build_invalidation_payload(record, motivo, responsable_dui, solicitante_dui, kwargs)
+    try:
+        validate_dte_preflight_payload(payload)
+        logger.info("dte.invalidation.preflight_ok order_id=%s dte_record_id=%s", order.id, record.id)
+    except DTEPreflightError:
+        logger.exception("dte.invalidation.preflight_failed order_id=%s dte_record_id=%s", order.id, record.id)
+        logger.exception("dte.invalidation.schema_error order_id=%s dte_record_id=%s", order.id, record.id)
+        raise
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
+    logger.info("dte.invalidation.bridge_response order_id=%s dte_record_id=%s response=%s", order.id, record.id, response)
     parsed = interpret_dte_response(response)
     attempt = DteInvalidationAttempt.objects.create(
         order=order,
@@ -1251,6 +1507,15 @@ def invalidate_dte_for_order(
     if attempt.success:
         record.status = DTERecord.STATUS_INVALIDATED
         record.save(update_fields=["status", "updated_at"])
+        logger.info("dte.invalidation.success order_id=%s dte_record_id=%s attempt_id=%s", order.id, record.id, attempt.id)
+    else:
+        logger.error(
+            "dte.invalidation.failure order_id=%s dte_record_id=%s attempt_id=%s error=%s",
+            order.id,
+            record.id,
+            attempt.id,
+            attempt.error_message,
+        )
     logger.info(
         "dte.invalidation.attempt order_id=%s dte_record_id=%s base_status=%s success=%s error=%s",
         order.id,

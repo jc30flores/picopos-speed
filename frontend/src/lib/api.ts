@@ -236,6 +236,13 @@ export type Order = {
   subtotalAfterDiscounts?: number;
   taxTotal?: number;
   totalPayable?: number;
+  isPending?: boolean;
+  pendingState?: "none" | "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
+  pendingReference?: string;
+  pendingMarkedAt?: string | null;
+  pendingCompletedAt?: string | null;
+  pendingCompletionType?: "none" | "paid" | "removed" | "canceled";
+  pendingCompletionNote?: string;
 };
 
 export type EmployeeStats = {
@@ -1735,6 +1742,13 @@ const mapOrder = (order: {
   subtotal_after_discounts?: string;
   tax_total?: string;
   total_payable?: string;
+  is_pending?: boolean;
+  pending_state?: Order["pendingState"];
+  pending_reference?: string;
+  pending_marked_at?: string | null;
+  pending_completed_at?: string | null;
+  pending_completion_type?: Order["pendingCompletionType"];
+  pending_completion_note?: string;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -1798,7 +1812,77 @@ const mapOrder = (order: {
     subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
     taxTotal: Number(order.tax_total ?? 0),
     totalPayable: Number(order.total_payable ?? order.total),
+    isPending: Boolean(order.is_pending),
+    pendingState: (order.pending_state ?? "none") as Order["pendingState"],
+    pendingReference: order.pending_reference ?? "",
+    pendingMarkedAt: order.pending_marked_at ?? null,
+    pendingCompletedAt: order.pending_completed_at ?? null,
+    pendingCompletionType: (order.pending_completion_type ?? "none") as Order["pendingCompletionType"],
+    pendingCompletionNote: order.pending_completion_note ?? "",
   };
+};
+
+export const getPendingOrders = async (params?: { branchId?: number; tab?: "pending" | "finalized"; query?: string }): Promise<{ count: number; results: Order[] }> => {
+  const qs = new URLSearchParams();
+  if (params?.branchId) qs.set("branch_id", String(params.branchId));
+  if (params?.tab) qs.set("tab", params.tab);
+  if (params?.query) qs.set("q", params.query);
+  const response = await request(`/orders/pending/${qs.toString() ? `?${qs.toString()}` : ""}`);
+  const data = await handleJson<{ count: number; results: any[] }>(response);
+  return {
+    count: Number(data.count ?? 0),
+    results: (data.results ?? []).map((row) => mapOrder(row)),
+  };
+};
+
+export const setOrderPending = async (
+  orderId: number,
+  payload: {
+    isPending: boolean;
+    pendingState?: "pending_payment" | "paid_pending_delivery" | "in_kitchen" | "ready";
+    authorizationPin?: string;
+    pendingReference?: string;
+    removalReason?: string;
+    completionType?: "paid" | "removed" | "canceled";
+    items?: Array<{
+      sourceOrderItemId?: number;
+      productId?: number | null;
+      productName: string;
+      quantity: number;
+      price: number;
+      isCustom?: boolean;
+      unitPriceOverride?: number | null;
+      customCode?: string;
+      assignedName?: string;
+      modifiers: Array<{ id?: number; name: string; price: number }>;
+    }>;
+  }
+): Promise<Order> => {
+  const response = await request(`/orders/${orderId}/pending/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      is_pending: payload.isPending,
+      pending_state: payload.pendingState,
+      authorization_pin: payload.authorizationPin ?? "",
+      pending_reference: payload.pendingReference ?? "",
+      removal_reason: payload.removalReason ?? "",
+      completion_type: payload.completionType ?? "",
+      items: (payload.items ?? []).map((item) => ({
+        source_order_item_id: item.sourceOrderItemId ?? null,
+        product_id: item.productId ?? null,
+        product_name_snapshot: item.productName,
+        quantity: item.quantity,
+        price_snapshot: item.price,
+        is_custom: Boolean(item.isCustom),
+        unit_price_override: item.unitPriceOverride ?? null,
+        snapshot_sku_or_code: item.customCode ?? "",
+        assigned_name: item.assignedName ?? "",
+        modifiers: (item.modifiers ?? []).map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      })),
+    }),
+  });
+  return mapOrder(await handleJson<any>(response));
 };
 
 export const createOrder = async (payload: {
@@ -4112,13 +4196,19 @@ export const dteDeliverByOrder = async (
   };
 };
 
-export const dteInvalidate = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {
+export const dteInvalidate = async (
+  id: number,
+  payload: { motivoAnulacion: string; numDocResponsable: string }
+): Promise<{ message: string; record?: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/invalidate/`, {
     method: "POST",
-    body: JSON.stringify({ motivo }),
+    body: JSON.stringify({
+      motivo_anulacion: payload.motivoAnulacion,
+      num_doc_responsable: payload.numDocResponsable,
+    }),
   });
-  const payload = await handleJson<any>(res);
-  return { message: payload.message ?? "DTE invalidado", record: payload.record };
+  const data = await handleJson<any>(res);
+  return { message: data.message ?? "DTE invalidado", record: data.record };
 };
 
 export const dteCreateCreditNote = async (id: number, motivo: string): Promise<{ message: string; record?: DTERecord }> => {

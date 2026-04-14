@@ -27,6 +27,19 @@ class Order(models.Model):
         ("refunded_full", "Refunded (Full)"),
         ("voided", "Voided"),
     ]
+    PENDING_STATE_CHOICES = [
+        ("none", "No pendiente"),
+        ("pending_payment", "Pendiente de pago"),
+        ("paid_pending_delivery", "Pagada pendiente de entrega"),
+        ("in_kitchen", "En cocina"),
+        ("ready", "Lista"),
+    ]
+    PENDING_COMPLETION_CHOICES = [
+        ("none", "Sin finalizar"),
+        ("paid", "Pagada"),
+        ("removed", "Removida"),
+        ("canceled", "Cancelada"),
+    ]
 
     order_number = models.PositiveIntegerField()
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="orders")
@@ -56,6 +69,13 @@ class Order(models.Model):
     )
     refund_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     net_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_pending = models.BooleanField(default=False)
+    pending_state = models.CharField(max_length=30, choices=PENDING_STATE_CHOICES, default="none")
+    pending_reference = models.CharField(max_length=120, blank=True, default="")
+    pending_marked_at = models.DateTimeField(null=True, blank=True)
+    pending_completed_at = models.DateTimeField(null=True, blank=True)
+    pending_completion_type = models.CharField(max_length=20, choices=PENDING_COMPLETION_CHOICES, default="none")
+    pending_completion_note = models.CharField(max_length=160, blank=True, default="")
     amount_due_cents = models.IntegerField(default=0)
     financial_locked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

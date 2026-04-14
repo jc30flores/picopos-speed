@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -18,6 +19,7 @@ import { formatDateTimeSV } from "@/lib/datetime";
 import { Copy } from "lucide-react";
 import { DteRowActions } from "@/components/dte/DteRowActions";
 import { PageLayout } from "@/components/layout/PageLayout";
+import { useAuth } from "@/context/useAuth";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -69,11 +71,17 @@ const JsonBlock = ({ title, payload }: { title: string; payload: unknown }) => {
 
 export default function DTEPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [rows, setRows] = useState<DTERecord[]>([]);
   const [selected, setSelected] = useState<DTERecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionsLoading, setActionsLoading] = useState<Record<number, ActionType | null>>({});
+  const [invalidateDialogOpen, setInvalidateDialogOpen] = useState(false);
+  const [invalidateTarget, setInvalidateTarget] = useState<DTERecord | null>(null);
+  const [invalidateMotivo, setInvalidateMotivo] = useState("Invalidación desde panel DTE");
+  const [invalidateDoc, setInvalidateDoc] = useState("");
+  const [invalidateInlineError, setInvalidateInlineError] = useState("");
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -185,18 +193,49 @@ export default function DTEPage() {
         toast({ title: "Nota de crédito", description: result.message });
       }
       if (action === "invalidate") {
-        if (!window.confirm("¿Invalidar este DTE? Esta acción no se puede deshacer.")) return;
-        const motivo = window.prompt("Motivo de invalidación", "Invalidación desde panel DTE")?.trim() || "";
-        if (!motivo) return;
-        const result = await dteInvalidate(row.id, motivo);
-        patchRow(result.record);
-        toast({ title: "Invalidación", description: result.message });
+        setInvalidateTarget(row);
+        setInvalidateMotivo("Invalidación desde panel DTE");
+        setInvalidateDoc("");
+        setInvalidateInlineError("");
+        setInvalidateDialogOpen(true);
+        return;
       }
       await load();
     } catch (err) {
       toast({ title: "Acción fallida", description: String(err), variant: "destructive" });
     } finally {
       setActionsLoading((prev) => ({ ...prev, [row.id]: null }));
+    }
+  };
+
+  const submitInvalidation = async () => {
+    if (!invalidateTarget) return;
+    const motivo = invalidateMotivo.trim();
+    const documento = invalidateDoc.trim();
+    if (!motivo) {
+      setInvalidateInlineError("El motivo de invalidación es obligatorio.");
+      return;
+    }
+    if (!documento) {
+      setInvalidateInlineError("El número de documento responsable es obligatorio.");
+      return;
+    }
+    setInvalidateInlineError("");
+    setActionsLoading((prev) => ({ ...prev, [invalidateTarget.id]: "invalidate" }));
+    try {
+      const result = await dteInvalidate(invalidateTarget.id, {
+        motivoAnulacion: motivo,
+        numDocResponsable: documento,
+      });
+      patchRow(result.record);
+      toast({ title: "Invalidación", description: result.message });
+      setInvalidateDialogOpen(false);
+      setInvalidateTarget(null);
+      await load();
+    } catch (err) {
+      toast({ title: "Acción fallida", description: String(err), variant: "destructive" });
+    } finally {
+      setActionsLoading((prev) => ({ ...prev, [invalidateTarget.id]: null }));
     }
   };
 
@@ -326,6 +365,57 @@ export default function DTEPage() {
 
         {error && <div className="rounded border border-red-600/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>}
       </div>
+
+      <Dialog
+        open={invalidateDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInvalidateDialogOpen(false);
+            setInvalidateTarget(null);
+            setInvalidateInlineError("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Invalidar DTE</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Se requiere el documento del responsable para completar la invalidación.
+          </p>
+          <div className="space-y-3">
+            <label className="block space-y-1">
+              <span className="text-sm font-medium">Motivo de invalidación</span>
+              <Textarea
+                value={invalidateMotivo}
+                onChange={(e) => setInvalidateMotivo(e.target.value)}
+                placeholder="Describe el motivo de invalidación"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm font-medium">Número de documento responsable</span>
+              <Input
+                value={invalidateDoc}
+                onChange={(e) => setInvalidateDoc(e.target.value)}
+                placeholder="Ej. 01234567-8"
+              />
+            </label>
+            {invalidateInlineError ? <p className="text-sm text-destructive">{invalidateInlineError}</p> : null}
+            <p className="text-xs text-muted-foreground">Usuario: {user?.username || "actual"}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setInvalidateDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={() => void submitInvalidation()}
+                disabled={!invalidateMotivo.trim() || !invalidateDoc.trim() || !invalidateTarget}
+              >
+                Confirmar invalidación
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">

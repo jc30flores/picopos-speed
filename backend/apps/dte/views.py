@@ -238,18 +238,51 @@ class DTEInvalidateView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        def _resolve_actor_name(user) -> str:
+            full = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
+            return (
+                str(getattr(user, "get_full_name", lambda: "")() or "").strip()
+                or str(getattr(user, "display_name", "") or "").strip()
+                or full
+                or str(getattr(user, "username", "") or "").strip()
+                or "Responsable"
+            )
+
         record = generics.get_object_or_404(DTERecord, pk=pk)
         flags = evaluate_record_actions(record)
         if not flags["can_invalidate"]:
             return Response({"detail": flags["invalidate_reason"] or "No se puede invalidar"}, status=status.HTTP_400_BAD_REQUEST)
+        motivo_anulacion = str(request.data.get("motivo_anulacion") or request.data.get("motivo") or "").strip()
+        num_doc_responsable = str(request.data.get("num_doc_responsable") or request.data.get("responsable_dui") or "").strip()
+        if not motivo_anulacion:
+            return Response({"detail": "El motivo de invalidación es obligatorio."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        if not num_doc_responsable:
+            return Response({"detail": "El número de documento responsable es obligatorio."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        actor_name = _resolve_actor_name(request.user)
+        logger.info(
+            "dte.invalidation.form_input issued_id=%s order_id=%s motivo_len=%s num_doc_responsable=%s",
+            pk,
+            record.order_id,
+            len(motivo_anulacion),
+            num_doc_responsable,
+        )
+        logger.info(
+            "dte.invalidation.user_resolved issued_id=%s order_id=%s actor_name=%s user_id=%s",
+            pk,
+            record.order_id,
+            actor_name,
+            getattr(request.user, "id", None),
+        )
         try:
             result = invalidate_dte_for_order(
                 record.order,
-                motivo=request.data.get("motivo", ""),
-                responsable_dui=request.data.get("responsable_dui", ""),
-                solicitante_dui=request.data.get("solicitante_dui", ""),
+                motivo=motivo_anulacion,
+                responsable_dui=num_doc_responsable,
+                solicitante_dui=num_doc_responsable,
                 dte_record=record,
                 allow_non_accepted=True,
+                nombreResponsable=actor_name,
+                nombreSolicita=actor_name,
             )
         except DTEPreflightError as exc:
             logger.warning(
@@ -268,7 +301,7 @@ class DTEInvalidateView(APIView):
         invalidation = DTEInvalidation.objects.create(
             order=record.order,
             dte_record=record,
-            motivo=request.data.get("motivo", ""),
+            motivo=motivo_anulacion,
             tipo_anulacion=request.data.get("tipo_anulacion", "total"),
             status=DTERecord.STATUS_INVALIDATED if result.get("success") else DTERecord.STATUS_REJECTED,
         )

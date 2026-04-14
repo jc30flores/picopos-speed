@@ -14,11 +14,11 @@ export const usePrivilegedActionGuard = () => {
     setPendingAction(actionKey);
   };
 
-  const onPinSuccess = (handlers: Record<string, () => void>) => {
+  const onPinSuccess = (handlers: Record<string, (pin?: string) => void>, pin?: string) => {
     if (!pendingAction) return;
     const handler = handlers[pendingAction];
     setPendingAction(null);
-    handler?.();
+    handler?.(pin);
   };
 
   return {
