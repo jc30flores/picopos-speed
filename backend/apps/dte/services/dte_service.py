@@ -545,7 +545,6 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
                 "codigoGeneracion",
                 "tipoDocumento",
                 "numDocumento",
-                "codigoGeneracionR",
                 "selloRecibido",
                 "montoIva",
                 "nombre",
@@ -553,6 +552,8 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             )
             if not str(documento.get(key) or "").strip()
         ]
+        if "codigoGeneracionR" not in documento:
+            missing_documento.append("codigoGeneracionR")
         if missing_documento:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
@@ -1431,7 +1432,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         "codigoGeneracion": codigo_generacion,
         "tipoDocumento": receptor_tipo_documento,
         "numDocumento": receptor_num_documento,
-        "codigoGeneracionR": codigo_generacion,
+        "codigoGeneracionR": None,
         "selloRecibido": sello_recibido,
         "montoIva": monto_iva,
         "nombre": receptor_nombre,
@@ -1464,7 +1465,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             "emisor": emisor_full,
             "motivo": {
                 "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
-                "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
+                "motivoAnulacion": str(motivo or "").strip() or "Rescindir de la operación realizada",
                 "nombreResponsable": str(extra.get("nombreResponsable") or "Responsable").strip(),
                 "tipDocResponsable": tip_doc_responsable,
                 "numDocResponsable": num_doc_responsable,
@@ -1483,7 +1484,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             "codigoGeneracion": codigo_generacion_source,
             "tipoDocumento": receptor_tipo_documento_source,
             "numDocumento": receptor_num_documento_source,
-            "codigoGeneracionR": codigo_generacion_source,
+            "codigoGeneracionR": "fixed:null",
             "selloRecibido": sello_source,
             "montoIva": "request_payload.dte.resumen.totalIva",
             "nombre": receptor_nombre_source,

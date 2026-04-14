@@ -93,7 +93,7 @@ class DTEPayloadBuildersTests(TestCase):
                         "codigoGeneracion": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                         "tipoDocumento": "13",
                         "numDocumento": "00000000-0",
-                        "codigoGeneracionR": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "codigoGeneracionR": None,
                         "selloRecibido": "SELLO-X",
                         "montoIva": 1.3,
                         "nombre": "Cliente DTE",
@@ -136,3 +136,39 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertIn("nomEstablecimiento", invalidacion["emisor"])
         self.assertEqual(invalidacion["motivo"]["numDocResponsable"], "01234567-8")
         self.assertEqual(invalidacion["motivo"]["numDocSolicita"], "98765432-1")
+
+    def test_build_invalidation_payload_sets_codigo_generacion_r_as_null(self):
+        specific_record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-01-S001P001-000000000002035",
+            generation_code="62D34A17-994B-4D69-8DAE-87B074984D8A",
+            codigo_generacion="62D34A17-994B-4D69-8DAE-87B074984D8A",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "tipoDte": "01",
+                        "numeroControl": "DTE-01-S001P001-000000000002035",
+                        "codigoGeneracion": "62D34A17-994B-4D69-8DAE-87B074984D8A",
+                        "fecEmi": "2026-01-10",
+                    },
+                    "receptor": {},
+                    "resumen": {"totalIva": 1.35},
+                }
+            },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "202696A4871E1C39437A9D55A64F6A0F2A8B74OC"}},
+            sello_recibido="202696A4871E1C39437A9D55A64F6A0F2A8B74OC",
+            total_amount=Decimal("10.00"),
+        )
+        payload = build_invalidation_payload(
+            specific_record,
+            motivo="",
+            responsable_dui="01234567-8",
+            solicitante_dui="01234567-8",
+            extra={},
+        )
+        self.assertEqual(payload["invalidacion"]["documento"]["codigoGeneracion"], "62D34A17-994B-4D69-8DAE-87B074984D8A")
+        self.assertIsNone(payload["invalidacion"]["documento"]["codigoGeneracionR"])
+        self.assertEqual(payload["invalidacion"]["motivo"]["motivoAnulacion"], "Rescindir de la operación realizada")

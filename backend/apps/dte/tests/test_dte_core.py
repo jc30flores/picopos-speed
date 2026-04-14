@@ -1273,7 +1273,7 @@ class DTEInvalidateEndpointTests(TestCase):
         self.assertIsInstance(sent_payload["invalidacion"]["documento"]["montoIva"], float)
         self.assertEqual(
             sent_payload["invalidacion"]["documento"]["codigoGeneracionR"],
-            "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            None,
         )
         self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")
         self.assertNotIn("nrc", sent_payload["invalidacion"]["emisor"])
