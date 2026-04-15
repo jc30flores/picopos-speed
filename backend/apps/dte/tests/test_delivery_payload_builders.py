@@ -172,3 +172,127 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertEqual(payload["invalidacion"]["documento"]["codigoGeneracion"], "62D34A17-994B-4D69-8DAE-87B074984D8A")
         self.assertIsNone(payload["invalidacion"]["documento"]["codigoGeneracionR"])
         self.assertEqual(payload["invalidacion"]["motivo"]["motivoAnulacion"], "Rescindir de la operación realizada")
+
+    def test_build_invalidation_payload_prefers_original_consumer_final_null_documents(self):
+        self.order.customer.tipo_documento = "13"
+        self.order.customer.num_documento = "00000000-0"
+        self.order.customer.save(update_fields=["tipo_documento", "num_documento", "updated_at"])
+        record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-01-S001P001-000000000003333",
+            generation_code="11111111-2222-3333-4444-555555555555",
+            codigo_generacion="11111111-2222-3333-4444-555555555555",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "tipoDte": "01",
+                        "numeroControl": "DTE-01-S001P001-000000000003333",
+                        "codigoGeneracion": "11111111-2222-3333-4444-555555555555",
+                        "fecEmi": "2026-01-12",
+                    },
+                    "receptor": {
+                        "nombre": "CONSUMIDOR FINAL",
+                        "tipoDocumento": None,
+                        "numDocumento": None,
+                    },
+                    "resumen": {"totalIva": 1.00},
+                }
+            },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-CF"}},
+            sello_recibido="SELLO-CF",
+            total_amount=Decimal("7.50"),
+        )
+        payload = build_invalidation_payload(record, "Prueba", "01234567-8", "01234567-8", {})
+        self.assertIsNone(payload["invalidacion"]["documento"]["tipoDocumento"])
+        self.assertIsNone(payload["invalidacion"]["documento"]["numDocumento"])
+        self.assertEqual(payload["invalidacion"]["documento"]["nombre"], "CONSUMIDOR FINAL")
+        self.assertIsNone(payload["invalidacion"]["documento"]["codigoGeneracionR"])
+
+    def test_build_invalidation_payload_copies_identified_receptor_exactly(self):
+        record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CCF_03",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-03-S001P001-000000000004444",
+            generation_code="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            codigo_generacion="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "tipoDte": "03",
+                        "numeroControl": "DTE-03-S001P001-000000000004444",
+                        "codigoGeneracion": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                        "fecEmi": "2026-01-13",
+                    },
+                    "receptor": {
+                        "nombre": "CLIENTE CCF",
+                        "tipoDocumento": "36",
+                        "numDocumento": "06141234567890",
+                    },
+                    "resumen": {"totalIva": 2.15},
+                }
+            },
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-CCF"}},
+            sello_recibido="SELLO-CCF",
+            total_amount=Decimal("16.50"),
+        )
+        payload = build_invalidation_payload(record, "Prueba", "01234567-8", "01234567-8", {})
+        self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "36")
+        self.assertEqual(payload["invalidacion"]["documento"]["numDocumento"], "06141234567890")
+        self.assertEqual(payload["invalidacion"]["documento"]["nombre"], "CLIENTE CCF")
+
+    def test_build_invalidation_payload_has_no_legacy_structure(self):
+        payload = build_invalidation_payload(self.record, "Prueba", "01234567-8", "01234567-8", {})
+        self.assertNotIn("dte", payload)
+        self.assertNotIn("responsable", payload["invalidacion"])
+        self.assertNotIn("solicitante", payload["invalidacion"])
+        self.assertNotIn("extra", payload["invalidacion"])
+        self.assertNotIn("tipoDte", payload["invalidacion"]["identificacion"])
+        self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
+
+    def test_build_invalidation_payload_prefers_documento_firmado_over_request_payload(self):
+        record = DTERecord.objects.create(
+            order=self.order,
+            branch=self.branch,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-01-S001P001-000000000009999",
+            generation_code="99999999-8888-7777-6666-555555555555",
+            codigo_generacion="99999999-8888-7777-6666-555555555555",
+            request_payload={
+                "dte": {
+                    "identificacion": {
+                        "tipoDte": "01",
+                        "numeroControl": "DTE-01-S001P001-000000000009999",
+                        "codigoGeneracion": "99999999-8888-7777-6666-555555555555",
+                        "fecEmi": "2026-01-01",
+                    },
+                    "receptor": {"nombre": "REQ", "tipoDocumento": "13", "numDocumento": "00000000-0"},
+                    "resumen": {"totalIva": 1.00},
+                }
+            },
+            response_payload={
+                "respuesta_hacienda": {"selloRecibido": "SELLO-FIRMADO"},
+                "documento_firmado": {
+                    "identificacion": {
+                        "tipoDte": "01",
+                        "numeroControl": "DTE-01-S001P001-000000000009999",
+                        "codigoGeneracion": "99999999-8888-7777-6666-555555555555",
+                        "fecEmi": "2026-01-20",
+                    },
+                    "receptor": {"nombre": "FIRMADO", "tipoDocumento": None, "numDocumento": None},
+                    "resumen": {"totalIva": 2.25},
+                },
+            },
+            sello_recibido="SELLO-FIRMADO",
+            total_amount=Decimal("18.00"),
+        )
+        payload = build_invalidation_payload(record, "Prueba", "01234567-8", "01234567-8", {})
+        self.assertEqual(payload["invalidacion"]["documento"]["fecEmi"], "2026-01-20")
+        self.assertEqual(payload["invalidacion"]["documento"]["montoIva"], 2.25)
+        self.assertEqual(payload["invalidacion"]["documento"]["nombre"], "FIRMADO")
+        self.assertIsNone(payload["invalidacion"]["documento"]["tipoDocumento"])
