@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AttendanceHistoryRow,
   AttendanceState,
-  attendanceBreakEnd,
-  attendanceBreakStart,
   attendanceClockIn,
   attendanceClockOut,
   getMyAttendanceHistory,
@@ -43,8 +41,6 @@ export const AttendancePanel = () => {
 
   const actions = useMemo(() => ({
     clockIn: async () => setState(await attendanceClockIn()),
-    breakStart: async () => setState(await attendanceBreakStart()),
-    breakEnd: async () => setState(await attendanceBreakEnd()),
     clockOut: async () => setState(await attendanceClockOut()),
   }), []);
 
@@ -52,24 +48,6 @@ export const AttendancePanel = () => {
     try { await fn(); toast.success("Marcaje guardado"); }
     catch (error) { toast.error(error instanceof Error ? error.message : "Acción inválida"); }
   };
-
-  const hasClockIn = Boolean(state?.clockIn);
-  const hasClockOut = Boolean(state?.clockOut);
-  const hasBreakStart = Boolean(state?.breakStart);
-  const hasBreakEnd = Boolean(state?.breakEnd);
-  const breakActive = hasBreakStart && !hasBreakEnd;
-  const breakDone = hasBreakStart && hasBreakEnd;
-  const breakLabel = breakActive ? "Volver" : breakDone ? "Break ✓" : "Break";
-  const breakDisabled = loading || !hasClockIn || hasClockOut || breakDone;
-  const breakClass = breakDone
-    ? "border border-border bg-background text-muted-foreground"
-    : breakActive
-      ? "bg-emerald-600 text-white enabled:hover:bg-emerald-500"
-      : "bg-yellow-500 text-black enabled:hover:bg-yellow-400";
-
-  const breakText = hasBreakStart
-    ? `${fmtHM(state?.breakStart ?? null)}${hasBreakEnd ? `–${fmtHM(state?.breakEnd ?? null)}` : "–"}`
-    : "—";
 
   const loadHistory = async (filters: { start?: string; end?: string } = {}) => {
     setHistoryLoading(true);
@@ -87,20 +65,12 @@ export const AttendancePanel = () => {
         </div>
         <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button>
       </div>
-      <div className="mb-3 grid grid-cols-3 gap-2 text-xs sm:text-sm">
+      <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(state?.clockIn ?? null)}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break</p><p className="font-semibold">{breakText}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(state?.clockOut ?? null)}</p></div>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <Button className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50" disabled={loading || !state?.canClockIn} onClick={() => void runAction(actions.clockIn)}>Entrada</Button>
-        <Button
-          className={`h-12 disabled:opacity-35 disabled:saturate-50 ${breakClass}`}
-          disabled={breakDisabled}
-          onClick={() => void runAction(breakActive ? actions.breakEnd : actions.breakStart)}
-        >
-          {breakLabel}
-        </Button>
         <Button className="h-12 bg-rose-600 text-white enabled:hover:bg-rose-500 disabled:opacity-35 disabled:saturate-50" disabled={loading || !state?.canClockOut} onClick={() => void runAction(actions.clockOut)}>Salida</Button>
       </div>
       <AttendanceRecordsModal open={recordsOpen} onOpenChange={setRecordsOpen} rows={history} loading={historyLoading} onApplyFilters={loadHistory} />

@@ -1,34 +1,76 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
 import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
 import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
+import { getMyAttendanceToday } from "@/lib/api";
+import { toast } from "sonner";
+
+const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
+  pos: ShoppingCart,
+  pending: ClipboardList,
+  kiosk: Store,
+  kitchen: ChefHat,
+  orders_customers: ClipboardList,
+  menu_discounts: Tags,
+  registers: BarChart3,
+  dte: FileText,
+  clients: Users,
+  settings: Settings,
+};
 
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
-  const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
-    pos: ShoppingCart,
-    pending: ClipboardList,
-    kiosk: Store,
-    kitchen: ChefHat,
-    orders_customers: ClipboardList,
-    menu_discounts: Tags,
-    registers: BarChart3,
-    dte: FileText,
-    clients: Users,
-    settings: Settings,
-  };
 
   const cards = useMemo(
     () => filterModulesForUser(user, appModules).map((module) => ({ ...module, icon: iconByModule[module.key] })),
     [user]
   );
   const isWorker = user?.role === "worker";
+  const isAttendanceBypassUser = Boolean(user?.isSuperuser || user?.role === "admin");
+  const [hasActiveAttendance, setHasActiveAttendance] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (!user || isAttendanceBypassUser) {
+      setHasActiveAttendance(true);
+      return;
+    }
+    let cancelled = false;
+    const loadAttendanceState = async () => {
+      try {
+        const today = await getMyAttendanceToday();
+        const active = Boolean(today.clockIn) && !today.clockOut;
+        if (cancelled) return;
+        setHasActiveAttendance(active);
+        console.info("attendance.home.state", {
+          userId: user.id,
+          role: user.role,
+          pathname: "/",
+          clockIn: today.clockIn,
+          clockOut: today.clockOut,
+          hasActiveAttendance: active,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setHasActiveAttendance(false);
+        console.info("attendance.home.state_error", {
+          userId: user.id,
+          role: user.role,
+          pathname: "/",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    void loadAttendanceState();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAttendanceBypassUser, user]);
 
   const toggleTheme = () => {
     const next = theme === "light" ? "dark" : "light";
@@ -75,7 +117,24 @@ const MainMenu = () => {
         {!isWorker ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
-              <Button key={card.path} className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90" onClick={() => navigate(card.path)}>
+              <Button
+                key={card.path}
+                className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90"
+                onClick={() => {
+                  const blockedByAttendance = !isAttendanceBypassUser && !hasActiveAttendance;
+                  console.info("attendance.home.module_click", {
+                    userId: user?.id ?? null,
+                    role: user?.role ?? null,
+                    path: card.path,
+                    blockedByAttendance,
+                  });
+                  if (blockedByAttendance) {
+                    toast.error("Debes marcar Entrada antes de continuar.");
+                    return;
+                  }
+                  navigate(card.path);
+                }}
+              >
                 <card.icon className="h-6 w-6" />
                 {card.label}
               </Button>
