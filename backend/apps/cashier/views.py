@@ -161,15 +161,26 @@ class CashSessionCurrentView(APIView):
         )
         branch_id = resolve_branch_id(raw_branch_id)
         session = get_open_cash_session_for_branch(branch_id)
+        today_sv = timezone.localdate()
+        scoped_sessions = CashSession.objects.filter(register__branch_id=branch_id) if branch_id else CashSession.objects.all()
+        latest_session = scoped_sessions.order_by("-opened_at").first()
+        total_sessions_today = scoped_sessions.filter(opened_at__date=today_sv).count()
         include_sensitive = _can_view_sensitive_cash_data(request)
         logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
             return Response(
                 {
                     "has_open_session": False,
+                    "has_open_cash_session": False,
                     "session": None,
+                    "current_cash_session": None,
                     "summary": None,
                     "business_date": str(timezone.localdate()),
+                    "last_opened_at": latest_session.opened_at if latest_session else None,
+                    "last_closed_at": latest_session.closed_at if latest_session else None,
+                    "total_sessions_today": total_sessions_today,
+                    "can_open_cash": True,
+                    "can_close_cash": False,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -177,9 +188,16 @@ class CashSessionCurrentView(APIView):
         return Response(
             {
                 "has_open_session": True,
+                "has_open_cash_session": True,
                 "session": _session_contract_payload(session, include_sensitive=include_sensitive),
+                "current_cash_session": _session_contract_payload(session, include_sensitive=include_sensitive),
                 "summary": CashSessionSummarySerializer(summary).data if summary else None,
                 "business_date": str(timezone.localdate()),
+                "last_opened_at": session.opened_at,
+                "last_closed_at": session.closed_at,
+                "total_sessions_today": total_sessions_today,
+                "can_open_cash": False,
+                "can_close_cash": True,
             },
             status=status.HTTP_200_OK,
         )
@@ -227,25 +245,10 @@ class CashSessionOpenView(APIView):
                     "code": "CASH_SESSION_ALREADY_OPEN",
                     "detail": "Ya existe una caja abierta para esta sucursal.",
                     "has_open_session": True,
+                    "has_open_cash_session": True,
+                    "can_open_cash": False,
+                    "can_close_cash": True,
                     "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        today_sv = timezone.localdate()
-        existing_today = (
-            CashSession.objects.select_for_update()
-            .filter(register__branch_id=scope_branch_id, opened_at__date=today_sv)
-            .order_by("-opened_at")
-            .first()
-        )
-        if existing_today:
-            return Response(
-                {
-                    "code": "CASH_SESSION_ALREADY_OPENED_TODAY",
-                    "detail": "Ya se realizó apertura de caja hoy en esta sucursal (hora local El Salvador).",
-                    "business_date": str(today_sv),
-                    "last_session_id": existing_today.id,
                 },
                 status=status.HTTP_409_CONFLICT,
             )
@@ -256,6 +259,9 @@ class CashSessionOpenView(APIView):
         return Response(
             {
                 "has_open_session": True,
+                "has_open_cash_session": True,
+                "can_open_cash": False,
+                "can_close_cash": True,
                 "already_open": False,
                 "session": _session_contract_payload(session, include_sensitive=_can_view_sensitive_cash_data(request)),
             },

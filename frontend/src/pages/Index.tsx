@@ -76,6 +76,7 @@ import {
   Order,
   PrintJob,
 } from "@/lib/api";
+import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
 import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
@@ -1093,7 +1094,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       ]);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] current-session", { open: snapshot.open, sessionId: snapshot.session?.id ?? null });
+        console.info("[cash-debug] current-session", {
+          open: snapshot.open,
+          sessionId: snapshot.session?.id ?? null,
+          status: getCashSessionStatus(snapshot),
+          totalSessionsToday: snapshot.totalSessionsToday ?? 0,
+          lastOpenedAt: snapshot.lastOpenedAt ?? null,
+          lastClosedAt: snapshot.lastClosedAt ?? null,
+        });
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
@@ -1259,7 +1267,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const current = await getCurrentCashSession();
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-refetch", { open: current.open, sessionId: current.session?.id ?? null });
+        console.info("[cash-debug] open-session-refetch", {
+          open: current.open,
+          sessionId: current.session?.id ?? null,
+          status: getCashSessionStatus(current),
+        });
       }
       setCashSnapshot(current);
       if (!current.open) {

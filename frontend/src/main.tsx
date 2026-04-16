@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import { AuthProvider } from "./context/AuthProvider";
+import { AttendanceAccessProvider } from "./context/AttendanceAccessProvider";
 import "./index.css";
 
 const THEME_STORAGE_KEY = "theme";
@@ -17,6 +18,8 @@ applyInitialTheme();
 
 createRoot(document.getElementById("root")!).render(
   <AuthProvider>
-    <App />
+    <AttendanceAccessProvider>
+      <App />
+    </AttendanceAccessProvider>
   </AuthProvider>
 );

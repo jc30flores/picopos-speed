@@ -2,6 +2,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+import logging
 from rest_framework import generics, status
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAdminOrManager, IsAuthenticatedAndActive
@@ -16,6 +17,8 @@ from apps.employees.serializers import (
     AttendanceHistoryRowSerializer,
     build_attendance_state,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EmployeeListCreateView(generics.ListCreateAPIView):
@@ -118,11 +121,13 @@ class AttendanceTodayView(APIView):
     def get(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
+            logger.info("attendance.today.no_employee user_id=%s", request.user.id)
             return Response({"attendance": None, "state": "NO_EMPLOYEE"}, status=status.HTTP_200_OK)
         record = _today_record_if_exists(employee)
         if not record:
             empty_record = AttendanceRecord(employee=employee, date=timezone.localdate())
             payload = build_attendance_state(empty_record, employee)
+            logger.info("attendance.today.no_record user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
             return Response(
                 {
                     "attendance": AttendanceStateSerializer(payload).data,
@@ -131,6 +136,7 @@ class AttendanceTodayView(APIView):
                 status=status.HTTP_200_OK,
             )
         payload = build_attendance_state(record, employee)
+        logger.info("attendance.today.ok user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
         return Response({"attendance": AttendanceStateSerializer(payload).data, "state": "OK"}, status=status.HTTP_200_OK)
 
 
@@ -142,6 +148,7 @@ class AttendanceActionView(APIView):
     def post(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
+            logger.info("attendance.action.no_employee user_id=%s action=%s", request.user.id, self.action)
             return Response(
                 {"detail": "Empleado no asociado al usuario.", "state": "NO_EMPLOYEE"},
                 status=status.HTTP_404_NOT_FOUND,
@@ -151,42 +158,56 @@ class AttendanceActionView(APIView):
         now = timezone.now()
         clock_in = record.clock_in or record.check_in
         clock_out = record.clock_out or record.check_out
+        has_active_session = bool(clock_in and (clock_out is None or clock_in > clock_out))
+        logger.info(
+            "attendance.action.start user_id=%s employee_id=%s action=%s clock_in=%s clock_out=%s has_active_session=%s break_start=%s break_end=%s",
+            request.user.id,
+            employee.id,
+            self.action,
+            clock_in,
+            clock_out,
+            has_active_session,
+            record.break_start,
+            record.break_end,
+        )
 
         if self.action == "clock_in":
-            if clock_in:
+            if has_active_session:
                 payload = build_attendance_state(record, employee)
                 return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_in = now
             record.check_in = now
+            record.clock_out = None
+            record.check_out = None
+            record.break_start = None
+            record.break_end = None
+            record.total_clock_ins = int(record.total_clock_ins or 0) + 1
         elif self.action == "break_start":
-            if not clock_in:
+            if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_start:
                 return Response({"detail": "Break ya iniciado."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
-                return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
             record.break_start = now
         elif self.action == "break_end":
             if not record.break_start:
                 return Response({"detail": "Debes iniciar break primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_end:
                 return Response({"detail": "Break ya finalizado."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
+            if not has_active_session:
                 return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
             record.break_end = now
         elif self.action == "clock_out":
-            if not clock_in:
+            if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_start and not record.break_end:
                 return Response({"detail": "Debes finalizar el break antes de salida."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
-                payload = build_attendance_state(record, employee)
-                return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_out = now
             record.check_out = now
+            record.total_clock_outs = int(record.total_clock_outs or 0) + 1
 
         record.save()
         payload = build_attendance_state(record, employee)
+        logger.info("attendance.action.end user_id=%s employee_id=%s action=%s payload=%s", request.user.id, employee.id, self.action, payload)
         return Response(AttendanceStateSerializer(payload).data)
 
 
