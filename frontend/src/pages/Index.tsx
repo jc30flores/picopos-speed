@@ -1006,6 +1006,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
+  const cancelPendingCheckoutContinuation = (reason: string) => {
+    const hadPendingContinuation = Boolean(postOpenSessionActionRef.current);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] continue-checkout", { reason, executed: false, hadPendingContinuation });
+    }
+    postOpenSessionActionRef.current = null;
+    openSessionResolverRef.current?.(false);
+    openSessionResolverRef.current = null;
+  };
+
   const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
     try {
       const current = await getCurrentCashSession();
@@ -1029,6 +1040,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       console.info("[cash-debug] cobrar-click", {
+        cartItems: cart.length,
+        cartTotal: total,
         currentCashSession: cashSnapshot.session?.id ?? null,
         open: cashSnapshot.open,
         requiresCashOpen,
@@ -1162,7 +1175,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
-      setCashSnapshot((previous) => ({ ...previous, open: false }));
+      setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
       if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
       }
@@ -2894,6 +2907,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         open={isOpenSessionModalOpen}
         onOpenChange={(open) => {
           if (!open && !cashSnapshot.open) return;
+          if (!open) {
+            cancelPendingCheckoutContinuation("modal_closed_by_user");
+          }
           setIsOpenSessionModalOpen(open);
         }}
       >
@@ -2925,7 +2941,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             />
             <div className="flex gap-2">
               {cashSnapshot.open ? (
-                <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => {
+                    cancelPendingCheckoutContinuation("open-session-cancel");
+                    setIsOpenSessionModalOpen(false);
+                  }}
+                >
+                  Cancelar
+                </Button>
               ) : null}
               <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
@@ -2937,6 +2962,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 variant="outline"
                 className="w-full"
                 onClick={() => {
+                  cancelPendingCheckoutContinuation("open-session-back");
                   setIsOpenSessionModalOpen(false);
                   navigate("/");
                 }}
