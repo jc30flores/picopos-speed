@@ -15,6 +15,7 @@ from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from apps.core.audit import log_audit
+from apps.core.models import Branch
 from apps.core.permissions import (
     IsAuthenticatedAndActive,
     IsCashierOrManagerOrAdmin,
@@ -201,15 +202,23 @@ class OrderCreateView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         source = str(serializer.validated_data.get("source") or "").strip().lower()
         branch = serializer.validated_data.get("branch_id")
+        if branch is None:
+            inferred_branch_id = _selected_branch_id(request)
+            if inferred_branch_id:
+                branch = Branch.objects.filter(id=inferred_branch_id).first()
+                if branch is not None:
+                    serializer.validated_data["branch_id"] = branch
         branch_id = getattr(branch, "id", None)
         has_open_session = has_open_cash_session_for_branch(branch_id)
         logger.info(
-            "orders.create.cash_gate user_id=%s username=%s source=%s branch_id=%s has_open_cash_session=%s",
+            "orders.create.cash_gate user_id=%s username=%s source=%s branch_id=%s has_open_cash_session=%s branch_raw_query=%s branch_raw_header=%s",
             getattr(request.user, "id", None),
             getattr(request.user, "username", ""),
             source,
             branch_id,
             has_open_session,
+            request.query_params.get("branch_id"),
+            request.headers.get("X-Branch-Id") or request.headers.get("x-branch-id"),
         )
         if source != "kiosk" and not has_open_session:
             return Response(

@@ -1846,6 +1846,29 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
 
     try {
+      const currentCash = await getCurrentCashSession();
+      setCashSnapshot(currentCash);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] payment.precheck_current_session", {
+          open: currentCash.open,
+          sessionId: currentCash.session?.id ?? null,
+          canSell: currentCash.open,
+          requiresCashOpen: !currentCash.open,
+        });
+      }
+      if (!currentCash.open) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-debug] gate.open_modal", {
+            reason: "payment_precheck_current_session_closed",
+            canSell: false,
+            requiresCashOpen: true,
+          });
+        }
+        requestOpenSession();
+        return;
+      }
       setIsProcessingPayment(true);
       let order = activeOrder;
       if (!order && createdOrderId) {
