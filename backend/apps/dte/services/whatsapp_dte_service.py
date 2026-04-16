@@ -119,6 +119,8 @@ def _build_whatsapp_files(record: DTERecord, payload: dict) -> tuple[dict, list[
 
 
 def _build_whatsapp_form_data(payload: dict) -> dict:
+    invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
+    respuesta_hacienda = invoice_json.get("respuesta_hacienda") if isinstance(invoice_json.get("respuesta_hacienda"), dict) else {}
     return {
         "num_receptor": _json_for_form(payload.get("num_receptor")),
         "send_json": _json_for_form(payload.get("send_json")),
@@ -132,12 +134,9 @@ def _build_whatsapp_form_data(payload: dict) -> dict:
         "estado_mh": _json_for_form(payload.get("estado_mh")),
         "empresa": _json_for_form(payload.get("empresa")),
         "total": _json_for_form(payload.get("total")),
-        "sello_recibido": _json_for_form(payload.get("sello_recibido")),
-        "fhProcesamiento": _json_for_form(payload.get("fhProcesamiento")),
         "dte": _json_for_form(payload.get("dte") if isinstance(payload.get("dte"), dict) else {}),
-        "respuesta_hacienda": _json_for_form(
-            payload.get("respuesta_hacienda") if isinstance(payload.get("respuesta_hacienda"), dict) else {}
-        ),
+        "respuesta_hacienda": _json_for_form(respuesta_hacienda),
+        "invoice_json": _json_for_form(invoice_json),
     }
 
 
@@ -168,6 +167,11 @@ def _validate_whatsapp_payload_contract(payload: dict) -> list[str]:
         missing.append("dte")
     if payload.get("send_json") is not True:
         missing.append("send_json")
+    invoice_json = payload.get("invoice_json")
+    if not isinstance(invoice_json, dict):
+        missing.append("invoice_json")
+    elif not isinstance(invoice_json.get("respuesta_hacienda"), dict):
+        missing.append("invoice_json.respuesta_hacienda")
     return missing
 
 
@@ -205,9 +209,18 @@ def _log_whatsapp_request_debug(
     as_multipart: bool,
 ) -> None:
     safe_payload = _sanitize_payload_for_log(payload)
+    invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
+    respuesta_hacienda = invoice_json.get("respuesta_hacienda") if isinstance(invoice_json.get("respuesta_hacienda"), dict) else {}
+    misplaced = [
+        key
+        for key in ("sello_recibido", "selloRecibido", "fh_procesamiento", "fhProcesamiento")
+        if key in payload or key in invoice_json
+    ]
     logger.info(
-        "WHATSAPP_OUTGOING_REQUEST job_id=%s method=POST endpoint=%s content_type=%s headers=%s fields=%s required=%s files=%s payload=%s curl=%s",
+        "WHATSAPP_OUTGOING_REQUEST job_id=%s channel=whatsapp issued_id=%s order_id=%s method=POST endpoint=%s content_type=%s headers=%s fields=%s required=%s has_invoice_json=%s has_respuesta_hacienda=%s respuesta_hacienda_keys=%s files=%s payload=%s curl=%s",
         attempt.id,
+        payload.get("issued_id"),
+        payload.get("order_id"),
         endpoint,
         "multipart/form-data" if as_multipart else "application/json",
         _json_compact(_sanitize_headers(headers)),
@@ -217,12 +230,17 @@ def _log_whatsapp_request_debug(
             "empresa": bool(payload.get("empresa")),
             "send_json": payload.get("send_json") is True,
             "dte": isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
-            "respuesta_hacienda": isinstance(payload.get("respuesta_hacienda"), dict),
-            "sello_recibido": bool(payload.get("sello_recibido")),
-            "fhProcesamiento": bool(payload.get("fhProcesamiento")),
+            "respuesta_hacienda": isinstance(respuesta_hacienda, dict),
+            "selloRecibido": "selloRecibido" in respuesta_hacienda,
+            "sello_recibido": "sello_recibido" in respuesta_hacienda,
+            "fhProcesamiento": "fhProcesamiento" in respuesta_hacienda,
+            "fh_procesamiento": "fh_procesamiento" in respuesta_hacienda,
             "pdf": any(item["mime"] == "application/pdf" for item in file_meta),
             "json": any(item["mime"] == "application/json" for item in file_meta),
         },
+        bool(invoice_json),
+        bool(respuesta_hacienda),
+        sorted(respuesta_hacienda.keys()),
         file_meta,
         _json_pretty(safe_payload),
         _build_debug_curl(
@@ -234,6 +252,8 @@ def _log_whatsapp_request_debug(
             as_multipart=as_multipart,
         ),
     )
+    if misplaced:
+        logger.warning("WHATSAPP_OUTGOING_REQUEST_MISPLACED_KEYS job_id=%s misplaced=%s", attempt.id, misplaced)
 
 
 def _log_whatsapp_response_debug(*, attempt: DteDeliveryAttempt, response, provider_body: dict) -> None:
@@ -371,11 +391,12 @@ def _safe_dte_for_whatsapp(record: DTERecord) -> dict:
 
 def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationResolution) -> dict:
     base = build_delivery_base_payload(record)
-    dte = _safe_dte_for_whatsapp(record) or (base.get("invoice_json") if isinstance(base.get("invoice_json"), dict) else {})
+    invoice_json = base.get("invoice_json") if isinstance(base.get("invoice_json"), dict) else {}
+    dte = _safe_dte_for_whatsapp(record) or (invoice_json.get("dte") if isinstance(invoice_json.get("dte"), dict) else {})
     receptor = dte.get("receptor") if isinstance(dte.get("receptor"), dict) else {}
     if not str(receptor.get("telefono") or "").strip():
         dte["receptor"] = {**receptor, "telefono": destination.normalized_phone}
-    response_payload = base.get("hacienda_response") if isinstance(base.get("hacienda_response"), dict) else {}
+    respuesta_hacienda = base.get("respuesta_hacienda") if isinstance(base.get("respuesta_hacienda"), dict) else {}
     tipo_dte = "01"
     doc_type = "CF"
     normalized = (record.dte_type or "").upper()
@@ -406,12 +427,7 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         "empresa": empresa_nombre,
         "empresa_nombre": empresa_nombre,
         "total": total,
-        "respuesta_hacienda": response_payload,
-        "hacienda_response": response_payload,
-        "sello_recibido": base.get("sello_recibido") or "",
-        "selloRecibido": base.get("sello_recibido") or "",
-        "fh_procesamiento": base.get("fh_procesamiento"),
-        "fhProcesamiento": base.get("fh_procesamiento"),
+        "invoice_json": {"dte": dte, "respuesta_hacienda": respuesta_hacienda},
         "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
     }
 
@@ -485,14 +501,14 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         endpoint,
         bool(payload.get("num_receptor")),
         isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
-        isinstance(payload.get("respuesta_hacienda"), dict),
+        isinstance((payload.get("invoice_json") or {}).get("respuesta_hacienda"), dict),
         True,
         bool(payload.get("send_json")),
         payload.get("tipo_dte"),
         payload.get("generation_code"),
         payload.get("control_number"),
-        bool(payload.get("sello_recibido")),
-        bool(payload.get("fh_procesamiento")),
+        bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("selloRecibido") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("sello_recibido")),
+        bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fhProcesamiento") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fh_procesamiento")),
     )
     _log_whatsapp_request_debug(
         attempt=attempt,

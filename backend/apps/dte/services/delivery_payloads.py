@@ -26,6 +26,23 @@ def _extract_dte_json(record: DTERecord) -> dict:
     return {}
 
 
+def _extract_respuesta_hacienda(response_payload: dict, dte_json: dict) -> tuple[dict, str]:
+    if isinstance(response_payload.get("respuesta_hacienda"), dict):
+        base = dict(response_payload.get("respuesta_hacienda") or {})
+        source = "response_payload.respuesta_hacienda"
+    elif isinstance(dte_json.get("respuesta_hacienda"), dict):
+        base = dict(dte_json.get("respuesta_hacienda") or {})
+        source = "dte.respuesta_hacienda"
+    else:
+        base = {}
+        source = ""
+    for key in ("selloRecibido", "sello_recibido", "fhProcesamiento", "fh_procesamiento"):
+        if key not in base and response_payload.get(key) not in (None, ""):
+            base[key] = response_payload.get(key)
+            source = source or "response_payload"
+    return base, source
+
+
 def _safe_iso(value) -> str | None:
     if value is None:
         return None
@@ -83,6 +100,7 @@ def _extract_fh_procesamiento(record: DTERecord, response_payload: dict, dte_jso
 def build_delivery_base_payload(record: DTERecord) -> dict:
     dte_json = _extract_dte_json(record)
     response_payload = record.response_payload or {}
+    respuesta_hacienda, respuesta_hacienda_source = _extract_respuesta_hacienda(response_payload, dte_json)
     identificacion = dte_json.get("identificacion") if isinstance(dte_json.get("identificacion"), dict) else {}
     receptor = dte_json.get("receptor") if isinstance(dte_json.get("receptor"), dict) else {}
     emisor = dte_json.get("emisor") if isinstance(dte_json.get("emisor"), dict) else {}
@@ -128,6 +146,10 @@ def build_delivery_base_payload(record: DTERecord) -> dict:
             record.order_id,
             record.status,
         )
+    invoice_json = {
+        "dte": dte_json if isinstance(dte_json, dict) else {},
+        "respuesta_hacienda": respuesta_hacienda if isinstance(respuesta_hacienda, dict) else {},
+    }
 
     return {
         "issued_id": record.id,
@@ -148,7 +170,10 @@ def build_delivery_base_payload(record: DTERecord) -> dict:
         "receiver_email": receiver_email,
         "receiver_phone": receiver_phone,
         "company_name": company_name,
-        "invoice_json": dte_json,
+        "invoice_json": invoice_json,
+        "dte_json": dte_json,
+        "respuesta_hacienda": respuesta_hacienda,
+        "respuesta_hacienda_source": respuesta_hacienda_source,
         "hacienda_response": response_payload,
         "total": total,
         "attachments": {"pdf": True, "json": True},

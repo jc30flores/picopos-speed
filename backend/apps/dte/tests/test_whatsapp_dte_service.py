@@ -55,7 +55,9 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertIn("descripcion_msg", payload)
         self.assertNotIn("Numero de telefono del cliente", payload["descripcion_msg"])
         self.assertEqual(payload["empresa"], payload["empresa_nombre"])
-        self.assertIsInstance(payload["respuesta_hacienda"], dict)
+        self.assertIsInstance(payload["invoice_json"]["respuesta_hacienda"], dict)
+        self.assertNotIn("sello_recibido", payload)
+        self.assertNotIn("fhProcesamiento", payload)
 
     def test_validate_whatsapp_target_rejects_invalid_number(self):
         ok, error, phone = validate_whatsapp_target(self.record, to_phone="abc", allow_default_fallback=False)
@@ -137,6 +139,7 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
         self.assertEqual(kwargs["data"]["send_json"], "true")
         self.assertIn("dte", kwargs["data"])
+        self.assertIn("invoice_json", kwargs["data"])
         self.assertIn("json_file", kwargs["files"])
         self.assertIn("pdf_file", kwargs["files"])
 
