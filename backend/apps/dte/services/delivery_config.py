@@ -20,6 +20,13 @@ def _read_setting(*names: str) -> str:
     return ""
 
 
+def _read_bool_setting(*names: str, default: bool = False) -> bool:
+    raw = _read_setting(*names)
+    if not raw:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class DeliveryConfig:
     email_base_url: str
@@ -29,6 +36,7 @@ class DeliveryConfig:
     whatsapp_endpoint: str
     whatsapp_api_key: str
     whatsapp_default_phone: str
+    whatsapp_allow_default_fallback: bool
     whatsapp_company_name: str
 
     @property
@@ -57,5 +65,6 @@ def resolve_delivery_config() -> DeliveryConfig:
         whatsapp_endpoint=_read_setting("WHATSAPP_DTE_API_ENDPOINT", "WHATSAPP_API_ENDPOINT") or "/api/send-dte-whatsapp",
         whatsapp_api_key=_read_setting("WHATSAPP_DTE_API_KEY", "WHATSAPP_API_KEY"),
         whatsapp_default_phone=_read_setting("WHATSAPP_DEFAULT_TO_PHONE"),
+        whatsapp_allow_default_fallback=_read_bool_setting("WHATSAPP_ALLOW_DEFAULT_FALLBACK", default=False),
         whatsapp_company_name=_read_setting("WHATSAPP_EMPRESA_NOMBRE", "WHATSAPP_COMPANY_NAME"),
     )

@@ -16,7 +16,10 @@ Ambos usan `deliver_dte_to_client(...)` en `delivery.py`.
 ```
 
 - `channels` es obligatorio (al menos un canal válido).
-- `email` y `phone` son opcionales; si no se envían, se usan los del cliente.
+- `phone` es el **campo canónico** para destino WhatsApp.
+- Alias soportados por compatibilidad: `telefono`, `telefono_cliente`, `customer_phone`, `receiver_phone`, `whatsapp_phone`.
+- Si no se envía `phone`, se usa el teléfono del cliente del registro.
+- Fallback al default (`WHATSAPP_DEFAULT_TO_PHONE`) solo si `WHATSAPP_ALLOW_DEFAULT_FALLBACK=true`.
 
 ## Respuesta
 ```json
@@ -36,6 +39,7 @@ Ambos usan `deliver_dte_to_client(...)` en `delivery.py`.
 
 ## Configuración requerida
 - WhatsApp: `WHATSAPP_DTE_API_BASE`, `WHATSAPP_DTE_API_KEY`
+- Fallback de pruebas/manual (opcional): `WHATSAPP_DEFAULT_TO_PHONE` + `WHATSAPP_ALLOW_DEFAULT_FALLBACK=true`
 - Email: `DELIVER_EMAIL_API_BASE_URL` o `EMAIL_API_BASE_URL`; `DELIVER_EMAIL_API_KEY` o `EMAIL_API_KEY`
 
 ## Contratos usados por este backend

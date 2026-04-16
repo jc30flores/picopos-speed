@@ -61,8 +61,10 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertIn("identificacion", payload["invoice_json"])
 
     def test_build_whatsapp_payload_exact_keys(self):
-        payload = build_whatsapp_payload(self.record)
-        self.assertEqual(payload["num_receptor"], "50370000000")
+        from apps.dte.services.whatsapp_dte_service import resolve_whatsapp_destination
+
+        payload = build_whatsapp_payload(self.record, resolve_whatsapp_destination(self.record))
+        self.assertEqual(payload["num_receptor"], "50371112222")
         self.assertTrue(payload["send_json"])
         self.assertEqual(payload["tipo_dte"], "01")
         self.assertEqual(payload["doc_type"], "CF")

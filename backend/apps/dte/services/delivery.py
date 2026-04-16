@@ -104,7 +104,7 @@ def deliver_dte_to_client(
                     error=provider_error or ("No se pudo enviar correo" if attempt.status != "SENT" else None),
                 )
         if channel == "whatsapp":
-            ok_phone, phone_error, target_phone = validate_whatsapp_target(target, to_phone=to_phone or flags.get("customer_phone"))
+            ok_phone, phone_error, target_phone = validate_whatsapp_target(target, to_phone=to_phone)
             if not ok_phone:
                 results[channel] = _channel_result(
                     ok=False,

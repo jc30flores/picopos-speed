@@ -73,7 +73,7 @@ def evaluate_record_actions(record: DTERecord) -> dict:
     email = ((getattr(customer, "correo", "") or getattr(customer, "email", "") or "").strip() if customer else "")
     phone = ((getattr(customer, "telefono", "") or "").strip() if customer else "")
     config = resolve_delivery_config()
-    fallback_phone = (config.whatsapp_default_phone or "").strip()
+    fallback_phone = (config.whatsapp_default_phone or "").strip() if config.whatsapp_allow_default_fallback else ""
     email_ok = bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
     email_is_internal = email.lower() == INTERNAL_BILLING_EMAIL.lower() if email else False
 
@@ -106,5 +106,5 @@ def evaluate_record_actions(record: DTERecord) -> dict:
         "invalidate_deadline": invalidate_deadline,
         "invalidate_remaining": invalidate_remaining,
         "customer_email": email,
-        "customer_phone": phone or fallback_phone,
+        "customer_phone": phone,
     }

@@ -28,6 +28,14 @@ from apps.dte.services.availability import evaluate_record_actions
 logger = logging.getLogger("apps.dte")
 
 
+def _extract_delivery_phone(request) -> str | None:
+    for key in ("phone", "telefono", "telefono_cliente", "customer_phone", "receiver_phone", "whatsapp_phone"):
+        value = request.data.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
 class IsDTECashierOrAbove(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
@@ -186,7 +194,7 @@ class DTEBulkDeliveryView(APIView):
             actor_user=request.user,
             request=request,
             to_email=request.data.get("email"),
-            to_phone=request.data.get("phone"),
+            to_phone=_extract_delivery_phone(request),
             mode="manual",
         )
         if not result.get("results"):
@@ -207,7 +215,7 @@ class DTEOrderBulkDeliveryView(APIView):
             actor_user=request.user,
             request=request,
             to_email=request.data.get("email"),
-            to_phone=request.data.get("phone"),
+            to_phone=_extract_delivery_phone(request),
             mode="manual",
         )
         if not result.get("results"):
@@ -225,7 +233,7 @@ class DTESendWhatsAppView(APIView):
             channels=("whatsapp",),
             actor_user=request.user,
             request=request,
-            to_phone=request.data.get("phone"),
+            to_phone=_extract_delivery_phone(request),
             mode="manual",
         )
         status_code = status.HTTP_200_OK if result.get("results") else status.HTTP_400_BAD_REQUEST
