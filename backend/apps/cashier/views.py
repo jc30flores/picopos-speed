@@ -43,7 +43,7 @@ class PdfRenderer(BaseRenderer):
 
 def _get_open_session_for_register(register):
     return (
-        CashSession.objects.filter(register=register, status="open", closed_at__isnull=True)
+        CashSession.objects.filter(register=register, closed_at__isnull=True)
         .select_related("register", "register__branch")
         .first()
     )
@@ -154,10 +154,13 @@ class CashSessionCurrentView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        raw_branch_id = (
+        request_branch_raw = (
             request.query_params.get("branch_id")
             or request.headers.get("X-Branch-Id")
             or request.headers.get("x-branch-id")
+        )
+        raw_branch_id = (
+            request_branch_raw
         )
         branch_id = resolve_branch_id(raw_branch_id)
         session = get_open_cash_session_for_branch(branch_id)
@@ -166,7 +169,17 @@ class CashSessionCurrentView(APIView):
         latest_session = scoped_sessions.order_by("-opened_at").first()
         total_sessions_today = scoped_sessions.filter(opened_at__date=today_sv).count()
         include_sensitive = _can_view_sensitive_cash_data(request)
-        logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
+        logger.info(
+            "cash_session.current user_id=%s username=%s branch_raw=%s branch_id=%s has_open_session=%s open_session_id=%s open_session_branch_id=%s filter_scope=%s",
+            getattr(request.user, "id", None),
+            getattr(request.user, "username", ""),
+            request_branch_raw,
+            branch_id,
+            bool(session),
+            getattr(session, "id", None),
+            getattr(getattr(session, "register", None), "branch_id", None),
+            "branch" if branch_id else "global",
+        )
         if not session:
             return Response(
                 {
@@ -235,7 +248,7 @@ class CashSessionOpenView(APIView):
         existing_session = (
             CashSession.objects.select_for_update()
             .select_related("register", "register__branch")
-            .filter(register__branch_id=scope_branch_id, status="open", closed_at__isnull=True)
+            .filter(register__branch_id=scope_branch_id, closed_at__isnull=True)
             .first()
         )
         if existing_session:

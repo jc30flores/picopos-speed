@@ -116,6 +116,7 @@ const formatPhone = (raw: string) => {
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
 const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
+const hasActiveCashSession = (snapshot: CashSessionSnapshot) => Boolean(snapshot.open && snapshot.session?.id);
 
 const getPaidExtrasLines = (item: CartItem) =>
   (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
@@ -187,6 +188,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
   const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
+  const hasOpenCashSession = hasActiveCashSession(cashSnapshot);
+  const requiresCashOpen = !hasOpenCashSession;
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
@@ -1016,7 +1019,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    if (isOpenSessionModalOpen && !cashSnapshot.open) return;
+    if (isOpenSessionModalOpen && requiresCashOpen) return;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] checkout.attempt", {
+        canSell: hasOpenCashSession,
+        requiresCashOpen,
+        isOpenSessionModalOpen,
+        cartItems: cart.length,
+        sessionId: cashSnapshot.session?.id ?? null,
+      });
+    }
     try {
       await ensureCashSessionOpen(async () => {
         await proceedToCheckout();
@@ -1026,12 +1039,30 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (/caja no aperturada|cash session|required/i.test(message)) {
         try {
           const current = await getCurrentCashSession();
-          setCashSnapshot(current);
-          if (!current.open) {
+          const currentHasOpen = hasActiveCashSession(current);
+          setCashSnapshot({ ...current, open: currentHasOpen });
+          if (!currentHasOpen) {
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.info("[cash-debug] checkout.requires_open_after_error", {
+                reason: "backend_cash_required_and_current_closed",
+                sessionId: current.session?.id ?? null,
+              });
+            }
             requestOpenSession();
             return;
           }
-          toast.error(message || "Conflicto al crear orden");
+          if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.info("[cash-debug] checkout.auto_resume_after_revalidate", {
+              reason: "backend_cash_required_but_current_open",
+              sessionId: current.session?.id ?? null,
+              requiresCashOpen: !currentHasOpen,
+              isCashModalOpen: isOpenSessionModalOpen,
+            });
+          }
+          await proceedToCheckout();
+          return;
         } catch {
           requestOpenSession();
         }
@@ -1086,6 +1117,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
 
+  const applyCashGateState = (snapshot: CashSessionSnapshot, reason: string) => {
+    const hasOpenCash = hasActiveCashSession(snapshot);
+    const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] gate.state", {
+        reason,
+        hasOpenCash,
+        requiresCashOpen: !hasOpenCash,
+        isCashModalOpen: isOpenSessionModalOpen,
+        sessionId: snapshot.session?.id ?? null,
+      });
+    }
+    setCashSnapshot({ ...snapshot, open: hasOpenCash });
+    setIsOpenSessionModalOpen(!hasOpenCash && !shouldDelayOpenGate);
+  };
+
   const loadCashData = async () => {
     try {
       const [snapshot, transactions] = await Promise.all([
@@ -1103,14 +1151,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           lastClosedAt: snapshot.lastClosedAt ?? null,
         });
       }
-      setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
-      if (!snapshot.open && !shouldDelayOpenGate) {
-        setIsOpenSessionModalOpen(true);
-      } else {
-        setIsOpenSessionModalOpen(false);
-      }
+      applyCashGateState(snapshot, "loadCashData");
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
@@ -1123,12 +1165,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     loadCashData().catch(() => undefined);
-    const forceCashGate = () => {
-      setCashSnapshot((previous) => ({ ...previous, open: false }));
-      if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
-        return;
+    const forceCashGate = async () => {
+      try {
+        const current = await getCurrentCashSession();
+        applyCashGateState(current, "cash:required_event_revalidate");
+      } catch {
+        applyCashGateState({ open: false }, "cash:required_event_revalidate_failed");
       }
-      setIsOpenSessionModalOpen(true);
     };
     window.addEventListener("cash:required", forceCashGate as EventListener);
     return () => {
@@ -1263,23 +1306,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (isSavingCashAction) return;
     setIsSavingCashAction(true);
     try {
-      await openCashSession(Number(openSessionAmount || 0));
+      const openResult = await openCashSession(Number(openSessionAmount || 0));
       const current = await getCurrentCashSession();
+      const hasOpenCash = hasActiveCashSession(current);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-debug] open-session-refetch", {
-          open: current.open,
+          open: hasOpenCash,
           sessionId: current.session?.id ?? null,
           status: getCashSessionStatus(current),
+          isCashModalOpen: isOpenSessionModalOpen,
         });
       }
-      setCashSnapshot(current);
-      if (!current.open) {
+      setCashSnapshot({ ...current, open: hasOpenCash });
+      if (!hasOpenCash) {
         toast.error("No se pudo confirmar apertura de caja.");
         openSessionResolverRef.current?.(false);
         return;
       }
-      await loadCashData();
       const action = postOpenSessionActionRef.current;
       postOpenSessionActionRef.current = null;
       setIsOpenSessionModalOpen(false);
@@ -1292,32 +1336,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       }
       openSessionResolverRef.current?.(true);
-      toast.success("Caja aperturada");
+      toast.success(openResult.alreadyOpen ? "Caja ya estaba aperturada" : "Caja aperturada");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error desconocido";
-      if (message.includes("409") || message.toLowerCase().includes("abierta")) {
-        try {
-          const current = await getCurrentCashSession();
-          setCashSnapshot(current);
-          if (current.open) {
-            setIsOpenSessionModalOpen(false);
-            const action = postOpenSessionActionRef.current;
-            postOpenSessionActionRef.current = null;
-            if (action) {
-              try {
-                await action();
-              } catch (actionError) {
-                const actionMessage = actionError instanceof Error ? actionError.message : "Error en checkout";
-                toast.error(actionMessage);
-              }
-            }
-            openSessionResolverRef.current?.(true);
-            toast.success("Caja ya estaba aperturada");
-            return;
-          }
-        } catch {
-          // fallback to generic error below
-        }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-error", { message, isCashModalOpen: isOpenSessionModalOpen });
       }
       openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
@@ -1812,6 +1836,29 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
 
     try {
+      const currentCash = await getCurrentCashSession();
+      setCashSnapshot(currentCash);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] payment.precheck_current_session", {
+          open: currentCash.open,
+          sessionId: currentCash.session?.id ?? null,
+          canSell: currentCash.open,
+          requiresCashOpen: !currentCash.open,
+        });
+      }
+      if (!currentCash.open) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-debug] gate.open_modal", {
+            reason: "payment_precheck_current_session_closed",
+            canSell: false,
+            requiresCashOpen: true,
+          });
+        }
+        requestOpenSession();
+        return;
+      }
       setIsProcessingPayment(true);
       let order = activeOrder;
       if (!order && createdOrderId) {
@@ -2835,25 +2882,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog
         open={isOpenSessionModalOpen}
         onOpenChange={(open) => {
-          if (!open && !cashSnapshot.open) return;
           setIsOpenSessionModalOpen(open);
         }}
       >
         <DialogContent
           className="max-w-md"
-          showCloseButton={cashSnapshot.open}
+          showCloseButton={hasOpenCashSession}
           onEscapeKeyDown={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
           onPointerDownOutside={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
           onInteractOutside={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
         >
           <DialogHeader>
-            <DialogTitle>{cashSnapshot.open ? "Aperturar caja" : "Caja cerrada / Apertura requerida"}</DialogTitle>
+            <DialogTitle>{hasOpenCashSession ? "Aperturar caja" : "Caja cerrada / Apertura requerida"}</DialogTitle>
             <DialogDescription>Ingresa el efectivo inicial para abrir la sesión.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -2866,14 +2912,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               inputMode="decimal"
             />
             <div className="flex gap-2">
-              {cashSnapshot.open ? (
+              {hasOpenCashSession ? (
                 <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
               ) : null}
               <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
               </Button>
             </div>
-            {!cashSnapshot.open ? (
+            {requiresCashOpen ? (
               <Button
                 type="button"
                 variant="outline"

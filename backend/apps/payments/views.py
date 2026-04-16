@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager, IsAdmin
 from apps.cashier.models import Register, CashSession, CashTransaction
+from apps.cashier.services import get_open_cash_session_for_branch
 from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
@@ -40,10 +41,6 @@ from apps.core.money import to_cents, from_cents
 logger = logging.getLogger(__name__)
 
 
-def _get_open_session(user):
-    return CashSession.objects.filter(opened_by=user, status="open").select_related("register").first()
-
-
 def _is_cash_payment_method(payment_method: PaymentMethod | None) -> bool:
     if not payment_method:
         return False
@@ -70,12 +67,7 @@ def _venta_pdf_filename(order, *, include_seconds: bool = False) -> str:
 
 
 def _get_open_session_for_branch(branch_id: int) -> CashSession | None:
-    return (
-        CashSession.objects.filter(register__branch_id=branch_id, status="open", closed_at__isnull=True)
-        .select_related("register", "register__branch")
-        .order_by("-opened_at")
-        .first()
-    )
+    return get_open_cash_session_for_branch(branch_id)
 
 
 def _create_cash_out_for_refund(refund: Refund, user) -> tuple[CashTransaction, bool]:
@@ -171,7 +163,22 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         order = serializer.validated_data["order"]
         branch_has_register = Register.objects.filter(branch_id=order.branch_id, is_active=True).exists()
-        if branch_has_register and not _get_open_session_for_branch(order.branch_id):
+        open_session = _get_open_session_for_branch(order.branch_id)
+        logger.info(
+            "payments.create.cash_gate user_id=%s username=%s order_id=%s branch_id=%s branch_has_register=%s open_session_id=%s",
+            getattr(request.user, "id", None),
+            getattr(request.user, "username", ""),
+            order.id,
+            order.branch_id,
+            branch_has_register,
+            getattr(open_session, "id", None),
+        )
+        if branch_has_register and not open_session:
+            logger.warning(
+                "payments.create.cash_gate_blocked order_id=%s branch_id=%s reason=no_open_session_for_branch",
+                order.id,
+                order.branch_id,
+            )
             return Response(
                 {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
                 status=status.HTTP_409_CONFLICT,
@@ -201,7 +208,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             order.financial_locked_at = timezone.now()
             order.save(update_fields=["amount_due_cents", "financial_locked_at", "updated_at"])
         payment = serializer.save(
-            cash_session=_get_open_session(request.user),
+            cash_session=open_session,
             amount=from_cents(applied_cents),
             amount_applied=from_cents(applied_cents),
             amount_received=from_cents(received_cents),
