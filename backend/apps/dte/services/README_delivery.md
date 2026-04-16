@@ -52,8 +52,12 @@ Payload enviado:
   "subject": "DTE DTE-01-S001P001-000000000000123",
   "body_text": "Adjuntamos comprobante DTE DTE-01-S001P001-000000000000123.",
   "invoice_json": { "...": "..." },
+  "sello_recibido": "SELLO",
+  "generation_code": "UUID",
+  "control_number": "DTE-01-S001P001-000000000000123",
+  "tipo_dte": "01",
   "flags": { "source": "picopos", "channel": "email_dte", "attach_pdf": true, "attach_json": true },
-  "metadata": { "dte_type": "CF_01", "status": "ACEPTADO" }
+  "metadata": { "dte_type": "CF_01", "status": "ACEPTADO", "sello_recibido": "SELLO" }
 }
 ```
 - Campos requeridos: `to_email`, `subject`, `body_text`, `invoice_json`.
@@ -66,8 +70,14 @@ Payload enviado (gateway actual):
   "num_receptor": "5037XXXXXXX",
   "send_json": true,
   "dte": { "...": "..." },
+  "issued_id": 123,
+  "order_id": 456,
   "tipo_dte": "01",
+  "generation_code": "UUID",
+  "control_number": "DTE-01-S001P001-000000000000123",
   "doc_type": "CF",
+  "receiver_name": "CLIENTE",
+  "estado_mh": "PROCESADO",
   "empresa_nombre": "PicoPOS",
   "total": 15.50,
   "hacienda_response": { "...": "..." },

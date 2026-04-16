@@ -7,6 +7,7 @@ import time
 
 import requests
 
+from apps.dte.services.delivery_payloads import build_delivery_base_payload
 from apps.dte.models import DTERecord, DteDeliveryAttempt
 from apps.dte.services.delivery_config import resolve_delivery_config
 
@@ -147,8 +148,9 @@ def _safe_dte_for_whatsapp(record: DTERecord) -> dict:
 
 
 def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationResolution) -> dict:
-    dte = _safe_dte_for_whatsapp(record)
-    response_payload = record.response_payload or {}
+    base = build_delivery_base_payload(record)
+    dte = _safe_dte_for_whatsapp(record) or (base.get("invoice_json") if isinstance(base.get("invoice_json"), dict) else {})
+    response_payload = base.get("hacienda_response") if isinstance(base.get("hacienda_response"), dict) else {}
     tipo_dte = "01"
     doc_type = "CF"
     normalized = (record.dte_type or "").upper()
@@ -158,29 +160,26 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         tipo_dte, doc_type = "14", "SX"
     elif isinstance(dte.get("identificacion"), dict) and dte["identificacion"].get("tipoDte"):
         tipo_dte = str(dte["identificacion"]["tipoDte"])
-    empresa_nombre = (
-        (dte.get("emisor") or {}).get("nombreComercial")
-        or (dte.get("emisor") or {}).get("nombre")
-        or resolve_delivery_config().whatsapp_company_name
-        or "PicoPOS"
-    )
+    empresa_nombre = base.get("company_name") or resolve_delivery_config().whatsapp_company_name or "PicoPOS"
     resumen = dte.get("resumen") if isinstance(dte.get("resumen"), dict) else {}
-    total = float(resumen.get("totalPagar") or record.total_amount or 0)
+    total = float(resumen.get("totalPagar") or base.get("total") or record.total_amount or 0)
     return {
         "num_receptor": destination.normalized_phone,
         "send_json": True,
         "dte": dte,
         "tipo_dte": tipo_dte,
         "doc_type": doc_type,
+        "issued_id": base.get("issued_id"),
+        "order_id": base.get("order_id"),
+        "generation_code": base.get("generation_code"),
+        "control_number": base.get("control_number"),
+        "receiver_name": base.get("receiver_name"),
+        "estado_mh": base.get("estado_mh"),
         "empresa_nombre": empresa_nombre,
         "total": total,
         "hacienda_response": response_payload,
-        "sello_recibido": record.sello_recibido or record.sello_recepcion or response_payload.get("sello_recibido") or "",
-        "fh_procesamiento": (
-            response_payload.get("fhProcesamiento")
-            or response_payload.get("fh_procesamiento")
-            or (record.recibido_at.isoformat() if record.recibido_at else None)
-        ),
+        "sello_recibido": base.get("sello_recibido") or "",
+        "fh_procesamiento": base.get("fh_procesamiento"),
         "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
     }
 
@@ -219,11 +218,17 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
 
     payload = build_whatsapp_payload(record, destination)
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s destination_source=%s destination=%s endpoint=%s",
+        "WHATSAPP_JOB_START job_id=%s destination_source=%s destination=%s endpoint=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_pdf=%s has_json=%s",
         attempt.id,
         destination.source,
         _mask_phone(destination.normalized_phone),
         endpoint,
+        payload.get("tipo_dte"),
+        payload.get("generation_code"),
+        payload.get("control_number"),
+        bool(payload.get("sello_recibido")),
+        True,
+        bool(payload.get("send_json")),
     )
 
     for retry in range(3):

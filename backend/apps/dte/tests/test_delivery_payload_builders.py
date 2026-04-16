@@ -4,6 +4,7 @@ from django.test import TestCase, override_settings
 
 from apps.core.models import Branch, Customer, ServiceType
 from apps.dte.models import DTERecord
+from apps.dte.services.delivery_payloads import build_delivery_base_payload
 from apps.dte.services.dte_service import build_invalidation_payload
 from apps.dte.services.email_dte_service import build_email_payload
 from apps.dte.services.whatsapp_dte_service import build_whatsapp_payload
@@ -57,7 +58,12 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertIn("Adjuntamos comprobante DTE", payload["body_text"])
         self.assertEqual(payload["flags"]["attach_pdf"], True)
         self.assertEqual(payload["flags"]["attach_json"], True)
-        self.assertEqual(payload["metadata"], {"dte_type": "CF_01", "status": "ACEPTADO"})
+        self.assertEqual(payload["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["metadata"]["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["metadata"]["control_number"], "DTE-01-S001P001-000000000000001")
+        self.assertEqual(payload["metadata"]["generation_code"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        self.assertEqual(payload["metadata"]["dte_type"], "CF_01")
+        self.assertEqual(payload["metadata"]["status"], "ACEPTADO")
         self.assertIn("identificacion", payload["invoice_json"])
 
     def test_build_whatsapp_payload_exact_keys(self):
@@ -68,7 +74,37 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertTrue(payload["send_json"])
         self.assertEqual(payload["tipo_dte"], "01")
         self.assertEqual(payload["doc_type"], "CF")
+        self.assertEqual(payload["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["generation_code"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        self.assertEqual(payload["control_number"], "DTE-01-S001P001-000000000000001")
         self.assertIn("descripcion_msg", payload)
+
+    def test_email_and_whatsapp_share_same_delivery_base(self):
+        base = build_delivery_base_payload(self.record)
+        from apps.dte.services.whatsapp_dte_service import resolve_whatsapp_destination
+
+        wa_payload = build_whatsapp_payload(self.record, resolve_whatsapp_destination(self.record))
+        email_payload = build_email_payload(self.record)
+        self.assertEqual(email_payload["sello_recibido"], base["sello_recibido"])
+        self.assertEqual(wa_payload["sello_recibido"], base["sello_recibido"])
+        self.assertEqual(email_payload["generation_code"], base["generation_code"])
+        self.assertEqual(wa_payload["generation_code"], base["generation_code"])
+        self.assertEqual(email_payload["control_number"], base["control_number"])
+        self.assertEqual(wa_payload["control_number"], base["control_number"])
+
+    def test_payloads_without_sello_do_not_break_and_leave_field_empty(self):
+        self.record.sello_recibido = ""
+        self.record.sello_recepcion = ""
+        self.record.response_payload = {}
+        self.record.save(update_fields=["sello_recibido", "sello_recepcion", "response_payload"])
+        from apps.dte.services.whatsapp_dte_service import resolve_whatsapp_destination
+
+        base = build_delivery_base_payload(self.record)
+        wa_payload = build_whatsapp_payload(self.record, resolve_whatsapp_destination(self.record))
+        email_payload = build_email_payload(self.record)
+        self.assertEqual(base["sello_recibido"], "")
+        self.assertEqual(wa_payload["sello_recibido"], "")
+        self.assertEqual(email_payload["sello_recibido"], "")
 
     def test_build_invalidation_payload_exact_keys(self):
         payload = build_invalidation_payload(

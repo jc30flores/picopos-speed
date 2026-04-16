@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-import os
 
 import requests
 
 from apps.dte.models import DTERecord, DteDeliveryAttempt
+from apps.dte.services.delivery_payloads import build_delivery_base_payload
 from apps.dte.services.delivery_config import INTERNAL_BILLING_EMAIL
 from apps.dte.services.delivery_config import resolve_delivery_config
 
@@ -37,12 +37,9 @@ def validate_delivery_email_target(record: DTERecord, to_email: str | None = Non
 
 def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
     _, _, recipient = validate_delivery_email_target(record, to_email=to_email)
-    company_name = (
-        str(os.environ.get("COMPANY_NAME") or "").strip()
-        or str(os.environ.get("DTE_NOMBRE_COMERCIAL") or "").strip()
-        or "PicoPOS"
-    )
-    customer_name = str(getattr(getattr(record.order, "customer", None), "nombre", "") or "").strip()
+    base = build_delivery_base_payload(record)
+    company_name = base["company_name"]
+    customer_name = base["receiver_name"]
     greeting = f"Hola {customer_name}," if customer_name else "Hola,"
     body_text = (
         f"{greeting}\n\n"
@@ -56,8 +53,7 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
         "<p>Adjuntamos tu DTE en formato PDF y JSON.</p>"
         f"<p>Atentamente,<br>{company_name}</p>"
     )
-    request_payload = record.request_payload or {}
-    invoice_json = request_payload.get("dte") if isinstance(request_payload, dict) and isinstance(request_payload.get("dte"), dict) else request_payload
+    invoice_json = base["invoice_json"]
     if not isinstance(invoice_json, dict) or not invoice_json:
         invoice_json = {
             "identificacion": {
@@ -74,7 +70,37 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
         "body_html": body_html,
         "invoice_json": invoice_json,
         "flags": {"source": "picopos", "channel": "email_dte", "attach_pdf": True, "attach_json": True},
-        "metadata": {"dte_type": record.dte_type, "status": record.status, "company_name": company_name},
+        "metadata": {
+            "issued_id": base["issued_id"],
+            "order_id": base["order_id"],
+            "dte_type": base["dte_type"],
+            "tipo_dte": base["tipo_dte"],
+            "generation_code": base["generation_code"],
+            "control_number": base["control_number"],
+            "sello_recibido": base["sello_recibido"],
+            "fh_procesamiento": base["fh_procesamiento"],
+            "status": base["status"],
+            "estado_mh": base["estado_mh"],
+            "receiver_name": base["receiver_name"],
+            "receiver_email": recipient,
+            "receiver_phone": base["receiver_phone"],
+            "company_name": company_name,
+            "attach_pdf": bool(base["attachments"]["pdf"]),
+            "attach_json": bool(base["attachments"]["json"]),
+        },
+        "sello_recibido": base["sello_recibido"],
+        "generation_code": base["generation_code"],
+        "control_number": base["control_number"],
+        "tipo_dte": base["tipo_dte"],
+        "issued_id": base["issued_id"],
+        "order_id": base["order_id"],
+        "issue_date": base["issue_date"],
+        "issue_time": base["issue_time"],
+        "fh_procesamiento": base["fh_procesamiento"],
+        "status": base["status"],
+        "estado_mh": base["estado_mh"],
+        "receiver_name": base["receiver_name"],
+        "company_name": company_name,
     }
 
 
@@ -139,13 +165,19 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
     payload = build_email_payload(record, to_email=target_email)
     invoice_keys = list((payload.get("invoice_json") or {}).keys()) if isinstance(payload.get("invoice_json"), dict) else []
     logger.info(
-        "[DTE EMAIL] payload_summary order=%s to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s",
+        "[DTE EMAIL] payload_summary order=%s to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_pdf=%s has_json=%s",
         record.order_id,
         payload.get("to_email"),
         payload.get("subject"),
         bool(payload.get("body_text")),
         invoice_keys,
         payload.get("flags"),
+        payload.get("tipo_dte"),
+        payload.get("generation_code"),
+        payload.get("control_number"),
+        bool(payload.get("sello_recibido")),
+        bool((payload.get("flags") or {}).get("attach_pdf")),
+        bool((payload.get("flags") or {}).get("attach_json")),
     )
 
     for retry in range(3):
