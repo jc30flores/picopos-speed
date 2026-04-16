@@ -54,6 +54,8 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(payload["doc_type"], "CF")
         self.assertIn("descripcion_msg", payload)
         self.assertNotIn("Numero de telefono del cliente", payload["descripcion_msg"])
+        self.assertEqual(payload["empresa"], payload["empresa_nombre"])
+        self.assertIsInstance(payload["respuesta_hacienda"], dict)
 
     def test_validate_whatsapp_target_rejects_invalid_number(self):
         ok, error, phone = validate_whatsapp_target(self.record, to_phone="abc", allow_default_fallback=False)
@@ -114,6 +116,7 @@ class DTEWhatsAppServiceTests(TestCase):
         payload = build_whatsapp_payload(self.record, destination)
         self.assertIn("direccion", payload["dte"]["receptor"])
         self.assertEqual(payload["dte"]["receptor"]["direccion"]["complemento"], "")
+        self.assertEqual(payload["dte"]["receptor"]["telefono"], destination.normalized_phone)
 
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)

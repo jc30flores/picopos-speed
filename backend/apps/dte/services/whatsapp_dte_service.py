@@ -150,6 +150,9 @@ def _safe_dte_for_whatsapp(record: DTERecord) -> dict:
 def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationResolution) -> dict:
     base = build_delivery_base_payload(record)
     dte = _safe_dte_for_whatsapp(record) or (base.get("invoice_json") if isinstance(base.get("invoice_json"), dict) else {})
+    receptor = dte.get("receptor") if isinstance(dte.get("receptor"), dict) else {}
+    if not str(receptor.get("telefono") or "").strip():
+        dte["receptor"] = {**receptor, "telefono": destination.normalized_phone}
     response_payload = base.get("hacienda_response") if isinstance(base.get("hacienda_response"), dict) else {}
     tipo_dte = "01"
     doc_type = "CF"
@@ -175,8 +178,10 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         "control_number": base.get("control_number"),
         "receiver_name": base.get("receiver_name"),
         "estado_mh": base.get("estado_mh"),
+        "empresa": empresa_nombre,
         "empresa_nombre": empresa_nombre,
         "total": total,
+        "respuesta_hacienda": response_payload,
         "hacienda_response": response_payload,
         "sello_recibido": base.get("sello_recibido") or "",
         "fh_procesamiento": base.get("fh_procesamiento"),
@@ -218,17 +223,22 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
 
     payload = build_whatsapp_payload(record, destination)
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s destination_source=%s destination=%s endpoint=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_pdf=%s has_json=%s",
+        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s",
         attempt.id,
+        record.order_id,
+        record.id,
         destination.source,
         _mask_phone(destination.normalized_phone),
         endpoint,
+        bool(payload.get("num_receptor")),
+        isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
+        isinstance(payload.get("respuesta_hacienda"), dict),
+        True,
+        bool(payload.get("send_json")),
         payload.get("tipo_dte"),
         payload.get("generation_code"),
         payload.get("control_number"),
         bool(payload.get("sello_recibido")),
-        True,
-        bool(payload.get("send_json")),
     )
 
     for retry in range(3):
