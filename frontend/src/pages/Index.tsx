@@ -1106,6 +1106,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
 
+  const applyCashGateState = (snapshot: CashSessionSnapshot, reason: string) => {
+    const hasOpenCash = hasActiveCashSession(snapshot);
+    const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] gate.state", {
+        reason,
+        hasOpenCash,
+        requiresCashOpen: !hasOpenCash,
+        isCashModalOpen: isOpenSessionModalOpen,
+        sessionId: snapshot.session?.id ?? null,
+      });
+    }
+    setCashSnapshot({ ...snapshot, open: hasOpenCash });
+    setIsOpenSessionModalOpen(!hasOpenCash && !shouldDelayOpenGate);
+  };
+
   const loadCashData = async () => {
     try {
       const [snapshot, transactions] = await Promise.all([
@@ -1123,24 +1140,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           lastClosedAt: snapshot.lastClosedAt ?? null,
         });
       }
-      setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      const hasOpenCash = hasActiveCashSession(snapshot);
-      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
-      if (!hasOpenCash && !shouldDelayOpenGate) {
-        if (import.meta.env.DEV) {
-          // eslint-disable-next-line no-console
-          console.info("[cash-debug] gate.open_modal", {
-            reason: "current_session_closed",
-            shouldDelayOpenGate,
-            canSell: hasOpenCash,
-            requiresCashOpen: !hasOpenCash,
-          });
-        }
-        setIsOpenSessionModalOpen(true);
-      } else {
-        setIsOpenSessionModalOpen(false);
-      }
+      applyCashGateState(snapshot, "loadCashData");
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
@@ -1153,20 +1154,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     loadCashData().catch(() => undefined);
-    const forceCashGate = () => {
-      setCashSnapshot((previous) => ({ ...previous, open: false }));
-      if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
-        return;
+    const forceCashGate = async () => {
+      try {
+        const current = await getCurrentCashSession();
+        applyCashGateState(current, "cash:required_event_revalidate");
+      } catch {
+        applyCashGateState({ open: false }, "cash:required_event_revalidate_failed");
       }
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[cash-debug] gate.open_modal", {
-          reason: "cash:required_event",
-          canSell: false,
-          requiresCashOpen: true,
-        });
-      }
-      setIsOpenSessionModalOpen(true);
     };
     window.addEventListener("cash:required", forceCashGate as EventListener);
     return () => {
