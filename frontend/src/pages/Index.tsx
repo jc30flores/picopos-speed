@@ -1017,6 +1017,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     if (isOpenSessionModalOpen && !cashSnapshot.open) return;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] checkout.attempt", {
+        canSell: cashSnapshot.open,
+        requiresCashOpen: !cashSnapshot.open,
+        isOpenSessionModalOpen,
+        cartItems: cart.length,
+        sessionId: cashSnapshot.session?.id ?? null,
+      });
+    }
     try {
       await ensureCashSessionOpen(async () => {
         await proceedToCheckout();
@@ -1028,6 +1038,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           const current = await getCurrentCashSession();
           setCashSnapshot(current);
           if (!current.open) {
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.info("[cash-debug] checkout.requires_open_after_error", {
+                reason: "backend_cash_required_and_current_closed",
+                sessionId: current.session?.id ?? null,
+              });
+            }
             requestOpenSession();
             return;
           }
@@ -1107,6 +1124,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashTransactions(transactions);
       const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
       if (!snapshot.open && !shouldDelayOpenGate) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-debug] gate.open_modal", {
+            reason: "current_session_closed",
+            shouldDelayOpenGate,
+            canSell: false,
+            requiresCashOpen: true,
+          });
+        }
         setIsOpenSessionModalOpen(true);
       } else {
         setIsOpenSessionModalOpen(false);
@@ -1127,6 +1153,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashSnapshot((previous) => ({ ...previous, open: false }));
       if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
+      }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] gate.open_modal", {
+          reason: "cash:required_event",
+          canSell: false,
+          requiresCashOpen: true,
+        });
       }
       setIsOpenSessionModalOpen(true);
     };

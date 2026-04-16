@@ -537,6 +537,14 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   canClockOut: false,
 });
 
+const getSelectedBranchId = (): number | null => {
+  const raw = localStorage.getItem("selected_branch_id");
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
 const request = async (path: string, options: RequestInit = {}) => {
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers || {});
@@ -1922,6 +1930,7 @@ export const createOrder = async (payload: {
     assignedName?: string;
   }>;
 }): Promise<Order> => {
+  const selectedBranchId = getSelectedBranchId();
   const response = await request("/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1939,7 +1948,7 @@ export const createOrder = async (payload: {
       discount_id: payload.discountId ?? undefined,
       discount_mode: payload.discountMode ?? undefined,
       send_to_kitchen: Boolean(payload.sendToKitchen),
-      ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
+      ...(selectedBranchId != null ? { branch_id: selectedBranchId } : {}),
       items: payload.items.map((item) => ({
         type: item.isCustom ? "MANUAL" : "MENU",
         product_id: item.isCustom ? undefined : (item.productId ?? null),
@@ -3762,15 +3771,27 @@ export type CashSessionHistoryRow = {
 };
 export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const params = new URLSearchParams();
-  const branchIdRaw = localStorage.getItem("selected_branch_id");
-  if (branchIdRaw && Number.isFinite(Number(branchIdRaw))) {
-    params.set("branch_id", String(Number(branchIdRaw)));
+  const branchId = getSelectedBranchId();
+  if (branchId != null) {
+    params.set("branch_id", String(branchId));
   }
   const query = params.toString();
   const response = await request(`/cashier/session/current/${query ? `?${query}` : ""}`);
   const data = await handleJson<any>(response);
   const hasOpenSession = Boolean(data.has_open_cash_session ?? data.has_open_session);
   const session = data.session ?? null;
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.info("[cash-debug] api.current_session.response", {
+      branchId,
+      hasOpenSession,
+      sessionId: session?.id ?? null,
+      canOpenCash: data.can_open_cash,
+      canCloseCash: data.can_close_cash,
+      lastOpenedAt: data.last_opened_at ?? null,
+      lastClosedAt: data.last_closed_at ?? null,
+    });
+  }
   if (!hasOpenSession || !session) {
     return {
       open: false,
@@ -3826,12 +3847,12 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
 };
 
 export const openCashSession = async (openingCash: number): Promise<void> => {
-  const branchIdRaw = localStorage.getItem("selected_branch_id");
+  const branchId = getSelectedBranchId();
   await handleJson(await request('/cashier/session/open/', {
     method: 'POST',
     body: JSON.stringify({
       opening_cash: openingCash,
-      ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
+      ...(branchId != null ? { branch_id: branchId } : {}),
     }),
   }));
 };
@@ -3842,7 +3863,7 @@ export const closeCashSession = async (
   totals?: { bills?: number; coins?: number; posCards?: number; pedidosYa?: number },
   options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
-  const branchIdRaw = localStorage.getItem("selected_branch_id");
+  const branchId = getSelectedBranchId();
   const data = await handleJson<any>(await request('/cashier/session/close/', {
     method: 'POST',
     body: JSON.stringify({
@@ -3853,7 +3874,7 @@ export const closeCashSession = async (
       total_pos_tarjetas: Number(totals?.posCards ?? 0),
       total_pedidos_ya: Number(totals?.pedidosYa ?? 0),
       notes: notes ?? '',
-      ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
+      ...(branchId != null ? { branch_id: branchId } : {}),
     }),
   }));
   return {
