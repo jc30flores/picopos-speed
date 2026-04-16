@@ -596,9 +596,10 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       const errorPayload = await response.json().catch(() => null);
       const errorCode = errorPayload && typeof errorPayload.code === "string" ? String(errorPayload.code) : undefined;
       const detailText = String((errorPayload && (errorPayload.detail || errorPayload.error)) || "");
+      const isAlreadyOpenConflict = errorCode === "CASH_SESSION_ALREADY_OPEN";
       const shouldRequireCashGate =
         errorCode === "CASH_SESSION_REQUIRED" ||
-        ((response.status === 401 || response.status === 403 || response.status === 409) &&
+        (!isAlreadyOpenConflict && (response.status === 401 || response.status === 403 || response.status === 409) &&
           /caja|cash session|required/i.test(detailText));
       if (shouldRequireCashGate) {
         window.dispatchEvent(new CustomEvent("cash:required"));
@@ -3846,15 +3847,32 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   };
 };
 
-export const openCashSession = async (openingCash: number): Promise<void> => {
+export const openCashSession = async (openingCash: number): Promise<{ alreadyOpen: boolean }> => {
   const branchId = getSelectedBranchId();
-  await handleJson(await request('/cashier/session/open/', {
+  const response = await request('/cashier/session/open/', {
     method: 'POST',
     body: JSON.stringify({
       opening_cash: openingCash,
       ...(branchId != null ? { branch_id: branchId } : {}),
     }),
-  }));
+  });
+  if (response.ok) {
+    await handleJson<Record<string, unknown>>(response);
+    return { alreadyOpen: false };
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (response.status === 409 && contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => null) as { code?: string; detail?: string } | null;
+    if (payload?.code === "CASH_SESSION_ALREADY_OPEN") {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-already-open", { branchId, detail: payload.detail ?? "" });
+      }
+      return { alreadyOpen: true };
+    }
+  }
+  await handleJson(response);
+  return { alreadyOpen: false };
 };
 
 export const closeCashSession = async (

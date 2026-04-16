@@ -116,6 +116,7 @@ const formatPhone = (raw: string) => {
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
 const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
+const hasActiveCashSession = (snapshot: CashSessionSnapshot) => Boolean(snapshot.open && snapshot.session?.id);
 
 const getPaidExtrasLines = (item: CartItem) =>
   (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
@@ -1122,15 +1123,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
+      const hasOpenCash = hasActiveCashSession(snapshot);
       const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
-      if (!snapshot.open && !shouldDelayOpenGate) {
+      if (!hasOpenCash && !shouldDelayOpenGate) {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
           console.info("[cash-debug] gate.open_modal", {
             reason: "current_session_closed",
             shouldDelayOpenGate,
-            canSell: false,
-            requiresCashOpen: true,
+            canSell: hasOpenCash,
+            requiresCashOpen: !hasOpenCash,
           });
         }
         setIsOpenSessionModalOpen(true);
@@ -1297,23 +1299,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (isSavingCashAction) return;
     setIsSavingCashAction(true);
     try {
-      await openCashSession(Number(openSessionAmount || 0));
+      const openResult = await openCashSession(Number(openSessionAmount || 0));
       const current = await getCurrentCashSession();
+      const hasOpenCash = hasActiveCashSession(current);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-debug] open-session-refetch", {
-          open: current.open,
+          open: hasOpenCash,
           sessionId: current.session?.id ?? null,
           status: getCashSessionStatus(current),
+          isCashModalOpen: isOpenSessionModalOpen,
         });
       }
-      setCashSnapshot(current);
-      if (!current.open) {
+      setCashSnapshot({ ...current, open: hasOpenCash });
+      if (!hasOpenCash) {
         toast.error("No se pudo confirmar apertura de caja.");
         openSessionResolverRef.current?.(false);
         return;
       }
-      await loadCashData();
       const action = postOpenSessionActionRef.current;
       postOpenSessionActionRef.current = null;
       setIsOpenSessionModalOpen(false);
@@ -1326,32 +1329,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       }
       openSessionResolverRef.current?.(true);
-      toast.success("Caja aperturada");
+      toast.success(openResult.alreadyOpen ? "Caja ya estaba aperturada" : "Caja aperturada");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error desconocido";
-      if (message.includes("409") || message.toLowerCase().includes("abierta")) {
-        try {
-          const current = await getCurrentCashSession();
-          setCashSnapshot(current);
-          if (current.open) {
-            setIsOpenSessionModalOpen(false);
-            const action = postOpenSessionActionRef.current;
-            postOpenSessionActionRef.current = null;
-            if (action) {
-              try {
-                await action();
-              } catch (actionError) {
-                const actionMessage = actionError instanceof Error ? actionError.message : "Error en checkout";
-                toast.error(actionMessage);
-              }
-            }
-            openSessionResolverRef.current?.(true);
-            toast.success("Caja ya estaba aperturada");
-            return;
-          }
-        } catch {
-          // fallback to generic error below
-        }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-error", { message, isCashModalOpen: isOpenSessionModalOpen });
       }
       openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
