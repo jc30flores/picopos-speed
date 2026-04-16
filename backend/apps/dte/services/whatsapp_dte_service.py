@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import re
 import time
@@ -10,10 +11,13 @@ import requests
 from apps.dte.services.delivery_payloads import build_delivery_base_payload
 from apps.dte.models import DTERecord, DteDeliveryAttempt
 from apps.dte.services.delivery_config import resolve_delivery_config
+from apps.printing.receipt_pdf import build_receipt_pdf_from_text
+from apps.printing.services.renderers import render_customer_ticket
 
 logger = logging.getLogger("apps.dte")
 PHONE_RE = re.compile(r"^\d{8,15}$")
 INVALID_PHONES = {"00000000", "000000000", "0000000000", "50300000000"}
+MAX_LOG_TEXT = 3000
 
 
 def _normalize_phone(value: str | None) -> str:
@@ -34,6 +38,224 @@ def _is_valid_phone(phone: str) -> bool:
     if phone in INVALID_PHONES or set(phone) == {"0"}:
         return False
     return True
+
+
+def _mask_secret(value: str | None) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return "***"
+    return f"{text[:4]}***{text[-2:]}"
+
+
+def _sanitize_headers(headers: dict | None) -> dict:
+    src = headers or {}
+    out = {}
+    for key, value in src.items():
+        lowered = str(key).lower()
+        if lowered in {"authorization", "x-api-key", "api-key"}:
+            out[key] = _mask_secret(str(value))
+        else:
+            out[key] = str(value)
+    return out
+
+
+def _json_compact(data: dict) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _json_pretty(data: dict) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+
+
+def _json_for_form(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return _json_compact(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _sanitize_payload_for_log(payload: dict) -> dict:
+    cloned = dict(payload or {})
+    if "num_receptor" in cloned:
+        cloned["num_receptor"] = _mask_phone(cloned.get("num_receptor"))
+    dte = cloned.get("dte")
+    if isinstance(dte, dict):
+        receptor = dte.get("receptor") if isinstance(dte.get("receptor"), dict) else {}
+        if receptor:
+            receptor = {**receptor, "telefono": _mask_phone(receptor.get("telefono"))}
+            cloned["dte"] = {**dte, "receptor": receptor}
+    return cloned
+
+
+def _build_whatsapp_files(record: DTERecord, payload: dict) -> tuple[dict, list[dict]]:
+    files = {}
+    meta = []
+    dte_json = payload.get("dte") if isinstance(payload.get("dte"), dict) else {}
+    json_bytes = _json_pretty(dte_json).encode("utf-8")
+    json_name = f"dte_{record.id}_{record.control_number or 'sin_control'}.json"
+    files["json_file"] = (json_name, json_bytes, "application/json")
+    meta.append({"field": "json_file", "name": json_name, "mime": "application/json", "size": len(json_bytes)})
+    try:
+        ticket = render_customer_ticket(record.order)
+        pdf_result = build_receipt_pdf_from_text(
+            text=str(ticket.get("text") or ""),
+            filename=f"dte_{record.id}_{record.control_number or 'sin_control'}.pdf",
+            receipt_context=ticket.get("meta", {}).get("receipt_context"),
+            center_lines=ticket.get("meta", {}).get("pdf_center_lines"),
+        )
+        pdf_name = str(pdf_result.filename or f"dte_{record.id}.pdf")
+        pdf_bytes = bytes(pdf_result.pdf_bytes or b"")
+        if pdf_bytes:
+            files["pdf_file"] = (pdf_name, pdf_bytes, "application/pdf")
+            meta.append({"field": "pdf_file", "name": pdf_name, "mime": "application/pdf", "size": len(pdf_bytes)})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("WHATSAPP_ATTACHMENTS_PDF_BUILD_FAILED order_id=%s error=%s", record.order_id, exc)
+    return files, meta
+
+
+def _build_whatsapp_form_data(payload: dict) -> dict:
+    return {
+        "num_receptor": _json_for_form(payload.get("num_receptor")),
+        "send_json": _json_for_form(payload.get("send_json")),
+        "tipo_dte": _json_for_form(payload.get("tipo_dte")),
+        "doc_type": _json_for_form(payload.get("doc_type")),
+        "issued_id": _json_for_form(payload.get("issued_id")),
+        "order_id": _json_for_form(payload.get("order_id")),
+        "generation_code": _json_for_form(payload.get("generation_code")),
+        "control_number": _json_for_form(payload.get("control_number")),
+        "receiver_name": _json_for_form(payload.get("receiver_name")),
+        "estado_mh": _json_for_form(payload.get("estado_mh")),
+        "empresa": _json_for_form(payload.get("empresa")),
+        "total": _json_for_form(payload.get("total")),
+        "sello_recibido": _json_for_form(payload.get("sello_recibido")),
+        "fhProcesamiento": _json_for_form(payload.get("fhProcesamiento")),
+        "dte": _json_for_form(payload.get("dte") if isinstance(payload.get("dte"), dict) else {}),
+        "respuesta_hacienda": _json_for_form(
+            payload.get("respuesta_hacienda") if isinstance(payload.get("respuesta_hacienda"), dict) else {}
+        ),
+    }
+
+
+def _response_has_job_signal(provider_body: dict, http_status: int) -> bool:
+    body = provider_body or {}
+    if not (200 <= http_status < 300):
+        return False
+    if body.get("job_id"):
+        return True
+    status_text = str(body.get("status") or "").strip().lower()
+    if status_text in {"queued", "processing", "sent", "ok"}:
+        return True
+    message_text = str(body.get("message") or body.get("detail") or "").strip().lower()
+    if message_text in {"queued", "processing", "sent", "ok"}:
+        return True
+    if bool(body.get("queued")):
+        return True
+    return False
+
+
+def _validate_whatsapp_payload_contract(payload: dict) -> list[str]:
+    missing = []
+    if not str(payload.get("num_receptor") or "").strip():
+        missing.append("num_receptor")
+    if not str(payload.get("empresa") or "").strip():
+        missing.append("empresa")
+    if not isinstance(payload.get("dte"), dict) or not payload.get("dte"):
+        missing.append("dte")
+    if payload.get("send_json") is not True:
+        missing.append("send_json")
+    return missing
+
+
+def _build_debug_curl(
+    *,
+    endpoint: str,
+    headers: dict,
+    payload: dict,
+    data: dict | None,
+    file_meta: list[dict],
+    as_multipart: bool,
+) -> str:
+    safe_headers = _sanitize_headers(headers)
+    parts = [f"curl -X POST '{endpoint}'"]
+    for k, v in safe_headers.items():
+        parts.append(f"-H '{k}: {v}'")
+    if as_multipart:
+        for k, v in (data or {}).items():
+            parts.append(f"--form '{k}={v}'")
+        for item in file_meta:
+            parts.append(f"--form '{item['field']}=@{item['name']};type={item['mime']}'")
+    else:
+        parts.append(f"--data '{_json_compact(_sanitize_payload_for_log(payload))}'")
+    return " ".join(parts)
+
+
+def _log_whatsapp_request_debug(
+    *,
+    attempt: DteDeliveryAttempt,
+    endpoint: str,
+    headers: dict,
+    payload: dict,
+    file_meta: list[dict],
+    data: dict | None,
+    as_multipart: bool,
+) -> None:
+    safe_payload = _sanitize_payload_for_log(payload)
+    logger.info(
+        "WHATSAPP_OUTGOING_REQUEST job_id=%s method=POST endpoint=%s content_type=%s headers=%s fields=%s required=%s files=%s payload=%s curl=%s",
+        attempt.id,
+        endpoint,
+        "multipart/form-data" if as_multipart else "application/json",
+        _json_compact(_sanitize_headers(headers)),
+        sorted(payload.keys()),
+        {
+            "num_receptor": bool(payload.get("num_receptor")),
+            "empresa": bool(payload.get("empresa")),
+            "send_json": payload.get("send_json") is True,
+            "dte": isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
+            "respuesta_hacienda": isinstance(payload.get("respuesta_hacienda"), dict),
+            "sello_recibido": bool(payload.get("sello_recibido")),
+            "fhProcesamiento": bool(payload.get("fhProcesamiento")),
+            "pdf": any(item["mime"] == "application/pdf" for item in file_meta),
+            "json": any(item["mime"] == "application/json" for item in file_meta),
+        },
+        file_meta,
+        _json_pretty(safe_payload),
+        _build_debug_curl(
+            endpoint=endpoint,
+            headers=headers,
+            payload=payload,
+            data=data,
+            file_meta=file_meta,
+            as_multipart=as_multipart,
+        ),
+    )
+
+
+def _log_whatsapp_response_debug(*, attempt: DteDeliveryAttempt, response, provider_body: dict) -> None:
+    headers_subset = {
+        "content-type": response.headers.get("content-type"),
+        "x-request-id": response.headers.get("x-request-id"),
+    }
+    logger.info(
+        "WHATSAPP_INCOMING_RESPONSE job_id=%s status_code=%s headers=%s body=%s parsed=%s",
+        attempt.id,
+        response.status_code,
+        _json_compact({k: v for k, v in headers_subset.items() if v}),
+        response.text[:MAX_LOG_TEXT],
+        _json_compact(provider_body or {}),
+    )
+    if 200 <= response.status_code < 300 and not _response_has_job_signal(provider_body or {}, response.status_code):
+        logger.warning(
+            "WHATSAPP_PROVIDER_2XX_WITHOUT_JOB_SIGNAL job_id=%s status_code=%s body=%s",
+            attempt.id,
+            response.status_code,
+            _json_compact(provider_body or {}),
+        )
 
 
 @dataclass(frozen=True)
@@ -227,6 +449,32 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         return attempt
 
     payload = build_whatsapp_payload(record, destination)
+    contract_missing = _validate_whatsapp_payload_contract(payload)
+    if contract_missing:
+        error = f"payload_missing_required:{','.join(contract_missing)}"
+        attempt.status = "FAILED"
+        attempt.provider_body = {
+            "error": error,
+            "provider_message": "Payload de WhatsApp incompleto; se cancela envío.",
+            "request_payload": _sanitize_payload_for_log(payload),
+            "missing_fields": contract_missing,
+            "to_phone": destination.normalized_phone,
+            "endpoint": endpoint,
+        }
+        attempt.save(update_fields=["status", "provider_body", "retries"])
+        logger.error(
+            "WHATSAPP_PAYLOAD_INVALID job_id=%s order_id=%s issued_id=%s missing=%s endpoint=%s",
+            attempt.id,
+            record.order_id,
+            record.id,
+            contract_missing,
+            endpoint,
+        )
+        return attempt
+
+    files, file_meta = _build_whatsapp_files(record, payload)
+    form_data = _build_whatsapp_form_data(payload)
+    request_headers = {"X-API-Key": key}
     logger.info(
         "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
         attempt.id,
@@ -246,6 +494,15 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         bool(payload.get("sello_recibido")),
         bool(payload.get("fh_procesamiento")),
     )
+    _log_whatsapp_request_debug(
+        attempt=attempt,
+        endpoint=endpoint,
+        headers=request_headers,
+        payload=payload,
+        file_meta=file_meta,
+        data=form_data,
+        as_multipart=True,
+    )
 
     for retry in range(3):
         attempt.retries = retry + 1
@@ -255,21 +512,32 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         try:
             response = requests.post(
                 endpoint,
-                json=payload,
-                headers={"X-API-Key": key, "Content-Type": "application/json"},
+                data=form_data,
+                files=files,
+                headers=request_headers,
                 timeout=8,
             )
             provider_status = response.status_code
             provider_body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {"raw": response.text[:3000]}
+            _log_whatsapp_response_debug(attempt=attempt, response=response, provider_body=provider_body)
             logger.info(
                 "WHATSAPP_PROVIDER_RESPONSE job_id=%s delivery_type=%s destination=%s status=%s body=%s",
                 attempt.id,
-                "json_bundle",
+                "multipart_bundle",
                 _mask_phone(destination.normalized_phone),
                 response.status_code,
                 str(provider_body)[:800],
             )
             if 200 <= response.status_code < 300:
+                if not _response_has_job_signal(provider_body or {}, response.status_code):
+                    error = "provider_2xx_without_job_signal"
+                    logger.warning(
+                        "WHATSAPP_PROVIDER_UNCONFIRMED_ENQUEUE job_id=%s retry=%s body=%s",
+                        attempt.id,
+                        retry + 1,
+                        _json_compact(provider_body or {}),
+                    )
+                    continue
                 provider_status_text = str((provider_body or {}).get("status") or "").strip().lower()
                 is_queued = bool((provider_body or {}).get("queued")) or provider_status_text == "queued"
                 attempt.status = "QUEUED" if is_queued else "SENT"

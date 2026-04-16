@@ -103,7 +103,8 @@ class DTEWhatsAppServiceTests(TestCase):
 
         self.assertEqual(attempt.status, "FAILED")
         _, kwargs = mock_post.call_args
-        self.assertEqual(kwargs["json"]["num_receptor"], "50379998888")
+        self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
+        self.assertIn("json_file", kwargs["files"])
         self.assertEqual(mock_post.call_count, 3)
         self.assertEqual(attempt.provider_body.get("to_phone"), "50379998888")
         self.assertEqual(attempt.provider_body.get("destination_source"), "client_phone")
@@ -125,18 +126,19 @@ class DTEWhatsAppServiceTests(TestCase):
         response = MagicMock()
         response.status_code = 200
         response.headers = {"content-type": "application/json"}
-        response.json.return_value = {"message": "queued"}
-        response.text = '{"message":"queued"}'
+        response.json.return_value = {"status": "queued", "message": "queued", "job_id": "J1"}
+        response.text = '{"status":"queued","message":"queued","job_id":"J1"}'
         mock_post.return_value = response
 
         attempt = send_dte_whatsapp(self.record, to_phone="50379998888")
 
-        self.assertEqual(attempt.status, "SENT")
+        self.assertEqual(attempt.status, "QUEUED")
         _, kwargs = mock_post.call_args
-        payload = kwargs["json"]
-        self.assertEqual(payload["num_receptor"], "50379998888")
-        self.assertIn("dte", payload)
-        self.assertTrue(payload["send_json"])
+        self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
+        self.assertEqual(kwargs["data"]["send_json"], "true")
+        self.assertIn("dte", kwargs["data"])
+        self.assertIn("json_file", kwargs["files"])
+        self.assertIn("pdf_file", kwargs["files"])
 
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
@@ -154,3 +156,54 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(attempt.status, "QUEUED")
         self.assertTrue(attempt.provider_body.get("queued"))
         self.assertEqual(attempt.provider_body.get("job_id"), "job-123")
+
+    @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
+    @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
+    @patch("apps.dte.services.whatsapp_dte_service.logger.warning")
+    @patch("apps.dte.services.whatsapp_dte_service.requests.post")
+    def test_send_whatsapp_warns_and_fails_when_200_has_no_job_signal(self, mock_post, mock_warning, _mock_sleep):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"ok": True, "message": "accepted"}
+        response.text = '{"ok":true,"message":"accepted"}'
+        mock_post.return_value = response
+
+        attempt = send_dte_whatsapp(self.record, to_phone="50379998888")
+
+        self.assertEqual(attempt.status, "FAILED")
+        self.assertEqual(mock_post.call_count, 3)
+        self.assertIn("provider_2xx_without_job_signal", str(attempt.provider_body.get("error") or ""))
+        self.assertTrue(mock_warning.called)
+
+    @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
+    @patch("apps.dte.services.whatsapp_dte_service.build_whatsapp_payload")
+    def test_send_whatsapp_fails_fast_when_num_receptor_missing(self, mock_builder):
+        destination = resolve_whatsapp_destination(self.record)
+        payload = build_whatsapp_payload(self.record, destination)
+        payload["num_receptor"] = ""
+        mock_builder.return_value = payload
+
+        attempt = send_dte_whatsapp(self.record, to_phone="50379998888")
+
+        self.assertEqual(attempt.status, "FAILED")
+        self.assertIn("payload_missing_required:num_receptor", str(attempt.provider_body.get("error") or ""))
+
+    @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
+    @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
+    @patch("apps.dte.services.whatsapp_dte_service.requests.post")
+    @patch("apps.dte.services.whatsapp_dte_service.logger.info")
+    def test_send_whatsapp_logs_when_respuesta_hacienda_missing(self, mock_info, mock_post, _mock_sleep):
+        self.record.response_payload = {}
+        self.record.save(update_fields=["response_payload"])
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"job_id": "job-222", "status": "queued", "queued": True}
+        response.text = '{"job_id":"job-222","status":"queued","queued":true}'
+        mock_post.return_value = response
+
+        attempt = send_dte_whatsapp(self.record, to_phone="50379998888")
+
+        self.assertEqual(attempt.status, "QUEUED")
+        self.assertTrue(any("WHATSAPP_OUTGOING_REQUEST" in str(call.args[0]) for call in mock_info.call_args_list))
