@@ -127,6 +127,22 @@ def build_receipt_context(order: Order) -> dict:
     fecha_dte = identificacion.get("fecEmi") if isinstance(identificacion, dict) else ""
     codigo_generacion = (identificacion.get("codigoGeneracion") if isinstance(identificacion, dict) else "") or (dte_record.codigo_generacion if dte_record else "")
     numero_control = (identificacion.get("numeroControl") if isinstance(identificacion, dict) else "") or (dte_record.control_number if dte_record else "")
+    response_payload = dte_record.response_payload if dte_record and isinstance(dte_record.response_payload, dict) else {}
+    respuesta_hacienda = response_payload.get("respuesta_hacienda") if isinstance(response_payload.get("respuesta_hacienda"), dict) else {}
+    sello_recibido = (
+        (dte_record.sello_recibido if dte_record else "")
+        or (dte_record.sello_recepcion if dte_record else "")
+        or str(response_payload.get("sello_recibido") or "").strip()
+        or str(respuesta_hacienda.get("selloRecibido") or "").strip()
+    )
+    fh_procesamiento = (
+        str(response_payload.get("fhProcesamiento") or "").strip()
+        or str(response_payload.get("fh_procesamiento") or "").strip()
+        or str(respuesta_hacienda.get("fhProcesamiento") or "").strip()
+        or str(respuesta_hacienda.get("fh_procesamiento") or "").strip()
+        or (timezone.localtime(dte_record.hacienda_processed_at).isoformat() if dte_record and dte_record.hacienda_processed_at else "")
+        or (timezone.localtime(dte_record.recibido_at).isoformat() if dte_record and dte_record.recibido_at else "")
+    )
 
     payment_total = sum((Decimal(str(p.amount or "0")) for p in payments), Decimal("0"))
     total_source = payment_total if payment_total > 0 else Decimal(str(resumen.get("totalPagar") or order.total or "0.00"))
@@ -177,6 +193,8 @@ def build_receipt_context(order: Order) -> dict:
             "numero_control": numero_control,
             "codigo_generacion": codigo_generacion,
             "fecha_dte": fecha_dte or "",
+            "sello_recibido": sello_recibido or "",
+            "fh_procesamiento": fh_procesamiento or "",
         },
         "public_url": public_url,
         "logo_path": str(_logo_path()),
@@ -246,6 +264,8 @@ def render_customer_ticket(order: Order) -> dict:
             f"No. Control: {ctx['dte']['numero_control'] or '-'}",
             f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}",
             f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}",
+            f"Sello de Recepcion: {ctx['dte']['sello_recibido'] or '-'}",
+            f"Fh Procesamiento: {ctx['dte']['fh_procesamiento'] or '-'}",
         ]
     )
 

@@ -58,6 +58,28 @@ def _extract_sello(record: DTERecord, response_payload: dict, dte_json: dict) ->
     return "", ""
 
 
+def _extract_fh_procesamiento(record: DTERecord, response_payload: dict, dte_json: dict) -> tuple[str | None, str]:
+    candidates = [
+        ("response_payload.fhProcesamiento", _safe_iso(response_payload.get("fhProcesamiento"))),
+        ("response_payload.fh_procesamiento", _safe_iso(response_payload.get("fh_procesamiento"))),
+        (
+            "response_payload.respuesta_hacienda.fhProcesamiento",
+            _safe_iso((response_payload.get("respuesta_hacienda") or {}).get("fhProcesamiento")),
+        ),
+        (
+            "response_payload.respuesta_hacienda.fh_procesamiento",
+            _safe_iso((response_payload.get("respuesta_hacienda") or {}).get("fh_procesamiento")),
+        ),
+        ("dte.identificacion.fhProcesamiento", _safe_iso((dte_json.get("identificacion") or {}).get("fhProcesamiento"))),
+        ("dte_record.hacienda_processed_at", _safe_iso(record.hacienda_processed_at)),
+        ("dte_record.recibido_at", _safe_iso(record.recibido_at)),
+    ]
+    for source, value in candidates:
+        if value:
+            return value, source
+    return None, ""
+
+
 def build_delivery_base_payload(record: DTERecord) -> dict:
     dte_json = _extract_dte_json(record)
     response_payload = record.response_payload or {}
@@ -67,12 +89,7 @@ def build_delivery_base_payload(record: DTERecord) -> dict:
     customer = getattr(record.order, "customer", None)
 
     sello_recibido, sello_source = _extract_sello(record, response_payload, dte_json)
-    fh_procesamiento = (
-        _safe_iso(response_payload.get("fhProcesamiento"))
-        or _safe_iso(response_payload.get("fh_procesamiento"))
-        or _safe_iso(record.hacienda_processed_at)
-        or _safe_iso(record.recibido_at)
-    )
+    fh_procesamiento, fh_source = _extract_fh_procesamiento(record, response_payload, dte_json)
 
     issue_date = (
         str(identificacion.get("fecEmi") or "").strip()
@@ -104,6 +121,13 @@ def build_delivery_base_payload(record: DTERecord) -> dict:
             record.order_id,
             record.status,
         )
+    if not fh_procesamiento:
+        logger.info(
+            "DTE_DELIVERY_BASE_MISSING_FH_PROCESSING dte_record_id=%s order_id=%s status=%s",
+            record.id,
+            record.order_id,
+            record.status,
+        )
 
     return {
         "issued_id": record.id,
@@ -114,6 +138,7 @@ def build_delivery_base_payload(record: DTERecord) -> dict:
         "control_number": control_number,
         "sello_recibido": sello_recibido,
         "sello_source": sello_source,
+        "fh_source": fh_source,
         "issue_date": issue_date,
         "issue_time": issue_time,
         "fh_procesamiento": fh_procesamiento,

@@ -175,16 +175,21 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         "issued_id": base.get("issued_id"),
         "order_id": base.get("order_id"),
         "generation_code": base.get("generation_code"),
+        "codigoGeneracion": base.get("generation_code"),
         "control_number": base.get("control_number"),
+        "numeroControl": base.get("control_number"),
         "receiver_name": base.get("receiver_name"),
         "estado_mh": base.get("estado_mh"),
+        "estadoMH": base.get("estado_mh"),
         "empresa": empresa_nombre,
         "empresa_nombre": empresa_nombre,
         "total": total,
         "respuesta_hacienda": response_payload,
         "hacienda_response": response_payload,
         "sello_recibido": base.get("sello_recibido") or "",
+        "selloRecibido": base.get("sello_recibido") or "",
         "fh_procesamiento": base.get("fh_procesamiento"),
+        "fhProcesamiento": base.get("fh_procesamiento"),
         "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
     }
 
@@ -223,7 +228,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
 
     payload = build_whatsapp_payload(record, destination)
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s",
+        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
         attempt.id,
         record.order_id,
         record.id,
@@ -239,6 +244,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         payload.get("generation_code"),
         payload.get("control_number"),
         bool(payload.get("sello_recibido")),
+        bool(payload.get("fh_procesamiento")),
     )
 
     for retry in range(3):

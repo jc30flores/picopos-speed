@@ -46,7 +46,7 @@ class DTEPayloadBuildersTests(TestCase):
                     "resumen": {"totalIva": 1.30},
                 }
             },
-            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-X"}},
+            response_payload={"respuesta_hacienda": {"selloRecibido": "SELLO-X", "fhProcesamiento": "2026-01-10T18:11:44"}},
             sello_recibido="SELLO-X",
             total_amount=Decimal("10.00"),
         )
@@ -59,7 +59,9 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertEqual(payload["flags"]["attach_pdf"], True)
         self.assertEqual(payload["flags"]["attach_json"], True)
         self.assertEqual(payload["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["fhProcesamiento"], "2026-01-10T18:11:44")
         self.assertEqual(payload["metadata"]["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["metadata"]["fhProcesamiento"], "2026-01-10T18:11:44")
         self.assertEqual(payload["metadata"]["control_number"], "DTE-01-S001P001-000000000000001")
         self.assertEqual(payload["metadata"]["generation_code"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         self.assertEqual(payload["metadata"]["dte_type"], "CF_01")
@@ -75,8 +77,10 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertEqual(payload["tipo_dte"], "01")
         self.assertEqual(payload["doc_type"], "CF")
         self.assertEqual(payload["sello_recibido"], "SELLO-X")
+        self.assertEqual(payload["fhProcesamiento"], "2026-01-10T18:11:44")
         self.assertEqual(payload["generation_code"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         self.assertEqual(payload["control_number"], "DTE-01-S001P001-000000000000001")
+        self.assertIsInstance(payload["respuesta_hacienda"], dict)
         self.assertIn("descripcion_msg", payload)
 
     def test_email_and_whatsapp_share_same_delivery_base(self):
@@ -87,6 +91,8 @@ class DTEPayloadBuildersTests(TestCase):
         email_payload = build_email_payload(self.record)
         self.assertEqual(email_payload["sello_recibido"], base["sello_recibido"])
         self.assertEqual(wa_payload["sello_recibido"], base["sello_recibido"])
+        self.assertEqual(email_payload["fhProcesamiento"], base["fh_procesamiento"])
+        self.assertEqual(wa_payload["fhProcesamiento"], base["fh_procesamiento"])
         self.assertEqual(email_payload["generation_code"], base["generation_code"])
         self.assertEqual(wa_payload["generation_code"], base["generation_code"])
         self.assertEqual(email_payload["control_number"], base["control_number"])
@@ -105,6 +111,16 @@ class DTEPayloadBuildersTests(TestCase):
         self.assertEqual(base["sello_recibido"], "")
         self.assertEqual(wa_payload["sello_recibido"], "")
         self.assertEqual(email_payload["sello_recibido"], "")
+        self.assertFalse(base["fh_procesamiento"])
+
+    def test_extracts_fh_procesamiento_from_nested_hacienda_response(self):
+        self.record.response_payload = {"respuesta_hacienda": {"fhProcesamiento": "2026-05-10T17:35:00", "selloRecibido": "SELLO-X"}}
+        self.record.hacienda_processed_at = None
+        self.record.recibido_at = None
+        self.record.save(update_fields=["response_payload", "hacienda_processed_at", "recibido_at"])
+
+        base = build_delivery_base_payload(self.record)
+        self.assertEqual(base["fh_procesamiento"], "2026-05-10T17:35:00")
 
     def test_build_invalidation_payload_exact_keys(self):
         payload = build_invalidation_payload(

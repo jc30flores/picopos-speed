@@ -78,7 +78,9 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
             "generation_code": base["generation_code"],
             "control_number": base["control_number"],
             "sello_recibido": base["sello_recibido"],
+            "selloRecibido": base["sello_recibido"],
             "fh_procesamiento": base["fh_procesamiento"],
+            "fhProcesamiento": base["fh_procesamiento"],
             "status": base["status"],
             "estado_mh": base["estado_mh"],
             "receiver_name": base["receiver_name"],
@@ -89,18 +91,26 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
             "attach_json": bool(base["attachments"]["json"]),
         },
         "sello_recibido": base["sello_recibido"],
+        "selloRecibido": base["sello_recibido"],
         "generation_code": base["generation_code"],
+        "codigoGeneracion": base["generation_code"],
         "control_number": base["control_number"],
+        "numeroControl": base["control_number"],
         "tipo_dte": base["tipo_dte"],
+        "tipoDte": base["tipo_dte"],
         "issued_id": base["issued_id"],
         "order_id": base["order_id"],
         "issue_date": base["issue_date"],
         "issue_time": base["issue_time"],
         "fh_procesamiento": base["fh_procesamiento"],
+        "fhProcesamiento": base["fh_procesamiento"],
         "status": base["status"],
         "estado_mh": base["estado_mh"],
+        "estadoMH": base["estado_mh"],
         "receiver_name": base["receiver_name"],
         "company_name": company_name,
+        "respuesta_hacienda": base["hacienda_response"],
+        "hacienda_response": base["hacienda_response"],
     }
 
 
@@ -165,8 +175,9 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
     payload = build_email_payload(record, to_email=target_email)
     invoice_keys = list((payload.get("invoice_json") or {}).keys()) if isinstance(payload.get("invoice_json"), dict) else []
     logger.info(
-        "[DTE EMAIL] payload_summary order=%s to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_pdf=%s has_json=%s",
+        "[DTE EMAIL] payload_summary order=%s issued_id=%s channel=email to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s",
         record.order_id,
+        payload.get("issued_id"),
         payload.get("to_email"),
         payload.get("subject"),
         bool(payload.get("body_text")),
@@ -176,6 +187,8 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
         payload.get("generation_code"),
         payload.get("control_number"),
         bool(payload.get("sello_recibido")),
+        bool(payload.get("fh_procesamiento")),
+        isinstance(payload.get("respuesta_hacienda"), dict),
         bool((payload.get("flags") or {}).get("attach_pdf")),
         bool((payload.get("flags") or {}).get("attach_json")),
     )
