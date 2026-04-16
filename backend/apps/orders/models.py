@@ -50,6 +50,8 @@ class Order(models.Model):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True, related_name="orders")
     dte_document_type = models.CharField(max_length=4, choices=DTE_DOCUMENT_TYPE_CHOICES, default="CF")
+    whatsapp_num_cliente = models.CharField(max_length=20, blank=True, default="")
+    whatsapp_num_cliente_country = models.CharField(max_length=3, blank=True, default="")
     iva_exempt = models.BooleanField(default=False)
     iva_exempt_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default="pos")

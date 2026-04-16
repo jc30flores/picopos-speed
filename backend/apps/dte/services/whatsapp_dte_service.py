@@ -83,6 +83,8 @@ def _sanitize_payload_for_log(payload: dict) -> dict:
     cloned = dict(payload or {})
     if "num_receptor" in cloned:
         cloned["num_receptor"] = _mask_phone(cloned.get("num_receptor"))
+    if "num_cliente" in cloned:
+        cloned["num_cliente"] = _mask_phone(cloned.get("num_cliente"))
     dte = cloned.get("dte")
     if isinstance(dte, dict):
         receptor = dte.get("receptor") if isinstance(dte.get("receptor"), dict) else {}
@@ -121,7 +123,7 @@ def _build_whatsapp_files(record: DTERecord, payload: dict) -> tuple[dict, list[
 def _build_whatsapp_form_data(payload: dict) -> dict:
     invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
     respuesta_hacienda = invoice_json.get("respuesta_hacienda") if isinstance(invoice_json.get("respuesta_hacienda"), dict) else {}
-    return {
+    form_data = {
         "num_receptor": _json_for_form(payload.get("num_receptor")),
         "send_json": _json_for_form(payload.get("send_json")),
         "tipo_dte": _json_for_form(payload.get("tipo_dte")),
@@ -138,6 +140,21 @@ def _build_whatsapp_form_data(payload: dict) -> dict:
         "respuesta_hacienda": _json_for_form(respuesta_hacienda),
         "invoice_json": _json_for_form(invoice_json),
     }
+    if str(payload.get("num_cliente") or "").strip():
+        form_data["num_cliente"] = _json_for_form(payload.get("num_cliente"))
+    return form_data
+
+
+def _resolve_num_cliente(record: DTERecord) -> str:
+    raw = str(getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return raw
+    digits = _normalize_phone(raw)
+    if not digits:
+        return ""
+    return f"+{digits}"
 
 
 def _response_has_job_signal(provider_body: dict, http_status: int) -> bool:
@@ -409,7 +426,7 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
     empresa_nombre = base.get("company_name") or resolve_delivery_config().whatsapp_company_name or "PicoPOS"
     resumen = dte.get("resumen") if isinstance(dte.get("resumen"), dict) else {}
     total = float(resumen.get("totalPagar") or base.get("total") or record.total_amount or 0)
-    return {
+    payload = {
         "num_receptor": destination.normalized_phone,
         "send_json": True,
         "dte": dte,
@@ -430,6 +447,10 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         "invoice_json": {"dte": dte, "respuesta_hacienda": respuesta_hacienda},
         "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
     }
+    num_cliente = _resolve_num_cliente(record)
+    if num_cliente:
+        payload["num_cliente"] = num_cliente
+    return payload
 
 
 def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeliveryAttempt:
@@ -492,7 +513,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
     form_data = _build_whatsapp_form_data(payload)
     request_headers = {"X-API-Key": key}
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
+        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_num_cliente=%s num_cliente_masked=%s payload_has_num_cliente=%s num_receptor_intact=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
         attempt.id,
         record.order_id,
         record.id,
@@ -500,6 +521,10 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         _mask_phone(destination.normalized_phone),
         endpoint,
         bool(payload.get("num_receptor")),
+        bool(payload.get("num_cliente")),
+        _mask_phone(payload.get("num_cliente")),
+        "num_cliente" in payload,
+        str(payload.get("num_receptor") or "") == str(destination.normalized_phone or ""),
         isinstance(payload.get("dte"), dict) and bool(payload.get("dte")),
         isinstance((payload.get("invoice_json") or {}).get("respuesta_hacienda"), dict),
         True,

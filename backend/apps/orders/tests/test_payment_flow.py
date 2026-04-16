@@ -125,6 +125,45 @@ class OrderPaymentFlowTests(TestCase):
         self.assertIn("remaining", payload)
         self.assertIn("subtotal_before_discounts", payload)
 
+    def test_patch_order_customer_persists_whatsapp_num_cliente_without_overwriting_customer_phone(self):
+        alt_customer = Customer.objects.create(
+            name="EMPRESA X",
+            full_name="EMPRESA X",
+            client_type="CCF",
+            telefono="77778888",
+            department_code="01",
+            municipality_code="01",
+        )
+        order = Order.objects.create(
+            order_number=105,
+            branch=self.branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            customer=self.customer,
+            customer_name=self.customer.name,
+            subtotal=Decimal("20.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("20.00"),
+            discount_total=Decimal("0.00"),
+        )
+        response = self.client.patch(
+            f"/api/orders/{order.id}/",
+            {
+                "customer_id": alt_customer.id,
+                "dte_document_type": "CCF",
+                "iva_exempt": False,
+                "whatsapp_num_cliente_country": "ESA",
+                "whatsapp_num_cliente": "+503 7937-8279",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        order.refresh_from_db()
+        alt_customer.refresh_from_db()
+        self.assertEqual(order.whatsapp_num_cliente_country, "ESA")
+        self.assertEqual(order.whatsapp_num_cliente, "+50379378279")
+        self.assertEqual(alt_customer.telefono, "77778888")
+
     def test_payment_ticket_pdf_endpoint_returns_readable_pdf(self):
         order = Order.objects.create(
             order_number=103,

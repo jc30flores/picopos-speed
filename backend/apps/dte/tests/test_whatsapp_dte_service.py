@@ -121,10 +121,30 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(payload["dte"]["receptor"]["direccion"]["complemento"], "")
         self.assertEqual(payload["dte"]["receptor"]["telefono"], destination.normalized_phone)
 
+    def test_build_payload_includes_num_cliente_when_order_has_extra_number(self):
+        self.order.whatsapp_num_cliente = "+50379378279"
+        self.order.whatsapp_num_cliente_country = "ESA"
+        self.order.save(update_fields=["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
+        destination = resolve_whatsapp_destination(self.record, to_phone="50379998888")
+        payload = build_whatsapp_payload(self.record, destination)
+        self.assertEqual(payload["num_receptor"], "50379998888")
+        self.assertEqual(payload["num_cliente"], "+50379378279")
+
+    def test_build_payload_omits_num_cliente_when_empty(self):
+        self.order.whatsapp_num_cliente = ""
+        self.order.whatsapp_num_cliente_country = ""
+        self.order.save(update_fields=["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
+        destination = resolve_whatsapp_destination(self.record)
+        payload = build_whatsapp_payload(self.record, destination)
+        self.assertNotIn("num_cliente", payload)
+
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
     @patch("apps.dte.services.whatsapp_dte_service.requests.post")
     def test_send_whatsapp_uses_same_builder_shape(self, mock_post, _mock_sleep):
+        self.order.whatsapp_num_cliente = "+50379378279"
+        self.order.whatsapp_num_cliente_country = "ESA"
+        self.order.save(update_fields=["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
         response = MagicMock()
         response.status_code = 200
         response.headers = {"content-type": "application/json"}
@@ -137,6 +157,7 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(attempt.status, "QUEUED")
         _, kwargs = mock_post.call_args
         self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
+        self.assertEqual(kwargs["data"]["num_cliente"], "+50379378279")
         self.assertEqual(kwargs["data"]["send_json"], "true")
         self.assertIn("dte", kwargs["data"])
         self.assertIn("invoice_json", kwargs["data"])

@@ -17,6 +17,27 @@ from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
 
+def normalize_whatsapp_num_cliente(value: str | None, country: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized_country = str(country or "").strip().upper()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if normalized_country == "ESA":
+        if digits.startswith("503"):
+            digits = digits[3:]
+        if len(digits) != 8:
+            raise serializers.ValidationError({"whatsapp_num_cliente": "Para ESA usa un número válido de 8 dígitos."})
+        return f"+503{digits}"
+    if normalized_country == "USA":
+        if digits.startswith("1"):
+            digits = digits[1:]
+        if len(digits) != 10:
+            raise serializers.ValidationError({"whatsapp_num_cliente": "Para USA usa un número válido de 10 dígitos."})
+        return f"+1{digits}"
+    raise serializers.ValidationError({"whatsapp_num_cliente_country": "Selecciona un país válido (ESA o USA)."})
+
+
 class OrderItemModifierSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItemModifier
@@ -134,6 +155,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "customer_name",
             "customer_id",
             "dte_document_type",
+            "whatsapp_num_cliente",
+            "whatsapp_num_cliente_country",
             "iva_exempt",
             "iva_exempt_discount",
             "subtotal",
@@ -302,6 +325,8 @@ class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True)
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.all(), required=False, allow_null=True)
     dte_document_type = serializers.ChoiceField(choices=["CF", "CCF", "SX"], required=False, default="CF")
+    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    whatsapp_num_cliente_country = serializers.ChoiceField(choices=["ESA", "USA"], required=False, allow_blank=True)
     iva_exempt = serializers.BooleanField(required=False, default=False)
     source = serializers.CharField(required=False, allow_blank=True)
     channel = serializers.CharField(required=False, allow_blank=True)
@@ -313,6 +338,19 @@ class OrderCreateSerializer(serializers.Serializer):
     discount_mode = serializers.ChoiceField(choices=["manual", "auto"], required=False, allow_null=True)
     manual_discount_snapshot = serializers.JSONField(required=False)
     items = OrderItemInputSerializer(many=True)
+
+    def validate(self, attrs):
+        country = str(attrs.get("whatsapp_num_cliente_country") or "").strip().upper()
+        value = str(attrs.get("whatsapp_num_cliente") or "").strip()
+        if value and not country:
+            raise serializers.ValidationError({"whatsapp_num_cliente_country": "Selecciona el país del número extra de WhatsApp."})
+        if not value and country:
+            attrs["whatsapp_num_cliente_country"] = ""
+            return attrs
+        if value and country:
+            attrs["whatsapp_num_cliente"] = normalize_whatsapp_num_cliente(value, country)
+            attrs["whatsapp_num_cliente_country"] = country
+        return attrs
 
     def _next_order_number(self, branch: Branch) -> int:
         latest = Order.objects.filter(branch=branch).order_by("-order_number").first()
@@ -367,6 +405,8 @@ class OrderCreateSerializer(serializers.Serializer):
         branch = validated_data.pop("branch_id", None)
         customer = validated_data.pop("customer_id", None)
         dte_document_type = validated_data.pop("dte_document_type", "CF")
+        whatsapp_num_cliente = str(validated_data.pop("whatsapp_num_cliente", "") or "").strip()
+        whatsapp_num_cliente_country = str(validated_data.pop("whatsapp_num_cliente_country", "") or "").strip().upper()
         iva_exempt = bool(validated_data.pop("iva_exempt", False))
         if branch is None:
             branch = Branch.objects.first()
@@ -408,6 +448,8 @@ class OrderCreateSerializer(serializers.Serializer):
             customer=customer,
             customer_name=customer_name or customer.name,
             dte_document_type=dte_document_type,
+            whatsapp_num_cliente=whatsapp_num_cliente,
+            whatsapp_num_cliente_country=whatsapp_num_cliente_country,
             iva_exempt=iva_exempt,
             **validated_data,
         )
@@ -649,7 +691,7 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ["customer_id", "dte_document_type", "iva_exempt"]
+        fields = ["customer_id", "dte_document_type", "iva_exempt", "whatsapp_num_cliente", "whatsapp_num_cliente_country"]
 
     def validate(self, attrs):
         customer = attrs.get("customer_id", self.instance.customer)
@@ -660,6 +702,16 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser CCF para emitir CCF."})
         if dte_document_type == "SX" and customer.client_type != "SX":
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser SX para emitir SX."})
+        country = str(attrs.get("whatsapp_num_cliente_country", self.instance.whatsapp_num_cliente_country) or "").strip().upper()
+        value = str(attrs.get("whatsapp_num_cliente", self.instance.whatsapp_num_cliente) or "").strip()
+        if value and not country:
+            raise serializers.ValidationError({"whatsapp_num_cliente_country": "Selecciona el país del número extra de WhatsApp."})
+        if not value:
+            attrs["whatsapp_num_cliente"] = ""
+            attrs["whatsapp_num_cliente_country"] = ""
+        else:
+            attrs["whatsapp_num_cliente"] = normalize_whatsapp_num_cliente(value, country)
+            attrs["whatsapp_num_cliente_country"] = country
         return attrs
 
     def update(self, instance: Order, validated_data):
@@ -671,5 +723,19 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             instance.dte_document_type = validated_data["dte_document_type"]
         if "iva_exempt" in validated_data:
             instance.iva_exempt = bool(validated_data["iva_exempt"])
-        instance.save(update_fields=["customer", "customer_name", "dte_document_type", "iva_exempt", "updated_at"])
+        if "whatsapp_num_cliente" in validated_data:
+            instance.whatsapp_num_cliente = str(validated_data["whatsapp_num_cliente"] or "").strip()
+        if "whatsapp_num_cliente_country" in validated_data:
+            instance.whatsapp_num_cliente_country = str(validated_data["whatsapp_num_cliente_country"] or "").strip().upper()
+        instance.save(
+            update_fields=[
+                "customer",
+                "customer_name",
+                "dte_document_type",
+                "iva_exempt",
+                "whatsapp_num_cliente",
+                "whatsapp_num_cliente_country",
+                "updated_at",
+            ]
+        )
         return instance

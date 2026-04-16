@@ -219,6 +219,8 @@ export type Order = {
   customerName?: string;
   customerId?: number;
   dteDocumentType?: "CF" | "CCF" | "SX";
+  whatsappNumCliente?: string;
+  whatsappNumClienteCountry?: "ESA" | "USA" | "";
   ivaExempt?: boolean;
   ivaExemptDiscount?: number;
   paymentStatus: "unpaid" | "partial" | "paid";
@@ -1700,6 +1702,8 @@ const mapOrder = (order: {
   customer_name: string;
   customer_id?: number;
   dte_document_type?: "CF" | "CCF" | "SX";
+  whatsapp_num_cliente?: string;
+  whatsapp_num_cliente_country?: "ESA" | "USA" | "";
   iva_exempt?: boolean;
   iva_exempt_discount?: string;
   total: string;
@@ -1789,6 +1793,8 @@ const mapOrder = (order: {
     customerName: order.customer_name || undefined,
     customerId: order.customer_id ?? undefined,
     dteDocumentType: order.dte_document_type ?? "CF",
+    whatsappNumCliente: order.whatsapp_num_cliente ?? "",
+    whatsappNumClienteCountry: (order.whatsapp_num_cliente_country ?? "") as "ESA" | "USA" | "",
     ivaExempt: Boolean(order.iva_exempt),
     ivaExemptDiscount: Number(order.iva_exempt_discount ?? 0),
     paymentStatus: order.payment_status,
@@ -1890,6 +1896,8 @@ export const createOrder = async (payload: {
   customerName?: string;
   customerId?: number;
   dteDocumentType?: "CF" | "CCF" | "SX";
+  whatsappNumCliente?: string;
+  whatsappNumClienteCountry?: "ESA" | "USA" | "";
   ivaExempt?: boolean;
   source?: "kiosk" | "pos";
   channel?: "kiosk" | "pos";
@@ -1918,6 +1926,8 @@ export const createOrder = async (payload: {
       customer_name: payload.customerName ?? "",
       customer_id: payload.customerId,
       dte_document_type: payload.dteDocumentType ?? "CF",
+      whatsapp_num_cliente: payload.whatsappNumCliente ?? "",
+      whatsapp_num_cliente_country: payload.whatsappNumClienteCountry ?? "",
       iva_exempt: Boolean(payload.ivaExempt),
       source: payload.source,
       channel: payload.channel,
@@ -2106,7 +2116,13 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
 
 export const updateOrderCustomerDte = async (
   orderId: number,
-  payload: { customerId: number; dteDocumentType: "CF" | "CCF" | "SX"; ivaExempt?: boolean }
+  payload: {
+    customerId: number;
+    dteDocumentType: "CF" | "CCF" | "SX";
+    ivaExempt?: boolean;
+    whatsappNumCliente?: string;
+    whatsappNumClienteCountry?: "ESA" | "USA" | "";
+  }
 ): Promise<Order> => {
   const response = await request(`/orders/${orderId}/`, {
     method: "PATCH",
@@ -2114,6 +2130,8 @@ export const updateOrderCustomerDte = async (
       customer_id: payload.customerId,
       dte_document_type: payload.dteDocumentType,
       iva_exempt: Boolean(payload.ivaExempt),
+      whatsapp_num_cliente: payload.whatsappNumCliente ?? "",
+      whatsapp_num_cliente_country: payload.whatsappNumClienteCountry ?? "",
     }),
   });
   const data = await handleJson<Parameters<typeof mapOrder>[0]>(response);
