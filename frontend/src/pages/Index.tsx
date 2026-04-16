@@ -1039,8 +1039,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (/caja no aperturada|cash session|required/i.test(message)) {
         try {
           const current = await getCurrentCashSession();
-          setCashSnapshot(current);
-          if (!current.open) {
+          const currentHasOpen = hasActiveCashSession(current);
+          setCashSnapshot({ ...current, open: currentHasOpen });
+          if (!currentHasOpen) {
             if (import.meta.env.DEV) {
               // eslint-disable-next-line no-console
               console.info("[cash-debug] checkout.requires_open_after_error", {
@@ -1051,7 +1052,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             requestOpenSession();
             return;
           }
-          toast.error(message || "Conflicto al crear orden");
+          if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.info("[cash-debug] checkout.auto_resume_after_revalidate", {
+              reason: "backend_cash_required_but_current_open",
+              sessionId: current.session?.id ?? null,
+              requiresCashOpen: !currentHasOpen,
+              isCashModalOpen: isOpenSessionModalOpen,
+            });
+          }
+          await proceedToCheckout();
+          return;
         } catch {
           requestOpenSession();
         }
