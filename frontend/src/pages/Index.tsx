@@ -188,6 +188,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
   const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
+  const hasOpenCashSession = hasActiveCashSession(cashSnapshot);
+  const requiresCashOpen = !hasOpenCashSession;
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
@@ -1017,12 +1019,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    if (isOpenSessionModalOpen && !cashSnapshot.open) return;
+    if (isOpenSessionModalOpen && requiresCashOpen) return;
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       console.info("[cash-debug] checkout.attempt", {
-        canSell: cashSnapshot.open,
-        requiresCashOpen: !cashSnapshot.open,
+        canSell: hasOpenCashSession,
+        requiresCashOpen,
         isOpenSessionModalOpen,
         cartItems: cart.length,
         sessionId: cashSnapshot.session?.id ?? null,
@@ -2875,25 +2877,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog
         open={isOpenSessionModalOpen}
         onOpenChange={(open) => {
-          if (!open && !cashSnapshot.open) return;
           setIsOpenSessionModalOpen(open);
         }}
       >
         <DialogContent
           className="max-w-md"
-          showCloseButton={cashSnapshot.open}
+          showCloseButton={hasOpenCashSession}
           onEscapeKeyDown={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
           onPointerDownOutside={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
           onInteractOutside={(event) => {
-            if (!cashSnapshot.open) event.preventDefault();
+            if (requiresCashOpen) event.preventDefault();
           }}
         >
           <DialogHeader>
-            <DialogTitle>{cashSnapshot.open ? "Aperturar caja" : "Caja cerrada / Apertura requerida"}</DialogTitle>
+            <DialogTitle>{hasOpenCashSession ? "Aperturar caja" : "Caja cerrada / Apertura requerida"}</DialogTitle>
             <DialogDescription>Ingresa el efectivo inicial para abrir la sesión.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -2906,14 +2907,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               inputMode="decimal"
             />
             <div className="flex gap-2">
-              {cashSnapshot.open ? (
+              {hasOpenCashSession ? (
                 <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
               ) : null}
               <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
               </Button>
             </div>
-            {!cashSnapshot.open ? (
+            {requiresCashOpen ? (
               <Button
                 type="button"
                 variant="outline"
