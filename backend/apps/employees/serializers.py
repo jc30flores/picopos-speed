@@ -315,6 +315,10 @@ class AttendanceStateSerializer(serializers.Serializer):
     break_start = serializers.DateTimeField(allow_null=True)
     break_end = serializers.DateTimeField(allow_null=True)
     clock_out = serializers.DateTimeField(allow_null=True)
+    has_active_session = serializers.BooleanField()
+    latest_event = serializers.ChoiceField(choices=["CLOCK_IN", "CLOCK_OUT", "NONE"])
+    last_clock_in = serializers.DateTimeField(allow_null=True)
+    last_clock_out = serializers.DateTimeField(allow_null=True)
     can_clock_in = serializers.BooleanField()
     can_break_start = serializers.BooleanField()
     can_break_end = serializers.BooleanField()
@@ -334,7 +338,14 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
     clock_out = record.clock_out or record.check_out
     break_start = record.break_start
     break_end = record.break_end
-    break_active = bool(break_start and not break_end)
+    has_active_session = bool(clock_in and (clock_out is None or clock_in > clock_out))
+    break_active = bool(has_active_session and break_start and not break_end)
+    if clock_in and (clock_out is None or clock_in >= clock_out):
+        latest_event = "CLOCK_IN"
+    elif clock_out:
+        latest_event = "CLOCK_OUT"
+    else:
+        latest_event = "NONE"
     return {
         "employee": {"id": employee.id, "name": employee.full_name, "role": employee.role},
         "date": record.date,
@@ -342,8 +353,12 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
         "break_start": break_start,
         "break_end": break_end,
         "clock_out": clock_out,
-        "can_clock_in": clock_in is None and clock_out is None,
-        "can_break_start": bool(clock_in and not break_start and not clock_out),
+        "has_active_session": has_active_session,
+        "latest_event": latest_event,
+        "last_clock_in": clock_in,
+        "last_clock_out": clock_out,
+        "can_clock_in": not has_active_session,
+        "can_break_start": bool(has_active_session and not break_start),
         "can_break_end": bool(break_active and not clock_out),
-        "can_clock_out": bool(clock_in and not clock_out and not break_active),
+        "can_clock_out": bool(has_active_session and not break_active),
     }

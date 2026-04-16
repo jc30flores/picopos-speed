@@ -91,6 +91,7 @@ const MainMenu = () => {
                     blockedByAttendance,
                     hasClockInToday: accessState.hasClockInToday,
                     hasClockOutToday: accessState.hasClockOutToday,
+                    hasActiveSession: accessState.canAccessDashboard,
                     canAccessDashboard: accessState.canAccessDashboard,
                     attendanceError,
                   });

@@ -36,6 +36,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
           userId: user.id,
           clockIn: next.clockIn,
           clockOut: next.clockOut,
+          hasActiveSession: next.hasActiveSession,
           payload: next,
         });
       } catch (error) {
@@ -63,6 +64,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
         userId: user?.id ?? null,
         clockIn: next.clockIn,
         clockOut: next.clockOut,
+        hasActiveSession: next.hasActiveSession,
         payload: next,
       });
     },
@@ -82,6 +84,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
       userId: user?.id ?? null,
       hasClockInToday: next.hasClockInToday,
       hasClockOutToday: next.hasClockOutToday,
+      hasActiveSession: attendance?.hasActiveSession ?? false,
       canAccessDashboard: next.canAccessDashboard,
       blockReason: next.blockReason,
     });

@@ -24,7 +24,8 @@ export const getAttendanceAccessState = (
 
   const hasClockInToday = Boolean(attendance?.clockIn);
   const hasClockOutToday = Boolean(attendance?.clockOut);
-  const canAccessDashboard = hasClockInToday && !hasClockOutToday;
+  const hasActiveSession = Boolean(attendance?.hasActiveSession);
+  const canAccessDashboard = hasActiveSession;
 
   if (options?.hasError) {
     return {
@@ -35,7 +36,7 @@ export const getAttendanceAccessState = (
     };
   }
 
-  if (!hasClockInToday) {
+  if (!hasActiveSession && !hasClockInToday) {
     return {
       hasClockInToday,
       hasClockOutToday,
@@ -44,7 +45,7 @@ export const getAttendanceAccessState = (
     };
   }
 
-  if (hasClockOutToday) {
+  if (!hasActiveSession && hasClockOutToday) {
     return {
       hasClockInToday,
       hasClockOutToday,

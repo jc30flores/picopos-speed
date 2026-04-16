@@ -519,7 +519,11 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   breakStart: null,
   breakEnd: null,
   clockOut: null,
-  canClockIn: false,
+  hasActiveSession: false,
+  latestEvent: "NONE",
+  lastClockIn: null,
+  lastClockOut: null,
+  canClockIn: true,
   canBreakStart: false,
   canBreakEnd: false,
   canClockOut: false,
@@ -3003,6 +3007,10 @@ export type AttendanceState = {
   breakStart: string | null;
   breakEnd: string | null;
   clockOut: string | null;
+  hasActiveSession: boolean;
+  latestEvent: "CLOCK_IN" | "CLOCK_OUT" | "NONE";
+  lastClockIn: string | null;
+  lastClockOut: string | null;
   canClockIn: boolean;
   canBreakStart: boolean;
   canBreakEnd: boolean;
@@ -3024,6 +3032,10 @@ const mapAttendanceState = (data: {
   break_start: string | null;
   break_end: string | null;
   clock_out: string | null;
+  has_active_session?: boolean;
+  latest_event?: "CLOCK_IN" | "CLOCK_OUT" | "NONE";
+  last_clock_in?: string | null;
+  last_clock_out?: string | null;
   can_clock_in: boolean;
   can_break_start: boolean;
   can_break_end: boolean;
@@ -3035,6 +3047,12 @@ const mapAttendanceState = (data: {
   breakStart: data.break_start,
   breakEnd: data.break_end,
   clockOut: data.clock_out,
+  hasActiveSession: typeof data.has_active_session === "boolean"
+    ? data.has_active_session
+    : Boolean(data.clock_in) && (!data.clock_out || new Date(data.clock_in).getTime() > new Date(data.clock_out).getTime()),
+  latestEvent: data.latest_event ?? "NONE",
+  lastClockIn: data.last_clock_in ?? data.clock_in,
+  lastClockOut: data.last_clock_out ?? data.clock_out,
   canClockIn: data.can_clock_in,
   canBreakStart: data.can_break_start,
   canBreakEnd: data.can_break_end,

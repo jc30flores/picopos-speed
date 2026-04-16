@@ -67,6 +67,7 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
       blockedByAttendance,
       hasClockInToday: accessState.hasClockInToday,
       hasClockOutToday: accessState.hasClockOutToday,
+      hasActiveSession: accessState.canAccessDashboard,
       canAccessDashboard: accessState.canAccessDashboard,
       attendanceError,
     });

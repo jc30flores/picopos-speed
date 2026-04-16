@@ -41,8 +41,28 @@ class AttendanceMarkingTests(TestCase):
 
         clock_out = self.client.post("/api/employees/attendance/clock-out/")
         self.assertEqual(clock_out.status_code, 200)
+        self.assertFalse(clock_out.json()["has_active_session"])
+        self.assertTrue(clock_out.json()["can_clock_in"])
         self.assertFalse(clock_out.json()["can_clock_out"])
-        self.assertFalse(clock_out.json()["can_break_start"])
+
+    def test_multiple_clock_in_clock_out_cycles_same_day(self):
+        first_clock_in = self.client.post("/api/employees/attendance/clock-in/")
+        self.assertEqual(first_clock_in.status_code, 200)
+        self.assertTrue(first_clock_in.json()["has_active_session"])
+        self.assertFalse(first_clock_in.json()["can_clock_in"])
+        self.assertTrue(first_clock_in.json()["can_clock_out"])
+
+        first_clock_out = self.client.post("/api/employees/attendance/clock-out/")
+        self.assertEqual(first_clock_out.status_code, 200)
+        self.assertFalse(first_clock_out.json()["has_active_session"])
+        self.assertTrue(first_clock_out.json()["can_clock_in"])
+        self.assertFalse(first_clock_out.json()["can_clock_out"])
+
+        second_clock_in = self.client.post("/api/employees/attendance/clock-in/")
+        self.assertEqual(second_clock_in.status_code, 200)
+        self.assertTrue(second_clock_in.json()["has_active_session"])
+        self.assertFalse(second_clock_in.json()["can_clock_in"])
+        self.assertTrue(second_clock_in.json()["can_clock_out"])
 
     def test_attendance_endpoints_without_employee_return_200_payload(self):
         self.employee.delete()

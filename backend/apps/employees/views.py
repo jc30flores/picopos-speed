@@ -158,47 +158,48 @@ class AttendanceActionView(APIView):
         now = timezone.now()
         clock_in = record.clock_in or record.check_in
         clock_out = record.clock_out or record.check_out
+        has_active_session = bool(clock_in and (clock_out is None or clock_in > clock_out))
         logger.info(
-            "attendance.action.start user_id=%s employee_id=%s action=%s clock_in=%s clock_out=%s break_start=%s break_end=%s",
+            "attendance.action.start user_id=%s employee_id=%s action=%s clock_in=%s clock_out=%s has_active_session=%s break_start=%s break_end=%s",
             request.user.id,
             employee.id,
             self.action,
             clock_in,
             clock_out,
+            has_active_session,
             record.break_start,
             record.break_end,
         )
 
         if self.action == "clock_in":
-            if clock_in:
+            if has_active_session:
                 payload = build_attendance_state(record, employee)
                 return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_in = now
             record.check_in = now
+            record.clock_out = None
+            record.check_out = None
+            record.break_start = None
+            record.break_end = None
         elif self.action == "break_start":
-            if not clock_in:
+            if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_start:
                 return Response({"detail": "Break ya iniciado."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
-                return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
             record.break_start = now
         elif self.action == "break_end":
             if not record.break_start:
                 return Response({"detail": "Debes iniciar break primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_end:
                 return Response({"detail": "Break ya finalizado."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
+            if not has_active_session:
                 return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
             record.break_end = now
         elif self.action == "clock_out":
-            if not clock_in:
+            if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
             if record.break_start and not record.break_end:
                 return Response({"detail": "Debes finalizar el break antes de salida."}, status=status.HTTP_400_BAD_REQUEST)
-            if clock_out:
-                payload = build_attendance_state(record, employee)
-                return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_out = now
             record.check_out = now
 
