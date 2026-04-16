@@ -1,12 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
 import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
 import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
-import { getMyAttendanceToday } from "@/lib/api";
+import { useAttendanceAccess } from "@/context/useAttendanceAccess";
 import { toast } from "sonner";
 
 const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
@@ -25,6 +25,7 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { accessState, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const cards = useMemo(
@@ -32,45 +33,6 @@ const MainMenu = () => {
     [user]
   );
   const isWorker = user?.role === "worker";
-  const isAttendanceBypassUser = Boolean(user?.isSuperuser || user?.role === "admin");
-  const [hasActiveAttendance, setHasActiveAttendance] = useState<boolean>(true);
-
-  useEffect(() => {
-    if (!user || isAttendanceBypassUser) {
-      setHasActiveAttendance(true);
-      return;
-    }
-    let cancelled = false;
-    const loadAttendanceState = async () => {
-      try {
-        const today = await getMyAttendanceToday();
-        const active = Boolean(today.clockIn) && !today.clockOut;
-        if (cancelled) return;
-        setHasActiveAttendance(active);
-        console.info("attendance.home.state", {
-          userId: user.id,
-          role: user.role,
-          pathname: "/",
-          clockIn: today.clockIn,
-          clockOut: today.clockOut,
-          hasActiveAttendance: active,
-        });
-      } catch (error) {
-        if (cancelled) return;
-        setHasActiveAttendance(false);
-        console.info("attendance.home.state_error", {
-          userId: user.id,
-          role: user.role,
-          pathname: "/",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    };
-    void loadAttendanceState();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAttendanceBypassUser, user]);
 
   const toggleTheme = () => {
     const next = theme === "light" ? "dark" : "light";
@@ -121,15 +83,25 @@ const MainMenu = () => {
                 key={card.path}
                 className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90"
                 onClick={() => {
-                  const blockedByAttendance = !isAttendanceBypassUser && !hasActiveAttendance;
+                  const blockedByAttendance = !accessState.canAccessDashboard;
                   console.info("attendance.home.module_click", {
                     userId: user?.id ?? null,
                     role: user?.role ?? null,
                     path: card.path,
                     blockedByAttendance,
+                    hasClockInToday: accessState.hasClockInToday,
+                    hasClockOutToday: accessState.hasClockOutToday,
+                    canAccessDashboard: accessState.canAccessDashboard,
+                    attendanceError,
                   });
                   if (blockedByAttendance) {
-                    toast.error("Debes marcar Entrada antes de continuar.");
+                    if (attendanceError) {
+                      toast.error(`No se pudo validar asistencia: ${attendanceError}`);
+                    } else if (accessState.blockReason === "CLOCKED_OUT") {
+                      toast.error("Tu jornada ya fue cerrada. Debes marcar Entrada en un nuevo turno.");
+                    } else {
+                      toast.error("Debes marcar Entrada antes de continuar.");
+                    }
                     return;
                   }
                   navigate(card.path);

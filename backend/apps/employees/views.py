@@ -2,6 +2,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+import logging
 from rest_framework import generics, status
 from apps.core.audit import log_audit
 from apps.core.permissions import IsAdminOrManager, IsAuthenticatedAndActive
@@ -16,6 +17,8 @@ from apps.employees.serializers import (
     AttendanceHistoryRowSerializer,
     build_attendance_state,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EmployeeListCreateView(generics.ListCreateAPIView):
@@ -118,11 +121,13 @@ class AttendanceTodayView(APIView):
     def get(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
+            logger.info("attendance.today.no_employee user_id=%s", request.user.id)
             return Response({"attendance": None, "state": "NO_EMPLOYEE"}, status=status.HTTP_200_OK)
         record = _today_record_if_exists(employee)
         if not record:
             empty_record = AttendanceRecord(employee=employee, date=timezone.localdate())
             payload = build_attendance_state(empty_record, employee)
+            logger.info("attendance.today.no_record user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
             return Response(
                 {
                     "attendance": AttendanceStateSerializer(payload).data,
@@ -131,6 +136,7 @@ class AttendanceTodayView(APIView):
                 status=status.HTTP_200_OK,
             )
         payload = build_attendance_state(record, employee)
+        logger.info("attendance.today.ok user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
         return Response({"attendance": AttendanceStateSerializer(payload).data, "state": "OK"}, status=status.HTTP_200_OK)
 
 
@@ -142,6 +148,7 @@ class AttendanceActionView(APIView):
     def post(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
+            logger.info("attendance.action.no_employee user_id=%s action=%s", request.user.id, self.action)
             return Response(
                 {"detail": "Empleado no asociado al usuario.", "state": "NO_EMPLOYEE"},
                 status=status.HTTP_404_NOT_FOUND,
@@ -151,6 +158,16 @@ class AttendanceActionView(APIView):
         now = timezone.now()
         clock_in = record.clock_in or record.check_in
         clock_out = record.clock_out or record.check_out
+        logger.info(
+            "attendance.action.start user_id=%s employee_id=%s action=%s clock_in=%s clock_out=%s break_start=%s break_end=%s",
+            request.user.id,
+            employee.id,
+            self.action,
+            clock_in,
+            clock_out,
+            record.break_start,
+            record.break_end,
+        )
 
         if self.action == "clock_in":
             if clock_in:
@@ -187,6 +204,7 @@ class AttendanceActionView(APIView):
 
         record.save()
         payload = build_attendance_state(record, employee)
+        logger.info("attendance.action.end user_id=%s employee_id=%s action=%s payload=%s", request.user.id, employee.id, self.action, payload)
         return Response(AttendanceStateSerializer(payload).data)
 
 
