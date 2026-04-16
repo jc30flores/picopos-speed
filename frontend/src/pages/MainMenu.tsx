@@ -25,7 +25,7 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { accessState, attendanceError } = useAttendanceAccess();
+  const { attendance, accessState, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const cards = useMemo(
@@ -91,7 +91,7 @@ const MainMenu = () => {
                     blockedByAttendance,
                     hasClockInToday: accessState.hasClockInToday,
                     hasClockOutToday: accessState.hasClockOutToday,
-                    hasActiveSession: accessState.canAccessDashboard,
+                    hasActiveSession: attendance?.hasActiveSession ?? false,
                     canAccessDashboard: accessState.canAccessDashboard,
                     attendanceError,
                   });

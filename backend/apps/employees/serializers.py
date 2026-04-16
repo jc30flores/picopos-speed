@@ -319,6 +319,8 @@ class AttendanceStateSerializer(serializers.Serializer):
     latest_event = serializers.ChoiceField(choices=["CLOCK_IN", "CLOCK_OUT", "NONE"])
     last_clock_in = serializers.DateTimeField(allow_null=True)
     last_clock_out = serializers.DateTimeField(allow_null=True)
+    total_entries_today = serializers.IntegerField()
+    total_exits_today = serializers.IntegerField()
     can_clock_in = serializers.BooleanField()
     can_break_start = serializers.BooleanField()
     can_break_end = serializers.BooleanField()
@@ -346,6 +348,8 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
         latest_event = "CLOCK_OUT"
     else:
         latest_event = "NONE"
+    total_entries_today = max(int(record.total_clock_ins or 0), 1 if clock_in else 0)
+    total_exits_today = max(int(record.total_clock_outs or 0), 1 if clock_out else 0)
     return {
         "employee": {"id": employee.id, "name": employee.full_name, "role": employee.role},
         "date": record.date,
@@ -357,6 +361,8 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
         "latest_event": latest_event,
         "last_clock_in": clock_in,
         "last_clock_out": clock_out,
+        "total_entries_today": total_entries_today,
+        "total_exits_today": total_exits_today,
         "can_clock_in": not has_active_session,
         "can_break_start": bool(has_active_session and not break_start),
         "can_break_end": bool(break_active and not clock_out),

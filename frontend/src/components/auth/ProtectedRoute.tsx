@@ -14,7 +14,7 @@ interface ProtectedRouteProps {
 
 export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage = "Sin permisos", children }: ProtectedRouteProps) => {
   const { user, loading } = useAuth();
-  const { accessState, attendanceLoading, attendanceError } = useAttendanceAccess();
+  const { attendance, accessState, attendanceLoading, attendanceError } = useAttendanceAccess();
   const location = useLocation();
   const warnedRef = useRef<string | null>(null);
 
@@ -67,7 +67,7 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
       blockedByAttendance,
       hasClockInToday: accessState.hasClockInToday,
       hasClockOutToday: accessState.hasClockOutToday,
-      hasActiveSession: accessState.canAccessDashboard,
+      hasActiveSession: attendance?.hasActiveSession ?? false,
       canAccessDashboard: accessState.canAccessDashboard,
       attendanceError,
     });

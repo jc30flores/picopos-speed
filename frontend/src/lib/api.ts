@@ -306,6 +306,12 @@ export type PaymentMethodOption = {
 
 export type CashSessionSnapshot = {
   open: boolean;
+  hasOpenCashSession?: boolean;
+  canOpenCash?: boolean;
+  canCloseCash?: boolean;
+  lastOpenedAt?: string | null;
+  lastClosedAt?: string | null;
+  totalSessionsToday?: number;
   session?: {
     id: number;
     openingCash: number;
@@ -523,6 +529,8 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   latestEvent: "NONE",
   lastClockIn: null,
   lastClockOut: null,
+  totalEntriesToday: 0,
+  totalExitsToday: 0,
   canClockIn: true,
   canBreakStart: false,
   canBreakEnd: false,
@@ -3011,6 +3019,8 @@ export type AttendanceState = {
   latestEvent: "CLOCK_IN" | "CLOCK_OUT" | "NONE";
   lastClockIn: string | null;
   lastClockOut: string | null;
+  totalEntriesToday: number;
+  totalExitsToday: number;
   canClockIn: boolean;
   canBreakStart: boolean;
   canBreakEnd: boolean;
@@ -3036,6 +3046,8 @@ const mapAttendanceState = (data: {
   latest_event?: "CLOCK_IN" | "CLOCK_OUT" | "NONE";
   last_clock_in?: string | null;
   last_clock_out?: string | null;
+  total_entries_today?: number;
+  total_exits_today?: number;
   can_clock_in: boolean;
   can_break_start: boolean;
   can_break_end: boolean;
@@ -3053,6 +3065,8 @@ const mapAttendanceState = (data: {
   latestEvent: data.latest_event ?? "NONE",
   lastClockIn: data.last_clock_in ?? data.clock_in,
   lastClockOut: data.last_clock_out ?? data.clock_out,
+  totalEntriesToday: Number(data.total_entries_today ?? (data.clock_in ? 1 : 0)),
+  totalExitsToday: Number(data.total_exits_today ?? (data.clock_out ? 1 : 0)),
   canClockIn: data.can_clock_in,
   canBreakStart: data.can_break_start,
   canBreakEnd: data.can_break_end,
@@ -3755,11 +3769,27 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
   const query = params.toString();
   const response = await request(`/cashier/session/current/${query ? `?${query}` : ""}`);
   const data = await handleJson<any>(response);
-  const hasOpenSession = Boolean(data.has_open_session);
+  const hasOpenSession = Boolean(data.has_open_cash_session ?? data.has_open_session);
   const session = data.session ?? null;
-  if (!hasOpenSession || !session) return { open: false };
+  if (!hasOpenSession || !session) {
+    return {
+      open: false,
+      hasOpenCashSession: false,
+      canOpenCash: Boolean(data.can_open_cash ?? true),
+      canCloseCash: Boolean(data.can_close_cash ?? false),
+      lastOpenedAt: data.last_opened_at ?? null,
+      lastClosedAt: data.last_closed_at ?? null,
+      totalSessionsToday: Number(data.total_sessions_today ?? 0),
+    };
+  }
   return {
     open: true,
+    hasOpenCashSession: true,
+    canOpenCash: Boolean(data.can_open_cash ?? false),
+    canCloseCash: Boolean(data.can_close_cash ?? true),
+    lastOpenedAt: data.last_opened_at ?? session.opened_at ?? null,
+    lastClosedAt: data.last_closed_at ?? session.closed_at ?? null,
+    totalSessionsToday: Number(data.total_sessions_today ?? 0),
     session: {
       id: session.id,
       openingCash: Number(session.opening_cash ?? 0),

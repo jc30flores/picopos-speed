@@ -181,6 +181,7 @@ class AttendanceActionView(APIView):
             record.check_out = None
             record.break_start = None
             record.break_end = None
+            record.total_clock_ins = int(record.total_clock_ins or 0) + 1
         elif self.action == "break_start":
             if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
@@ -202,6 +203,7 @@ class AttendanceActionView(APIView):
                 return Response({"detail": "Debes finalizar el break antes de salida."}, status=status.HTTP_400_BAD_REQUEST)
             record.clock_out = now
             record.check_out = now
+            record.total_clock_outs = int(record.total_clock_outs or 0) + 1
 
         record.save()
         payload = build_attendance_state(record, employee)

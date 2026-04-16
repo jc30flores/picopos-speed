@@ -70,6 +70,9 @@ export const AttendancePanel = () => {
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Ciclos hoy: {attendance?.totalEntriesToday ?? 0} entradas / {attendance?.totalExitsToday ?? 0} salidas
+      </p>
       <div className="grid grid-cols-2 gap-2">
         <Button
           className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50"

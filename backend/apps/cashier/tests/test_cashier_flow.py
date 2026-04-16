@@ -34,7 +34,7 @@ class CashierFlowTests(TestCase):
         self.assertEqual(res.data.get('has_open_session'), True)
         self.assertIsNone(res.data.get('session', {}).get('opening_amount'))
 
-    def test_open_session_rejects_second_open_for_same_day(self):
+    def test_open_session_rejects_second_open_while_active_session_exists(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         second = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '50.00'}, format='json')
 
@@ -42,6 +42,21 @@ class CashierFlowTests(TestCase):
         self.assertEqual(second.status_code, 409)
         self.assertEqual(second.data.get("code"), "CASH_SESSION_ALREADY_OPEN")
         self.assertEqual(CashSession.objects.filter(opened_by_id=first.data['session']['opened_by'], status='open').count(), 1)
+
+    def test_open_close_open_again_same_day_is_allowed(self):
+        first_open = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(first_open.status_code, 201)
+
+        first_close = self.client.post(
+            '/api/cashier/session/close/',
+            {'total_billetes': '80.00', 'total_monedas': '20.00', 'total_contado': '100.00'},
+            format='json',
+        )
+        self.assertEqual(first_close.status_code, 200)
+
+        second_open = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '20.00'}, format='json')
+        self.assertEqual(second_open.status_code, 201)
+        self.assertNotEqual(first_open.data['session']['id'], second_open.data['session']['id'])
 
     def test_open_session_concurrent_requests_create_only_one_open_session(self):
         self.client.force_authenticate(None)

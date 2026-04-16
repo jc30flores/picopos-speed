@@ -37,6 +37,8 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
           clockIn: next.clockIn,
           clockOut: next.clockOut,
           hasActiveSession: next.hasActiveSession,
+          totalEntriesToday: next.totalEntriesToday,
+          totalExitsToday: next.totalExitsToday,
           payload: next,
         });
       } catch (error) {
@@ -65,6 +67,8 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
         clockIn: next.clockIn,
         clockOut: next.clockOut,
         hasActiveSession: next.hasActiveSession,
+        totalEntriesToday: next.totalEntriesToday,
+        totalExitsToday: next.totalExitsToday,
         payload: next,
       });
     },
