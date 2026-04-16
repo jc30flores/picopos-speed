@@ -490,6 +490,41 @@ def _resolve_non_empty(*candidates: tuple[str, Any]) -> tuple[str, str]:
     return "", ""
 
 
+def _load_json_if_needed(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _extract_original_dte_payload(record: DTERecord) -> tuple[dict[str, Any], str]:
+    response_payload = record.response_payload or {}
+    documento_firmado_raw = (
+        response_payload.get("documento_firmado")
+        or response_payload.get("documentoFirmado")
+        or response_payload.get("dte_json")
+        or response_payload.get("jsonDte")
+    )
+    documento_firmado = _load_json_if_needed(documento_firmado_raw)
+    if documento_firmado:
+        logger.info("dte.invalidate.source.documento_firmado_found dte_record_id=%s", record.id)
+        if isinstance(documento_firmado.get("dte"), dict):
+            return documento_firmado.get("dte") or {}, "response_payload.documento_firmado.dte"
+        return documento_firmado, "response_payload.documento_firmado"
+
+    request_payload = record.request_payload or {}
+    request_dte = request_payload.get("dte") if isinstance(request_payload.get("dte"), dict) else {}
+    if request_dte:
+        logger.info("dte.invalidate.source.original_payload_found dte_record_id=%s", record.id)
+        return request_dte, "request_payload.dte"
+    return {}, "none"
+
+
 def _validate_pagos_payload(resumen: dict[str, Any]) -> None:
     pagos = resumen.get("pagos")
     if not isinstance(pagos, list) or not pagos:
@@ -539,13 +574,22 @@ def validate_dte_preflight_payload(payload: dict[str, Any]) -> None:
             raise DTEPreflightError("invalidacion.documento es obligatorio.")
         missing_documento = [
             key
-            for key in ("tipoDocumento", "numDocumento", "codigoGeneracionR", "selloRecibido", "montoIva", "nombre")
+            for key in ("tipoDte", "numeroControl", "codigoGeneracion", "selloRecibido", "montoIva", "nombre", "fecEmi")
             if not str(documento.get(key) or "").strip()
         ]
+        for key in ("tipoDocumento", "numDocumento"):
+            if key not in documento:
+                missing_documento.append(key)
+        if "codigoGeneracionR" not in documento:
+            missing_documento.append("codigoGeneracionR")
         if missing_documento:
             raise DTEPreflightError(
                 f"invalidacion.documento incompleto: faltan {', '.join(missing_documento)}"
             )
+        try:
+            float(documento.get("montoIva"))
+        except (TypeError, ValueError):
+            raise DTEPreflightError("invalidacion.documento.montoIva debe ser numérico.")
         prohibited_documento = [k for k in ("horEmi",) if k in documento]
         if prohibited_documento:
             raise DTEPreflightError(
@@ -1277,7 +1321,8 @@ def send_dte_for_credit_note(credit_note: CreditNote) -> DTERecord:
 
 def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: str, solicitante_dui: str, extra: dict[str, Any] | None = None) -> dict:
     extra = extra or {}
-    request_dte = (record.request_payload or {}).get("dte") or {}
+    original_dte, original_source = _extract_original_dte_payload(record)
+    request_dte = original_dte or {}
     request_identificacion = (
         request_dte.get("identificacion")
         or (record.request_payload or {}).get("identificacion")
@@ -1386,18 +1431,86 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
     if monto_iva_raw in (None, ""):
         raise DTEPreflightError("No se puede invalidar: falta montoIva del DTE original")
     receptor_nombre, receptor_nombre_source = _resolve_non_empty(
-        ("request_payload.dte.receptor.nombre", receptor_origen.get("nombre")),
+        (f"{original_source}.receptor.nombre", receptor_origen.get("nombre")),
+        ("order.customer.name", getattr(getattr(record.order, "customer", None), "name", "")),
         ("order.customer_name", getattr(record.order, "customer_name", "")),
     )
+    if "tipoDocumento" in receptor_origen:
+        receptor_tipo_documento = receptor_origen.get("tipoDocumento")
+        receptor_tipo_documento_source = f"{original_source}.receptor.tipoDocumento"
+    else:
+        receptor_tipo_documento, receptor_tipo_documento_source = _resolve_non_empty(
+            ("order.customer.tipo_documento", getattr(getattr(record.order, "customer", None), "tipo_documento", "")),
+        )
+        if receptor_tipo_documento:
+            logger.info("dte.invalidate.source.fallback_customer_used dte_record_id=%s field=tipoDocumento", record.id)
+        else:
+            receptor_tipo_documento = "13"
+            receptor_tipo_documento_source = "fallback.consumer_final.tipo_documento"
+            logger.info("dte.invalidate.source.fallback_customer_used dte_record_id=%s field=tipoDocumento default=13", record.id)
+    if "numDocumento" in receptor_origen:
+        receptor_num_documento = receptor_origen.get("numDocumento")
+        receptor_num_documento_source = f"{original_source}.receptor.numDocumento"
+    else:
+        receptor_num_documento, receptor_num_documento_source = _resolve_non_empty(
+            ("order.customer.num_documento", getattr(getattr(record.order, "customer", None), "num_documento", "")),
+            ("order.customer.dui", getattr(getattr(record.order, "customer", None), "dui", "")),
+            ("order.customer.nit", getattr(getattr(record.order, "customer", None), "nit", "")),
+        )
+        if receptor_num_documento:
+            logger.info("dte.invalidate.source.fallback_customer_used dte_record_id=%s field=numDocumento", record.id)
+        else:
+            receptor_num_documento = "00000000-0"
+            receptor_num_documento_source = "fallback.consumer_final.num_documento"
+            logger.info("dte.invalidate.source.fallback_customer_used dte_record_id=%s field=numDocumento default=00000000-0", record.id)
+    if not receptor_nombre:
+        receptor_nombre = "CONSUMIDOR FINAL"
+        receptor_nombre_source = "fallback.consumer_final.nombre"
+    monto_iva = float(money(monto_iva_raw))
     documento = {
-        "tipoDocumento": tipo_dte_base,
-        "numDocumento": numero_control,
-        "codigoGeneracionR": codigo_generacion,
+        "tipoDte": tipo_dte_base,
+        "numeroControl": numero_control,
+        "codigoGeneracion": codigo_generacion,
+        "tipoDocumento": receptor_tipo_documento,
+        "numDocumento": receptor_num_documento,
+        "codigoGeneracionR": None,
         "selloRecibido": sello_recibido,
-        "montoIva": str(money(monto_iva_raw)),
+        "montoIva": monto_iva,
         "nombre": receptor_nombre,
         "fecEmi": fec_emi,
     }
+    logger.info(
+        "dte.invalidation.document_sources dte_record_id=%s original_tipo_dte=%s original_numero_control=%s original_codigo_generacion=%s original_sello=%s original_fec_emi=%s original_total_iva=%s original_receptor_tipo_documento=%s original_receptor_num_documento=%s original_receptor_nombre=%s final_invalidacion_documento=%s",
+        record.id,
+        tipo_dte_base,
+        numero_control,
+        codigo_generacion,
+        sello_recibido,
+        fec_emi,
+        monto_iva,
+        receptor_tipo_documento,
+        _mask_document(receptor_num_documento),
+        receptor_nombre,
+        documento,
+    )
+    logger.info(
+        "dte.invalidate.original_document_values dte_record_id=%s values=%s",
+        record.id,
+        {
+            "tipoDte": tipo_dte_base,
+            "numeroControl": numero_control,
+            "codigoGeneracion": codigo_generacion,
+            "selloRecibido": sello_recibido,
+            "fecEmi": fec_emi,
+            "montoIva": monto_iva,
+            "tipoDocumento": receptor_origen.get("tipoDocumento"),
+            "numDocumento": receptor_origen.get("numDocumento"),
+            "nombre": receptor_origen.get("nombre"),
+            "source": original_source,
+        },
+    )
+    logger.info("dte.invalidate.final_document_values dte_record_id=%s values=%s", record.id, documento)
+    logger.info("dte.invalidate.codigoGeneracionR_value dte_record_id=%s value=%s", record.id, documento.get("codigoGeneracionR"))
     payload = {
         "invalidacion": {
             "identificacion": {
@@ -1411,7 +1524,7 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
             "emisor": emisor_full,
             "motivo": {
                 "tipoAnulacion": int((extra or {}).get("tipoAnulacion") or 2),
-                "motivoAnulacion": str(motivo or "").strip() or "Invalidación solicitada",
+                "motivoAnulacion": str(motivo or "").strip() or "Rescindir de la operación realizada",
                 "nombreResponsable": str(extra.get("nombreResponsable") or "Responsable").strip(),
                 "tipDocResponsable": tip_doc_responsable,
                 "numDocResponsable": num_doc_responsable,
@@ -1425,9 +1538,12 @@ def build_invalidation_payload(record: DTERecord, motivo: str, responsable_dui: 
         "dte.invalidation.field_sources dte_record_id=%s sources=%s",
         record.id,
         {
-            "tipoDocumento": tipo_dte_source,
-            "numDocumento": numero_control_source,
-            "codigoGeneracionR": codigo_generacion_source,
+            "tipoDte": tipo_dte_source,
+            "numeroControl": numero_control_source,
+            "codigoGeneracion": codigo_generacion_source,
+            "tipoDocumento": receptor_tipo_documento_source,
+            "numDocumento": receptor_num_documento_source,
+            "codigoGeneracionR": "fixed:null",
             "selloRecibido": sello_source,
             "montoIva": "request_payload.dte.resumen.totalIva",
             "nombre": receptor_nombre_source,
@@ -1491,6 +1607,8 @@ def invalidate_dte_for_order(
     active_branch = get_active_branch()
     response = send_to_bridge("INVALIDACION", payload, branch_name=active_branch.name, order_id=order.id, branch_id=active_branch.id)
     logger.info("dte.invalidation.bridge_response order_id=%s dte_record_id=%s response=%s", order.id, record.id, response)
+    if isinstance(response, dict) and int(response.get("http_status") or 0) == 400:
+        logger.error("dte.invalidate.http_400_body order_id=%s dte_record_id=%s body=%s", order.id, record.id, response)
     parsed = interpret_dte_response(response)
     attempt = DteInvalidationAttempt.objects.create(
         order=order,

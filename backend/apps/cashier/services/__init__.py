@@ -1,4 +1,5 @@
 from .cash_drawer import CashDrawerError, CashDrawerRuntimeError, CashDrawerService
+from .reconciliation import calculate_session_payment_method_net
 from .session import get_open_cash_session_for_branch, has_open_cash_session_for_branch, resolve_branch_id, resolve_open_cash_session
 
 __all__ = [
@@ -9,4 +10,5 @@ __all__ = [
     "get_open_cash_session_for_branch",
     "has_open_cash_session_for_branch",
     "resolve_open_cash_session",
+    "calculate_session_payment_method_net",
 ]

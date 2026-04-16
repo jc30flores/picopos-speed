@@ -93,6 +93,10 @@ class DTEEmailServiceTests(TestCase):
         self.assertIn("PicoPOS", payload["body_text"])
         self.assertNotIn("dte_json", payload)
         self.assertNotIn("email", payload)
+        self.assertIn("dte", payload["invoice_json"])
+        self.assertIn("respuesta_hacienda", payload["invoice_json"])
+        self.assertNotIn("sello_recibido", payload)
+        self.assertNotIn("fhProcesamiento", payload)
 
     @override_settings(DELIVER_EMAIL_API_BASE_URL="https://email.example", DELIVER_EMAIL_API_ENDPOINT="/api/email/send-invoice", DELIVER_EMAIL_API_KEY="k1")
     @patch.dict("os.environ", {"COMPANY_NAME": "RESTAURANTE PICO DE GALLO"}, clear=False)

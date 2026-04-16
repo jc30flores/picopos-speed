@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
-import os
 
 import requests
 
 from apps.dte.models import DTERecord, DteDeliveryAttempt
+from apps.dte.services.delivery_payloads import build_delivery_base_payload
 from apps.dte.services.delivery_config import INTERNAL_BILLING_EMAIL
 from apps.dte.services.delivery_config import resolve_delivery_config
 
 logger = logging.getLogger("apps.dte")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MAX_LOG_PAYLOAD = 3000
 
 
 def _resolve_email_target(record: DTERecord, to_email: str | None = None) -> str:
@@ -37,12 +39,9 @@ def validate_delivery_email_target(record: DTERecord, to_email: str | None = Non
 
 def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
     _, _, recipient = validate_delivery_email_target(record, to_email=to_email)
-    company_name = (
-        str(os.environ.get("COMPANY_NAME") or "").strip()
-        or str(os.environ.get("DTE_NOMBRE_COMERCIAL") or "").strip()
-        or "PicoPOS"
-    )
-    customer_name = str(getattr(getattr(record.order, "customer", None), "nombre", "") or "").strip()
+    base = build_delivery_base_payload(record)
+    company_name = base["company_name"]
+    customer_name = base["receiver_name"]
     greeting = f"Hola {customer_name}," if customer_name else "Hola,"
     body_text = (
         f"{greeting}\n\n"
@@ -56,16 +55,18 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
         "<p>Adjuntamos tu DTE en formato PDF y JSON.</p>"
         f"<p>Atentamente,<br>{company_name}</p>"
     )
-    request_payload = record.request_payload or {}
-    invoice_json = request_payload.get("dte") if isinstance(request_payload, dict) and isinstance(request_payload.get("dte"), dict) else request_payload
+    invoice_json = base["invoice_json"]
     if not isinstance(invoice_json, dict) or not invoice_json:
         invoice_json = {
-            "identificacion": {
-                "tipoDte": record.dte_type,
-                "numeroControl": record.control_number,
-                "codigoGeneracion": record.generation_code or record.codigo_generacion,
+            "dte": {
+                "identificacion": {
+                    "tipoDte": record.dte_type,
+                    "numeroControl": record.control_number,
+                    "codigoGeneracion": record.generation_code or record.codigo_generacion,
+                },
+                "resumen": {"totalPagar": float(record.total_amount or 0)},
             },
-            "resumen": {"totalPagar": float(record.total_amount or 0)},
+            "respuesta_hacienda": {},
         }
     return {
         "to_email": recipient,
@@ -74,8 +75,69 @@ def build_email_payload(record: DTERecord, to_email: str | None = None) -> dict:
         "body_html": body_html,
         "invoice_json": invoice_json,
         "flags": {"source": "picopos", "channel": "email_dte", "attach_pdf": True, "attach_json": True},
-        "metadata": {"dte_type": record.dte_type, "status": record.status, "company_name": company_name},
+        "metadata": {
+            "issued_id": base["issued_id"],
+            "order_id": base["order_id"],
+            "dte_type": base["dte_type"],
+            "tipo_dte": base["tipo_dte"],
+            "generation_code": base["generation_code"],
+            "control_number": base["control_number"],
+            "status": base["status"],
+            "estado_mh": base["estado_mh"],
+            "receiver_name": base["receiver_name"],
+            "receiver_email": recipient,
+            "receiver_phone": base["receiver_phone"],
+            "company_name": company_name,
+            "attach_pdf": bool(base["attachments"]["pdf"]),
+            "attach_json": bool(base["attachments"]["json"]),
+        },
+        "generation_code": base["generation_code"],
+        "codigoGeneracion": base["generation_code"],
+        "control_number": base["control_number"],
+        "numeroControl": base["control_number"],
+        "tipo_dte": base["tipo_dte"],
+        "tipoDte": base["tipo_dte"],
+        "issued_id": base["issued_id"],
+        "order_id": base["order_id"],
+        "issue_date": base["issue_date"],
+        "issue_time": base["issue_time"],
+        "status": base["status"],
+        "estado_mh": base["estado_mh"],
+        "estadoMH": base["estado_mh"],
+        "receiver_name": base["receiver_name"],
+        "company_name": company_name,
+        "respuesta_hacienda": base["respuesta_hacienda"],
     }
+
+
+def _log_email_payload_structure(record: DTERecord, payload: dict) -> None:
+    invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
+    respuesta_hacienda = invoice_json.get("respuesta_hacienda") if isinstance(invoice_json.get("respuesta_hacienda"), dict) else {}
+    misplaced = [
+        key
+        for key in ("sello_recibido", "selloRecibido", "fh_procesamiento", "fhProcesamiento")
+        if key in payload or key in invoice_json
+    ]
+    logger.info(
+        "[DTE EMAIL] payload_structure channel=email issued_id=%s order_id=%s has_invoice_json=%s has_respuesta_hacienda=%s respuesta_hacienda_keys=%s has_selloRecibido=%s has_sello_recibido=%s has_fhProcesamiento=%s has_fh_procesamiento=%s payload=%s",
+        record.id,
+        record.order_id,
+        bool(invoice_json),
+        bool(respuesta_hacienda),
+        sorted(respuesta_hacienda.keys()),
+        "selloRecibido" in respuesta_hacienda,
+        "sello_recibido" in respuesta_hacienda,
+        "fhProcesamiento" in respuesta_hacienda,
+        "fh_procesamiento" in respuesta_hacienda,
+        json.dumps(payload, ensure_ascii=False, default=str)[:MAX_LOG_PAYLOAD],
+    )
+    if misplaced:
+        logger.warning(
+            "[DTE EMAIL] payload_structure_misplaced_keys issued_id=%s order_id=%s misplaced=%s",
+            record.id,
+            record.order_id,
+            misplaced,
+        )
 
 
 def _parse_provider_body(response) -> tuple[dict, str]:
@@ -137,15 +199,30 @@ def send_dte_email(record: DTERecord, to_email: str | None = None) -> DteDeliver
         return attempt
 
     payload = build_email_payload(record, to_email=target_email)
+    _log_email_payload_structure(record, payload)
     invoice_keys = list((payload.get("invoice_json") or {}).keys()) if isinstance(payload.get("invoice_json"), dict) else []
+    invoice_respuesta = (
+        (payload.get("invoice_json") or {}).get("respuesta_hacienda")
+        if isinstance((payload.get("invoice_json") or {}).get("respuesta_hacienda"), dict)
+        else {}
+    )
     logger.info(
-        "[DTE EMAIL] payload_summary order=%s to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s",
+        "[DTE EMAIL] payload_summary order=%s issued_id=%s channel=email to_email=%s subject=%s has_body_text=%s invoice_keys=%s flags=%s tipo_dte=%s gen=%s control=%s has_respuesta_hacienda=%s has_sello=%s has_fh=%s has_pdf=%s has_json=%s",
         record.order_id,
+        payload.get("issued_id"),
         payload.get("to_email"),
         payload.get("subject"),
         bool(payload.get("body_text")),
         invoice_keys,
         payload.get("flags"),
+        payload.get("tipo_dte"),
+        payload.get("generation_code"),
+        payload.get("control_number"),
+        isinstance(invoice_respuesta, dict),
+        bool(invoice_respuesta.get("selloRecibido") or invoice_respuesta.get("sello_recibido")),
+        bool(invoice_respuesta.get("fhProcesamiento") or invoice_respuesta.get("fh_procesamiento")),
+        bool((payload.get("flags") or {}).get("attach_pdf")),
+        bool((payload.get("flags") or {}).get("attach_json")),
     )
 
     for retry in range(3):

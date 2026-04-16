@@ -206,11 +206,12 @@ class DTECoreTests(TestCase):
             self.assertIn("horAnula", payload["invalidacion"]["identificacion"])
             self.assertNotIn("numeroControl", payload["invalidacion"]["identificacion"])
             self.assertNotIn("tipoDte", payload["invalidacion"]["identificacion"])
-            self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "01")
-            self.assertEqual(
-                payload["invalidacion"]["documento"]["numDocumento"],
-                "DTE-01-S001P001-000000000000123",
-            )
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDte"], "01")
+            self.assertEqual(payload["invalidacion"]["documento"]["numeroControl"], "DTE-01-S001P001-000000000000123")
+            self.assertEqual(payload["invalidacion"]["documento"]["codigoGeneracion"], "A" * 36)
+            self.assertEqual(payload["invalidacion"]["documento"]["tipoDocumento"], "13")
+            self.assertEqual(payload["invalidacion"]["documento"]["numDocumento"], "00000000-0")
+            self.assertIsInstance(payload["invalidacion"]["documento"]["montoIva"], float)
             self.assertNotIn("responsable", payload["invalidacion"])
             self.assertNotIn("solicitante", payload["invalidacion"])
             self.assertNotIn("extra", payload["invalidacion"])
@@ -1259,13 +1260,20 @@ class DTEInvalidateEndpointTests(TestCase):
         self.assertEqual(response.data["attempt"]["success"], True)
         sent_payload = mock_send.call_args.kwargs["payload"]
         self.assertNotIn("numeroControl", sent_payload["invalidacion"]["identificacion"])
+        self.assertEqual(sent_payload["invalidacion"]["documento"]["tipoDte"], "01")
         self.assertEqual(
-            sent_payload["invalidacion"]["documento"]["numDocumento"],
+            sent_payload["invalidacion"]["documento"]["numeroControl"],
             "DTE-01-S001P001-000000000000357",
         )
         self.assertEqual(
+            sent_payload["invalidacion"]["documento"]["numDocumento"],
+            "00000000-0",
+        )
+        self.assertEqual(sent_payload["invalidacion"]["documento"]["tipoDocumento"], "13")
+        self.assertIsInstance(sent_payload["invalidacion"]["documento"]["montoIva"], float)
+        self.assertEqual(
             sent_payload["invalidacion"]["documento"]["codigoGeneracionR"],
-            "105AD7EE-9DDA-411F-98EE-C0CA45D98810",
+            None,
         )
         self.assertEqual(sent_payload["invalidacion"]["emisor"]["nit"], "12171409901063")
         self.assertNotIn("nrc", sent_payload["invalidacion"]["emisor"])

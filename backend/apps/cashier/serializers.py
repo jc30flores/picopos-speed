@@ -4,14 +4,11 @@ from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import serializers
 
 from apps.cashier.models import Register, CashSession, CloseoutCount, CashTransaction
+from apps.cashier.services.reconciliation import calculate_session_payment_method_net
 from apps.orders.models import Order
 from apps.payments.models import Payment
-from apps.payments.normalization import payment_code_from_payment
 
 MONEY_Q = Decimal("0.01")
-
-PAYMENT_METHOD_CODES = ["cash", "card", "transfer", "pedidos_ya", "paypal"]
-
 
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
@@ -144,25 +141,9 @@ def calculate_shift_summary(session: CashSession) -> dict:
     if session.status == "closed" and session.summary_snapshot:
         return session.summary_snapshot
 
-    payments = Payment.objects.filter(cash_session=session)
-
-    totals_by_method = {code: Decimal("0") for code in PAYMENT_METHOD_CODES}
-    non_cash_sales = []
-    for payment in payments.select_related("payment_method", "reporting_payment_method", "order"):
-        code = payment_code_from_payment(payment)
-        total = _q2((payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0")))
-        if code in totals_by_method:
-            totals_by_method[code] = _q2(totals_by_method[code] + total)
-        if code != "cash":
-            non_cash_sales.append(
-                {
-                    "payment_id": payment.id,
-                    "order_id": payment.order_id,
-                    "payment_method_code": code,
-                    "amount": f"{total:.2f}",
-                    "created_at": payment.created_at.isoformat(),
-                }
-            )
+    payment_net = calculate_session_payment_method_net(session)
+    totals_by_method = payment_net.totals_by_method
+    non_cash_sales = payment_net.non_cash_movements
 
     transactions = CashTransaction.objects.filter(session=session).order_by("-created_at")
     expense_transactions = transactions.filter(
@@ -184,7 +165,7 @@ def calculate_shift_summary(session: CashSession) -> dict:
     expenses_total = _q2(expense_transactions.aggregate(total=Sum("amount")).get("total"))
 
     cash_initial = _q2(session.opening_cash)
-    cash_sales = _q2(totals_by_method["cash"])
+    cash_sales = _q2(totals_by_method.get("cash"))
     expected_cash_in_drawer = _q2(cash_initial + cash_sales - expenses_total)
     counted_cash = _q2(session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0"))
     counted_bills = _q2(session.closing_total_bills if session.closing_total_bills is not None else Decimal("0"))
@@ -192,6 +173,7 @@ def calculate_shift_summary(session: CashSession) -> dict:
     counted_pos_cards = _q2(session.closing_total_pos_cards if session.closing_total_pos_cards is not None else Decimal("0"))
     counted_pedidos_ya = _q2(session.closing_total_pedidos_ya if session.closing_total_pedidos_ya is not None else Decimal("0"))
     difference = _q2(counted_cash - expected_cash_in_drawer)
+    payments = Payment.objects.filter(cash_session=session)
     order_ids = payments.values_list("order_id", flat=True).distinct()
 
     return {
@@ -206,6 +188,7 @@ def calculate_shift_summary(session: CashSession) -> dict:
         "counted_pedidos_ya": f"{counted_pedidos_ya:.2f}",
         "difference": f"{difference:.2f}",
         "totals_by_method": {k: f"{_q2(v):.2f}" for k, v in totals_by_method.items()},
+        "method_labels": payment_net.labels_by_method,
         "cash_movements": cash_movements,
         "non_cash_sales": non_cash_sales,
         "orders_count": Order.objects.filter(id__in=order_ids).count(),

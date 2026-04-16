@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
 
 from apps.cashier.models import CashSession
+from apps.cashier.services.reconciliation import calculate_session_payment_method_net
 from apps.cashier.serializers import calculate_shift_summary
 from apps.core.branch_profile import get_current_branch_id, get_branch_profile
 from apps.core.models import Branch, ServiceType
@@ -127,16 +128,17 @@ def _resolve_branch_profile(session: CashSession) -> dict[str, str]:
     return profile
 
 
-def _payment_rows(payments_qs):
+def _payment_rows(session: CashSession):
     rows: list[str] = []
     total = Decimal("0")
     totals = {code: {"count": 0, "total": Decimal("0")} for code, _ in PAYMENT_METHOD_REPORT_ORDER}
-    for payment in payments_qs:
+    net = calculate_session_payment_method_net(session).totals_by_method
+    for code in totals:
+        totals[code]["total"] = Decimal(net.get(code) or 0)
+    for payment in _payments_for_session(session):
         code = payment_code_from_payment(payment)
-        if code not in totals:
-            continue
-        totals[code]["count"] += 1
-        totals[code]["total"] += (payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0"))
+        if code in totals:
+            totals[code]["count"] += 1
     for code, label in PAYMENT_METHOD_REPORT_ORDER:
         amount = Decimal(totals[code]["total"] or 0).quantize(Decimal("0.01"))
         count = int(totals[code]["count"] or 0)
@@ -216,12 +218,13 @@ def _refund_rows(session: CashSession):
 
 def _report_cash_lines(summary: dict, payments_qs, session: CashSession, branch: Branch | None = None):
     payment_map = {code: {"count": 0, "total": Decimal("0")} for code, _ in PAYMENT_METHOD_REPORT_ORDER}
-    for payment in payments_qs:
+    net = calculate_session_payment_method_net(session).totals_by_method
+    for code in payment_map:
+        payment_map[code]["total"] = Decimal(net.get(code) or 0)
+    for payment in _payments_for_session(session):
         code = payment_code_from_payment(payment)
-        if code not in payment_map:
-            continue
-        payment_map[code]["count"] += 1
-        payment_map[code]["total"] += (payment.amount or Decimal("0")) + (payment.tip_amount or Decimal("0"))
+        if code in payment_map:
+            payment_map[code]["count"] += 1
 
     cash_count = payment_map["cash"]["count"]
     cash_total = payment_map["cash"]["total"]
@@ -270,7 +273,7 @@ def build_end_of_day_ticket(session_id: int) -> str:
     paid_orders = Order.objects.filter(id__in=order_ids).exclude(financial_status="voided")
     voided_orders = Order.objects.filter(id__in=order_ids, financial_status="voided")
 
-    payment_rows, payment_total = _payment_rows(payments)
+    payment_rows, payment_total = _payment_rows(session)
     service_rows, service_total = _service_type_rows(paid_orders)
     item_rows, item_total = _item_subtotals(paid_orders)
     discount_rows, discount_total = _discount_rows(paid_orders)

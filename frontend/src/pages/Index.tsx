@@ -401,26 +401,60 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
     if (hydratedPendingOrderIdRef.current === pendingOrderId) return;
     hydratedPendingOrderIdRef.current = pendingOrderId;
+    setCart([]);
+    setCheckoutDraft(null);
+    setSelectedDiscount(null);
+    setActiveOrder(null);
+    console.info("open_order.pos_loader.source", { order_id: pendingOrderId, mode, total_db: null, items: 0 });
     getOrderById(pendingOrderId)
       .then((order) => {
         const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
+        const hydratedPricing = calculatePosPricing({
+          items: restoredCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+          products,
+          serviceType: order.serviceType || serviceType,
+          serviceTypes,
+          selectedDiscount: null,
+          availableDiscounts: [],
+        });
+        console.info("open_order.pos_loader.source", {
+          order_id: order.id,
+          mode,
+          total_db: order.totalPayable ?? order.total,
+          items: restoredCart.length,
+        });
+        console.info("open_order.pos_loader.recomputed_totals", {
+          order_id: order.id,
+          subtotal: hydratedPricing.subtotal,
+          discounts: hydratedPricing.discountTotal,
+          fees: hydratedPricing.disposableTotal,
+          total: hydratedPricing.total,
+          items: restoredCart.length,
+        });
         setActiveOrder(order);
         setCreatedOrderId(order.id);
         setCreatedOrderNumber(order.orderNumber);
         setPendingReferenceDraft(order.pendingReference || "");
         setPendingEditAuthorizationPin("");
+        setSelectedDiscount(null);
+        setSelectedCustomerId(order.customerId ? String(order.customerId) : "");
         setCart(restoredCart);
         setCheckoutDraft({
           items: restoredCart,
-          subtotal: order.subtotalBeforeDiscounts ?? order.total,
+          subtotal: hydratedPricing.subtotal,
           tax: order.taxTotal ?? 0,
-          total: order.totalPayable ?? order.total,
+          total: hydratedPricing.total,
           taxRate,
           serviceType: order.serviceType || serviceType,
           createdAt: Date.now(),
         });
         setServiceType(order.serviceType || serviceType);
         if (mode === "pay") {
+          console.info("open_order.pay.load", {
+            order_id: order.id,
+            total_db: order.totalPayable ?? order.total,
+            total_rebuilt: hydratedPricing.total,
+          });
           setIsPaymentOpen(true);
         } else {
           setIsPaymentOpen(false);
@@ -429,7 +463,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
-  }, [navigate, searchParams, serviceType, taxRate]);
+  }, [navigate, searchParams, serviceType, taxRate, products, serviceTypes]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -856,13 +890,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [availableDiscounts, checkoutDraft, products, selectedDiscount, serviceTypes]
   );
   const checkoutDisposableTotal = checkoutDraftPricing?.disposableTotal ?? 0;
-  const checkoutSummarySubtotalBefore = activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
-  const checkoutSummaryDiscount = activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount;
-  const checkoutSummaryTotal = activeOrder?.totalPayable ?? paymentTotal;
+  const checkoutSummarySubtotalBefore = checkoutDraftPricing?.subtotal ?? activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
+  const checkoutSummaryDiscount = checkoutDraftPricing?.discountTotal ?? (activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount);
+  const checkoutSummaryTotal = checkoutDraftPricing?.total ?? activeOrder?.totalPayable ?? paymentTotal;
   const checkoutDiscountLines = checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
   const filteredDiscounts = availableDiscounts.filter((discount) =>
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
+
+  useEffect(() => {
+    if (!isPaymentOpen) return;
+    console.info("open_order.pay.modal_totals", {
+      order_id: activeOrder?.id ?? null,
+      subtotal: checkoutSummarySubtotalBefore,
+      discounts: checkoutSummaryDiscount,
+      fees: checkoutDisposableTotal,
+      total: checkoutSummaryTotal,
+    });
+  }, [activeOrder?.id, activeOrder?.isPending, checkoutDisposableTotal, checkoutSummaryDiscount, checkoutSummarySubtotalBefore, checkoutSummaryTotal, isPaymentOpen]);
 
   const proceedToCheckout = async () => {
     if (cart.length === 0) return;
@@ -894,7 +939,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       JSON.stringify(checkoutDraft.items) === JSON.stringify(draft.items);
     setCheckoutDraft(draft);
     let order = activeOrder;
-    if (!hasSameDraft || !order) {
+    if (order?.isPending) {
+      order = await syncExistingOpenOrder(order);
+      order = await getOrderById(order.id);
+      setActiveOrder(order);
+    } else if (!hasSameDraft || !order) {
       order = await createOrder({
         serviceType: draft.serviceType,
         source: "pos",
@@ -922,6 +971,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setActiveOrder(order);
       setCreatedOrderId(order.id);
       setCreatedOrderNumber(order.orderNumber ?? null);
+      console.info("open_order.save.start", { id: order.id, is_update: false });
     } else {
       order = await getOrderById(order.id);
       setActiveOrder(order);
@@ -1349,6 +1399,55 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   };
 
+  const buildPendingPayloadItems = (items: CartItem[]) =>
+    items.map((item) => ({
+      sourceOrderItemId: item.sourceOrderItemId,
+      productId: item.productId,
+      productName: item.name,
+      price: getItemBaseEffective(item),
+      quantity: item.quantity,
+      isCustom: Boolean(item.isCustom),
+      unitPriceOverride: item.unitPriceOverride ?? null,
+      customCode: item.customCode,
+      assignedName: item.assignedName,
+      modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+    }));
+
+  const syncExistingOpenOrder = async (order: Order) => {
+    const pricing = calculatePosPricing({
+      items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+      products,
+      serviceType,
+      serviceTypes,
+      selectedDiscount: null,
+      availableDiscounts,
+    });
+    console.info("open_order.update.request", { order_id: order.id, is_update: true });
+    console.info("open_order.save.payload", {
+      id: order.id,
+      total_front: pricing.total,
+      items: cart.length,
+      subtotal_front: pricing.subtotal,
+      discount_front: pricing.discountTotal,
+      fees_front: pricing.disposableTotal,
+    });
+    const saved = await setOrderPending(order.id, {
+      isPending: true,
+      pendingState: order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment",
+      pendingReference: pendingReferenceDraft.trim() || order.pendingReference || "",
+      authorizationPin: pendingEditAuthorizationPin,
+      items: buildPendingPayloadItems(cart),
+    });
+    console.info("open_order.save.done", {
+      id: saved.id,
+      total_saved: saved.totalPayable,
+      subtotal_saved: saved.subtotalBeforeDiscounts,
+      discount_saved: saved.discountTotal,
+      fees_saved: saved.disposableTotal,
+    });
+    return saved;
+  };
+
   const handleSendOrderToPending = async () => {
     if (isSendingToPending) return;
     if (!pendingReferenceDraft.trim()) {
@@ -1382,25 +1481,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
       }
       const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
-      const pendingPayloadItems = cart.map((item) => ({
-        sourceOrderItemId: item.sourceOrderItemId,
-        productId: item.productId,
-        productName: item.name,
-        price: getItemBaseEffective(item),
-        quantity: item.quantity,
-        isCustom: Boolean(item.isCustom),
-        unitPriceOverride: item.unitPriceOverride ?? null,
-        customCode: item.customCode,
-        assignedName: item.assignedName,
-        modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
-      }));
-      const saved = await setOrderPending(order.id, {
-        isPending: true,
-        pendingState,
-        pendingReference: pendingReferenceDraft.trim(),
-        authorizationPin: pendingEditAuthorizationPin,
-        items: pendingPayloadItems,
-      });
+      const saved = activeOrder?.isPending
+        ? await syncExistingOpenOrder(order)
+        : await setOrderPending(order.id, {
+            isPending: true,
+            pendingState,
+            pendingReference: pendingReferenceDraft.trim(),
+            authorizationPin: pendingEditAuthorizationPin,
+            items: buildPendingPayloadItems(cart),
+          });
+      if (!activeOrder?.isPending) {
+        console.info("open_order.save.start", { id: saved.id, is_update: false });
+      }
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
       }
@@ -1765,6 +1857,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               isPending: false,
               removalReason: "Pagada en POS",
               completionType: "paid",
+            });
+            console.info("open_order.finalize_paid", {
+              id: finalizedOrder.id,
+              subtotal: finalizedOrder.subtotalBeforeDiscounts,
+              discount_total: finalizedOrder.discountTotal,
+              fees_total: finalizedOrder.disposableTotal,
+              total: finalizedOrder.totalPayable,
             });
             setActiveOrder(finalizedOrder);
           } catch (pendingError) {

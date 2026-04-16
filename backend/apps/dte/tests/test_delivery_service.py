@@ -136,4 +136,4 @@ class DTEDeliveryServiceTests(TestCase):
         self.customer.save(update_fields=["telefono"])
         result = deliver_dte_to_client(self.record, channels=("whatsapp",), mode="manual")
         self.assertFalse(result["success"])
-        self.assertIn("inválido", (result["results"]["whatsapp"]["error"] or "").lower())
+        self.assertIn("teléfono", (result["results"]["whatsapp"]["error"] or "").lower())
