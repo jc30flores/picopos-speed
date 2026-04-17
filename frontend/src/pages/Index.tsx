@@ -634,6 +634,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const handleProductClick = (product: Product) => {
+    if (requiresCashOpen) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] pos-blocked", { action: "product-click", reason: "requires-cash-open" });
+      }
+      return;
+    }
     const visibleGroups = getPosModifierGroups(product);
     if (!visibleGroups.length) {
       addToCart(product, []);
@@ -709,6 +716,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
+    if (requiresCashOpen) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] pos-blocked", { action: "addToCart", reason: "requires-cash-open" });
+      }
+      return;
+    }
     const pricing = resolveEffectiveUnitPrice(product, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     const effectiveBasePrice = pricing.effectivePrice;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
@@ -746,6 +760,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
+    if (requiresCashOpen) return;
     setCart(
       cart
         .map((item) =>
@@ -756,6 +771,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const removeItem = (itemId: string) => {
+    if (requiresCashOpen) return;
     if (activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || "")))) {
       toast.error("No se pueden eliminar productos: la orden ya fue enviada a cocina.");
       return;
@@ -1173,16 +1189,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      if (isOpenSessionModalOpen && snapshot.open) {
-        if (import.meta.env.DEV) {
-          // eslint-disable-next-line no-console
-          console.info("[cash-debug] open-session-modal", { source: "loadCashData", action: "close", reason: "session-open" });
-        }
-        setIsOpenSessionModalOpen(false);
+      const hasOpenCashSession = getCashSessionStatus(snapshot).hasOpenCashSession;
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-modal", {
+          source: "loadCashData",
+          action: hasOpenCashSession ? "close" : "open",
+          reason: hasOpenCashSession ? "session-open" : "session-missing",
+        });
       }
+      setIsOpenSessionModalOpen(!hasOpenCashSession);
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-modal", { source: "loadCashData", action: "open", reason: "fetch-error" });
+      }
+      setCashSnapshot({ open: false, hasOpenCashSession: false, session: undefined });
+      setIsOpenSessionModalOpen(true);
     } finally {
       setIsCashGateLoading(false);
     }
@@ -2228,7 +2253,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
-      <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
+      <div className={cn("h-full min-h-0 px-2 pb-4 pt-4 lg:px-4", requiresCashOpen && "pointer-events-none select-none opacity-80")}>
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
@@ -2540,7 +2565,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   variant="default"
                   className="h-14 w-full text-base font-bold"
                   size="lg"
-                  disabled={cart.length === 0 || isProcessingPayment}
+                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
                   onClick={handleCheckout}
                 >
                   Cobrar {formatMoney(total)}
