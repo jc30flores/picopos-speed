@@ -240,6 +240,12 @@ class CashSessionOpenView(APIView):
         )
         if existing_session:
             logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
+            logger.info(
+                "cash_session.open.response status=409 branch_id=%s session_id=%s has_open_session=%s",
+                scope_branch_id,
+                existing_session.id,
+                True,
+            )
             return Response(
                 {
                     "code": "CASH_SESSION_ALREADY_OPEN",
@@ -255,6 +261,12 @@ class CashSessionOpenView(APIView):
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
         logger.info("cash_session.open branch_id=%s opened_session_id=%s", register.branch_id, session.id)
+        logger.info(
+            "cash_session.open.response status=201 branch_id=%s session_id=%s has_open_session=%s",
+            register.branch_id,
+            session.id,
+            True,
+        )
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(
             {
@@ -403,6 +415,13 @@ class CashSessionCloseView(APIView):
                 "cash_session.close.print_failed",
                 extra={"cash_session_id": session.id, "user_id": getattr(request.user, "id", None)},
             )
+        logger.info(
+            "cash_session.close.response status=200 branch_id=%s session_id=%s printed=%s print_error=%s",
+            session.register.branch_id,
+            session.id,
+            printed,
+            print_error,
+        )
         log_audit(request, "cash_session.close", "CashSession", session.id, {"counted_cash": str(counted_cash)})
         return Response(
             {

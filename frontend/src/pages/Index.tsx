@@ -313,6 +313,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
+  const requiresCashOpen = !getCashSessionStatus(cashSnapshot).hasOpenCashSession;
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
@@ -633,6 +634,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const handleProductClick = (product: Product) => {
+    if (requiresCashOpen) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] pos-blocked", { action: "product-click", reason: "requires-cash-open" });
+      }
+      return;
+    }
     const visibleGroups = getPosModifierGroups(product);
     if (!visibleGroups.length) {
       addToCart(product, []);
@@ -708,6 +716,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const addToCart = (product: Product, modifiers: Array<{ id?: number; name: string; price: number }>) => {
+    if (requiresCashOpen) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] pos-blocked", { action: "addToCart", reason: "requires-cash-open" });
+      }
+      return;
+    }
     const pricing = resolveEffectiveUnitPrice(product, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     const effectiveBasePrice = pricing.effectivePrice;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
@@ -745,6 +760,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
+    if (requiresCashOpen) return;
     setCart(
       cart
         .map((item) =>
@@ -755,6 +771,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const removeItem = (itemId: string) => {
+    if (requiresCashOpen) return;
     if (activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || "")))) {
       toast.error("No se pueden eliminar productos: la orden ya fue enviada a cocina.");
       return;
@@ -952,6 +969,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         sendToKitchen: draft.serviceType === "KIOSK",
         priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
         customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+        whatsappNumCliente: checkoutCustomerWhatsapp,
+        whatsappNumClienteCountry: "",
         dteDocumentType,
         ivaExempt,
         discountId: selectedDiscount?.id,
@@ -989,11 +1008,31 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const requestOpenSession = (postAction?: () => Promise<void>, resolver?: (opened: boolean) => void) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] open-session-modal", {
+        source: "requestOpenSession",
+        hasPostAction: Boolean(postAction),
+        currentCashSession: cashSnapshot.session?.id ?? null,
+        requiresCashOpen,
+      });
+    }
     postOpenSessionActionRef.current = postAction ?? null;
     openSessionResolverRef.current = resolver ?? null;
     setOpenSessionAmount("0.00");
     setIsOpenSessionModalOpen(true);
     setTimeout(() => openSessionInputRef.current?.select(), 0);
+  };
+
+  const cancelPendingCheckoutContinuation = (reason: string) => {
+    const hadPendingContinuation = Boolean(postOpenSessionActionRef.current);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] continue-checkout", { reason, executed: false, hadPendingContinuation });
+    }
+    postOpenSessionActionRef.current = null;
+    openSessionResolverRef.current?.(false);
+    openSessionResolverRef.current = null;
   };
 
   const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
@@ -1016,26 +1055,65 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    if (isOpenSessionModalOpen && !cashSnapshot.open) return;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] cobrar-click", {
+        cartItems: cart.length,
+        cartTotal: total,
+        currentCashSession: cashSnapshot.session?.id ?? null,
+        open: cashSnapshot.open,
+        requiresCashOpen,
+        isOpenSessionModalOpen,
+        customerId: checkoutCustomer?.id ?? null,
+        customerType: checkoutCustomer?.clientType ?? null,
+        whatsappNumCliente: checkoutCustomerWhatsapp,
+        whatsappNumClienteCountry: "",
+      });
+    }
     try {
       await ensureCashSessionOpen(async () => {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-debug] continue-checkout", { reason: "cash-ready" });
+        }
         await proceedToCheckout();
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/caja no aperturada|cash session|required/i.test(message)) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info("[cash-debug] checkout-blocked", { reason: message });
+        }
         try {
           const current = await getCurrentCashSession();
           setCashSnapshot(current);
           if (!current.open) {
-            requestOpenSession();
+            requestOpenSession(async () => {
+              if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.info("[cash-debug] continue-checkout", { reason: "resolved-after-error" });
+              }
+              await proceedToCheckout();
+            });
             return;
           }
-          toast.error(message || "Conflicto al crear orden");
+          await proceedToCheckout();
+          return;
         } catch {
-          requestOpenSession();
+          requestOpenSession(async () => {
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.info("[cash-debug] continue-checkout", { reason: "resolved-after-refetch-failed" });
+            }
+            await proceedToCheckout();
+          });
         }
         return;
+      }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] checkout-blocked", { reason: "order-or-backend-error", message });
       }
       toast.error(message || "No se pudo continuar al cobro");
     }
@@ -1060,6 +1138,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     });
     return { errors: nextErrors, selectedMods };
   };
+
+  const checkoutCustomer = useMemo(
+    () => customers.find((customer) => String(customer.id) === selectedCustomerId) ?? null,
+    [customers, selectedCustomerId],
+  );
+  const checkoutCustomerWhatsapp = ((checkoutCustomer?.phone ?? checkoutCustomer?.telefono ?? "") || "").trim();
 
   const pendingSelectionValidation = getPendingSelectionValidation();
   const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
@@ -1105,17 +1189,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
-      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
-      if (!snapshot.open && !shouldDelayOpenGate) {
-        setIsOpenSessionModalOpen(true);
-      } else {
-        setIsOpenSessionModalOpen(false);
+      const hasOpenCashSession = getCashSessionStatus(snapshot).hasOpenCashSession;
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-modal", {
+          source: "loadCashData",
+          action: hasOpenCashSession ? "close" : "open",
+          reason: hasOpenCashSession ? "session-open" : "session-missing",
+        });
       }
+      setIsOpenSessionModalOpen(!hasOpenCashSession);
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-modal", { source: "loadCashData", action: "open", reason: "fetch-error" });
+      }
+      setCashSnapshot({ open: false, hasOpenCashSession: false, session: undefined });
       setIsOpenSessionModalOpen(true);
-      setCashSnapshot({ open: false });
     } finally {
       setIsCashGateLoading(false);
     }
@@ -1124,9 +1216,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
-      setCashSnapshot((previous) => ({ ...previous, open: false }));
+      setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
       if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
+      }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-modal", { source: "cash:required", action: "open" });
       }
       setIsOpenSessionModalOpen(true);
     };
@@ -1261,6 +1357,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleOpenCashSession = async () => {
     if (isSavingCashAction) return;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-debug] open-session-submit", { amount: Number(openSessionAmount || 0), currentCashSession: cashSnapshot.session?.id ?? null });
+    }
     setIsSavingCashAction(true);
     try {
       await openCashSession(Number(openSessionAmount || 0));
@@ -1281,6 +1381,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       await loadCashData();
       const action = postOpenSessionActionRef.current;
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-result", { status: "opened", willContinueCheckout: Boolean(action) });
+      }
       postOpenSessionActionRef.current = null;
       setIsOpenSessionModalOpen(false);
       if (action) {
@@ -1303,6 +1407,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             setIsOpenSessionModalOpen(false);
             const action = postOpenSessionActionRef.current;
             postOpenSessionActionRef.current = null;
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.info("[cash-debug] open-session-result", { status: "already-open", willContinueCheckout: Boolean(action) });
+            }
             if (action) {
               try {
                 await action();
@@ -1318,6 +1426,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         } catch {
           // fallback to generic error below
         }
+      }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] open-session-result", { status: "error", message, willContinueCheckout: false });
       }
       openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
@@ -1474,6 +1586,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           serviceType,
           customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
           customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+          whatsappNumCliente: ((selectedCustomer?.phone ?? selectedCustomer?.telefono ?? "") || "").trim(),
+          whatsappNumClienteCountry: "",
           dteDocumentType,
           ivaExempt,
           source: "pos",
@@ -2139,7 +2253,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
-      <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
+      <div className={cn("h-full min-h-0 px-2 pb-4 pt-4 lg:px-4", requiresCashOpen && "pointer-events-none select-none opacity-80")}>
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
@@ -2451,7 +2565,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   variant="default"
                   className="h-14 w-full text-base font-bold"
                   size="lg"
-                  disabled={cart.length === 0 || isProcessingPayment}
+                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
                   onClick={handleCheckout}
                 >
                   Cobrar {formatMoney(total)}
@@ -2836,6 +2950,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         open={isOpenSessionModalOpen}
         onOpenChange={(open) => {
           if (!open && !cashSnapshot.open) return;
+          if (!open) {
+            cancelPendingCheckoutContinuation("modal_closed_by_user");
+          }
           setIsOpenSessionModalOpen(open);
         }}
       >
@@ -2867,7 +2984,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             />
             <div className="flex gap-2">
               {cashSnapshot.open ? (
-                <Button variant="outline" className="flex-1" onClick={() => setIsOpenSessionModalOpen(false)}>Cancelar</Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => {
+                    cancelPendingCheckoutContinuation("open-session-cancel");
+                    setIsOpenSessionModalOpen(false);
+                  }}
+                >
+                  Cancelar
+                </Button>
               ) : null}
               <Button className="flex-1" onClick={handleOpenCashSession} disabled={isSavingCashAction}>
                 {isSavingCashAction ? "Aperturando..." : "Aperturar"}
@@ -2879,6 +3005,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 variant="outline"
                 className="w-full"
                 onClick={() => {
+                  cancelPendingCheckoutContinuation("open-session-back");
                   setIsOpenSessionModalOpen(false);
                   navigate("/");
                 }}

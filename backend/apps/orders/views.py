@@ -202,7 +202,21 @@ class OrderCreateView(generics.CreateAPIView):
         source = str(serializer.validated_data.get("source") or "").strip().lower()
         branch = serializer.validated_data.get("branch_id")
         branch_id = getattr(branch, "id", None)
-        if source != "kiosk" and not has_open_cash_session_for_branch(branch_id):
+        has_open_cash_session = has_open_cash_session_for_branch(branch_id)
+        logger.info(
+            "orders.create.cash_gate source=%s branch_id=%s has_open_cash_session=%s user_id=%s",
+            source,
+            branch_id,
+            has_open_cash_session,
+            getattr(request.user, "id", None),
+        )
+        if source != "kiosk" and not has_open_cash_session:
+            logger.warning(
+                "orders.create.cash_gate.blocked source=%s branch_id=%s user_id=%s",
+                source,
+                branch_id,
+                getattr(request.user, "id", None),
+            )
             return Response(
                 {"code": "CASH_SESSION_REQUIRED", "detail": "Caja no aperturada."},
                 status=status.HTTP_409_CONFLICT,
