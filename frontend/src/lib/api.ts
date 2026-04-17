@@ -218,6 +218,7 @@ export type Order = {
   prepTime: number;
   customerName?: string;
   customerId?: number;
+  whatsappNumCliente?: string;
   dteDocumentType?: "CF" | "CCF" | "SX";
   ivaExempt?: boolean;
   ivaExemptDiscount?: number;
@@ -1901,6 +1902,7 @@ export const createOrder = async (payload: {
   serviceType: Order["serviceType"];
   customerName?: string;
   customerId?: number;
+  whatsappNumCliente?: string;
   dteDocumentType?: "CF" | "CCF" | "SX";
   ivaExempt?: boolean;
   source?: "kiosk" | "pos";
@@ -1922,79 +1924,107 @@ export const createOrder = async (payload: {
     assignedName?: string;
   }>;
 }): Promise<Order> => {
+  const orderPayload = {
+    service_type_key: payload.serviceType,
+    customer_name: payload.customerName ?? "",
+    customer_id: payload.customerId,
+    whatsapp_num_cliente: (payload.whatsappNumCliente ?? "").trim(),
+    dte_document_type: payload.dteDocumentType ?? "CF",
+    iva_exempt: Boolean(payload.ivaExempt),
+    source: payload.source,
+    channel: payload.channel,
+    fast_pos_mode: payload.channel === "pos",
+    price_change_pin: payload.priceChangePin ?? "",
+    manual_discount_id: payload.discountId ?? undefined,
+    discount_id: payload.discountId ?? undefined,
+    discount_mode: payload.discountMode ?? undefined,
+    send_to_kitchen: Boolean(payload.sendToKitchen),
+    ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
+    items: payload.items.map((item) => ({
+      type: item.isCustom ? "MANUAL" : "MENU",
+      product_id: item.isCustom ? undefined : (item.productId ?? null),
+      is_custom: Boolean(item.isCustom),
+      manual_name: item.isCustom ? item.productName : undefined,
+      custom_name: item.isCustom ? item.productName : undefined,
+      manual_unit_price: item.isCustom ? item.price : undefined,
+      unit_price: item.isCustom ? item.price : undefined,
+      unit_price_override: item.unitPriceOverride ?? undefined,
+      custom_code: item.isCustom ? item.customCode : undefined,
+      product_name_snapshot: item.productName,
+      price_snapshot: item.price,
+      quantity: item.quantity,
+      assigned_name: item.assignedName?.trim() || "",
+      modifiers: item.modifiers.map((modifier) => ({
+        id: modifier.id,
+        name: modifier.name,
+        price: modifier.price,
+      })),
+    })),
+  };
+
+  if (import.meta.env.DEV) {
+    console.info("[pos-debug] create-order-payload", {
+      customerId: orderPayload.customer_id ?? null,
+      dteDocumentType: orderPayload.dte_document_type,
+      whatsappNumCliente: orderPayload.whatsapp_num_cliente,
+      source: orderPayload.source,
+      channel: orderPayload.channel,
+      items: orderPayload.items.length,
+    });
+  }
+
   const response = await request("/orders/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      service_type_key: payload.serviceType,
-      customer_name: payload.customerName ?? "",
-      customer_id: payload.customerId,
-      dte_document_type: payload.dteDocumentType ?? "CF",
-      iva_exempt: Boolean(payload.ivaExempt),
-      source: payload.source,
-      channel: payload.channel,
-      fast_pos_mode: payload.channel === "pos",
-      price_change_pin: payload.priceChangePin ?? "",
-      manual_discount_id: payload.discountId ?? undefined,
-      discount_id: payload.discountId ?? undefined,
-      discount_mode: payload.discountMode ?? undefined,
-      send_to_kitchen: Boolean(payload.sendToKitchen),
-      ...(localStorage.getItem("selected_branch_id") ? { branch_id: Number(localStorage.getItem("selected_branch_id")) } : {}),
-      items: payload.items.map((item) => ({
-        type: item.isCustom ? "MANUAL" : "MENU",
-        product_id: item.isCustom ? undefined : (item.productId ?? null),
-        is_custom: Boolean(item.isCustom),
-        manual_name: item.isCustom ? item.productName : undefined,
-        custom_name: item.isCustom ? item.productName : undefined,
-        manual_unit_price: item.isCustom ? item.price : undefined,
-        unit_price: item.isCustom ? item.price : undefined,
-        unit_price_override: item.unitPriceOverride ?? undefined,
-        custom_code: item.isCustom ? item.customCode : undefined,
-        product_name_snapshot: item.productName,
-        price_snapshot: item.price,
-        quantity: item.quantity,
-        assigned_name: item.assignedName?.trim() || "",
-        modifiers: item.modifiers.map((modifier) => ({
-          id: modifier.id,
-          name: modifier.name,
-          price: modifier.price,
-        })),
-      })),
-    }),
+    body: JSON.stringify(orderPayload),
   });
+
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("text/html")) {
       throw new Error("Error al crear orden. Revisa backend logs.");
     }
   }
-  const data = await handleJson<{
-    id: number;
-    order_number: number;
-    status: Order["status"];
-    customer_name: string;
-    total: string;
-    service_type: Order["serviceType"];
-    created_at: string;
-    payment_status: Order["paymentStatus"];
-    total_paid: string;
-    remaining: string;
-    items: Array<{
+
+  try {
+    const data = await handleJson<{
       id: number;
-      product_id: number | null;
-      product_name_snapshot: string;
-      price_snapshot: string;
-      unit_price_override?: string | null;
-      snapshot_sku_or_code?: string;
-      is_custom?: boolean;
-      quantity: number;
-      applied_modifiers: Array<{ modifier_name_snapshot: string }>;
-    }>;
-  }>(response);
-  if (import.meta.env.DEV) {
-    console.debug("[API] createOrder raw response", data);
+      order_number: number;
+      status: Order["status"];
+      customer_name: string;
+      total: string;
+      service_type: Order["serviceType"];
+      created_at: string;
+      payment_status: Order["paymentStatus"];
+      total_paid: string;
+      remaining: string;
+      items: Array<{
+        id: number;
+        product_id: number | null;
+        product_name_snapshot: string;
+        price_snapshot: string;
+        unit_price_override?: string | null;
+        snapshot_sku_or_code?: string;
+        is_custom?: boolean;
+        quantity: number;
+        applied_modifiers: Array<{ modifier_name_snapshot: string }>;
+      }>;
+    }>(response);
+    if (import.meta.env.DEV) {
+      console.debug("[API] createOrder raw response", data);
+    }
+    return mapOrder(data);
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      const apiError = error as { message?: string; status?: number; code?: string };
+      console.info("[pos-debug] create-order-error", {
+        status: apiError?.status ?? null,
+        code: apiError?.code ?? null,
+        message: apiError?.message ?? "Unknown error",
+      });
+    }
+    throw error;
   }
-  return mapOrder(data);
 };
 
 export const validateOrderPricePin = async (pin: string): Promise<void> => {

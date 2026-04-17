@@ -47,6 +47,7 @@ class Order(models.Model):
     table = models.ForeignKey(Table, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting_payment")
     customer_name = models.CharField(max_length=120, blank=True)
+    whatsapp_num_cliente = models.CharField(max_length=32, blank=True, default="")
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True, related_name="orders")
     dte_document_type = models.CharField(max_length=4, choices=DTE_DOCUMENT_TYPE_CHOICES, default="CF")

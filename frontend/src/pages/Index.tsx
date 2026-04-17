@@ -953,6 +953,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         sendToKitchen: draft.serviceType === "KIOSK",
         priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
         customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
+        whatsappNumCliente: checkoutCustomerWhatsapp,
         dteDocumentType,
         ivaExempt,
         discountId: selectedDiscount?.id,
@@ -1046,6 +1047,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         open: cashSnapshot.open,
         requiresCashOpen,
         isOpenSessionModalOpen,
+        customerId: checkoutCustomer?.id ?? null,
+        customerType: checkoutCustomer?.clientType ?? null,
+        whatsappNumCliente: checkoutCustomerWhatsapp,
       });
     }
     try {
@@ -1089,6 +1093,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
         return;
       }
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.info("[cash-debug] checkout-blocked", { reason: "order-or-backend-error", message });
+      }
       toast.error(message || "No se pudo continuar al cobro");
     }
   };
@@ -1112,6 +1120,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     });
     return { errors: nextErrors, selectedMods };
   };
+
+  const checkoutCustomer = useMemo(
+    () => customers.find((customer) => String(customer.id) === selectedCustomerId) ?? null,
+    [customers, selectedCustomerId],
+  );
+  const checkoutCustomerWhatsapp = ((checkoutCustomer?.phone ?? checkoutCustomer?.telefono ?? "") || "").trim();
 
   const pendingSelectionValidation = getPendingSelectionValidation();
   const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
@@ -1545,6 +1559,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           serviceType,
           customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
           customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+          whatsappNumCliente: ((selectedCustomer?.phone ?? selectedCustomer?.telefono ?? "") || "").trim(),
           dteDocumentType,
           ivaExempt,
           source: "pos",

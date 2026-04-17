@@ -245,6 +245,70 @@ class OrderPaymentFlowTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.json())
 
+    def test_create_order_sets_empty_whatsapp_for_consumer_final_without_phone(self):
+        register = Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
+        CashSession.objects.create(register=register, opened_by=self.user, opening_cash=Decimal("20.00"), status="open")
+        self.customer.telefono = ""
+        self.customer.save(update_fields=["telefono"])
+
+        response = self.client.post(
+            "/api/orders/",
+            {
+                "branch_id": self.branch.id,
+                "service_type_key": "dine-in",
+                "source": "pos",
+                "channel": "pos",
+                "customer_id": self.customer.id,
+                "dte_document_type": "CF",
+                "whatsapp_num_cliente": None,
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "product_name_snapshot": self.product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        order = Order.objects.get(id=response.json()["id"])
+        self.assertEqual(order.whatsapp_num_cliente, "")
+
+    def test_create_order_uses_customer_phone_as_whatsapp_fallback(self):
+        register = Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
+        CashSession.objects.create(register=register, opened_by=self.user, opening_cash=Decimal("20.00"), status="open")
+        self.customer.telefono = "77778888"
+        self.customer.save(update_fields=["telefono"])
+
+        response = self.client.post(
+            "/api/orders/",
+            {
+                "branch_id": self.branch.id,
+                "service_type_key": "dine-in",
+                "source": "pos",
+                "channel": "pos",
+                "customer_id": self.customer.id,
+                "dte_document_type": "CF",
+                "whatsapp_num_cliente": "",
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "product_name_snapshot": self.product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        order = Order.objects.get(id=response.json()["id"])
+        self.assertEqual(order.whatsapp_num_cliente, "77778888")
+
     def test_create_payment_requires_open_cash_session_when_register_exists(self):
         Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
         order = Order.objects.create(
