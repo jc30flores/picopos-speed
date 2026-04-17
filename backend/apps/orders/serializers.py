@@ -305,6 +305,7 @@ class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True)
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.all(), required=False, allow_null=True)
     whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=32)
+    whatsapp_num_cliente_country = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=8)
     dte_document_type = serializers.ChoiceField(choices=["CF", "CCF", "SX"], required=False, default="CF")
     iva_exempt = serializers.BooleanField(required=False, default=False)
     source = serializers.CharField(required=False, allow_blank=True)
@@ -371,6 +372,7 @@ class OrderCreateSerializer(serializers.Serializer):
         branch = validated_data.pop("branch_id", None)
         customer = validated_data.pop("customer_id", None)
         raw_whatsapp_num_cliente = (validated_data.pop("whatsapp_num_cliente", "") or "").strip()
+        raw_whatsapp_num_cliente_country = (validated_data.pop("whatsapp_num_cliente_country", "") or "").strip().upper()
         dte_document_type = validated_data.pop("dte_document_type", "CF")
         iva_exempt = bool(validated_data.pop("iva_exempt", False))
         if branch is None:
@@ -406,8 +408,9 @@ class OrderCreateSerializer(serializers.Serializer):
         status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
         customer_phone = (getattr(customer, "telefono", "") or "").strip()
         normalized_whatsapp_num_cliente = raw_whatsapp_num_cliente or customer_phone or ""
+        normalized_whatsapp_num_cliente_country = raw_whatsapp_num_cliente_country or ""
         logger.info(
-            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_customer_phone=%s whatsapp_final=%s",
+            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_customer_phone=%s whatsapp_final=%s whatsapp_country_in_payload=%s whatsapp_country_final=%s",
             source,
             channel,
             getattr(customer, "id", None),
@@ -416,6 +419,8 @@ class OrderCreateSerializer(serializers.Serializer):
             raw_whatsapp_num_cliente,
             customer_phone,
             normalized_whatsapp_num_cliente,
+            raw_whatsapp_num_cliente_country,
+            normalized_whatsapp_num_cliente_country,
         )
         order = Order.objects.create(
             branch=branch,
@@ -426,6 +431,7 @@ class OrderCreateSerializer(serializers.Serializer):
             customer=customer,
             customer_name=customer_name or customer.name,
             whatsapp_num_cliente=normalized_whatsapp_num_cliente,
+            whatsapp_num_cliente_country=normalized_whatsapp_num_cliente_country,
             dte_document_type=dte_document_type,
             iva_exempt=iva_exempt,
             **validated_data,

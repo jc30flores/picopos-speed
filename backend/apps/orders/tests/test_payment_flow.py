@@ -261,6 +261,7 @@ class OrderPaymentFlowTests(TestCase):
                 "customer_id": self.customer.id,
                 "dte_document_type": "CF",
                 "whatsapp_num_cliente": None,
+                "whatsapp_num_cliente_country": None,
                 "items": [
                     {
                         "product_id": self.product.id,
@@ -276,6 +277,7 @@ class OrderPaymentFlowTests(TestCase):
         self.assertEqual(response.status_code, 201, response.json())
         order = Order.objects.get(id=response.json()["id"])
         self.assertEqual(order.whatsapp_num_cliente, "")
+        self.assertEqual(order.whatsapp_num_cliente_country, "")
 
     def test_create_order_uses_customer_phone_as_whatsapp_fallback(self):
         register = Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
@@ -293,6 +295,7 @@ class OrderPaymentFlowTests(TestCase):
                 "customer_id": self.customer.id,
                 "dte_document_type": "CF",
                 "whatsapp_num_cliente": "",
+                "whatsapp_num_cliente_country": "",
                 "items": [
                     {
                         "product_id": self.product.id,
@@ -308,6 +311,7 @@ class OrderPaymentFlowTests(TestCase):
         self.assertEqual(response.status_code, 201, response.json())
         order = Order.objects.get(id=response.json()["id"])
         self.assertEqual(order.whatsapp_num_cliente, "77778888")
+        self.assertEqual(order.whatsapp_num_cliente_country, "")
 
     def test_create_payment_requires_open_cash_session_when_register_exists(self):
         Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)

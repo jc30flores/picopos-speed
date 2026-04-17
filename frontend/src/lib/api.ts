@@ -219,6 +219,7 @@ export type Order = {
   customerName?: string;
   customerId?: number;
   whatsappNumCliente?: string;
+  whatsappNumClienteCountry?: string;
   dteDocumentType?: "CF" | "CCF" | "SX";
   ivaExempt?: boolean;
   ivaExemptDiscount?: number;
@@ -1903,6 +1904,7 @@ export const createOrder = async (payload: {
   customerName?: string;
   customerId?: number;
   whatsappNumCliente?: string;
+  whatsappNumClienteCountry?: string;
   dteDocumentType?: "CF" | "CCF" | "SX";
   ivaExempt?: boolean;
   source?: "kiosk" | "pos";
@@ -1929,6 +1931,7 @@ export const createOrder = async (payload: {
     customer_name: payload.customerName ?? "",
     customer_id: payload.customerId,
     whatsapp_num_cliente: (payload.whatsappNumCliente ?? "").trim(),
+    whatsapp_num_cliente_country: (payload.whatsappNumClienteCountry ?? "").trim().toUpperCase(),
     dte_document_type: payload.dteDocumentType ?? "CF",
     iva_exempt: Boolean(payload.ivaExempt),
     source: payload.source,
@@ -1967,6 +1970,7 @@ export const createOrder = async (payload: {
       customerId: orderPayload.customer_id ?? null,
       dteDocumentType: orderPayload.dte_document_type,
       whatsappNumCliente: orderPayload.whatsapp_num_cliente,
+      whatsappNumClienteCountry: orderPayload.whatsapp_num_cliente_country,
       source: orderPayload.source,
       channel: orderPayload.channel,
       items: orderPayload.items.length,

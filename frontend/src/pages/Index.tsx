@@ -954,6 +954,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
         customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
         whatsappNumCliente: checkoutCustomerWhatsapp,
+        whatsappNumClienteCountry: "",
         dteDocumentType,
         ivaExempt,
         discountId: selectedDiscount?.id,
@@ -1050,6 +1051,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         customerId: checkoutCustomer?.id ?? null,
         customerType: checkoutCustomer?.clientType ?? null,
         whatsappNumCliente: checkoutCustomerWhatsapp,
+        whatsappNumClienteCountry: "",
       });
     }
     try {
@@ -1560,6 +1562,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
           customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
           whatsappNumCliente: ((selectedCustomer?.phone ?? selectedCustomer?.telefono ?? "") || "").trim(),
+          whatsappNumClienteCountry: "",
           dteDocumentType,
           ivaExempt,
           source: "pos",
