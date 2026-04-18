@@ -1,3 +1,4 @@
+from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -104,6 +105,25 @@ class CashierFlowTests(TestCase):
 
         self.assertEqual(second.status_code, 409)
         self.assertEqual(second.data.get('code'), "CASH_SESSION_ALREADY_OPEN")
+
+    def test_open_session_auto_closes_stale_previous_day_session_before_creating_new_one(self):
+        opened = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(opened.status_code, 201)
+        stale_id = opened.data['session']['id']
+
+        stale = CashSession.objects.get(pk=stale_id)
+        stale.opened_at = timezone.now() - timedelta(days=1, hours=2)
+        stale.save(update_fields=['opened_at'])
+
+        reopened = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '25.00'}, format='json')
+        self.assertEqual(reopened.status_code, 201)
+        new_id = reopened.data['session']['id']
+        self.assertNotEqual(new_id, stale_id)
+
+        stale.refresh_from_db()
+        self.assertEqual(stale.status, 'closed')
+        self.assertIsNotNone(stale.closed_at)
+        self.assertIn("[AUTO-CIERRE SISTEMA]", stale.notes or "")
 
     def test_close_session_blocked_when_pending_orders_exist(self):
         open_res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

@@ -1,3 +1,4 @@
+from datetime import datetime, time
 from decimal import Decimal, InvalidOperation
 import json
 import logging
@@ -91,6 +92,28 @@ def _parse_decimal(value, *, field_label: str) -> Decimal:
 
 def _to_json_compatible(value):
     return json.loads(json.dumps(value, default=str))
+
+
+def _local_business_date(dt):
+    if not dt:
+        return None
+    return timezone.localtime(dt, timezone.get_current_timezone()).date()
+
+
+def _log_session_time_debug(prefix: str, session: CashSession | None):
+    if not session:
+        return
+    logger.info(
+        "%s session_id=%s status=%s opened_at_db=%s opened_at_local=%s closed_at_db=%s closed_at_local=%s timezone=%s",
+        prefix,
+        session.id,
+        session.status,
+        session.opened_at.isoformat() if session.opened_at else None,
+        timezone.localtime(session.opened_at).isoformat() if session.opened_at else None,
+        session.closed_at.isoformat() if session.closed_at else None,
+        timezone.localtime(session.closed_at).isoformat() if session.closed_at else None,
+        "America/El_Salvador",
+    )
 
 
 def _build_close_payload(data) -> dict:
@@ -221,22 +244,51 @@ class CashSessionOpenView(APIView):
             .filter(register__branch_id=scope_branch_id, status="open", closed_at__isnull=True)
             .first()
         )
+        now = timezone.now()
+        today_sv = timezone.localdate(now)
         if existing_session:
-            logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
-            return Response(
-                {
-                    "code": "CASH_SESSION_ALREADY_OPEN",
-                    "detail": "Ya existe una caja abierta para esta sucursal.",
-                    "has_open_session": True,
-                    "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+            existing_business_date = _local_business_date(existing_session.opened_at)
+            if existing_business_date and existing_business_date < today_sv:
+                logger.warning(
+                    "cash_session.open.auto_closing_stale_session stale_session_id=%s stale_opened_business_date=%s today_business_date=%s",
+                    existing_session.id,
+                    str(existing_business_date),
+                    str(today_sv),
+                )
+                existing_session.status = "closed"
+                existing_session.closed_by = request.user
+                existing_session.closed_at = now
+                existing_session.notes = (
+                    f"{existing_session.notes}\n"
+                    if existing_session.notes
+                    else ""
+                ) + (
+                    f"[AUTO-CIERRE SISTEMA] Sesión abierta en fecha anterior ({existing_business_date}) cerrada automáticamente el {today_sv}."
+                )
+                stale_snapshot = calculate_shift_summary(existing_session)
+                existing_session.summary_snapshot = _to_json_compatible(stale_snapshot)
+                existing_session.save(update_fields=["status", "closed_by", "closed_at", "notes", "summary_snapshot"])
+                _log_session_time_debug("cash_session.open.stale_session_closed", existing_session)
+                existing_session = None
+            else:
+                logger.info("cash_session.open branch_id=%s already_open_session_id=%s", scope_branch_id, existing_session.id)
+                return Response(
+                    {
+                        "code": "CASH_SESSION_ALREADY_OPEN",
+                        "detail": "Ya existe una caja abierta para esta sucursal.",
+                        "has_open_session": True,
+                        "session": _session_contract_payload(existing_session, include_sensitive=_can_view_sensitive_cash_data(request)),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        today_sv = timezone.localdate()
         existing_today = (
             CashSession.objects.select_for_update()
-            .filter(register__branch_id=scope_branch_id, opened_at__date=today_sv)
+            .filter(
+                register__branch_id=scope_branch_id,
+                opened_at__gte=timezone.make_aware(datetime.combine(today_sv, time.min), timezone.get_current_timezone()),
+                opened_at__lte=timezone.make_aware(datetime.combine(today_sv, time.max), timezone.get_current_timezone()),
+            )
             .order_by("-opened_at")
             .first()
         )
@@ -252,6 +304,7 @@ class CashSessionOpenView(APIView):
             )
 
         session = CashSession.objects.create(register=register, opened_by=request.user, opening_cash=opening_cash, status="open")
+        _log_session_time_debug("cash_session.open.created", session)
         logger.info("cash_session.open branch_id=%s opened_session_id=%s", register.branch_id, session.id)
         log_audit(request, "cash_session.open", "CashSession", session.id, {"register_id": register.id, "opening_cash": str(opening_cash)})
         return Response(
@@ -365,6 +418,7 @@ class CashSessionCloseView(APIView):
                 "summary_snapshot",
             ]
         )
+        _log_session_time_debug("cash_session.close.persisted", session)
 
         ticket_text = ""
         printed = False
