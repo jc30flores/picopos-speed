@@ -16,6 +16,10 @@ from apps.core.money import to_cents
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
+import logging
+
+logger = logging.getLogger("apps.orders")
+
 
 def normalize_whatsapp_num_cliente(value: str | None, country: str | None) -> str:
     raw = str(value or "").strip()
@@ -325,8 +329,8 @@ class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True)
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.all(), required=False, allow_null=True)
     dte_document_type = serializers.ChoiceField(choices=["CF", "CCF", "SX"], required=False, default="CF")
-    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, max_length=20)
-    whatsapp_num_cliente_country = serializers.ChoiceField(choices=["ESA", "USA"], required=False, allow_blank=True)
+    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=20)
+    whatsapp_num_cliente_country = serializers.ChoiceField(choices=["ESA", "USA"], required=False, allow_blank=True, allow_null=True)
     iva_exempt = serializers.BooleanField(required=False, default=False)
     source = serializers.CharField(required=False, allow_blank=True)
     channel = serializers.CharField(required=False, allow_blank=True)
@@ -407,6 +411,10 @@ class OrderCreateSerializer(serializers.Serializer):
         dte_document_type = validated_data.pop("dte_document_type", "CF")
         whatsapp_num_cliente = str(validated_data.pop("whatsapp_num_cliente", "") or "").strip()
         whatsapp_num_cliente_country = str(validated_data.pop("whatsapp_num_cliente_country", "") or "").strip().upper()
+        if whatsapp_num_cliente and not whatsapp_num_cliente_country:
+            whatsapp_num_cliente_country = "ESA" if whatsapp_num_cliente.startswith("+503") else "USA" if whatsapp_num_cliente.startswith("+1") else ""
+        if not whatsapp_num_cliente:
+            whatsapp_num_cliente_country = ""
         iva_exempt = bool(validated_data.pop("iva_exempt", False))
         if branch is None:
             branch = Branch.objects.first()
@@ -439,20 +447,45 @@ class OrderCreateSerializer(serializers.Serializer):
 
         order_number = self._next_order_number(branch)
         status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
-        order = Order.objects.create(
-            branch=branch,
-            order_number=order_number,
-            service_type=service_type,
-            status=status,
-            channel=channel if channel in {"pos", "kiosk", "online"} else "pos",
-            customer=customer,
-            customer_name=customer_name or customer.name,
-            dte_document_type=dte_document_type,
-            whatsapp_num_cliente=whatsapp_num_cliente,
-            whatsapp_num_cliente_country=whatsapp_num_cliente_country,
-            iva_exempt=iva_exempt,
-            **validated_data,
+        channel_value = channel if channel in {"pos", "kiosk", "online"} else "pos"
+        logger.info(
+            "orders.create.normalized_payload source=%s channel=%s customer_id=%s customer_name=%s customer_type=%s dte_document_type=%s whatsapp_num_cliente=%s whatsapp_num_cliente_country=%s",
+            source,
+            channel_value,
+            getattr(customer, "id", None),
+            customer_name or customer.name,
+            getattr(customer, "client_type", None),
+            dte_document_type,
+            whatsapp_num_cliente or "",
+            whatsapp_num_cliente_country or "",
         )
+        try:
+            order = Order.objects.create(
+                branch=branch,
+                order_number=order_number,
+                service_type=service_type,
+                status=status,
+                channel=channel_value,
+                customer=customer,
+                customer_name=customer_name or customer.name,
+                dte_document_type=dte_document_type,
+                whatsapp_num_cliente=whatsapp_num_cliente or "",
+                whatsapp_num_cliente_country=whatsapp_num_cliente_country or "",
+                iva_exempt=iva_exempt,
+                **validated_data,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "orders.create.failed source=%s channel=%s customer_id=%s dte_document_type=%s whatsapp_num_cliente=%s whatsapp_num_cliente_country=%s error=%s",
+                source,
+                channel_value,
+                getattr(customer, "id", None),
+                dte_document_type,
+                whatsapp_num_cliente or "",
+                whatsapp_num_cliente_country or "",
+                exc,
+            )
+            raise
 
         discounts = list(Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id"))
 
@@ -688,6 +721,8 @@ class OrderCreateSerializer(serializers.Serializer):
 
 class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.filter(is_deleted=False), required=False, allow_null=True)
+    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=20)
+    whatsapp_num_cliente_country = serializers.ChoiceField(choices=["ESA", "USA"], required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Order

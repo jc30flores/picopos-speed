@@ -371,6 +371,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     () => `pos_draft_${selectedBranchId}_${user?.id ?? "anon"}`,
     [selectedBranchId, user?.id]
   );
+  const hasOpenCashSession = Boolean(cashSnapshot.open);
+  const requiresCashOpen = !hasOpenCashSession;
 
   const cartPricing = useMemo(
     () =>
@@ -1022,6 +1024,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       order = await getOrderById(order.id);
       setActiveOrder(order);
     } else if (!hasSameDraft || !order) {
+      console.info("[pos-order-create] request_payload", {
+        source: "pos",
+        customerId: selectedCustomerId ? Number(selectedCustomerId) : null,
+        dteDocumentType,
+        whatsapp_num_cliente: whatsappNumClienteNormalized || "",
+        whatsapp_num_cliente_country: whatsappNumClienteNormalized ? whatsappNumClienteCountry : "",
+        items: draft.items.length,
+      });
       order = await createOrder({
         serviceType: draft.serviceType,
         source: "pos",
@@ -1075,10 +1085,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setTimeout(() => openSessionInputRef.current?.select(), 0);
   };
 
+  const syncCashGateState = (snapshot: CashSessionSnapshot, reason: string) => {
+    const open = Boolean(snapshot.open);
+    const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
+    const shouldOpenModal = !open && !shouldDelayOpenGate;
+    console.info("[pos-cash-gate] sync", {
+      reason,
+      currentCashSession: snapshot,
+      hasOpenCashSession: open,
+      requiresCashOpen: !open,
+      shouldOpenModal,
+    });
+    setCashSnapshot(snapshot);
+    setIsOpenSessionModalOpen(shouldOpenModal);
+  };
+
   const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
     try {
       const current = await getCurrentCashSession();
-      setCashSnapshot(current);
+      syncCashGateState(current, "ensureCashSessionOpen");
       if (current.open) {
         await postAction();
         return true;
@@ -1095,6 +1120,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (requiresCashOpen) {
+      console.info("[pos-cash-gate] checkout_blocked", {
+        reason: "requires_cash_open",
+        hasOpenCashSession,
+        requiresCashOpen,
+      });
+      setIsOpenSessionModalOpen(true);
+      return;
+    }
     if (isOpenSessionModalOpen && !cashSnapshot.open) return;
     try {
       await ensureCashSessionOpen(async () => {
@@ -1102,10 +1136,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[pos-order-create] checkout_error", {
+        message,
+        hasOpenCashSession,
+        requiresCashOpen,
+      });
       if (/caja no aperturada|cash session|required/i.test(message)) {
         try {
           const current = await getCurrentCashSession();
-          setCashSnapshot(current);
+          syncCashGateState(current, "checkout_error_cash_required");
           if (!current.open) {
             requestOpenSession();
             return;
@@ -1171,21 +1210,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         getCurrentCashSession(),
         getCashTransactions(),
       ]);
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[cash-debug] current-session", { open: snapshot.open, sessionId: snapshot.session?.id ?? null });
-      }
-      setCashSnapshot(snapshot);
+      console.info("[pos-cash-gate] current-session", { open: snapshot.open, sessionId: snapshot.session?.id ?? null });
       setCashTransactions(transactions);
-      const shouldDelayOpenGate = cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress";
-      if (!snapshot.open && !shouldDelayOpenGate) {
-        setIsOpenSessionModalOpen(true);
-      } else {
-        setIsOpenSessionModalOpen(false);
-      }
+      syncCashGateState(snapshot, "loadCashData");
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
+      console.info("[pos-cash-gate] load_error_opening_modal", { reason: "loadCashData_exception" });
       setIsOpenSessionModalOpen(true);
       setCashSnapshot({ open: false });
     } finally {
@@ -1196,6 +1227,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
+      console.info("[pos-cash-gate] force_required_event", { reason: "window.cash:required" });
       setCashSnapshot((previous) => ({ ...previous, open: false }));
       if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
@@ -1542,6 +1574,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       let order = activeOrder;
       if (!order) {
+        console.info("[pos-order-create] request_payload", {
+          source: "pos",
+          customerId: selectedCustomer ? Number(selectedCustomer.id) : null,
+          dteDocumentType,
+          whatsapp_num_cliente: whatsappNumClienteNormalized || "",
+          whatsapp_num_cliente_country: whatsappNumClienteNormalized ? whatsappNumClienteCountry : "",
+          items: cart.length,
+        });
         order = await createOrder({
           serviceType,
           customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
@@ -2218,7 +2258,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
-      <div className="h-full min-h-0 px-2 pb-4 pt-4 lg:px-4">
+      <div className={cn("h-full min-h-0 px-2 pb-4 pt-4 lg:px-4", requiresCashOpen && "pointer-events-none select-none opacity-60")}>
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
@@ -2915,6 +2955,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         open={isOpenSessionModalOpen}
         onOpenChange={(open) => {
           if (!open && !cashSnapshot.open) return;
+          console.info("[pos-cash-gate] modal_toggle", {
+            open,
+            hasOpenCashSession,
+            requiresCashOpen,
+            reason: open ? "user_or_system_open" : "user_close_with_open_cash",
+          });
           setIsOpenSessionModalOpen(open);
         }}
       >

@@ -262,6 +262,33 @@ class OrderPaymentFlowTests(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json().get("code"), "CASH_SESSION_REQUIRED")
 
+    def test_create_order_allows_null_whatsapp_fields_and_normalizes_to_empty_string(self):
+        response = self.client.post(
+            "/api/orders/",
+            {
+                "branch_id": self.branch.id,
+                "service_type_key": "dine-in",
+                "source": "kiosk",
+                "channel": "kiosk",
+                "whatsapp_num_cliente": None,
+                "whatsapp_num_cliente_country": None,
+                "items": [
+                    {
+                        "product_id": self.product.id,
+                        "product_name_snapshot": self.product.name,
+                        "price_snapshot": "10.00",
+                        "quantity": 1,
+                        "modifiers": [],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        order = Order.objects.get(pk=response.json()["id"])
+        self.assertEqual(order.whatsapp_num_cliente, "")
+        self.assertEqual(order.whatsapp_num_cliente_country, "")
+
     def test_create_order_allows_when_open_session_exists_for_branch(self):
         register = Register.objects.create(name="Caja 1", station_name="POS 1", branch=self.branch, is_active=True)
         CashSession.objects.create(register=register, opened_by=self.user, opening_cash=Decimal("20.00"), status="open")

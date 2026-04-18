@@ -97,6 +97,11 @@ class Order(models.Model):
     def __str__(self) -> str:
         return f"Order {self.order_number}"
 
+    def save(self, *args, **kwargs):
+        self.whatsapp_num_cliente = str(self.whatsapp_num_cliente or "").strip()
+        self.whatsapp_num_cliente_country = str(self.whatsapp_num_cliente_country or "").strip().upper()
+        super().save(*args, **kwargs)
+
     def recalculate_financials(self) -> None:
         from decimal import Decimal
         from django.db.models import DecimalField, ExpressionWrapper, F, Sum
