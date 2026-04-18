@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -16,6 +18,8 @@ from apps.employees.serializers import (
     AttendanceHistoryRowSerializer,
     build_attendance_state,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EmployeeListCreateView(generics.ListCreateAPIView):
@@ -104,7 +108,8 @@ def _get_employee_for_user(user):
 
 def _today_record_for_employee(employee: Employee) -> AttendanceRecord:
     today = timezone.localdate()
-    record, _ = AttendanceRecord.objects.get_or_create(employee=employee, date=today)
+    defaults = {"total_clock_ins": 0, "total_clock_outs": 0}
+    record, _ = AttendanceRecord.objects.get_or_create(employee=employee, date=today, defaults=defaults)
     return record
 
 def _today_record_if_exists(employee: Employee) -> AttendanceRecord | None:
@@ -147,10 +152,42 @@ class AttendanceActionView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         today = timezone.localdate()
-        record, _ = AttendanceRecord.objects.select_for_update().get_or_create(employee=employee, date=today)
+        defaults = {"total_clock_ins": 0, "total_clock_outs": 0}
+        logger.info(
+            "attendance.%s.get_or_create employee_id=%s date=%s defaults=%s",
+            self.action,
+            employee.id,
+            str(today),
+            defaults,
+        )
+        try:
+            record, created = AttendanceRecord.objects.select_for_update().get_or_create(
+                employee=employee,
+                date=today,
+                defaults=defaults,
+            )
+        except Exception:
+            logger.exception(
+                "attendance.%s.get_or_create_failed employee_id=%s date=%s",
+                self.action,
+                employee.id,
+                str(today),
+            )
+            raise
         now = timezone.now()
         clock_in = record.clock_in or record.check_in
         clock_out = record.clock_out or record.check_out
+        logger.info(
+            "attendance.%s.before employee_id=%s record_id=%s created=%s total_clock_ins=%s total_clock_outs=%s clock_in=%s clock_out=%s",
+            self.action,
+            employee.id,
+            record.id,
+            created,
+            record.total_clock_ins,
+            record.total_clock_outs,
+            clock_in.isoformat() if clock_in else None,
+            clock_out.isoformat() if clock_out else None,
+        )
 
         if self.action == "clock_in":
             if clock_in:
@@ -158,6 +195,7 @@ class AttendanceActionView(APIView):
                 return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_in = now
             record.check_in = now
+            record.total_clock_ins = int(record.total_clock_ins or 0) + 1
         elif self.action == "break_start":
             if not clock_in:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
@@ -184,8 +222,19 @@ class AttendanceActionView(APIView):
                 return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
             record.clock_out = now
             record.check_out = now
+            record.total_clock_outs = int(record.total_clock_outs or 0) + 1
 
         record.save()
+        logger.info(
+            "attendance.%s.after employee_id=%s record_id=%s total_clock_ins=%s total_clock_outs=%s clock_in=%s clock_out=%s",
+            self.action,
+            employee.id,
+            record.id,
+            record.total_clock_ins,
+            record.total_clock_outs,
+            (record.clock_in or record.check_in).isoformat() if (record.clock_in or record.check_in) else None,
+            (record.clock_out or record.check_out).isoformat() if (record.clock_out or record.check_out) else None,
+        )
         payload = build_attendance_state(record, employee)
         return Response(AttendanceStateSerializer(payload).data)
 

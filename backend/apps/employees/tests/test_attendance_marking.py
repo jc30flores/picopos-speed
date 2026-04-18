@@ -3,7 +3,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch
-from apps.employees.models import Employee
+from apps.employees.models import AttendanceRecord, Employee
 from apps.users.models import UserProfile
 
 
@@ -58,3 +58,18 @@ class AttendanceMarkingTests(TestCase):
         clock_in = self.client.post("/api/employees/attendance/clock-in/")
         self.assertEqual(clock_in.status_code, 404)
         self.assertEqual(clock_in.json().get("state"), "NO_EMPLOYEE")
+
+    def test_clock_in_creates_record_with_counter_defaults_and_clock_out_increments(self):
+        clock_in = self.client.post("/api/employees/attendance/clock-in/")
+        self.assertEqual(clock_in.status_code, 200)
+
+        record = AttendanceRecord.objects.get(employee=self.employee)
+        self.assertEqual(record.total_clock_ins, 1)
+        self.assertEqual(record.total_clock_outs, 0)
+
+        clock_out = self.client.post("/api/employees/attendance/clock-out/")
+        self.assertEqual(clock_out.status_code, 200)
+
+        record.refresh_from_db()
+        self.assertEqual(record.total_clock_ins, 1)
+        self.assertEqual(record.total_clock_outs, 1)

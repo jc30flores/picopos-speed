@@ -50,6 +50,8 @@ class AttendanceRecord(models.Model):
     clock_out = models.DateTimeField(null=True, blank=True)
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
+    total_clock_ins = models.IntegerField(default=0)
+    total_clock_outs = models.IntegerField(default=0)
     minutes_late = models.IntegerField(default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
