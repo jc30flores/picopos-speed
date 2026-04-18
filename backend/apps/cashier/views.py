@@ -3,6 +3,7 @@ import json
 import logging
 
 from django.db import transaction
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -506,22 +507,43 @@ class CashSessionHistoryView(APIView):
         )
         register_id = request.query_params.get("register_id")
 
-        queryset = CashSession.objects.select_related("register", "opened_by", "closed_by").all()
+        queryset = (
+            CashSession.objects.select_related("register", "opened_by", "closed_by")
+            .annotate(sort_at=Coalesce("closed_at", "opened_at"))
+            .all()
+        )
         if start_at:
             queryset = queryset.filter(opened_at__gte=start_at)
         if end_at:
             queryset = queryset.filter(opened_at__lte=end_at)
         if register_id:
             queryset = queryset.filter(register_id=register_id)
+        queryset = queryset.order_by("-sort_at", "-opened_at", "-id")
 
         payload = []
         for session in queryset:
             summary = calculate_shift_summary(session)
+            opened_at_iso = session.opened_at.isoformat() if session.opened_at else None
+            closed_at_iso = session.closed_at.isoformat() if session.closed_at else None
+            sort_at = getattr(session, "sort_at", None) or session.closed_at or session.opened_at
+            sort_at_iso = sort_at.isoformat() if sort_at else None
+            logger.info(
+                "cash.history.row id=%s opened_at_db=%s closed_at_db=%s sort_at=%s timezone=%s",
+                session.id,
+                opened_at_iso,
+                closed_at_iso,
+                sort_at_iso,
+                "America/El_Salvador",
+            )
             payload.append(
                 {
                     "id": session.id,
-                    "opened_at": session.opened_at,
-                    "closed_at": session.closed_at,
+                    "opened_at": opened_at_iso,
+                    "closed_at": closed_at_iso,
+                    "sort_at": sort_at_iso,
+                    "opened_at_ts": session.opened_at.timestamp() if session.opened_at else None,
+                    "closed_at_ts": session.closed_at.timestamp() if session.closed_at else None,
+                    "sort_at_ts": sort_at.timestamp() if sort_at else None,
                     "opened_by": getattr(session.opened_by, "username", ""),
                     "closed_by": getattr(session.closed_by, "username", ""),
                     "expected_cash": summary.get("expected_cash_in_drawer", Decimal("0")),
@@ -533,6 +555,14 @@ class CashSessionHistoryView(APIView):
                     "register_name": getattr(session.register, "name", ""),
                 }
             )
+        logger.info(
+            "cash.history.response rows=%s timezone=%s date_from=%s date_to=%s register_id=%s",
+            len(payload),
+            "America/El_Salvador",
+            request.query_params.get("date_from"),
+            request.query_params.get("date_to"),
+            register_id,
+        )
         return Response(payload)
 
 

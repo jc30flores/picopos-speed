@@ -87,6 +87,16 @@ const buildAuditSnapshot = (row: CashSessionHistoryRow | null): AuditSnapshot =>
   };
 };
 
+const formatCashSessionDate = (value: string | null | undefined) => formatDateTimeSV(value ?? null);
+
+const resolveRowSortTimestamp = (row: CashSessionHistoryRow) => {
+  const sortAtTs = typeof row.sortAtTs === "number" ? row.sortAtTs : 0;
+  if (sortAtTs > 0) return sortAtTs;
+  const fallbackSort = row.sortAt || row.closedAt || row.openedAt;
+  const parsed = fallbackSort ? new Date(fallbackSort).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 export const CashHistoryTab = () => {
   const [rows, setRows] = useState<CashSessionHistoryRow[]>([]);
   const [dateFrom, setDateFrom] = useState("");
@@ -96,7 +106,18 @@ export const CashHistoryTab = () => {
   const [downloadingSessionId, setDownloadingSessionId] = useState<number | null>(null);
 
   const load = async () => {
-    setRows(await getCashSessionsHistory({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }));
+    const nextRows = await getCashSessionsHistory({ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined });
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-history-ui] rows_received", nextRows.map((row) => ({
+        id: row.id,
+        openedAt: row.openedAt,
+        closedAt: row.closedAt,
+        sortAt: row.sortAt,
+        sortAtTs: resolveRowSortTimestamp(row),
+      })));
+    }
+    setRows(nextRows);
   };
 
   useEffect(() => { load(); }, []);
@@ -113,10 +134,27 @@ export const CashHistoryTab = () => {
     }
   };
 
-  const sortedRows = useMemo(
-    () => [...rows].sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime()),
-    [rows]
-  );
+  const sortedRows = useMemo(() => {
+    const next = [...rows].sort((a, b) => {
+      const bTs = resolveRowSortTimestamp(b);
+      const aTs = resolveRowSortTimestamp(a);
+      if (bTs !== aTs) return bTs - aTs;
+      return b.id - a.id;
+    });
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-history-ui] rows_sorted", next.map((row) => ({
+        id: row.id,
+        sortAtTs: resolveRowSortTimestamp(row),
+        openedAt: row.openedAt,
+        closedAt: row.closedAt,
+        openedAtShown: formatCashSessionDate(row.openedAt),
+        closedAtShown: formatCashSessionDate(row.closedAt ?? null),
+        timezone: "America/El_Salvador",
+      })));
+    }
+    return next;
+  }, [rows]);
   const selectedAudit = useMemo(() => buildAuditSnapshot(selectedRow), [selectedRow]);
 
   const tableAuditSummary = (row: CashSessionHistoryRow) => {
@@ -182,8 +220,8 @@ export const CashHistoryTab = () => {
             <TableBody>
               {sortedRows.map((r) => (
                 <TableRow key={r.id} className="min-h-14">
-                  <TableCell>{formatDateTimeSV(r.openedAt)}</TableCell>
-                  <TableCell>{r.closedAt ? formatDateTimeSV(r.closedAt) : "-"}</TableCell>
+                  <TableCell>{formatCashSessionDate(r.openedAt)}</TableCell>
+                  <TableCell>{r.closedAt ? formatCashSessionDate(r.closedAt) : "-"}</TableCell>
                   <TableCell>{r.openedByUsername}</TableCell>
                   <TableCell>{formatMoney(r.expectedCash)}</TableCell>
                   <TableCell>{formatMoney(r.countedCash)}</TableCell>
@@ -234,8 +272,8 @@ export const CashHistoryTab = () => {
                 <div><p className="text-xs text-muted-foreground">Estado</p><p className="font-medium">{selectedRow?.status === "closed" ? "Cerrada" : "Abierta"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Usuario apertura</p><p className="font-medium">{selectedRow?.openedByUsername || "-"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Usuario cierre</p><p className="font-medium">{selectedRow?.closedByUsername || "-"}</p></div>
-                <div><p className="text-xs text-muted-foreground">Fecha apertura</p><p className="font-medium">{selectedRow?.openedAt ? formatDateTimeSV(selectedRow.openedAt) : "-"}</p></div>
-                <div><p className="text-xs text-muted-foreground">Fecha cierre</p><p className="font-medium">{selectedRow?.closedAt ? formatDateTimeSV(selectedRow.closedAt) : "-"}</p></div>
+                <div><p className="text-xs text-muted-foreground">Fecha apertura</p><p className="font-medium">{selectedRow?.openedAt ? formatCashSessionDate(selectedRow.openedAt) : "-"}</p></div>
+                <div><p className="text-xs text-muted-foreground">Fecha cierre</p><p className="font-medium">{selectedRow?.closedAt ? formatCashSessionDate(selectedRow.closedAt) : "-"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Monto de apertura</p><p className="font-semibold">{formatMoney(selectedRow?.summary?.openingCash ?? 0)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Total ventas</p><p className="font-semibold">{formatMoney(selectedAudit.totalSales)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Diferencia final</p><p className={`font-semibold ${differenceTextClass(selectedAudit.overallDiff)}`}>{formatMoney(selectedAudit.overallDiff)}</p></div>

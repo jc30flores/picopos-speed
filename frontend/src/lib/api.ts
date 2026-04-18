@@ -3738,6 +3738,10 @@ export type CashSessionHistoryRow = {
   closedByUsername?: string | null;
   openedAt: string;
   closedAt?: string | null;
+  sortAt?: string | null;
+  openedAtTs?: number | null;
+  closedAtTs?: number | null;
+  sortAtTs?: number | null;
   expectedCash: number;
   countedCash: number;
   difference: number;
@@ -3872,13 +3876,18 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
   if (filters?.registerId) params.set('register_id', String(filters.registerId));
   const response = await request(`/cashier/session/history/${params.toString() ? `?${params.toString()}` : ''}`);
   const data = await handleJson<Array<any>>(response);
-  return data.map((row) => ({
+  return data.map((row) => {
+    const normalized = {
     id: row.id,
     registerName: row.register_name ?? "-",
     openedByUsername: row.opened_by ?? "-",
     closedByUsername: row.closed_by ?? null,
     openedAt: row.opened_at,
     closedAt: row.closed_at,
+    sortAt: row.sort_at ?? row.closed_at ?? row.opened_at,
+    openedAtTs: Number(row.opened_at_ts ?? 0) || null,
+    closedAtTs: Number(row.closed_at_ts ?? 0) || null,
+    sortAtTs: Number(row.sort_at_ts ?? 0) || null,
     expectedCash: Number(row.expected_cash ?? 0),
     countedCash: Number(row.counted_cash ?? 0),
     difference: Number(row.difference ?? 0),
@@ -3911,7 +3920,22 @@ export const getCashSessionsHistory = async (filters?: { dateFrom?: string; date
         cashIn: Number(row.summary_snapshot?.total_cash_sales ?? row.summary_snapshot?.cash_in_total ?? 0),
       },
     },
-  }));
+  };
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[cash-history-api] row", {
+        id: normalized.id,
+        openedAtRaw: row.opened_at,
+        closedAtRaw: row.closed_at,
+        sortAtRaw: row.sort_at,
+        openedAtTs: normalized.openedAtTs,
+        closedAtTs: normalized.closedAtTs,
+        sortAtTs: normalized.sortAtTs,
+        timezone: "America/El_Salvador",
+      });
+    }
+    return normalized;
+  });
 };
 
 export const getCashSessionDetail = async (sessionId: number): Promise<{ summary: CashSessionSnapshot["summary"]; transactions: CashTransaction[] }> => {
