@@ -18,6 +18,9 @@ from apps.dte.services.dte_service import (
     calculate_line_tax_breakdown,
     DTEPreflightError,
     _validate_dte_totals,
+    validate_dte_rounding,
+    validate_item_tax_consistency,
+    validate_summary_consistency,
     validate_dte_preflight_payload,
     assert_no_string_numbers,
     build_payload_cf,
@@ -747,6 +750,88 @@ class DTECoreTests(TestCase):
         cuerpo = payload["dte"]["cuerpoDocumento"]
         self.assertFalse(any(round(line["precioUni"], 2) == 0.01 for line in cuerpo))
         self.assertEqual(round(sum(line["ventaGravada"] + line["ventaExenta"] for line in cuerpo), 2), 4.58)
+
+    def test_regression_rejected_document_case_with_micro_lines_is_consistent(self):
+        category = Category.objects.create(name="REG-IVA-003")
+        p1 = Product.objects.create(name="Disposable A", description="", price=Decimal("0.21"), category=category, available=True)
+        p2 = Product.objects.create(name="Tiny shell", description="", price=Decimal("0.01"), category=category, available=True)
+        p3 = Product.objects.create(name="Extra line", description="", price=Decimal("3.28"), category=category, available=True)
+        p4 = Product.objects.create(name="Main line", description="", price=Decimal("6.99"), category=category, available=True)
+        OrderItem.objects.create(order=self.order, product=p1, product_name_snapshot="Disposable A", price_snapshot=Decimal("0.21"), quantity=1)
+        OrderItem.objects.create(order=self.order, product=p2, product_name_snapshot="Tiny shell", price_snapshot=Decimal("0.01"), quantity=1)
+        OrderItem.objects.create(order=self.order, product=p3, product_name_snapshot="Extra line", price_snapshot=Decimal("3.28"), quantity=1)
+        OrderItem.objects.create(order=self.order, product=p4, product_name_snapshot="Main line", price_snapshot=Decimal("6.99"), quantity=1)
+        self.order.total = Decimal("10.49")
+        self.order.subtotal = Decimal("10.49")
+        self.order.save(update_fields=["total", "subtotal"])
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000903", "9" * 36, "00")
+        body = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+        self.assertEqual([round(line["precioUni"], 2) for line in body], [0.21, 0.01, 3.28, 6.99])
+        self.assertEqual([round(line["ivaItem"], 2) for line in body], [0.02, 0.00, 0.38, 0.80])
+        self.assertEqual(round(resumen["totalIva"], 2), 1.20)
+        self.assertEqual(round(resumen["totalGravada"], 2), 10.49)
+        validate_dte_rounding(payload["dte"])
+
+    def test_validate_item_tax_consistency_reports_invalid_iva(self):
+        errors = validate_item_tax_consistency(
+            [
+                {
+                    "numItem": 1,
+                    "cantidad": 1,
+                    "precioUni": 0.01,
+                    "montoDescu": 0.00,
+                    "ventaGravada": 0.01,
+                    "ventaExenta": 0.00,
+                    "ivaItem": 0.01,
+                }
+            ]
+        )
+        self.assertTrue(any("ivaItem" in err for err in errors))
+
+    def test_validate_summary_consistency_reports_mismatch(self):
+        body = [
+            {
+                "numItem": 1,
+                "cantidad": 1,
+                "precioUni": 3.28,
+                "montoDescu": 0.00,
+                "ventaNoSuj": 0.00,
+                "ventaExenta": 0.00,
+                "ventaGravada": 3.28,
+                "ivaItem": 0.38,
+            },
+            {
+                "numItem": 2,
+                "cantidad": 1,
+                "precioUni": 6.99,
+                "montoDescu": 0.00,
+                "ventaNoSuj": 0.00,
+                "ventaExenta": 0.00,
+                "ventaGravada": 6.99,
+                "ivaItem": 0.80,
+            },
+        ]
+        resumen = {
+            "totalNoSuj": 0.00,
+            "totalExenta": 0.00,
+            "totalGravada": 10.27,
+            "subTotalVentas": 10.27,
+            "descuNoSuj": 0.00,
+            "descuExenta": 0.00,
+            "descuGravada": 0.00,
+            "porcentajeDescuento": 0.00,
+            "totalDescu": 0.00,
+            "subTotal": 10.27,
+            "totalIva": 1.17,
+            "montoTotalOperacion": 10.27,
+            "totalPagar": 10.27,
+            "ivaRete1": 0.00,
+            "reteRenta": 0.00,
+        }
+        errors = validate_summary_consistency(resumen, body)
+        self.assertTrue(any("totalGravada" in err for err in errors))
 
     def test_receptor_consumidor_final_uses_null_document_fields_and_no_empty_strings(self):
         self.order.customer = Customer.objects.create(
