@@ -49,6 +49,7 @@ class DTEWhatsAppServiceTests(TestCase):
         destination = resolve_whatsapp_destination(self.record)
         payload = build_whatsapp_payload(self.record, destination)
         self.assertEqual(payload["num_receptor"], "50370001111")
+        self.assertNotIn("num_cliente", payload)
         self.assertTrue(payload["send_json"])
         self.assertEqual(payload["tipo_dte"], "01")
         self.assertEqual(payload["doc_type"], "CF")
@@ -58,6 +59,15 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertIsInstance(payload["invoice_json"]["respuesta_hacienda"], dict)
         self.assertNotIn("sello_recibido", payload)
         self.assertNotIn("fhProcesamiento", payload)
+
+    def test_build_whatsapp_payload_includes_optional_num_cliente_without_changing_num_receptor(self):
+        self.order.whatsapp_num_cliente = "+50379378279"
+        self.order.whatsapp_num_cliente_country = "ESA"
+        self.order.save(update_fields=["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
+        destination = resolve_whatsapp_destination(self.record, to_phone="50378889999")
+        payload = build_whatsapp_payload(self.record, destination)
+        self.assertEqual(payload["num_receptor"], "50378889999")
+        self.assertEqual(payload["num_cliente"], "+50379378279")
 
     def test_validate_whatsapp_target_rejects_invalid_number(self):
         ok, error, phone = validate_whatsapp_target(self.record, to_phone="abc", allow_default_fallback=False)
@@ -142,6 +152,26 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertIn("invoice_json", kwargs["data"])
         self.assertIn("json_file", kwargs["files"])
         self.assertIn("pdf_file", kwargs["files"])
+
+    @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
+    @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
+    @patch("apps.dte.services.whatsapp_dte_service.requests.post")
+    def test_send_whatsapp_includes_num_cliente_when_order_has_override(self, mock_post, _mock_sleep):
+        self.order.whatsapp_num_cliente = "+50379378279"
+        self.order.whatsapp_num_cliente_country = "ESA"
+        self.order.save(update_fields=["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"status": "queued", "message": "queued", "job_id": "J2"}
+        response.text = '{"status":"queued","message":"queued","job_id":"J2"}'
+        mock_post.return_value = response
+
+        send_dte_whatsapp(self.record, to_phone="50379998888")
+
+        _, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
+        self.assertEqual(kwargs["data"]["num_cliente"], "+50379378279")
 
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)

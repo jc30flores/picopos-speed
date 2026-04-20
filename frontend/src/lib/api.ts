@@ -1713,6 +1713,8 @@ const mapOrder = (order: {
   status: Order["status"];
   customer_name: string;
   customer_id?: number;
+  whatsapp_num_cliente?: string;
+  whatsapp_num_cliente_country?: string;
   dte_document_type?: "CF" | "CCF" | "SX";
   iva_exempt?: boolean;
   iva_exempt_discount?: string;
@@ -1802,6 +1804,8 @@ const mapOrder = (order: {
     prepTime,
     customerName: order.customer_name || undefined,
     customerId: order.customer_id ?? undefined,
+    whatsappNumCliente: (order.whatsapp_num_cliente || "").trim() || undefined,
+    whatsappNumClienteCountry: (order.whatsapp_num_cliente_country || "").trim() || undefined,
     dteDocumentType: order.dte_document_type ?? "CF",
     ivaExempt: Boolean(order.iva_exempt),
     ivaExemptDiscount: Number(order.iva_exempt_discount ?? 0),
@@ -2152,7 +2156,13 @@ export const getOrderById = async (orderId: number): Promise<Order> => {
 
 export const updateOrderCustomerDte = async (
   orderId: number,
-  payload: { customerId: number; dteDocumentType: "CF" | "CCF" | "SX"; ivaExempt?: boolean }
+  payload: {
+    customerId: number;
+    dteDocumentType: "CF" | "CCF" | "SX";
+    ivaExempt?: boolean;
+    whatsappNumCliente?: string;
+    whatsappNumClienteCountry?: string;
+  }
 ): Promise<Order> => {
   const response = await request(`/orders/${orderId}/`, {
     method: "PATCH",
@@ -2160,6 +2170,8 @@ export const updateOrderCustomerDte = async (
       customer_id: payload.customerId,
       dte_document_type: payload.dteDocumentType,
       iva_exempt: Boolean(payload.ivaExempt),
+      whatsapp_num_cliente: (payload.whatsappNumCliente ?? "").trim(),
+      whatsapp_num_cliente_country: (payload.whatsappNumClienteCountry ?? "").trim().toUpperCase(),
     }),
   });
   const data = await handleJson<Parameters<typeof mapOrder>[0]>(response);

@@ -11,6 +11,7 @@ from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.core.service_types import normalize_service_type
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
+from apps.orders.whatsapp_phone import normalize_whatsapp_num_cliente
 from apps.menu.utils.pricing import resolve_effective_price
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
@@ -136,6 +137,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "status",
             "customer_name",
             "customer_id",
+            "whatsapp_num_cliente",
+            "whatsapp_num_cliente_country",
             "dte_document_type",
             "iva_exempt",
             "iva_exempt_discount",
@@ -406,18 +409,20 @@ class OrderCreateSerializer(serializers.Serializer):
 
         order_number = self._next_order_number(branch)
         status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
-        customer_phone = (getattr(customer, "telefono", "") or "").strip()
-        normalized_whatsapp_num_cliente = raw_whatsapp_num_cliente or customer_phone or ""
-        normalized_whatsapp_num_cliente_country = raw_whatsapp_num_cliente_country or ""
+        normalized_whatsapp = normalize_whatsapp_num_cliente(
+            raw_number=raw_whatsapp_num_cliente,
+            raw_country=raw_whatsapp_num_cliente_country,
+        )
+        normalized_whatsapp_num_cliente = normalized_whatsapp.e164 if normalized_whatsapp else ""
+        normalized_whatsapp_num_cliente_country = normalized_whatsapp.country if normalized_whatsapp else ""
         logger.info(
-            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_customer_phone=%s whatsapp_final=%s whatsapp_country_in_payload=%s whatsapp_country_final=%s",
+            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_final=%s whatsapp_country_in_payload=%s whatsapp_country_final=%s",
             source,
             channel,
             getattr(customer, "id", None),
             bool(getattr(customer, "is_consumer_final", False)),
             dte_document_type,
             raw_whatsapp_num_cliente,
-            customer_phone,
             normalized_whatsapp_num_cliente,
             raw_whatsapp_num_cliente_country,
             normalized_whatsapp_num_cliente_country,
@@ -671,10 +676,12 @@ class OrderCreateSerializer(serializers.Serializer):
 
 class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.filter(is_deleted=False), required=False, allow_null=True)
+    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=32)
+    whatsapp_num_cliente_country = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=8)
 
     class Meta:
         model = Order
-        fields = ["customer_id", "dte_document_type", "iva_exempt"]
+        fields = ["customer_id", "dte_document_type", "iva_exempt", "whatsapp_num_cliente", "whatsapp_num_cliente_country"]
 
     def validate(self, attrs):
         customer = attrs.get("customer_id", self.instance.customer)
@@ -696,5 +703,22 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             instance.dte_document_type = validated_data["dte_document_type"]
         if "iva_exempt" in validated_data:
             instance.iva_exempt = bool(validated_data["iva_exempt"])
-        instance.save(update_fields=["customer", "customer_name", "dte_document_type", "iva_exempt", "updated_at"])
+        if "whatsapp_num_cliente" in validated_data or "whatsapp_num_cliente_country" in validated_data:
+            normalized_whatsapp = normalize_whatsapp_num_cliente(
+                raw_number=validated_data.get("whatsapp_num_cliente", instance.whatsapp_num_cliente),
+                raw_country=validated_data.get("whatsapp_num_cliente_country", instance.whatsapp_num_cliente_country),
+            )
+            instance.whatsapp_num_cliente = normalized_whatsapp.e164 if normalized_whatsapp else ""
+            instance.whatsapp_num_cliente_country = normalized_whatsapp.country if normalized_whatsapp else ""
+        instance.save(
+            update_fields=[
+                "customer",
+                "customer_name",
+                "dte_document_type",
+                "iva_exempt",
+                "whatsapp_num_cliente",
+                "whatsapp_num_cliente_country",
+                "updated_at",
+            ]
+        )
         return instance

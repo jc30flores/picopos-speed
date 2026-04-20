@@ -85,6 +85,7 @@ import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
+import { formatWhatsAppClientPhone, normalizeWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
 
 interface CartItem {
   id: string;
@@ -224,6 +225,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [whatsappClientCountry, setWhatsappClientCountry] = useState<WhatsAppCountry>("ESA");
+  const [whatsappClientInput, setWhatsappClientInput] = useState("");
+  const [whatsappClientError, setWhatsappClientError] = useState("");
   const [isCustomerPickerOpen, setIsCustomerPickerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [isCustomerCreateOpen, setIsCustomerCreateOpen] = useState(false);
@@ -440,6 +444,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setPendingEditAuthorizationPin("");
         setSelectedDiscount(null);
         setSelectedCustomerId(order.customerId ? String(order.customerId) : "");
+        if (order.whatsappNumClienteCountry === "ESA" || order.whatsappNumClienteCountry === "USA") {
+          setWhatsappClientCountry(order.whatsappNumClienteCountry);
+        }
+        if (order.whatsappNumCliente) {
+          const country = order.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
+          setWhatsappClientInput(formatWhatsAppClientPhone(country, order.whatsappNumCliente));
+        } else {
+          setWhatsappClientInput("");
+        }
         setCart(restoredCart);
         setCheckoutDraft({
           items: restoredCart,
@@ -492,6 +505,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         selectedDiscount?: Discount | null;
         dteDocumentType?: "CF" | "CCF" | "SX";
         ivaExempt?: boolean;
+        whatsappNumCliente?: string;
+        whatsappNumClienteCountry?: WhatsAppCountry;
       };
       const restoredCart = Array.isArray(parsed.cart) ? parsed.cart : [];
       if (restoredCart.length > 0) {
@@ -503,6 +518,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (restoredCart.length > 0 && parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
       if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
       if (typeof parsed.ivaExempt === "boolean") setIvaExempt(parsed.ivaExempt);
+      if (parsed.whatsappNumClienteCountry === "ESA" || parsed.whatsappNumClienteCountry === "USA") {
+        setWhatsappClientCountry(parsed.whatsappNumClienteCountry);
+      }
+      if (parsed.whatsappNumCliente) {
+        const country = parsed.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
+        setWhatsappClientInput(formatWhatsAppClientPhone(country, parsed.whatsappNumCliente));
+      }
     } catch (error) {
       console.error("Failed to restore POS draft", error);
     }
@@ -525,13 +547,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           selectedDiscount: cart.length > 0 ? selectedDiscount : null,
           dteDocumentType,
           ivaExempt,
+          whatsappNumCliente: whatsappClientInput,
+          whatsappNumClienteCountry: whatsappClientCountry,
         })
       );
     }, 250);
     return () => {
       if (draftPersistTimeoutRef.current) window.clearTimeout(draftPersistTimeoutRef.current);
     };
-  }, [cart, dteDocumentType, ivaExempt, posDraftStorageKey, selectedCustomerId, selectedDiscount, serviceType]);
+  }, [cart, dteDocumentType, ivaExempt, posDraftStorageKey, selectedCustomerId, selectedDiscount, serviceType, whatsappClientCountry, whatsappClientInput]);
 
   useEffect(() => {
     if (!serviceTypes.length || !serviceType) return;
@@ -969,8 +993,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         sendToKitchen: draft.serviceType === "KIOSK",
         priceChangePin: draft.items.some((item) => item.unitPriceOverride != null) ? validatedPin : undefined,
         customerId: selectedCustomerId ? Number(selectedCustomerId) : undefined,
-        whatsappNumCliente: checkoutCustomerWhatsapp,
-        whatsappNumClienteCountry: "",
+        whatsappNumCliente: normalizedWhatsappClient ?? "",
+        whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
         dteDocumentType,
         ivaExempt,
         discountId: selectedDiscount?.id,
@@ -1066,8 +1090,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         isOpenSessionModalOpen,
         customerId: checkoutCustomer?.id ?? null,
         customerType: checkoutCustomer?.clientType ?? null,
-        whatsappNumCliente: checkoutCustomerWhatsapp,
-        whatsappNumClienteCountry: "",
+        whatsappNumCliente: normalizedWhatsappClient ?? "",
+        whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
       });
     }
     try {
@@ -1143,7 +1167,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     () => customers.find((customer) => String(customer.id) === selectedCustomerId) ?? null,
     [customers, selectedCustomerId],
   );
-  const checkoutCustomerWhatsapp = ((checkoutCustomer?.phone ?? checkoutCustomer?.telefono ?? "") || "").trim();
+  const normalizedWhatsappClient = useMemo(() => {
+    const trimmed = whatsappClientInput.trim();
+    if (!trimmed) return null;
+    const parsed = normalizeWhatsAppClientPhone(whatsappClientCountry, trimmed);
+    return parsed.ok ? parsed.e164 : null;
+  }, [whatsappClientCountry, whatsappClientInput]);
 
   const pendingSelectionValidation = getPendingSelectionValidation();
   const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
@@ -1586,8 +1615,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           serviceType,
           customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
           customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
-          whatsappNumCliente: ((selectedCustomer?.phone ?? selectedCustomer?.telefono ?? "") || "").trim(),
-          whatsappNumClienteCountry: "",
+          whatsappNumCliente: normalizedWhatsappClient ?? "",
+          whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
           dteDocumentType,
           ivaExempt,
           source: "pos",
@@ -2044,12 +2073,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("Selecciona un cliente");
       return;
     }
+    const trimmedWhatsAppInput = whatsappClientInput.trim();
+    if (trimmedWhatsAppInput) {
+      const parsed = normalizeWhatsAppClientPhone(whatsappClientCountry, trimmedWhatsAppInput);
+      if (!parsed.ok) {
+        setWhatsappClientError(parsed.error);
+        toast.error(parsed.error);
+        return;
+      }
+    }
+    setWhatsappClientError("");
     if (activeOrder) {
       try {
         const updatedOrder = await updateOrderCustomerDte(activeOrder.id, {
           customerId: Number(selectedCustomerId),
           dteDocumentType,
           ivaExempt,
+          whatsappNumCliente: normalizedWhatsappClient ?? "",
+          whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
         });
         setActiveOrder((previousOrder) => {
           if (!previousOrder || previousOrder.id !== updatedOrder.id) return updatedOrder;
@@ -2074,6 +2115,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               (updatedOrder.totalPayable ?? 0) > 0
                 ? updatedOrder.totalPayable
                 : previousOrder.totalPayable,
+            whatsappNumCliente: updatedOrder.whatsappNumCliente,
+            whatsappNumClienteCountry: updatedOrder.whatsappNumClienteCountry,
           };
         });
       } catch (error) {
@@ -3126,7 +3169,22 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsCustomerDteOpen(true)}>
+                    <Button
+                      className="h-14 min-w-0 text-base"
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        if (activeOrder?.whatsappNumClienteCountry === "ESA" || activeOrder?.whatsappNumClienteCountry === "USA") {
+                          setWhatsappClientCountry(activeOrder.whatsappNumClienteCountry);
+                        }
+                        if (activeOrder?.whatsappNumCliente) {
+                          const country = activeOrder.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
+                          setWhatsappClientInput(formatWhatsAppClientPhone(country, activeOrder.whatsappNumCliente));
+                        }
+                        setWhatsappClientError("");
+                        setIsCustomerDteOpen(true);
+                      }}
+                    >
                       <span className="min-w-0 truncate text-left">
                         Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
                       </span>
@@ -3266,6 +3324,43 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   Administrar
                 </Button>
               </div>
+            </div>
+            <div className="space-y-2 rounded-md border p-3">
+              <Label>Número extra del cliente que recibirá DTE por WhatsApp</Label>
+              <p className="text-xs text-muted-foreground">
+                Opcional. Solo se usará como num_cliente en el mensaje de WhatsApp. No reemplaza el teléfono del receptor del DTE ni el num_receptor del servicio.
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[120px_minmax(0,1fr)]">
+                <Select
+                  value={whatsappClientCountry}
+                  onValueChange={(value) => {
+                    const nextCountry = value === "USA" ? "USA" : "ESA";
+                    setWhatsappClientCountry(nextCountry);
+                    if (whatsappClientInput.trim()) {
+                      setWhatsappClientInput(formatWhatsAppClientPhone(nextCountry, whatsappClientInput));
+                    }
+                    setWhatsappClientError("");
+                  }}
+                >
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ESA">ESA (+503)</SelectItem>
+                    <SelectItem value="USA">USA (+1)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  className="h-11"
+                  value={whatsappClientInput}
+                  placeholder={whatsappClientCountry === "USA" ? "+1 (000) 0000-000" : "+503 0000-0000"}
+                  onChange={(event) => {
+                    setWhatsappClientError("");
+                    setWhatsappClientInput(formatWhatsAppClientPhone(whatsappClientCountry, event.target.value));
+                  }}
+                />
+              </div>
+              {whatsappClientError ? <p className="text-xs text-destructive">{whatsappClientError}</p> : null}
             </div>
             {dteDocumentType === "CCF" ? (
               <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>

@@ -72,13 +72,14 @@ def evaluate_record_actions(record: DTERecord) -> dict:
     customer = getattr(record.order, "customer", None)
     email = ((getattr(customer, "correo", "") or getattr(customer, "email", "") or "").strip() if customer else "")
     phone = ((getattr(customer, "telefono", "") or "").strip() if customer else "")
+    phone_override = (getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
     config = resolve_delivery_config()
     fallback_phone = (config.whatsapp_default_phone or "").strip() if config.whatsapp_allow_default_fallback else ""
     email_ok = bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""))
     email_is_internal = email.lower() == INTERNAL_BILLING_EMAIL.lower() if email else False
 
     can_send_email = bool(email and email_ok and not email_is_internal)
-    can_send_whatsapp = bool(phone or fallback_phone)
+    can_send_whatsapp = bool(phone_override or phone or fallback_phone)
     missing_email_reason = ""
     if not can_send_email:
         if not email:
@@ -107,4 +108,5 @@ def evaluate_record_actions(record: DTERecord) -> dict:
         "invalidate_remaining": invalidate_remaining,
         "customer_email": email,
         "customer_phone": phone,
+        "customer_phone_override": phone_override,
     }
