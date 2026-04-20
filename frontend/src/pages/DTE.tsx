@@ -20,6 +20,8 @@ import { Copy } from "lucide-react";
 import { DteRowActions } from "@/components/dte/DteRowActions";
 import { PageLayout } from "@/components/layout/PageLayout";
 import { useAuth } from "@/context/useAuth";
+import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
+import { maskPhoneForLog, resolveWhatsappDestination, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -82,6 +84,11 @@ export default function DTEPage() {
   const [invalidateMotivo, setInvalidateMotivo] = useState("Invalidación desde panel DTE");
   const [invalidateDoc, setInvalidateDoc] = useState("");
   const [invalidateInlineError, setInvalidateInlineError] = useState("");
+  const [whatsModalOpen, setWhatsModalOpen] = useState(false);
+  const [whatsTarget, setWhatsTarget] = useState<DTERecord | null>(null);
+  const [whatsCountry, setWhatsCountry] = useState<WhatsAppCountry>("ESA");
+  const [whatsInput, setWhatsInput] = useState("");
+  const [whatsError, setWhatsError] = useState("");
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -178,13 +185,12 @@ export default function DTEPage() {
         });
       }
       if (action === "whatsapp") {
-        const result = await dteDeliver(row.id, ["whatsapp"]);
-        const channel = result.results?.whatsapp;
-        toast({
-          title: "WhatsApp",
-          description: channel?.ok ? "WhatsApp enviado correctamente." : (channel?.error || result.summary),
-          variant: channel?.ok ? "default" : "destructive",
-        });
+        setWhatsTarget(row);
+        setWhatsCountry("ESA");
+        setWhatsInput("");
+        setWhatsError("");
+        setWhatsModalOpen(true);
+        return;
       }
       if (action === "credit_note") {
         if (!window.confirm("¿Crear nota de crédito para este DTE?")) return;
@@ -236,6 +242,57 @@ export default function DTEPage() {
       toast({ title: "Acción fallida", description: String(err), variant: "destructive" });
     } finally {
       setActionsLoading((prev) => ({ ...prev, [invalidateTarget.id]: null }));
+    }
+  };
+
+  const submitWhatsAppDelivery = async () => {
+    if (!whatsTarget) return;
+    const receptorPhone = String(
+      (whatsTarget.requestPayload?.dte?.receptor?.telefono ||
+        whatsTarget.responsePayload?.dte?.receptor?.telefono ||
+        "")
+    ).trim();
+    const resolved = resolveWhatsappDestination({
+      manualPhone: whatsInput,
+      manualCountry: whatsCountry,
+      receptorPhone,
+    });
+    console.info("dte.whatsapp.modal.submit", {
+      dte_id: whatsTarget.id,
+      selected_country: whatsCountry,
+      raw_input: whatsInput,
+      fallback_receptor_phone: maskPhoneForLog(receptorPhone),
+      resolved_ok: resolved.ok,
+      resolved_source: resolved.ok ? resolved.source : "invalid",
+      resolved_phone: resolved.ok ? maskPhoneForLog(resolved.phone) : "***",
+      reason: resolved.ok ? "" : resolved.reason,
+    });
+    if (!resolved.ok) {
+      setWhatsError(resolved.reason);
+      toast({
+        title: "WhatsApp",
+        description: resolved.reason,
+        variant: "destructive",
+      });
+      return;
+    }
+    setWhatsError("");
+    setActionsLoading((prev) => ({ ...prev, [whatsTarget.id]: "whatsapp" }));
+    try {
+      const result = await dteDeliver(whatsTarget.id, ["whatsapp"], { phone: resolved.phone });
+      const channel = result.results?.whatsapp;
+      toast({
+        title: "WhatsApp",
+        description: channel?.ok ? "WhatsApp enviado correctamente." : (channel?.error || result.summary),
+        variant: channel?.ok ? "default" : "destructive",
+      });
+      if (channel?.ok) {
+        setWhatsModalOpen(false);
+      }
+    } catch (err) {
+      toast({ title: "Acción fallida", description: String(err), variant: "destructive" });
+    } finally {
+      setActionsLoading((prev) => ({ ...prev, [whatsTarget.id]: null }));
     }
   };
 
@@ -411,6 +468,43 @@ export default function DTEPage() {
                 disabled={!invalidateMotivo.trim() || !invalidateDoc.trim() || !invalidateTarget}
               >
                 Confirmar invalidación
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={whatsModalOpen} onOpenChange={setWhatsModalOpen}>
+        <DialogContent className="w-[95vw] max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Enviar DTE por WhatsApp</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <WhatsAppPhoneInput
+              label="Número para envío por WhatsApp"
+              helpText="Déjalo vacío para usar receptor.telefono del JSON del DTE."
+              country={whatsCountry}
+              onCountryChange={(country) => {
+                setWhatsCountry(country);
+                setWhatsError("");
+              }}
+              value={whatsInput}
+              onValueChange={(value) => {
+                setWhatsInput(value);
+                setWhatsError("");
+              }}
+              error={whatsError}
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="h-12 flex-1" onClick={() => setWhatsModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                className="h-12 flex-1"
+                onClick={() => void submitWhatsAppDelivery()}
+                disabled={!whatsTarget || actionsLoading[whatsTarget.id] === "whatsapp"}
+              >
+                Enviar
               </Button>
             </div>
           </div>

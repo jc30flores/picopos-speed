@@ -299,6 +299,9 @@ def resolve_whatsapp_destination(
     allow_default_fallback: bool | None = None,
 ) -> WhatsAppDestinationResolution:
     config = resolve_delivery_config()
+    dte_payload = _safe_dte_for_whatsapp(record)
+    receptor_payload = dte_payload.get("receptor") if isinstance(dte_payload.get("receptor"), dict) else {}
+    receptor_phone = _normalize_phone(receptor_payload.get("telefono"))
     customer_phone = _normalize_phone(getattr(getattr(record.order, "customer", None), "telefono", ""))
     requested_raw = str(to_phone or "").strip()
     requested_phone = _normalize_phone(requested_raw)
@@ -330,6 +333,15 @@ def resolve_whatsapp_destination(
             is_valid=True,
         )
 
+    if receptor_phone and _is_valid_phone(receptor_phone):
+        return WhatsAppDestinationResolution(
+            raw_phone=receptor_phone,
+            normalized_phone=receptor_phone,
+            source="dte_receptor_phone",
+            rejected_reason="",
+            is_valid=True,
+        )
+
     if customer_phone and _is_valid_phone(customer_phone):
         return WhatsAppDestinationResolution(
             raw_phone=customer_phone,
@@ -348,9 +360,9 @@ def resolve_whatsapp_destination(
             is_valid=True,
         )
 
-    reason = "Cliente sin teléfono válido."
+    reason = "Sin teléfono válido (manual o receptor.telefono en DTE)."
     if not fallback_enabled:
-        reason = "Cliente sin teléfono válido y fallback por defecto deshabilitado."
+        reason = "Sin teléfono válido y fallback por defecto deshabilitado."
     return WhatsAppDestinationResolution(
         raw_phone=requested_raw or customer_phone or default_phone,
         normalized_phone="",

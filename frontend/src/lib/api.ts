@@ -4200,7 +4200,8 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
 
 export const dteDeliver = async (
   id: number,
-  channels: Array<"whatsapp" | "email">
+  channels: Array<"whatsapp" | "email">,
+  options?: { phone?: string }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4220,7 +4221,10 @@ export const dteDeliver = async (
 }> => {
   const res = await request(`/dte/issued/${id}/deliver/`, {
     method: "POST",
-    body: JSON.stringify({ channels }),
+    body: JSON.stringify({
+      channels,
+      ...(options?.phone ? { phone: options.phone } : {}),
+    }),
   });
   const payload = await handleJson<any>(res);
   return {
@@ -4246,7 +4250,8 @@ export const dteDeliver = async (
 
 export const dteDeliverByOrder = async (
   orderId: number,
-  channels: Array<"whatsapp" | "email">
+  channels: Array<"whatsapp" | "email">,
+  options?: { phone?: string }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4266,7 +4271,10 @@ export const dteDeliverByOrder = async (
 }> => {
   const res = await request(`/dte/orders/${orderId}/deliver/`, {
     method: "POST",
-    body: JSON.stringify({ channels }),
+    body: JSON.stringify({
+      channels,
+      ...(options?.phone ? { phone: options.phone } : {}),
+    }),
   });
   const payload = await handleJson<any>(res);
   return {

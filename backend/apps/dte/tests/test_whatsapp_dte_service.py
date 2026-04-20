@@ -100,6 +100,16 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertEqual(destination.normalized_phone, "50370000000")
         self.assertEqual(destination.source, "default_fallback")
 
+    def test_resolve_whatsapp_destination_uses_receptor_phone_from_dte_when_manual_empty(self):
+        self.customer.telefono = ""
+        self.customer.save(update_fields=["telefono"])
+        self.record.request_payload = {"dte": {"receptor": {"telefono": "50379990000"}}}
+        self.record.save(update_fields=["request_payload"])
+        destination = resolve_whatsapp_destination(self.record)
+        self.assertTrue(destination.is_valid)
+        self.assertEqual(destination.normalized_phone, "50379990000")
+        self.assertEqual(destination.source, "dte_receptor_phone")
+
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
     @patch("apps.dte.services.whatsapp_dte_service.requests.post")

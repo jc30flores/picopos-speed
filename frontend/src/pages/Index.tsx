@@ -85,7 +85,8 @@ import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
-import { formatWhatsAppClientPhone, normalizeWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
+import { formatWhatsAppClientPhone, normalizeWhatsAppClientPhone, validateWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
+import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
 
 interface CartItem {
   id: string;
@@ -2075,10 +2076,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     const trimmedWhatsAppInput = whatsappClientInput.trim();
     if (trimmedWhatsAppInput) {
-      const parsed = normalizeWhatsAppClientPhone(whatsappClientCountry, trimmedWhatsAppInput);
-      if (!parsed.ok) {
-        setWhatsappClientError(parsed.error);
-        toast.error(parsed.error);
+      const phoneError = validateWhatsAppClientPhone(whatsappClientCountry, trimmedWhatsAppInput);
+      if (phoneError) {
+        setWhatsappClientError(phoneError);
+        toast.error(phoneError);
         return;
       }
     }
@@ -3325,43 +3326,21 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </Button>
               </div>
             </div>
-            <div className="space-y-2 rounded-md border p-3">
-              <Label>Número extra del cliente que recibirá DTE por WhatsApp</Label>
-              <p className="text-xs text-muted-foreground">
-                Opcional. Solo se usará como num_cliente en el mensaje de WhatsApp. No reemplaza el teléfono del receptor del DTE ni el num_receptor del servicio.
-              </p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[120px_minmax(0,1fr)]">
-                <Select
-                  value={whatsappClientCountry}
-                  onValueChange={(value) => {
-                    const nextCountry = value === "USA" ? "USA" : "ESA";
-                    setWhatsappClientCountry(nextCountry);
-                    if (whatsappClientInput.trim()) {
-                      setWhatsappClientInput(formatWhatsAppClientPhone(nextCountry, whatsappClientInput));
-                    }
-                    setWhatsappClientError("");
-                  }}
-                >
-                  <SelectTrigger className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ESA">ESA (+503)</SelectItem>
-                    <SelectItem value="USA">USA (+1)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  className="h-11"
-                  value={whatsappClientInput}
-                  placeholder={whatsappClientCountry === "USA" ? "+1 (000) 0000-000" : "+503 0000-0000"}
-                  onChange={(event) => {
-                    setWhatsappClientError("");
-                    setWhatsappClientInput(formatWhatsAppClientPhone(whatsappClientCountry, event.target.value));
-                  }}
-                />
-              </div>
-              {whatsappClientError ? <p className="text-xs text-destructive">{whatsappClientError}</p> : null}
-            </div>
+            <WhatsAppPhoneInput
+              label="Número extra del cliente que recibirá DTE por WhatsApp"
+              helpText="Opcional. Solo se usará como num_cliente en el mensaje de WhatsApp. No reemplaza el teléfono del receptor del DTE ni el num_receptor del servicio."
+              country={whatsappClientCountry}
+              onCountryChange={(nextCountry) => {
+                setWhatsappClientCountry(nextCountry);
+                setWhatsappClientError("");
+              }}
+              value={whatsappClientInput}
+              onValueChange={(nextValue) => {
+                setWhatsappClientError("");
+                setWhatsappClientInput(nextValue);
+              }}
+              error={whatsappClientError}
+            />
             {dteDocumentType === "CCF" ? (
               <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
             ) : null}
