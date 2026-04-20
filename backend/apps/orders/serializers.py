@@ -435,7 +435,7 @@ class OrderCreateSerializer(serializers.Serializer):
             raw_whatsapp_num_cliente_country,
             normalized_whatsapp_num_cliente_country,
         )
-        order = Order.objects.create(
+        order_kwargs = dict(
             branch=branch,
             order_number=order_number,
             service_type=service_type,
@@ -443,12 +443,14 @@ class OrderCreateSerializer(serializers.Serializer):
             channel=channel if channel in {"pos", "kiosk", "online"} else "pos",
             customer=customer,
             customer_name=customer_name or customer.name,
-            whatsapp_num_cliente=normalized_whatsapp_num_cliente,
-            whatsapp_num_cliente_country=normalized_whatsapp_num_cliente_country,
             dte_document_type=dte_document_type,
             iva_exempt=iva_exempt,
             **validated_data,
         )
+        if has_whatsapp_order_columns():
+            order_kwargs["whatsapp_num_cliente"] = normalized_whatsapp_num_cliente
+            order_kwargs["whatsapp_num_cliente_country"] = normalized_whatsapp_num_cliente_country
+        order = Order.objects.create(**order_kwargs)
 
         discounts = list(Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id"))
 

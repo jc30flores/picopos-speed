@@ -158,13 +158,16 @@ class DTEResendView(APIView):
             return Response({"success": False, "message": str(exc), "detail": "permission_denied"}, status=status.HTTP_403_FORBIDDEN)
         log_audit(request, "dte.resend", "DTERecord", updated.id, {"sale_id": updated.order_id, "status": updated.status})
         payload = DTERecordDetailSerializer(updated).data
+        business_success = updated.status == DTERecord.STATUS_ACCEPTED
+        still_pending = updated.status == DTERecord.STATUS_PENDING
         msg = {
             DTERecord.STATUS_ACCEPTED: "Reenvío sincronizado: DTE aceptado/procesado.",
             DTERecord.STATUS_REJECTED: "Reenvío completado con rechazo técnico/negocio.",
             DTERecord.STATUS_PENDING: "Reenvío en cola: DTE pendiente real de outbox.",
         }.get(updated.status, "Reenvío procesado")
         response_payload = {
-            "success": True,
+            "success": business_success,
+            "pending": still_pending,
             "issued_id": updated.id,
             "dte_record_id": updated.id,
             "status": updated.status,

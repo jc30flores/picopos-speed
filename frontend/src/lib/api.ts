@@ -4180,10 +4180,18 @@ export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
   return handleJson<DTERecord>(res);
 };
 
-export const dteResend = async (id: number): Promise<{ message: string; record: DTERecord }> => {
+export const dteResend = async (
+  id: number
+): Promise<{ success: boolean; pending?: boolean; status?: string; message: string; record: DTERecord }> => {
   const res = await request(`/dte/issued/${id}/resend/`, { method: "POST" });
   const payload = await handleJson<any>(res);
-  return { message: payload.message ?? "Reenvío procesado", record: payload.record as DTERecord };
+  return {
+    success: Boolean(payload.success),
+    pending: Boolean(payload.pending),
+    status: payload.status,
+    message: payload.message ?? "Reenvío procesado",
+    record: payload.record as DTERecord,
+  };
 };
 
 export const dteSendEmail = async (id: number): Promise<{ message: string; record?: DTERecord }> => {

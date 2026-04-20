@@ -100,6 +100,20 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         self.assertTrue(body.get("success"))
         self.assertEqual(body.get("dte_record_id"), self.record.id)
 
+    @patch("apps.dte.views.resend_record")
+    def test_resend_returns_success_false_when_business_status_is_rejected(self, mock_resend):
+        self.client.force_authenticate(self.user)
+        self.record.status = DTERecord.STATUS_REJECTED
+        self.record.response_payload = {"http_status": 422}
+        self.record.response_text = json.dumps({"detail": "validation error"})
+        mock_resend.return_value = self.record
+
+        response = self.client.post(f"/api/dte/issued/{self.record.id}/resend/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body.get("success"))
+        self.assertFalse(body.get("pending"))
+
     @patch("apps.dte.services.dte_retry.send_or_queue_dte")
     @patch("apps.dte.services.dte_retry.build_payload_cf")
     def test_resend_rebuilds_payload_when_record_payload_is_empty(self, mock_build_payload, mock_send_or_queue):

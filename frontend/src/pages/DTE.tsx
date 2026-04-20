@@ -172,10 +172,16 @@ export default function DTEPage() {
       if (action === "resend") {
         const result = await dteResend(row.id);
         patchRow(result.record);
+        const semanticVariant =
+          result.record.status === "ACEPTADO"
+            ? "default"
+            : result.record.status === "PENDIENTE"
+              ? "default"
+              : "destructive";
         toast({
           title: "Hacienda",
           description: `${result.message} (estado: ${statusLabel(result.record.status)})`,
-          variant: result.record.status === "ACEPTADO" ? "default" : (result.record.status === "RECHAZADO" ? "destructive" : "default"),
+          variant: semanticVariant,
         });
       }
       if (action === "email") {
