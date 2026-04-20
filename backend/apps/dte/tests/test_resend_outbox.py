@@ -151,6 +151,20 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         sent_payload = mock_send_or_queue.call_args.kwargs["payload"]
         self.assertTrue(sent_payload.get("dte"))
 
+    @patch("apps.dte.services.dte_retry.send_or_queue_dte")
+    def test_resend_fails_without_correlatives_and_does_not_send(self, mock_send_or_queue):
+        self.record.request_payload = {}
+        self.record.control_number = ""
+        self.record.codigo_generacion = ""
+        self.record.generation_code = ""
+        self.record.save(update_fields=["request_payload", "control_number", "codigo_generacion", "generation_code"])
+
+        updated = resend_record(self.record)
+        self.assertEqual(updated.status, DTERecord.STATUS_REJECTED)
+        self.assertEqual(updated.error_code, "PRECHECK")
+        self.assertIn("faltan correlativos", (updated.error_message or "").lower())
+        mock_send_or_queue.assert_not_called()
+
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
     def test_outbox_enqueue_on_5xx(self, mock_send, _health):

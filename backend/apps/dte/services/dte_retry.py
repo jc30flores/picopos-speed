@@ -7,7 +7,6 @@ from django.utils import timezone
 
 from apps.dte.models import DTERecord
 from apps.dte.outbox import send_or_queue_dte
-from apps.dte.services.control import build_generation_code, next_control_number
 from apps.dte.services.dte_service import DTEPreflightError, build_payload_cf
 from apps.orders.models import OrderInvoice
 
@@ -51,10 +50,10 @@ def _resolve_resend_payload(record: DTERecord) -> tuple[dict[str, Any], str]:
         or str(getattr(invoice, "codigo_generacion", "") or "").strip()
     )
     ambiente = str(record.ambiente or "00").strip() or "00"
-    if not numero_control:
-        numero_control = next_control_number(record.order, dte_type=record.dte_type or "CF_01", ambiente=ambiente)
-    if not codigo_generacion:
-        codigo_generacion = build_generation_code()
+    if not numero_control or not codigo_generacion:
+        raise DTEPreflightError(
+            "No se puede reenviar: faltan correlativos (numeroControl/codigoGeneracion) para reconstruir DTE de forma segura."
+        )
 
     rebuilt = build_payload_cf(
         record.order,
@@ -66,7 +65,7 @@ def _resolve_resend_payload(record: DTERecord) -> tuple[dict[str, Any], str]:
 
 
 def resend_record(record: DTERecord) -> DTERecord:
-    payment = record.order.payments.order_by("-id").first()
+    payment = record.payment or record.order.payments.order_by("-id").first()
     invoice = OrderInvoice.objects.filter(order=record.order).first()
     initial_status = record.status
     payload_source = "snapshot"
