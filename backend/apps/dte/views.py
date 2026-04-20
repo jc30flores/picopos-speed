@@ -24,6 +24,7 @@ from apps.dte.services.delivery import deliver_dte_to_client
 from apps.dte.services.dte_service import DTEPreflightError, invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.dte_security import redact_payload
 from apps.dte.services.availability import evaluate_record_actions
+from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
 
 logger = logging.getLogger("apps.dte")
 
@@ -54,7 +55,10 @@ class DTEIssuedListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
+        ensure_whatsapp_order_columns()
         qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
+        if not has_whatsapp_order_columns():
+            qs = qs.defer("order__whatsapp_num_cliente", "order__whatsapp_num_cliente_country")
         status_filter = self.request.query_params.get("status")
         dte_type = self.request.query_params.get("dte_type") or self.request.query_params.get("type")
         start_at, end_at = parse_business_date_range(
@@ -113,9 +117,15 @@ class DTEIssuedListView(generics.ListAPIView):
 
 
 class DTEIssuedDetailView(generics.RetrieveAPIView):
-    queryset = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
     serializer_class = DTERecordDetailSerializer
     permission_classes = [IsDTECashierOrAbove]
+
+    def get_queryset(self):
+        ensure_whatsapp_order_columns()
+        qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
+        if not has_whatsapp_order_columns():
+            qs = qs.defer("order__whatsapp_num_cliente", "order__whatsapp_num_cliente_country")
+        return qs
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()

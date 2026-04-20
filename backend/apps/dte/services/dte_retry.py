@@ -96,7 +96,24 @@ def resend_record(record: DTERecord) -> DTERecord:
     numero_control = str(ident.get("numeroControl") or "").strip()
     codigo_generacion = str(ident.get("codigoGeneracion") or "").strip()
     if not numero_control or not codigo_generacion or not payload.get("dte"):
-        raise DTEPreflightError("Resend abortado: payload DTE inválido o incompleto (numeroControl/codigoGeneracion).")
+        reason = "Resend abortado: payload DTE inválido o incompleto (numeroControl/codigoGeneracion)."
+        record.status = DTERecord.STATUS_REJECTED
+        record.error_code = "PRECHECK"
+        record.error_message = reason
+        record.last_error_code = "PRECHECK"
+        record.last_error_message = reason
+        record.send_attempts = (record.send_attempts or 0) + 1
+        record.attempts = record.send_attempts
+        record.last_sent_at = timezone.now()
+        record.save()
+        LOGGER.error(
+            "dte.resend.invalid_payload dte_record_id=%s order_id=%s payment_id=%s invoice_id=%s",
+            record.id,
+            record.order_id,
+            getattr(payment, "id", None),
+            getattr(invoice, "id", None),
+        )
+        return record
 
     LOGGER.info(
         "dte.resend.start dte_record_id=%s order_id=%s payment_id=%s invoice_id=%s numero_control=%s codigo_generacion=%s payload_source=%s payload_size=%s",
