@@ -16,6 +16,7 @@ from apps.core.models import Branch, ServiceType
 from apps.dte.client import DTEClientResult
 from apps.dte.models import DTEBranchConfig, DTEOutbox, DTERecord
 from apps.dte.outbox import process_pending_outbox, send_or_queue_dte
+from apps.dte.services.dte_retry import resend_record
 from apps.orders.models import Order
 from apps.users.models import UserProfile
 
@@ -99,6 +100,43 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         self.assertTrue(body.get("success"))
         self.assertEqual(body.get("dte_record_id"), self.record.id)
 
+    @patch("apps.dte.services.dte_retry.send_or_queue_dte")
+    @patch("apps.dte.services.dte_retry.build_payload_cf")
+    def test_resend_rebuilds_payload_when_record_payload_is_empty(self, mock_build_payload, mock_send_or_queue):
+        self.record.request_payload = {}
+        self.record.control_number = ""
+        self.record.codigo_generacion = ""
+        self.record.generation_code = ""
+        self.record.save(update_fields=["request_payload", "control_number", "codigo_generacion", "generation_code"])
+        rebuilt_payload = {
+            "dte": {
+                "identificacion": {
+                    "tipoDte": "01",
+                    "numeroControl": "DTE-01-X001X001-000000000000999",
+                    "codigoGeneracion": "Z" * 36,
+                },
+                "cuerpoDocumento": [{"numItem": 1}],
+                "resumen": {"totalPagar": 2},
+            }
+        }
+        mock_build_payload.return_value = rebuilt_payload
+        mock_send_or_queue.return_value = DTEOutbox(
+            id=88,
+            order=self.order,
+            payment=None,
+            dte_record=self.record,
+            status=DTEOutbox.STATUS_FAILED,
+            attempts=1,
+        )
+
+        resend_record(self.record)
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.control_number, "DTE-01-X001X001-000000000000999")
+        self.assertEqual(self.record.codigo_generacion, "Z" * 36)
+        self.assertEqual(self.record.request_payload["dte"]["identificacion"]["numeroControl"], "DTE-01-X001X001-000000000000999")
+        sent_payload = mock_send_or_queue.call_args.kwargs["payload"]
+        self.assertTrue(sent_payload.get("dte"))
+
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
     def test_outbox_enqueue_on_5xx(self, mock_send, _health):
@@ -159,6 +197,23 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
         self.assertEqual(outbox.status, DTEOutbox.STATUS_FAILED)
         self.assertIsNone(outbox.next_attempt_at)
+
+    @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
+    @patch("apps.dte.outbox.DTEClient.send")
+    def test_outbox_422_already_processed_is_treated_as_accepted(self, mock_send, _health):
+        mock_send.return_value = DTEClientResult(
+            status_code=422,
+            json_body={"detail": "Documento ya fue procesado en Hacienda"},
+            text_body='{"detail":"Documento ya fue procesado en Hacienda"}',
+            success=False,
+            remote_uuid="",
+            sello_recibido="",
+            error_message="already processed",
+            error_type="VALIDATION",
+            elapsed_ms=10,
+        )
+        outbox = send_or_queue_dte(self.order, None, self.payload, dte_record=self.record)
+        self.assertEqual(outbox.status, DTEOutbox.STATUS_ACCEPTED)
 
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")

@@ -135,11 +135,35 @@ def parse_response_outcome(body: dict) -> str:
 def _classify_final_status(*, result, parsed: dict, inferred: str) -> str:
     status_code = int(result.status_code or 0)
     error_type = str(getattr(result, "error_type", "") or "").upper()
-    duplicate_msg = str(parsed.get("message") or parsed.get("detail") or "").lower()
+    duplicate_msg = " ".join(
+        [
+            str(parsed.get("message") or ""),
+            str(parsed.get("detail") or ""),
+            str(parsed.get("error") or ""),
+            str((parsed.get("respuesta_hacienda") or {}).get("descripcionMsg") or ""),
+            str(parsed.get("raw") or ""),
+            str(parsed.get("response_text") or ""),
+        ]
+    ).lower()
+    already_processed = any(
+        marker in duplicate_msg
+        for marker in (
+            "duplicate",
+            "already processed",
+            "ya fue procesado",
+            "ya fue recibido",
+            "ya existe",
+            "documento existente",
+            "documento ya",
+            "sello recibido",
+            "recibido anteriormente",
+            "procesado anteriormente",
+        )
+    )
 
     if 200 <= status_code < 300 and parsed.get("success") is True:
         return DTEOutbox.STATUS_ACCEPTED
-    if "duplicate" in duplicate_msg or "already processed" in duplicate_msg:
+    if already_processed:
         return DTEOutbox.STATUS_ACCEPTED
     if parsed.get("offline") is True or error_type == "TIMEOUT":
         return DTEOutbox.STATUS_PENDING
@@ -313,6 +337,9 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
         _preview(outbox.response_body),
     )
     if outbox.dte_record_id:
+        response_payload = dict(parsed or {})
+        response_payload.setdefault("http_status", result.status_code or 0)
+        response_payload.setdefault("response_text", result.text_body or "")
         record_status = {
             DTEOutbox.STATUS_ACCEPTED: DTERecord.STATUS_ACCEPTED,
             DTEOutbox.STATUS_FAILED: DTERecord.STATUS_REJECTED,
@@ -320,9 +347,18 @@ def _apply_result(outbox: DTEOutbox, result) -> DTEOutbox:
             DTEOutbox.STATUS_SENDING: DTERecord.STATUS_PENDING,
             DTEOutbox.STATUS_SENT: DTERecord.STATUS_PENDING,
         }.get(final_status, DTERecord.STATUS_PENDING)
+        DTE_LOGGER.info(
+            "dte.outbox.sync dte_record_id=%s outbox_id=%s transition=%s->%s order_id=%s payment_id=%s",
+            outbox.dte_record_id,
+            outbox.id,
+            outbox.status,
+            final_status,
+            outbox.order_id,
+            outbox.payment_id,
+        )
         DTERecord.objects.filter(pk=outbox.dte_record_id).update(
             status=record_status,
-            response_payload=parsed,
+            response_payload=response_payload,
             response_text=outbox.response_body or "",
             error_message=outbox.error_message or "",
             last_error_message=outbox.error_message or "",
@@ -357,6 +393,14 @@ def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTE
         .first()
     )
     if existing:
+        DTE_LOGGER.info(
+            "dte.outbox.reuse outbox_id=%s dte_record_id=%s order_id=%s payment_id=%s status=%s",
+            existing.id,
+            existing.dte_record_id,
+            existing.order_id,
+            existing.payment_id,
+            existing.status,
+        )
         return existing
     endpoint_url = f"{(getattr(settings, 'DTE_BASE_URL', '') or '').rstrip('/')}{_endpoint_for_payload(payload)}"
     outbox = DTEOutbox.objects.create(
@@ -382,6 +426,18 @@ def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTE
 
 
 def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
+    numero_control, codigo_generacion = _extract(payload)
+    DTE_LOGGER.info(
+        "dte.outbox.enqueue order_id=%s payment_id=%s dte_record_id=%s numero_control=%s codigo_generacion=%s has_dte=%s payload_size=%s attempt_immediate=%s",
+        order.id,
+        getattr(payment, "id", None),
+        getattr(dte_record, "id", None),
+        numero_control,
+        codigo_generacion,
+        bool((payload or {}).get("dte")),
+        len(str(payload or {})),
+        attempt_immediate,
+    )
     try:
         assert_no_string_numbers(payload)
     except DTEPreflightError as exc:

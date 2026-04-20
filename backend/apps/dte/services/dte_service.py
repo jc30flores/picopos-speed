@@ -1316,8 +1316,32 @@ def interpret_dte_response(response: dict) -> dict:
     rh = response.get("respuesta_hacienda") or {}
     estado = str(rh.get("estado") or "").upper()
     http_status = int(response.get("http_status", 0) or 0)
+    text_bag = " ".join(
+        [
+            str(response.get("message") or ""),
+            str(response.get("detail") or ""),
+            str(response.get("error") or ""),
+            str(rh.get("descripcionMsg") or ""),
+            str(response.get("response_text") or ""),
+            str(response.get("raw") or ""),
+        ]
+    ).lower()
+    already_processed = any(
+        marker in text_bag
+        for marker in (
+            "already processed",
+            "ya fue procesado",
+            "ya fue recibido",
+            "ya existe",
+            "documento existente",
+            "documento ya",
+            "procesado anteriormente",
+            "recibido anteriormente",
+            "sello recibido",
+        )
+    )
 
-    if estado_top == "ACEPTADO" or (response.get("success") is True and estado in {"PROCESADO", "RECIBIDO", "ACEPTADO"}):
+    if already_processed or estado_top == "ACEPTADO" or (response.get("success") is True and estado in {"PROCESADO", "RECIBIDO", "ACEPTADO"}):
         status = DTERecord.STATUS_ACCEPTED
     elif estado_top == "RECHAZADO" or (response.get("success") is False and rh):
         status = DTERecord.STATUS_REJECTED

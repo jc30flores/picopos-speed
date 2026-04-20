@@ -172,7 +172,11 @@ export default function DTEPage() {
       if (action === "resend") {
         const result = await dteResend(row.id);
         patchRow(result.record);
-        toast({ title: "Hacienda", description: result.message });
+        toast({
+          title: "Hacienda",
+          description: `${result.message} (estado: ${statusLabel(result.record.status)})`,
+          variant: result.record.status === "ACEPTADO" ? "default" : (result.record.status === "RECHAZADO" ? "destructive" : "default"),
+        });
       }
       if (action === "email") {
         const result = await dteDeliver(row.id, ["email"]);

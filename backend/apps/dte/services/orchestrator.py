@@ -139,40 +139,22 @@ def transmit_sale_dte(
 
     payload: dict = {}
     active_branch = get_active_branch()
-    prebuilt_record = DTERecord.objects.create(
-        order=order,
-        payment=payment,
-        branch=active_branch,
-        dte_type=dte_type,
-        status=DTERecord.STATUS_PENDING,
-        ambiente=ambiente,
-        control_number=numero_control,
-        generation_code=codigo_generacion,
-        codigo_generacion=codigo_generacion,
-        request_payload={},
-        response_payload={},
-        response_text="",
-        mh_response_json={},
-        mh_response_text="",
-        receiver_name=(order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final",
-        issue_date=timezone.localdate(),
-        total_amount=order.total,
-        source=source,
-        attempts=attempts,
-        send_attempts=attempts,
-        last_sent_at=now,
-    )
+    record = DTERecord.objects.filter(order=order, dte_type=dte_type, credit_note__isnull=True).order_by("-id").first()
 
     try:
         numero_control = numero_control or next_control_number(order, dte_type=dte_type, ambiente=ambiente)
         DTE_LOGGER.info("[DTE] preflight.validating order=%s numero_control=%s ambiente=%s", sale_id, numero_control, ambiente)
-        build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
-        DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
         payload = build_payload_cf(order, control_number=numero_control, generation_code=codigo_generacion, ambiente=ambiente)
-        prebuilt_record.request_payload = {**payload, "branch": active_branch.name}
-        prebuilt_record.save(update_fields=["request_payload", "updated_at"])
+        DTE_LOGGER.info("Reservado correlativo CF: order=%s -> numeroControl=%s codigoGeneracion=%s", sale_id, numero_control, codigo_generacion)
     except DTEPreflightError as exc:
         DTE_LOGGER.info("[DTE] send_dte.preflight_failed order=%s error=%s", sale_id, exc)
+        if not record:
+            record = DTERecord(
+                order=order,
+                payment=payment,
+                branch=active_branch,
+                dte_type=dte_type,
+            )
         parsed = {
             "status": DTERecord.STATUS_REJECTED,
             "hacienda_uuid": "",
@@ -187,11 +169,34 @@ def transmit_sale_dte(
         }
         response = {"success": False, "error": {"message": str(exc)}}
     else:
+        if not record:
+            record = DTERecord(
+                order=order,
+                payment=payment,
+                branch=active_branch,
+                dte_type=dte_type,
+            )
+        record.payment = payment
+        record.branch = active_branch
+        record.ambiente = ambiente
+        record.control_number = numero_control
+        record.generation_code = codigo_generacion
+        record.codigo_generacion = codigo_generacion
+        record.request_payload = {**payload, "branch": active_branch.name}
+        record.receiver_name = (order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final"
+        record.issue_date = timezone.localdate()
+        record.total_amount = order.total
+        record.source = source
+        record.attempts = attempts
+        record.send_attempts = attempts
+        record.last_sent_at = now
+        record.status = DTERecord.STATUS_PENDING
+        record.save()
         outbox = send_or_queue_dte(
             order=order,
             payment=payment,
             payload=payload,
-            dte_record=prebuilt_record,
+            dte_record=record,
             attempt_immediate=not queue_only,
         )
         response = {}
@@ -228,29 +233,45 @@ def transmit_sale_dte(
                 ambiente,
                 (payload.get("dte", {}).get("resumen", {}) if isinstance(payload, dict) else {}),
             )
-    prebuilt_record.status = parsed["status"]
-    prebuilt_record.request_payload = {**payload, "branch": active_branch.name}
-    prebuilt_record.response_payload = response if isinstance(response, dict) else {}
-    prebuilt_record.response_text = parsed.get("response_text", "")
-    prebuilt_record.mh_response_json = response if isinstance(response, dict) else {}
-    prebuilt_record.mh_response_text = json.dumps(response, ensure_ascii=False, default=str) if isinstance(response, dict) else str(response)
-    prebuilt_record.attempts = attempts
-    prebuilt_record.send_attempts = attempts
-    prebuilt_record.error_message = parsed["error_message"]
-    prebuilt_record.error_code = parsed["error_code"]
-    prebuilt_record.last_error_message = parsed["error_message"]
-    prebuilt_record.last_error_code = parsed["error_code"]
-    prebuilt_record.last_sent_at = now
-    prebuilt_record.hacienda_uuid = parsed["hacienda_uuid"]
-    prebuilt_record.sello_recepcion = parsed["sello_recepcion"]
-    prebuilt_record.sello_recibido = parsed.get("sello_recibido", parsed["sello_recepcion"])
-    prebuilt_record.firma = parsed.get("firma", "")
-    prebuilt_record.recibido_at = parsed.get("recibido_at")
-    prebuilt_record.estado_mh = parsed.get("estado_mh", "")
-    prebuilt_record.hacienda_state = parsed["hacienda_state"]
-    prebuilt_record.hacienda_processed_at = parsed.get("recibido_at")
-    prebuilt_record.save()
-    record = prebuilt_record
+    if not record:
+        record = DTERecord(
+            order=order,
+            payment=payment,
+            branch=active_branch,
+            dte_type=dte_type,
+        )
+    record.payment = payment
+    record.branch = active_branch
+    record.ambiente = ambiente
+    record.control_number = numero_control
+    record.generation_code = codigo_generacion
+    record.codigo_generacion = codigo_generacion
+    record.status = parsed["status"]
+    record.request_payload = {**payload, "branch": active_branch.name} if payload else (record.request_payload or {})
+    record.response_payload = response if isinstance(response, dict) else {}
+    record.response_text = parsed.get("response_text", "")
+    record.mh_response_json = response if isinstance(response, dict) else {}
+    record.mh_response_text = json.dumps(response, ensure_ascii=False, default=str) if isinstance(response, dict) else str(response)
+    record.receiver_name = (order.customer.name if order.customer_id else order.customer_name) or "Consumidor Final"
+    record.issue_date = timezone.localdate()
+    record.total_amount = order.total
+    record.source = source
+    record.attempts = attempts
+    record.send_attempts = attempts
+    record.error_message = parsed["error_message"]
+    record.error_code = parsed["error_code"]
+    record.last_error_message = parsed["error_message"]
+    record.last_error_code = parsed["error_code"]
+    record.last_sent_at = now
+    record.hacienda_uuid = parsed["hacienda_uuid"]
+    record.sello_recepcion = parsed["sello_recepcion"]
+    record.sello_recibido = parsed.get("sello_recibido", parsed["sello_recepcion"])
+    record.firma = parsed.get("firma", "")
+    record.recibido_at = parsed.get("recibido_at")
+    record.estado_mh = parsed.get("estado_mh", "")
+    record.hacienda_state = parsed["hacienda_state"]
+    record.hacienda_processed_at = parsed.get("recibido_at")
+    record.save()
 
     invoice.status = "sent" if record.status == DTERecord.STATUS_ACCEPTED else "failed" if record.status == DTERecord.STATUS_REJECTED else "pending"
     invoice.dte_number = numero_control
