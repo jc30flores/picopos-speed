@@ -1771,18 +1771,40 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const finalizePaidSale = () => {
+    const previousPaymentMethod = paymentMethod;
+    const previousPaymentMethodCode = selectedPaymentMethodCode;
+    const previousPath = `${location.pathname}${location.search}`;
     setIsPaymentOpen(false);
     setIsPaymentMethodOpen(false);
+    setPaymentMethod("cash");
+    setSelectedPaymentMethodCode("cash");
+    setCardType(null);
+    setPaymentAmount("");
+    setTipAmount("");
+    setPaymentReference("");
+    setActiveTenderField(null);
+    setShouldResetTenderOnFirstTap(true);
     setActiveOrder(null);
     setCart([]);
     setSelectedDiscount(null);
     setCheckoutDraft(null);
     setCreatedOrderId(null);
     setCreatedOrderNumber(null);
+    setLastPaymentId(null);
     setSplitEnabled(false);
     setParts([]);
     setActivePartId(null);
     setKitchenPromptOrderId(null);
+    setIsKitchenPromptOpen(false);
+    setPostSaleKitchenChoice(true);
+    setPostSalePrintChoice(true);
+    setFallbackPdfModal({
+      open: false,
+      title: "",
+      message: "",
+      onDownload: null,
+      shouldHardReloadAfterClose: false,
+    });
     setDteDocumentType("CF");
     if (defaultConsumerCustomer) {
       setSelectedCustomerId(String(defaultConsumerCustomer.id));
@@ -1791,6 +1813,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     hydratedPendingOrderIdRef.current = null;
     clearPersistedDraft();
+    console.info("[pos-finalize] reset_state", {
+      previousPath,
+      nextPath: "/pos",
+      previousPaymentMethod,
+      previousPaymentMethodCode,
+      nextPaymentMethod: "cash",
+      nextPaymentMethodCode: "cash",
+    });
     navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
   };
 
