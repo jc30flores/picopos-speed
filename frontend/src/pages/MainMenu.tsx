@@ -25,7 +25,7 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { attendance, accessState, attendanceError } = useAttendanceAccess();
+  const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const cards = useMemo(
@@ -83,11 +83,15 @@ const MainMenu = () => {
                 key={card.path}
                 className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90"
                 onClick={() => {
-                  const blockedByAttendance = !accessState.canAccessDashboard;
+                  const canEvaluateAttendanceGuard = attendanceResolved && !attendanceLoading;
+                  const blockedByAttendance = canEvaluateAttendanceGuard && !accessState.canAccessDashboard;
                   console.info("attendance.home.module_click", {
                     userId: user?.id ?? null,
                     role: user?.role ?? null,
                     path: card.path,
+                    attendanceResolved,
+                    attendanceLoading,
+                    canEvaluateAttendanceGuard,
                     blockedByAttendance,
                     hasClockInToday: accessState.hasClockInToday,
                     hasClockOutToday: accessState.hasClockOutToday,

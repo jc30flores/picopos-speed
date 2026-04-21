@@ -1876,7 +1876,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           onDownload: async () => {
             triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
           },
-          shouldHardReloadAfterClose: true,
+          shouldHardReloadAfterClose: false,
         });
           toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.receiptPdfUrl) {
@@ -1887,7 +1887,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           onDownload: async () => {
             await downloadPaymentTicketPdf(lastPaymentId);
           },
-          shouldHardReloadAfterClose: true,
+          shouldHardReloadAfterClose: false,
         });
           toast.warning("Impresora no detectada.");
         } else if (!printResult.printed && printResult.printError) {
@@ -1898,7 +1898,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           onDownload: async () => {
             await downloadPaymentTicketPdf(lastPaymentId);
           },
-          shouldHardReloadAfterClose: true,
+          shouldHardReloadAfterClose: false,
         });
           toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
         }
@@ -1907,6 +1907,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       }
       setIsKitchenPromptOpen(false);
+      console.info("[pos-finalize] confirm", {
+        orderId: kitchenPromptOrderId,
+        sendToKitchen: shouldSend,
+        printChoice: postSalePrintChoice,
+        nextPath: "/pos",
+      });
       finalizePaidSale();
       scheduleReload();
     } catch (error) {
@@ -3606,10 +3612,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
               onClick={() => {
+                console.info("[pos-finalize] omit", {
+                  orderId: kitchenPromptOrderId,
+                  sendToKitchen: postSaleKitchenChoice,
+                  printChoice: postSalePrintChoice,
+                  nextPath: "/pos",
+                });
                 setIsKitchenPromptOpen(false);
                 finalizePaidSale();
                 scheduleReload();
-                scheduleHardReload("finalize_omit");
               }}
             >
               Omitir
