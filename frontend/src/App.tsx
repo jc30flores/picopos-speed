@@ -18,6 +18,7 @@ import Login from "./pages/Login";
 import DTEPage from "./pages/DTE";
 import CustomersPage from "./pages/Customers";
 import PendientesPage from "./pages/Pendientes";
+import InventoryPage from "./pages/Inventory";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { InactivityGuard } from "./components/auth/InactivityGuard";
 
@@ -80,6 +81,14 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["admin", "manager"]}>
                   <Menu />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/inventory"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "manager"]}>
+                  <InventoryPage />
                 </ProtectedRoute>
               }
             />

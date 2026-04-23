@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/cashier/", include("apps.cashier.urls")),
     path("api/dte/", include("apps.dte.urls")),
     path("api/clients/", include("apps.core.client_urls")),
+    path("api/inventory/", include("apps.inventory.urls")),
 ]
 
 if settings.DEBUG:

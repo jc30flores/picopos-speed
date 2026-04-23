@@ -35,6 +35,7 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
+from apps.inventory.services import apply_inventory_for_order
 
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
 
         if remaining <= 0:
             persist_sale_snapshot(payment.order)
+            apply_inventory_for_order(payment.order, user=request.user)
             log_audit(
                 request,
                 "payment.completed",

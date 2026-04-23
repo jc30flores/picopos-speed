@@ -8,6 +8,7 @@ export type AppModuleKey =
   | "kitchen"
   | "orders_customers"
   | "menu_discounts"
+  | "inventory"
   | "registers"
   | "dte"
   | "clients"
@@ -29,6 +30,7 @@ export const appModules: AppModuleConfig[] = [
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
   { key: "menu_discounts", label: "MENÚ & DESCUENTOS", path: "/menu", requiredRoles: ["admin", "manager"] },
+  { key: "inventory", label: "INVENTARIO", path: "/inventory", requiredRoles: ["admin", "manager"] },
   { key: "registers", label: "REPORTES", path: "/registros/ventas", requiredRoles: ["admin"] },
   { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["admin"] },
   { key: "clients", label: "CLIENTES", path: "/clientes", requiredRoles: ["admin", "manager"] },
@@ -45,8 +47,8 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
-  manager: ["/", "/pos", "/open-orders", "/pendientes", "/menu", "/clientes"],
+  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
+  manager: ["/", "/pos", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   kitchen: ["/kitchen"],
   kiosk: ["/kiosk"],
@@ -62,6 +64,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
     { label: "Cocina", path: "/kitchen" },
     { label: "Pedidos Clientes", path: "/customer-display" },
     { label: "Menú & Descuentos", path: "/menu" },
+    { label: "Inventario", path: "/inventory" },
     { label: "Reportes", path: "/registros/ventas" },
     { label: "DTE", path: "/dte" },
     { label: "Clientes", path: "/clientes" },
@@ -71,6 +74,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
     { label: "POS", path: "/" },
     { label: "Open Orders", path: "/open-orders" },
     { label: "Menú & Descuentos", path: "/menu" },
+    { label: "Inventario", path: "/inventory" },
     { label: "Clientes", path: "/clientes" },
   ],
   cashier: [

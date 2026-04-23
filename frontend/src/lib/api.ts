@@ -63,6 +63,41 @@ export type Product = {
   modifierGroups: number[];
   modifierGroupsPos?: number[];
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
+  inventoryLinks?: InventoryProductLink[];
+};
+
+export type InventoryItem = {
+  id: number;
+  name: string;
+  sku: string;
+  unit: string;
+  currentStock: number;
+  minStock?: number | null;
+  notes?: string;
+  isActive: boolean;
+};
+
+export type InventoryMovement = {
+  id: number;
+  inventoryItem: number;
+  inventoryItemName: string;
+  movementType: string;
+  quantityChange: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  reason?: string;
+  referenceType?: string;
+  referenceId?: string;
+  createdByUsername?: string;
+  createdAt: string;
+};
+
+export type InventoryProductLink = {
+  id?: number;
+  inventoryItemId: number;
+  inventoryItemName: string;
+  inventoryItemUnit: string;
+  quantityRequired: number;
 };
 
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
@@ -886,6 +921,7 @@ export const getProducts = async (options?: {
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>>(response);
   return data.map((item) => {
     const normalizedImageUrl = normalizeImageUrl(item);
@@ -919,6 +955,13 @@ export const getProducts = async (options?: {
         groupId: link.group_id,
         showInPos: Boolean(link.show_in_pos),
       })),
+      inventoryLinks: (item.inventory_links ?? []).map((link) => ({
+        id: link.id,
+        inventoryItemId: link.inventory_item,
+        inventoryItemName: link.inventory_item_name,
+        inventoryItemUnit: link.inventory_item_unit,
+        quantityRequired: Number(link.quantity_required),
+      })),
     };
   });
 };
@@ -934,6 +977,7 @@ export const createProduct = async (payload: {
   disposableFee?: number;
   disposableApplyTo?: string[];
   modifierGroupIds?: number[];
+  inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
 }): Promise<Product> => {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -949,6 +993,12 @@ export const createProduct = async (payload: {
   }
   if (payload.modifierGroupIds?.length) {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+  if (payload.inventoryLinks) {
+    formData.append("inventory_links", JSON.stringify(payload.inventoryLinks.map((row) => ({
+      inventory_item: row.inventoryItemId,
+      quantity_required: row.quantityRequired,
+    }))));
   }
 
   const response = await request("/menu/products/", {
@@ -980,6 +1030,7 @@ export const createProduct = async (payload: {
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>(response);
   return {
     id: data.id,
@@ -1009,6 +1060,13 @@ export const createProduct = async (payload: {
       groupId: link.group_id,
       showInPos: Boolean(link.show_in_pos),
     })),
+    inventoryLinks: (data.inventory_links ?? []).map((link) => ({
+      id: link.id,
+      inventoryItemId: link.inventory_item,
+      inventoryItemName: link.inventory_item_name,
+      inventoryItemUnit: link.inventory_item_unit,
+      quantityRequired: Number(link.quantity_required),
+    })),
   };
 };
 
@@ -1026,6 +1084,7 @@ export const updateProduct = async (
     disposableFee?: number;
     disposableApplyTo?: string[];
     modifierGroupIds?: number[];
+    inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
   }
 ): Promise<Product> => {
   const formData = new FormData();
@@ -1042,6 +1101,12 @@ export const updateProduct = async (
   }
   if (payload.modifierGroupIds?.length) {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+  if (payload.inventoryLinks) {
+    formData.append("inventory_links", JSON.stringify(payload.inventoryLinks.map((row) => ({
+      inventory_item: row.inventoryItemId,
+      quantity_required: row.quantityRequired,
+    }))));
   }
 
   const response = await request(`/menu/products/${productId}/`, {
@@ -1070,6 +1135,7 @@ export const updateProduct = async (
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>(response);
   return {
     id: data.id,
@@ -1096,6 +1162,13 @@ export const updateProduct = async (
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
       groupId: link.group_id,
       showInPos: Boolean(link.show_in_pos),
+    })),
+    inventoryLinks: (data.inventory_links ?? []).map((link) => ({
+      id: link.id,
+      inventoryItemId: link.inventory_item,
+      inventoryItemName: link.inventory_item_name,
+      inventoryItemUnit: link.inventory_item_unit,
+      quantityRequired: Number(link.quantity_required),
     })),
   };
 };
@@ -1126,6 +1199,115 @@ export const changeProductPrice = async (productId: number, payload: { code: str
     newPrice: data.new_price != null ? Number(data.new_price) : undefined,
     updatedAt: data.updated_at,
   };
+};
+
+export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> => {
+  const params = new URLSearchParams();
+  if (q?.trim()) params.set("q", q.trim());
+  const response = await request(`/inventory/items/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    name: row.name,
+    sku: row.sku ?? "",
+    unit: row.unit,
+    currentStock: Number(row.current_stock ?? 0),
+    minStock: row.min_stock != null ? Number(row.min_stock) : null,
+    notes: row.notes ?? "",
+    isActive: Boolean(row.is_active),
+  }));
+};
+
+export const createInventoryItem = async (payload: {
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; notes?: string; isActive: boolean;
+}): Promise<InventoryItem> => {
+  const response = await request("/inventory/items/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      sku: payload.sku ?? "",
+      unit: payload.unit,
+      initial_stock: payload.initialStock ?? 0,
+      min_stock: payload.minStock,
+      notes: payload.notes ?? "",
+      is_active: payload.isActive,
+    }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const updateInventoryItem = async (id: number, payload: {
+  name: string; sku?: string; unit: string; minStock?: number | null; notes?: string; isActive: boolean;
+}): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      sku: payload.sku ?? "",
+      unit: payload.unit,
+      min_stock: payload.minStock,
+      notes: payload.notes ?? "",
+      is_active: payload.isActive,
+    }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/add-stock/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quantity, reason: reason ?? "" }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/adjust-stock/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const getInventoryMovements = async (inventoryItemId?: number): Promise<InventoryMovement[]> => {
+  const params = new URLSearchParams();
+  if (inventoryItemId) params.set("inventory_item", String(inventoryItemId));
+  const response = await request(`/inventory/movements/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItem: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    movementType: row.movement_type,
+    quantityChange: Number(row.quantity_change),
+    quantityBefore: Number(row.quantity_before),
+    quantityAfter: Number(row.quantity_after),
+    reason: row.reason ?? "",
+    referenceType: row.reference_type ?? "",
+    referenceId: row.reference_id ?? "",
+    createdByUsername: row.created_by_username ?? "",
+    createdAt: row.created_at,
+  }));
+};
+
+export const getCatalogInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/catalog-links/${productId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+  }));
 };
 
 export const deleteProduct = async (productId: number): Promise<{ detail?: string }> => {

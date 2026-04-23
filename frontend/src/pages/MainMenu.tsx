@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
-import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
+import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
@@ -16,6 +16,7 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
   kitchen: ChefHat,
   orders_customers: ClipboardList,
   menu_discounts: Tags,
+  inventory: Boxes,
   registers: BarChart3,
   dte: FileText,
   clients: Users,

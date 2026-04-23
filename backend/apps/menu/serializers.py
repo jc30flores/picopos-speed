@@ -18,6 +18,7 @@ from apps.menu.models import (
 from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 from apps.menu.utils.media import safe_media_url
 from apps.menu.utils.pricing import resolve_effective_price
+from apps.inventory.models import CatalogProductInventoryLink
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -281,6 +282,7 @@ class ProductSerializer(serializers.ModelSerializer):
     modifier_groups = serializers.SerializerMethodField()
     modifier_groups_pos = serializers.SerializerMethodField()
     modifier_group_links = serializers.SerializerMethodField()
+    inventory_links = serializers.SerializerMethodField()
     modifier_group_ids = serializers.PrimaryKeyRelatedField(
         many=True,
         source="modifier_groups",
@@ -324,6 +326,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "modifier_groups",
             "modifier_groups_pos",
             "modifier_group_links",
+            "inventory_links",
             "modifier_group_ids",
         ]
 
@@ -351,6 +354,19 @@ class ProductSerializer(serializers.ModelSerializer):
                 "show_in_pos": bool(by_group_id.get(group_id).show_in_pos) if by_group_id.get(group_id) else False,
             }
             for group_id in ordered_ids
+        ]
+
+    def get_inventory_links(self, obj: Product):
+        rows = CatalogProductInventoryLink.objects.filter(catalog_product=obj).select_related("inventory_item")
+        return [
+            {
+                "id": row.id,
+                "inventory_item": row.inventory_item_id,
+                "inventory_item_name": row.inventory_item.name,
+                "inventory_item_unit": row.inventory_item.unit,
+                "quantity_required": row.quantity_required,
+            }
+            for row in rows
         ]
 
     def _default_show_in_pos(self, group: ModifierGroup) -> bool:
@@ -392,6 +408,45 @@ class ProductSerializer(serializers.ModelSerializer):
             if not isinstance(group_id, int):
                 continue
             ProductModifierGroup.objects.filter(product=instance, modifier_group_id=group_id).update(show_in_pos=bool(show))
+
+    def _sync_inventory_links(self, instance: Product):
+        request = self.context.get("request")
+        if not request:
+            return
+        raw_links = request.data.get("inventory_links")
+        if raw_links is None:
+            return
+        try:
+            parsed_links = json.loads(raw_links) if isinstance(raw_links, str) else raw_links
+        except Exception:
+            raise serializers.ValidationError({"inventory_links": "Formato inválido."})
+        if not isinstance(parsed_links, list):
+            raise serializers.ValidationError({"inventory_links": "Debe ser una lista."})
+
+        normalized: dict[int, Decimal] = {}
+        for row in parsed_links:
+            if not isinstance(row, dict):
+                continue
+            item_id = row.get("inventory_item") or row.get("inventoryItemId")
+            qty = row.get("quantity_required") or row.get("quantityRequired")
+            if not item_id or qty in (None, ""):
+                continue
+            try:
+                item_id = int(item_id)
+                qty_dec = Decimal(str(qty))
+            except Exception:
+                raise serializers.ValidationError({"inventory_links": "Cantidad o item inválido."})
+            if qty_dec <= 0:
+                raise serializers.ValidationError({"inventory_links": "La cantidad debe ser mayor a 0."})
+            normalized[item_id] = qty_dec
+
+        CatalogProductInventoryLink.objects.filter(catalog_product=instance).delete()
+        CatalogProductInventoryLink.objects.bulk_create(
+            [
+                CatalogProductInventoryLink(catalog_product=instance, inventory_item_id=item_id, quantity_required=qty)
+                for item_id, qty in normalized.items()
+            ]
+        )
 
     def get_image_url(self, obj: Product) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)
@@ -444,6 +499,7 @@ class ProductSerializer(serializers.ModelSerializer):
             instance.modifier_group_order = [group.id for group in modifier_groups]
             instance.save(update_fields=["modifier_group_order"])
         self._update_show_in_pos_links(instance)
+        self._sync_inventory_links(instance)
 
         if image_file:
             saved = save_menu_image(image_file, instance.category.name)
@@ -471,6 +527,7 @@ class ProductSerializer(serializers.ModelSerializer):
             product.modifier_group_order = [group.id for group in modifier_groups]
             product.save(update_fields=["modifier_group_order"])
         self._update_show_in_pos_links(product)
+        self._sync_inventory_links(product)
         if image_file:
             saved = save_menu_image(image_file, product.category.name)
             product.image = saved["image"]
