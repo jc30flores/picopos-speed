@@ -25,7 +25,6 @@ export type RoleAccessUser = Pick<AuthUser, "role" | "isSuperuser"> | null;
 
 export const appModules: AppModuleConfig[] = [
   { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
-  { key: "pending", label: "OPEN ORDERS", path: "/open-orders", requiredRoles: ["admin", "manager", "cashier"] },
   { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin", "kiosk"] },
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },

@@ -322,9 +322,13 @@ export default function CustomersPage() {
             <div className="flex-1">
               <h2 className="text-base font-semibold text-muted-foreground">Gestión</h2>
             </div>
-            <div className="flex w-full gap-2 md:w-auto md:min-w-[420px]">
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente" />
-              <Button variant="outline" onClick={onNew}>Nuevo cliente</Button>
+            <div className="flex w-full md:w-auto md:min-w-[520px]">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre, DUI/NIT, teléfono o tipo"
+                className="h-12 text-base"
+              />
             </div>
           </div>
         </Card>
@@ -531,7 +535,7 @@ export default function CustomersPage() {
 
             <div className="mt-4 flex gap-2">
               <Button onClick={onSave} disabled={isSaving || !canWrite}>{isSaving ? "Guardando..." : selectedId && isEditing ? "Actualizar" : "Guardar"}</Button>
-              <Button variant="outline" onClick={onNew} disabled={isSaving}>Nuevo cliente</Button>
+              <Button variant="outline" onClick={onNew} disabled={isSaving}>Limpiar</Button>
               {selectedId ? <Button variant="destructive" onClick={onDelete} disabled={isSaving}>Eliminar</Button> : null}
             </div>
           </Card>

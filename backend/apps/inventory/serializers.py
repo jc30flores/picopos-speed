@@ -4,8 +4,37 @@ from rest_framework import serializers
 
 from apps.inventory.models import CatalogProductInventoryLink, InventoryItem, InventoryMovement
 
+INVENTORY_UNITS = {
+    "unidad",
+    "docena",
+    "media_docena",
+    "caja_25",
+    "caja_50",
+    "caja_75",
+    "caja_100",
+    "libra",
+    "media_libra",
+    "onza",
+    "kilogramo",
+    "gramo",
+    "litro",
+    "mililitro",
+    "bolsa",
+    "paquete",
+    "rollo",
+    "bandeja",
+    "botella",
+    "lata",
+}
+
 
 class InventoryItemSerializer(serializers.ModelSerializer):
+    def validate_unit(self, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in INVENTORY_UNITS:
+            raise serializers.ValidationError("Unidad inválida.")
+        return normalized
+
     class Meta:
         model = InventoryItem
         fields = [

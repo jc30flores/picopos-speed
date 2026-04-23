@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,7 @@ const Login = () => {
 
   const sanitizePin = (value: string) => value.replace(/\D/g, "").slice(0, PIN_LENGTH);
 
-  const submitPin = async (forcedPin?: string) => {
+  const submitPin = useCallback(async (forcedPin?: string) => {
     if (loginInFlightRef.current) return;
     const value = sanitizePin((forcedPin ?? pin).trim());
     if (!/^\d{6}$/.test(value)) {
@@ -71,7 +71,32 @@ const Login = () => {
       loginInFlightRef.current = false;
       setLoading(false);
     }
-  };
+  }, [loginWithPin, navigate, pin]);
+
+  useEffect(() => {
+    if (usePassword) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (loginInFlightRef.current) return;
+      if (event.key >= "0" && event.key <= "9") {
+        event.preventDefault();
+        setPin((prev) => sanitizePin(`${prev}${event.key}`));
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        event.preventDefault();
+        setPin((prev) => prev.slice(0, -1));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [usePassword]);
+
+  useEffect(() => {
+    if (usePassword || loading || loginInFlightRef.current) return;
+    if (pin.length === PIN_LENGTH) {
+      void submitPin(pin);
+    }
+  }, [pin, loading, submitPin, usePassword]);
 
   const handlePasswordSubmit = async (event: React.FormEvent) => {
     event.preventDefault();

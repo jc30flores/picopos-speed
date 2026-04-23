@@ -3289,10 +3289,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
               </div>
             </div>
-            <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+            <div
+              className={cn(
+                "rounded-lg border p-3 text-center font-semibold",
+                isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
+              )}
+            >
               {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
               {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-              {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+              {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
             </div>
             {activeTenderField ? (
               <div ref={keypadRef} className="grid grid-cols-4 gap-2">
