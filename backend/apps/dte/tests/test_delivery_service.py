@@ -5,7 +5,7 @@ import os
 from django.test import TestCase, override_settings
 
 from apps.core.models import Branch, Customer, ServiceType
-from apps.dte.models import DTERecord
+from apps.dte.models import DTERecord, DteDeliveryAttempt
 from apps.dte.services.delivery import deliver_dte_to_client
 from apps.dte.services.delivery_config import resolve_delivery_config
 from apps.orders.models import Order
@@ -137,3 +137,31 @@ class DTEDeliveryServiceTests(TestCase):
         result = deliver_dte_to_client(self.record, channels=("whatsapp",), mode="manual")
         self.assertFalse(result["success"])
         self.assertIn("teléfono", (result["results"]["whatsapp"]["error"] or "").lower())
+
+    @patch("apps.dte.services.delivery.send_dte_email")
+    def test_automatic_email_is_idempotent_if_already_sent(self, mock_email):
+        DteDeliveryAttempt.objects.create(
+            dte_record=self.record,
+            delivery_type=DteDeliveryAttempt.TYPE_EMAIL,
+            status="SENT",
+            provider_body={"to_email": "cliente@example.com"},
+            retries=1,
+        )
+        result = deliver_dte_to_client(self.record, channels=("email",), mode="automatic")
+        self.assertTrue(result["success"])
+        self.assertIn("idempotente", (result["results"]["email"]["provider_message"] or "").lower())
+        mock_email.assert_not_called()
+
+    @patch("apps.dte.services.delivery.send_dte_whatsapp")
+    def test_automatic_whatsapp_is_idempotent_if_already_queued(self, mock_whatsapp):
+        DteDeliveryAttempt.objects.create(
+            dte_record=self.record,
+            delivery_type=DteDeliveryAttempt.TYPE_WA,
+            status="QUEUED",
+            provider_body={"to_phone": "50370001111"},
+            retries=1,
+        )
+        result = deliver_dte_to_client(self.record, channels=("whatsapp",), mode="automatic")
+        self.assertTrue(result["success"])
+        self.assertIn("idempotente", (result["results"]["whatsapp"]["provider_message"] or "").lower())
+        mock_whatsapp.assert_not_called()

@@ -24,6 +24,7 @@ from apps.dte.services.delivery import deliver_dte_to_client
 from apps.dte.services.dte_service import DTEPreflightError, invalidate_dte_for_order, send_dte_for_credit_note
 from apps.dte.services.dte_security import redact_payload
 from apps.dte.services.availability import evaluate_record_actions
+from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
 
 logger = logging.getLogger("apps.dte")
 
@@ -54,7 +55,10 @@ class DTEIssuedListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
+        ensure_whatsapp_order_columns()
         qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
+        if not has_whatsapp_order_columns():
+            qs = qs.defer("order__whatsapp_num_cliente", "order__whatsapp_num_cliente_country")
         status_filter = self.request.query_params.get("status")
         dte_type = self.request.query_params.get("dte_type") or self.request.query_params.get("type")
         start_at, end_at = parse_business_date_range(
@@ -113,9 +117,15 @@ class DTEIssuedListView(generics.ListAPIView):
 
 
 class DTEIssuedDetailView(generics.RetrieveAPIView):
-    queryset = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
     serializer_class = DTERecordDetailSerializer
     permission_classes = [IsDTECashierOrAbove]
+
+    def get_queryset(self):
+        ensure_whatsapp_order_columns()
+        qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
+        if not has_whatsapp_order_columns():
+            qs = qs.defer("order__whatsapp_num_cliente", "order__whatsapp_num_cliente_country")
+        return qs
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -138,23 +148,31 @@ class DTEResendView(APIView):
             bool(getattr(request.user, "is_authenticated", False)),
         )
         record = generics.get_object_or_404(DTERecord, pk=pk)
-        if record.status != DTERecord.STATUS_PENDING:
-            return Response({"detail": "Solo se puede reenviar pendiente"}, status=status.HTTP_400_BAD_REQUEST)
         if record.status == DTERecord.STATUS_SENDING:
             return Response({"detail": "El DTE está en proceso de envío"}, status=status.HTTP_409_CONFLICT)
+        if record.status == DTERecord.STATUS_INVALIDATED:
+            return Response({"detail": "No se puede reenviar un DTE invalidado"}, status=status.HTTP_400_BAD_REQUEST)
         try:
             updated = resend_record(record)
         except PermissionDenied as exc:
             return Response({"success": False, "message": str(exc), "detail": "permission_denied"}, status=status.HTTP_403_FORBIDDEN)
         log_audit(request, "dte.resend", "DTERecord", updated.id, {"sale_id": updated.order_id, "status": updated.status})
         payload = DTERecordDetailSerializer(updated).data
+        business_success = updated.status == DTERecord.STATUS_ACCEPTED
+        still_pending = updated.status == DTERecord.STATUS_PENDING
+        msg = {
+            DTERecord.STATUS_ACCEPTED: "Reenvío sincronizado: DTE aceptado/procesado.",
+            DTERecord.STATUS_REJECTED: "Reenvío completado con rechazo técnico/negocio.",
+            DTERecord.STATUS_PENDING: "Reenvío en cola: DTE pendiente real de outbox.",
+        }.get(updated.status, "Reenvío procesado")
         response_payload = {
-            "success": True,
+            "success": business_success,
+            "pending": still_pending,
             "issued_id": updated.id,
             "dte_record_id": updated.id,
             "status": updated.status,
             "http_status": payload.get("response_payload", {}).get("http_status") or 0,
-            "message": "Reenvío procesado",
+            "message": msg,
             "body_preview": (updated.response_text or "")[:400],
             "sello_recibido": updated.sello_recibido or updated.sello_recepcion or "",
             "firma": updated.firma or "",

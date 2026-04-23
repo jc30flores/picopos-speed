@@ -11,6 +11,7 @@ from rest_framework import status
 from apps.orders.models import AppliedDiscount, Order, OrderFee, OrderItem, OrderItemModifier
 from apps.menu.models import Modifier, Product
 from apps.orders.serializers import OrderSerializer, OrderCreateSerializer, OrderCustomerUpdateSerializer
+from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
@@ -468,6 +469,7 @@ class PendingOrderListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
+        ensure_whatsapp_order_columns()
         tab = str(self.request.query_params.get("tab") or "pending").strip().lower()
         if tab == "finalized":
             queryset = (
@@ -490,6 +492,8 @@ class PendingOrderListView(generics.ListAPIView):
         branch_id = _selected_branch_id_optional(self.request)
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
+        if not has_whatsapp_order_columns():
+            queryset = queryset.defer("whatsapp_num_cliente", "whatsapp_num_cliente_country")
         query = str(self.request.query_params.get("q") or "").strip()
         if query:
             search_filter = (

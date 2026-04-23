@@ -11,6 +11,8 @@ from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.core.service_types import normalize_service_type
 from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
+from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
+from apps.orders.whatsapp_phone import normalize_whatsapp_num_cliente
 from apps.menu.utils.pricing import resolve_effective_price
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
@@ -136,6 +138,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "status",
             "customer_name",
             "customer_id",
+            "whatsapp_num_cliente",
+            "whatsapp_num_cliente_country",
             "dte_document_type",
             "iva_exempt",
             "iva_exempt_discount",
@@ -232,6 +236,12 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_total_payable(self, obj: Order):
         return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not has_whatsapp_order_columns():
+            self.fields.pop("whatsapp_num_cliente", None)
+            self.fields.pop("whatsapp_num_cliente_country", None)
 
 
 class AppliedModifierInputSerializer(serializers.Serializer):
@@ -353,6 +363,7 @@ class OrderCreateSerializer(serializers.Serializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        ensure_whatsapp_order_columns()
         items_data = validated_data.pop("items")
         service_type_id = validated_data.pop("service_type_id", None)
         service_type_key = (validated_data.pop("service_type_key", None) or "").strip() or None
@@ -406,23 +417,25 @@ class OrderCreateSerializer(serializers.Serializer):
 
         order_number = self._next_order_number(branch)
         status = "preparing" if source == "kiosk" or service_type_key == "KIOSK" else "waiting_payment"
-        customer_phone = (getattr(customer, "telefono", "") or "").strip()
-        normalized_whatsapp_num_cliente = raw_whatsapp_num_cliente or customer_phone or ""
-        normalized_whatsapp_num_cliente_country = raw_whatsapp_num_cliente_country or ""
+        normalized_whatsapp = normalize_whatsapp_num_cliente(
+            raw_number=raw_whatsapp_num_cliente,
+            raw_country=raw_whatsapp_num_cliente_country,
+        )
+        normalized_whatsapp_num_cliente = normalized_whatsapp.e164 if normalized_whatsapp else ""
+        normalized_whatsapp_num_cliente_country = normalized_whatsapp.country if normalized_whatsapp else ""
         logger.info(
-            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_customer_phone=%s whatsapp_final=%s whatsapp_country_in_payload=%s whatsapp_country_final=%s",
+            "orders.create.normalized_contact source=%s channel=%s customer_id=%s consumer_final=%s dte_document_type=%s whatsapp_in_payload=%s whatsapp_final=%s whatsapp_country_in_payload=%s whatsapp_country_final=%s",
             source,
             channel,
             getattr(customer, "id", None),
             bool(getattr(customer, "is_consumer_final", False)),
             dte_document_type,
             raw_whatsapp_num_cliente,
-            customer_phone,
             normalized_whatsapp_num_cliente,
             raw_whatsapp_num_cliente_country,
             normalized_whatsapp_num_cliente_country,
         )
-        order = Order.objects.create(
+        order_kwargs = dict(
             branch=branch,
             order_number=order_number,
             service_type=service_type,
@@ -430,12 +443,14 @@ class OrderCreateSerializer(serializers.Serializer):
             channel=channel if channel in {"pos", "kiosk", "online"} else "pos",
             customer=customer,
             customer_name=customer_name or customer.name,
-            whatsapp_num_cliente=normalized_whatsapp_num_cliente,
-            whatsapp_num_cliente_country=normalized_whatsapp_num_cliente_country,
             dte_document_type=dte_document_type,
             iva_exempt=iva_exempt,
             **validated_data,
         )
+        if has_whatsapp_order_columns():
+            order_kwargs["whatsapp_num_cliente"] = normalized_whatsapp_num_cliente
+            order_kwargs["whatsapp_num_cliente_country"] = normalized_whatsapp_num_cliente_country
+        order = Order.objects.create(**order_kwargs)
 
         discounts = list(Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id"))
 
@@ -671,10 +686,12 @@ class OrderCreateSerializer(serializers.Serializer):
 
 class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
     customer_id = serializers.PrimaryKeyRelatedField(queryset=Customer.objects.filter(is_deleted=False), required=False, allow_null=True)
+    whatsapp_num_cliente = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=32)
+    whatsapp_num_cliente_country = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=8)
 
     class Meta:
         model = Order
-        fields = ["customer_id", "dte_document_type", "iva_exempt"]
+        fields = ["customer_id", "dte_document_type", "iva_exempt", "whatsapp_num_cliente", "whatsapp_num_cliente_country"]
 
     def validate(self, attrs):
         customer = attrs.get("customer_id", self.instance.customer)
@@ -688,6 +705,7 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
         return attrs
 
     def update(self, instance: Order, validated_data):
+        ensure_whatsapp_order_columns()
         customer = validated_data.get("customer_id")
         if customer is not None:
             instance.customer = customer
@@ -696,5 +714,21 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             instance.dte_document_type = validated_data["dte_document_type"]
         if "iva_exempt" in validated_data:
             instance.iva_exempt = bool(validated_data["iva_exempt"])
-        instance.save(update_fields=["customer", "customer_name", "dte_document_type", "iva_exempt", "updated_at"])
+        if has_whatsapp_order_columns() and ("whatsapp_num_cliente" in validated_data or "whatsapp_num_cliente_country" in validated_data):
+            normalized_whatsapp = normalize_whatsapp_num_cliente(
+                raw_number=validated_data.get("whatsapp_num_cliente", instance.whatsapp_num_cliente),
+                raw_country=validated_data.get("whatsapp_num_cliente_country", instance.whatsapp_num_cliente_country),
+            )
+            instance.whatsapp_num_cliente = normalized_whatsapp.e164 if normalized_whatsapp else ""
+            instance.whatsapp_num_cliente_country = normalized_whatsapp.country if normalized_whatsapp else ""
+        update_fields = [
+            "customer",
+            "customer_name",
+            "dte_document_type",
+            "iva_exempt",
+            "updated_at",
+        ]
+        if has_whatsapp_order_columns():
+            update_fields.extend(["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
+        instance.save(update_fields=update_fields)
         return instance

@@ -5,6 +5,7 @@ import type { AttendanceAccessState } from "@/lib/attendanceAccess";
 export interface AttendanceAccessContextValue {
   attendance: AttendanceState | null;
   attendanceLoading: boolean;
+  attendanceResolved: boolean;
   attendanceError: string | null;
   accessState: AttendanceAccessState;
   refreshAttendance: (reason?: string) => Promise<void>;

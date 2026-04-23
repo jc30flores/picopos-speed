@@ -8,6 +8,7 @@ from apps.dte.services.availability import evaluate_record_actions
 from apps.dte.services.delivery_config import resolve_delivery_config
 from apps.dte.services.email_dte_service import send_dte_email, validate_delivery_email_target
 from apps.dte.services.whatsapp_dte_service import send_dte_whatsapp, validate_whatsapp_target
+from apps.dte.models import DteDeliveryAttempt
 
 
 def _normalize_channels(channels: Iterable[str] | None) -> list[str]:
@@ -83,6 +84,13 @@ def deliver_dte_to_client(
 
     for channel in selected_channels:
         if channel == "email":
+            if mode == "automatic" and DteDeliveryAttempt.objects.filter(
+                dte_record=target,
+                delivery_type=DteDeliveryAttempt.TYPE_EMAIL,
+                status="SENT",
+            ).exists():
+                results[channel] = _channel_result(ok=True, provider_message="Email ya había sido enviado (idempotente).")
+                continue
             ok_target, target_error, target_email = validate_delivery_email_target(target, to_email=to_email or flags.get("customer_email"))
             if not ok_target:
                 results[channel] = _channel_result(
@@ -104,6 +112,13 @@ def deliver_dte_to_client(
                     error=provider_error or ("No se pudo enviar correo" if attempt.status != "SENT" else None),
                 )
         if channel == "whatsapp":
+            if mode == "automatic" and DteDeliveryAttempt.objects.filter(
+                dte_record=target,
+                delivery_type=DteDeliveryAttempt.TYPE_WA,
+                status__in={"SENT", "QUEUED"},
+            ).exists():
+                results[channel] = _channel_result(ok=True, provider_message="WhatsApp ya había sido enviado (idempotente).")
+                continue
             ok_phone, phone_error, target_phone = validate_whatsapp_target(target, to_phone=to_phone)
             if not ok_phone:
                 results[channel] = _channel_result(

@@ -14,15 +14,16 @@ interface ProtectedRouteProps {
 
 export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage = "Sin permisos", children }: ProtectedRouteProps) => {
   const { user, loading } = useAuth();
-  const { attendance, accessState, attendanceLoading, attendanceError } = useAttendanceAccess();
+  const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const location = useLocation();
   const warnedRef = useRef<string | null>(null);
 
   const shouldCheckAttendance = Boolean(user) && location.pathname !== "/" && location.pathname !== "/login";
+  const canEvaluateAttendanceGuard = !shouldCheckAttendance || (attendanceResolved && !attendanceLoading);
 
   const blockedByAllowedRoles = Boolean(user && allowedRoles && !user.isSuperuser && !allowedRoles.includes(user.role));
   const blockedByPath = Boolean(user && !isRouteAllowed(user.role, location.pathname, user.isSuperuser));
-  const blockedByAttendance = Boolean(shouldCheckAttendance && !attendanceLoading && !accessState.canAccessDashboard);
+  const blockedByAttendance = Boolean(shouldCheckAttendance && canEvaluateAttendanceGuard && !accessState.canAccessDashboard);
   const isBlocked = blockedByAllowedRoles || blockedByPath || blockedByAttendance;
 
   useEffect(() => {
@@ -45,7 +46,7 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
     toast.error(deniedMessage);
   }, [accessState.blockReason, attendanceError, blockedByAttendance, deniedMessage, isBlocked, location.pathname, user]);
 
-  if (loading || (shouldCheckAttendance && attendanceLoading)) {
+  if (loading || (shouldCheckAttendance && !canEvaluateAttendanceGuard)) {
     return (
       <div className="min-h-screen flex items-center justify-center text-muted-foreground">
         Cargando...
@@ -65,6 +66,7 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
       blockedByAllowedRoles,
       blockedByPath,
       blockedByAttendance,
+      canEvaluateAttendanceGuard,
       hasClockInToday: accessState.hasClockInToday,
       hasClockOutToday: accessState.hasClockOutToday,
       hasActiveSession: attendance?.hasActiveSession ?? false,

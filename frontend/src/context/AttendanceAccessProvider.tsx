@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getMyAttendanceToday, type AttendanceState } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
 import { AttendanceAccessContext } from "./attendanceAccessContext";
@@ -12,25 +12,32 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   const { user } = useAuth();
   const [attendance, setAttendance] = useState<AttendanceState | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceResolved, setAttendanceResolved] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const refreshSeqRef = useRef(0);
 
   const bypassAttendance = Boolean(user?.isSuperuser || user?.role === "admin");
 
   const refreshAttendance = useCallback(
     async (reason = "manual") => {
+      const seq = ++refreshSeqRef.current;
       if (!user || bypassAttendance) {
         setAttendance(null);
         setAttendanceError(null);
         setAttendanceLoading(false);
+        setAttendanceResolved(true);
         attendanceLog("refresh_skipped", { reason, userId: user?.id ?? null, bypassAttendance });
         return;
       }
 
       setAttendanceLoading(true);
+      setAttendanceResolved(false);
       try {
         const next = await getMyAttendanceToday();
+        if (seq !== refreshSeqRef.current) return;
         setAttendance(next);
         setAttendanceError(null);
+        setAttendanceResolved(true);
         attendanceLog("today_response", {
           reason,
           userId: user.id,
@@ -42,15 +49,18 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
           payload: next,
         });
       } catch (error) {
+        if (seq !== refreshSeqRef.current) return;
         const message = error instanceof Error ? error.message : "No se pudo validar asistencia";
         setAttendanceError(message);
         setAttendance(null);
+        setAttendanceResolved(true);
         attendanceLog("refresh_error", {
           reason,
           userId: user.id,
           error: message,
         });
       } finally {
+        if (seq !== refreshSeqRef.current) return;
         setAttendanceLoading(false);
       }
     },
@@ -61,6 +71,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
     (next: AttendanceState, reason: string) => {
       setAttendance(next);
       setAttendanceError(null);
+      setAttendanceResolved(true);
       attendanceLog("state_transition", {
         reason,
         userId: user?.id ?? null,
@@ -99,12 +110,13 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
     () => ({
       attendance,
       attendanceLoading,
+      attendanceResolved,
       attendanceError,
       accessState,
       refreshAttendance,
       applyAttendanceState,
     }),
-    [attendance, attendanceLoading, attendanceError, accessState, refreshAttendance, applyAttendanceState],
+    [attendance, attendanceLoading, attendanceResolved, attendanceError, accessState, refreshAttendance, applyAttendanceState],
   );
 
   return <AttendanceAccessContext.Provider value={value}>{children}</AttendanceAccessContext.Provider>;
