@@ -112,6 +112,14 @@ interface CartItem {
   modifiers: Array<{ id?: number; name: string; price: number }>;
 }
 
+interface SaleCompletionSummary {
+  totalToPay: number;
+  amountReceived: number;
+  changeAmount: number;
+  paymentMethod: PaymentMethod;
+  paymentMethodCode: string;
+}
+
 const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
 const digitsOnly = (value: string) => value.replace(/\D+/g, "");
 const formatPhone = (raw: string) => {
@@ -174,6 +182,35 @@ const DrawerIcon = ({ className }: { className?: string }) => (
     <rect x="8" y="13" width="8" height="4" rx="1" />
   </svg>
 );
+
+const shouldOpenCashDrawer = (method: PaymentMethod, methodCode?: string): boolean => {
+  if (method === "cash") return true;
+  const normalizedCode = String(methodCode || "").trim().toLowerCase();
+  return normalizedCode === "cash" || normalizedCode === "efectivo";
+};
+
+const shouldShowChange = (summary: SaleCompletionSummary | null): boolean => {
+  if (!summary) return false;
+  if (!shouldOpenCashDrawer(summary.paymentMethod, summary.paymentMethodCode)) return false;
+  return summary.changeAmount > 0.009;
+};
+
+const buildSaleCompletionSummary = (params: {
+  totalToPay: number;
+  amountReceived: number;
+  paymentMethod: PaymentMethod;
+  paymentMethodCode: string;
+}): SaleCompletionSummary => {
+  const { totalToPay, amountReceived, paymentMethod, paymentMethodCode } = params;
+  const rawChange = amountReceived - totalToPay;
+  return {
+    totalToPay,
+    amountReceived,
+    changeAmount: rawChange > 0 ? rawChange : 0,
+    paymentMethod,
+    paymentMethodCode,
+  };
+};
 
 
 const POS = () => {
@@ -283,6 +320,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
   const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [saleCompletionSummary, setSaleCompletionSummary] = useState<SaleCompletionSummary | null>(null);
   const [printerAvailable, setPrinterAvailable] = useState(true);
   const [fallbackPdfModal, setFallbackPdfModal] = useState<{
     open: boolean;
@@ -1865,6 +1903,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsKitchenPromptOpen(false);
     setPostSaleKitchenChoice(true);
     setPostSalePrintChoice(true);
+    setSaleCompletionSummary(null);
     setFallbackPdfModal({
       open: false,
       title: "",
@@ -2097,6 +2136,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
       });
       setLastPaymentId(paymentResult.id);
+      if (shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode)) {
+        await triggerDrawerOpen({ showSuccessToast: false });
+      }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
@@ -2110,6 +2152,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
+        const finalTotalToPay = toNumber(refreshed.totalPayable ?? refreshed.total ?? checkoutSummaryTotal);
+        setSaleCompletionSummary(
+          buildSaleCompletionSummary({
+            totalToPay: finalTotalToPay,
+            amountReceived,
+            paymentMethod,
+            paymentMethodCode: selectedPaymentMethodCode,
+          })
+        );
         if (refreshed.isPending) {
           try {
             const finalizedOrder = await setOrderPending(refreshed.id, {
@@ -3198,9 +3249,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             {checkoutDraft ? (
               <>
                 <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                  <div className="rounded-lg border bg-muted/30 p-4">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(paymentTotal)}</div>
+                  <div className="rounded-xl border bg-muted/20 px-4 py-5 text-center shadow-sm">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
+                    <div className="mt-3 text-5xl font-extrabold leading-none text-secondary sm:text-6xl">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -3686,8 +3737,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
-        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+      <Dialog
+        open={isKitchenPromptOpen}
+        onOpenChange={(open) => {
+          if (!open) return;
+          if (!isSubmittingKitchenChoice) setIsKitchenPromptOpen(open);
+        }}
+      >
+        <DialogContent
+          className="w-[92vw] max-w-md rounded-2xl p-6"
+          showCloseButton={false}
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle className="text-2xl">Finalizar venta</DialogTitle>
             <DialogDescription className="text-base">
@@ -3695,6 +3757,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="rounded-xl border bg-muted/20 px-4 py-4 text-center">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">TOTAL A PAGAR</p>
+              <p className="mt-2 text-4xl font-extrabold text-secondary">
+                {formatMoney(saleCompletionSummary?.totalToPay ?? checkoutSummaryTotal)}
+              </p>
+              {shouldShowChange(saleCompletionSummary) ? (
+                <div className="mt-4 border-t border-border/60 pt-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">CAMBIO</p>
+                  <p className="mt-1 text-4xl font-extrabold text-amber-500">
+                    {formatMoney(saleCompletionSummary?.changeAmount ?? 0)}
+                  </p>
+                </div>
+              ) : null}
+            </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />

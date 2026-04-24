@@ -687,11 +687,6 @@ class PaymentPrintTicketView(APIView):
 
             drawer_opened = False
             drawer_error = None
-            should_open_drawer = payment.method == "cash" and bool(print_result["printed"])
-            if should_open_drawer:
-                drawer_opened, drawer_error = printer.open_cash_drawer(context=context, endpoint="payments.print-ticket.drawer")
-            elif payment.method == "cash" and not print_result["printed"]:
-                drawer_error = "No se pudo abrir la gaveta: impresora no detectada."
             job = PrintJob.objects.filter(order=payment.order, type="customer").order_by("-created_at").first()
             if job:
                 if print_result["receipt_pdf_path"]:
