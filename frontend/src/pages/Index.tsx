@@ -1256,7 +1256,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             : item
         )
       );
-      toast.success("Modificadores actualizados");
     } else {
       addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
     }
@@ -2630,18 +2629,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               <div className="flex flex-wrap gap-2">
                 {serviceTypes.length > 0 ? (
                   <Button
-                    variant="outline"
+                    variant="default"
                     size="sm"
                     onClick={cycleServiceType}
-                    className="relative min-h-16 w-full px-4"
+                    className="relative min-h-16 w-full bg-primary px-4 text-primary-foreground hover:bg-primary/90"
                   >
                     <span className="flex w-full flex-col items-center justify-center leading-tight">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tipo de pedido</span>
-                      <span className="mt-1 text-lg font-semibold text-primary">
+                      <span className="text-[10px] font-medium uppercase tracking-[1px] text-primary-foreground/60">TIPO DE PEDIDO</span>
+                      <span className="mt-1 text-[18px] font-bold text-primary-foreground">
                         {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}
                       </span>
                     </span>
-                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary/70" />
+                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary-foreground/80" />
                   </Button>
                 ) : (
                   <span className="text-sm text-muted-foreground">
