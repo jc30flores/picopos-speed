@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, XCircle } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
@@ -1635,6 +1635,84 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
     }));
 
+  const buildQuickPrintPendingReference = () => {
+    const existing = pendingReferenceDraft.trim();
+    if (existing) return existing;
+    const label = selectedCustomer?.fullName || selectedCustomer?.name || "POS";
+    return `QuickPrint ${label}`.slice(0, 120);
+  };
+
+  const ensureOrderForQuickPrint = async (): Promise<Order> => {
+    if (activeOrder) return activeOrder;
+    if (cart.length === 0) {
+      throw new Error("No hay productos en el pedido");
+    }
+    const created = await createOrder({
+      serviceType,
+      customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
+      customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+      whatsappNumCliente: normalizedWhatsappClient ?? "",
+      whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
+      dteDocumentType,
+      ivaExempt,
+      source: "pos",
+      channel: "pos",
+      items: cart.map((item) => ({
+        productId: item.productId,
+        productName: item.name,
+        price: getItemBaseEffective(item),
+        quantity: item.quantity,
+        isCustom: Boolean(item.isCustom),
+        type: item.isCustom ? "manual" : "menu",
+        unitPriceOverride: item.unitPriceOverride ?? null,
+        customCode: item.customCode,
+        assignedName: item.assignedName,
+        modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      })),
+    });
+    setActiveOrder(created);
+    setCreatedOrderId(created.id);
+    setCreatedOrderNumber(created.orderNumber ?? null);
+    return created;
+  };
+
+  const saveCurrentOrderAsHeld = async (order: Order): Promise<Order> => {
+    const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
+    const payloadItems = cart.length > 0
+      ? buildPendingPayloadItems(cart)
+      : buildPendingPayloadItems(order.items.map((item) => mapOrderItemToCartItem(item)));
+    const saved = await setOrderPending(order.id, {
+      isPending: true,
+      pendingState,
+      pendingReference: buildQuickPrintPendingReference(),
+      authorizationPin: pendingEditAuthorizationPin || undefined,
+      items: payloadItems,
+    });
+    setActiveOrder(saved);
+    return saved;
+  };
+
+  const printSalesTicketOnly = async (orderId: number) => {
+    const job = await createPrintJob({ orderId, type: "customer" });
+    setReceiptJob(job);
+    return job;
+  };
+
+  const handleQuickPrintTicket = async () => {
+    if (cart.length === 0 && !(activeOrder?.items?.length)) {
+      toast.info("No hay pedido para imprimir");
+      return;
+    }
+    try {
+      const baseOrder = await ensureOrderForQuickPrint();
+      const heldOrder = baseOrder.isPending ? baseOrder : await saveCurrentOrderAsHeld(baseOrder);
+      await printSalesTicketOnly(heldOrder.id);
+      toast.success("Ticket enviado a impresión");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket");
+    }
+  };
+
   const syncExistingOpenOrder = async (order: Order) => {
     const pricing = calculatePosPricing({
       items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
@@ -2760,10 +2838,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button
                   variant="outline"
                   className="h-14 w-14 p-0"
-                  onClick={() => privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))}
-                  title="Descuentos"
+                  onClick={() => void handleQuickPrintTicket()}
+                  title="Imprimir ticket"
+                  aria-label="Imprimir ticket"
                 >
-                  <BadgePercent className="h-5 w-5" />
+                  <Printer className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="secondary"
@@ -2777,9 +2856,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     void handleSendOrderToPending();
                   }}
                   disabled={isSendingToPending}
-                  title={cart.length === 0 ? "Imprimir / órdenes guardadas" : "Imprimir / guardar orden"}
+                  title={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
+                  aria-label={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
                 >
-                  <Printer className="h-5 w-5" />
+                  <Save className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="default"
