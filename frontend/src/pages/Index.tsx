@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Save, XCircle } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
@@ -1823,7 +1823,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       return acc;
     }, {});
     const openState = visibleGroups.reduce<Record<string, boolean>>((acc, group) => {
-      acc[String(group.id)] = true;
+      acc[String(group.id)] = false;
       return acc;
     }, {});
     setPendingProduct(product);
@@ -2660,7 +2660,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
-                            <h4 className="truncate font-semibold text-sm">{item.name}</h4>
+                            <h4 className="whitespace-normal break-words text-sm font-semibold leading-snug">{item.name}</h4>
                             {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase leading-none">Manual</Badge>}
                           </div>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
@@ -2679,25 +2679,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
                           )}
                           {item.modifiers.length > 0 && (
-                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                            <div className="mt-1 whitespace-normal break-words text-[11px] leading-snug text-muted-foreground">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
                             </div>
                           )}
                         </div>
                         <div className="flex items-center gap-1">
-                          <div className="flex items-center rounded-md border">
-                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-8 w-8 rounded-none">
-                              <Minus className="h-3 w-3" />
+                          <div className="flex items-center rounded-lg border bg-muted/20">
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-10 w-10 rounded-none">
+                              <Minus className="h-4 w-4" />
                             </Button>
                             <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
-                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-8 w-8 rounded-none">
-                              <Plus className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none">
+                              <Plus className="h-4 w-4" />
                             </Button>
                           </div>
                           <span className="w-20 text-right text-sm font-bold">{formatMoney(getItemUnitTotal(item) * item.quantity)}</span>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" title="Acciones de línea">
+                              <Button variant="ghost" size="icon" className="h-10 w-10" title="Acciones de línea">
                                 <Settings2 className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
@@ -2773,9 +2773,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     void handleSendOrderToPending();
                   }}
                   disabled={isSendingToPending}
-                  title={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
+                  title={cart.length === 0 ? "Imprimir / órdenes guardadas" : "Imprimir / guardar orden"}
                 >
-                  <Save className="h-5 w-5" />
+                  <Printer className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="default"
@@ -2784,7 +2784,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
                   onClick={handleCheckout}
                 >
-                  {formatMoney(total)}
+                  <span className="flex flex-col leading-tight">
+                    <span className="text-base font-semibold">Cobrar</span>
+                    <span className="text-sm font-medium opacity-90">{formatMoney(total)}</span>
+                  </span>
                 </Button>
                 <Button
                   variant="outline"
