@@ -2633,10 +2633,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     variant="outline"
                     size="sm"
                     onClick={cycleServiceType}
-                    className="min-h-14 w-full justify-between whitespace-nowrap px-4 text-base"
+                    className="relative min-h-16 w-full px-4"
                   >
-                    <span>Tipo pedido: {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}</span>
-                    <ChevronDown className="h-4 w-4 opacity-70" />
+                    <span className="flex w-full flex-col items-center justify-center leading-tight">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Tipo de pedido</span>
+                      <span className="mt-1 text-lg font-semibold text-primary">
+                        {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}
+                      </span>
+                    </span>
+                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary/70" />
                   </Button>
                 ) : (
                   <span className="text-sm text-muted-foreground">
@@ -2666,20 +2671,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
                               <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
-                              <span className="text-emerald-600 font-medium">Oferta aplicada</span>
+                              <span className="font-medium text-secondary">Oferta aplicada</span>
                             </p>
                           )}
                           {item.appliedSpecialPriceRuleName && (
-                            <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                            <p className="text-[11px] text-secondary/90">{item.appliedSpecialPriceRuleName}</p>
                           )}
                           {!item.appliedSpecialPriceRuleName && item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
-                            <p className="text-[11px] text-emerald-600/90">OFERTA</p>
+                            <p className="text-[11px] text-secondary/90">OFERTA</p>
                           )}
                           {item.unitPriceOverride != null && (
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
                           )}
                           {item.modifiers.length > 0 && (
-                            <div className="mt-1 whitespace-normal break-words text-[11px] leading-snug text-muted-foreground">
+                            <div className="mt-1 whitespace-normal break-words text-[11px] leading-snug text-secondary">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
                             </div>
                           )}
