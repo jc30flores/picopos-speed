@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid, RefreshCw } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
@@ -31,6 +31,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   createOrder,
   Customer,
@@ -207,6 +213,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const postOpenSessionActionRef = useRef<(() => Promise<void>) | null>(null);
   const openSessionResolverRef = useRef<((opened: boolean) => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
+  const [editingModifiersItemId, setEditingModifiersItemId] = useState<string | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
   const [modifierValidationErrors, setModifierValidationErrors] = useState<Record<string, string>>({});
@@ -680,6 +687,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }, {});
     setOpenModifierGroups(collapsed);
     setIsExtrasOpen(true);
+  };
+
+  const cycleServiceType = () => {
+    if (serviceTypes.length === 0) return;
+    const currentIndex = serviceTypes.findIndex((type) => type.key === serviceType);
+    const nextType = serviceTypes[(currentIndex + 1) % serviceTypes.length] ?? serviceTypes[0];
+    if (!nextType) return;
+    setServiceType(nextType.key);
   };
 
   useLayoutEffect(() => {
@@ -1191,9 +1206,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("Completa los modificadores obligatorios");
       return;
     }
-    addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
+    if (editingModifiersItemId) {
+      setCart((prev) =>
+        prev.map((item) =>
+          item.id === editingModifiersItemId
+            ? {
+                ...item,
+                modifiers: pendingSelectionValidation.selectedMods,
+                price: getItemBaseEffective(item) + pendingSelectionValidation.selectedMods.reduce((sum, mod) => sum + Number(mod.price || 0), 0),
+              }
+            : item
+        )
+      );
+      toast.success("Modificadores actualizados");
+    } else {
+      addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
+    }
     setIsExtrasOpen(false);
     setPendingProduct(null);
+    setEditingModifiersItemId(null);
     setSelectedModifiers({});
     setOpenModifierGroups({});
     setModifierValidationErrors({});
@@ -1723,10 +1754,46 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsExtrasOpen(open);
     if (!open) {
       setPendingProduct(null);
+      setEditingModifiersItemId(null);
       setSelectedModifiers({});
       setOpenModifierGroups({});
       setModifierValidationErrors({});
     }
+  };
+
+  const handleEditLineModifiers = (itemId: string) => {
+    const cartItem = cart.find((item) => item.id === itemId);
+    if (!cartItem?.productId) {
+      toast.error("Esta línea no permite modificadores");
+      return;
+    }
+    const product = products.find((candidate) => candidate.id === cartItem.productId);
+    if (!product) {
+      toast.error("No se encontró el producto");
+      return;
+    }
+    const visibleGroups = getPosModifierGroups(product);
+    if (!visibleGroups.length) {
+      toast.error("Este producto no tiene modificadores disponibles");
+      return;
+    }
+    const modifiersByGroup = visibleGroups.reduce<Record<string, string[]>>((acc, group) => {
+      const selected = cartItem.modifiers
+        .filter((mod) => mod.id != null && group.modifiers.some((candidate) => candidate.id === mod.id))
+        .map((mod) => String(mod.id));
+      acc[String(group.id)] = selected;
+      return acc;
+    }, {});
+    const openState = visibleGroups.reduce<Record<string, boolean>>((acc, group) => {
+      acc[String(group.id)] = true;
+      return acc;
+    }, {});
+    setPendingProduct(product);
+    setEditingModifiersItemId(itemId);
+    setSelectedModifiers(modifiersByGroup);
+    setOpenModifierGroups(openState);
+    setModifierValidationErrors({});
+    setIsExtrasOpen(true);
   };
 
   const focusTenderField = (field: "payment" | "tip") => {
@@ -2511,17 +2578,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="flex-none border-b px-4 py-3">
               <div className="flex flex-wrap gap-2">
                 {serviceTypes.length > 0 ? (
-                  serviceTypes.map((type) => (
-                    <Button
-                      key={type.id}
-                      variant={serviceType === type.key ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setServiceType(type.key)}
-                      className="min-h-14 min-w-fit whitespace-nowrap px-4 text-base"
-                    >
-                      {type.label}
-                    </Button>
-                  ))
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={cycleServiceType}
+                    className="min-h-14 w-full justify-between whitespace-nowrap px-4 text-base"
+                  >
+                    <span>Tipo pedido: {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}</span>
+                    <ChevronDown className="h-4 w-4 opacity-70" />
+                  </Button>
                 ) : (
                   <span className="text-sm text-muted-foreground">
                     Configura tipos de pedido en Configuración.
@@ -2538,14 +2603,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   <p className="text-sm">Agrega productos para empezar</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {cart.map((item) => (
-                    <Card key={item.id} className="p-3">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-semibold text-sm">{item.name}</h4>
-                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase">Manual</Badge>}
+                    <Card key={item.id} className="p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="truncate font-semibold text-sm">{item.name}</h4>
+                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase leading-none">Manual</Badge>}
                           </div>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
@@ -2563,51 +2628,47 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
                           )}
                           {item.modifiers.length > 0 && (
-                            <div className="text-xs text-muted-foreground mt-1">
+                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
                             </div>
                           )}
                         </div>
                         <div className="flex items-center gap-1">
-                          {!item.isCustom && (
-                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-10 w-10" title="Cambiar precio para esta venta">
-                              <PencilLine className="h-4 w-4" />
+                          <div className="flex items-center rounded-md border">
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-8 w-8 rounded-none">
+                              <Minus className="h-3 w-3" />
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeItem(item.id)}
-                            className="h-10 w-10 text-danger"
-                            disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
-                            title={activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))) ? "Orden enviada a cocina: no se puede eliminar." : "Eliminar producto"}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                            <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-8 w-8 rounded-none">
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <span className="w-20 text-right text-sm font-bold">{formatMoney(getItemUnitTotal(item) * item.quantity)}</span>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" title="Acciones de línea">
+                                <Settings2 className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleEditLineModifiers(item.id)}>
+                                Modificadores
+                              </DropdownMenuItem>
+                              {!item.isCustom && (
+                                <DropdownMenuItem onClick={() => openItemPriceEditor(item.id)}>
+                                  Precio
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={() => removeItem(item.id)}
+                                disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
+                              >
+                                Eliminar
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => updateQuantity(item.id, -1)}
-                            className="h-10 w-10"
-                          >
-                            <Minus className="h-3 w-3" />
-                          </Button>
-                          <span className="w-8 text-center font-semibold">{item.quantity}</span>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => updateQuantity(item.id, 1)}
-                            className="h-10 w-10"
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <span className="font-bold">${(getItemUnitTotal(item) * item.quantity).toFixed(2)}</span>
                       </div>
                     </Card>
                   ))}
@@ -2640,19 +2701,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="default"
-                  className="h-14 w-full text-base font-bold"
-                  size="lg"
-                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
-                  onClick={handleCheckout}
+                  variant="outline"
+                  className="h-14 w-14 p-0"
+                  onClick={() => privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))}
+                  title="Descuentos"
                 >
-                  Cobrar {formatMoney(total)}
+                  <BadgePercent className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="secondary"
-                  className="h-14 w-full text-base"
+                  className="h-14 w-14 p-0"
                   onClick={() => {
                     const isCurrentOrderEmpty = cart.length === 0;
                     if (isCurrentOrderEmpty) {
@@ -2662,23 +2722,30 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     void handleSendOrderToPending();
                   }}
                   disabled={isSendingToPending}
+                  title={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
                 >
-                  {isSendingToPending
-                    ? "Guardando..."
-                    : cart.length === 0
-                      ? "Guardadas"
-                      : "Guardar"}
+                  <Save className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant="default"
+                  className="h-14 flex-1 text-base font-bold"
+                  size="lg"
+                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
+                  onClick={handleCheckout}
+                >
+                  {formatMoney(total)}
                 </Button>
                 <Button
                   variant="outline"
-                  className="h-14 w-full text-base"
+                  className="h-14 w-14 p-0"
                   onClick={() => {
                     setCart([]);
                     setSelectedDiscount(null);
                     clearPersistedDraft();
                   }}
+                  title="Cancelar orden"
                 >
-                  Cancelar
+                  <XCircle className="h-5 w-5" />
                 </Button>
               </div>
             </div>
@@ -3761,9 +3828,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
         <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
           <DialogHeader>
-            <DialogTitle>Extras (opcional)</DialogTitle>
+            <DialogTitle>{editingModifiersItemId ? "Editar modificadores" : "Extras (opcional)"}</DialogTitle>
             <DialogDescription>
-              {pendingProduct ? `Selecciona extras de pago para ${pendingProduct.name}.` : "Selecciona extras de pago."}
+              {pendingProduct
+                ? editingModifiersItemId
+                  ? `Actualiza los modificadores de ${pendingProduct.name}.`
+                  : `Selecciona extras de pago para ${pendingProduct.name}.`
+                : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
@@ -3862,7 +3933,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
           <div className="pt-2">
             <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
-              {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
+              {editingModifiersItemId
+                ? selectedExtrasCount > 0
+                  ? `Actualizar (${selectedExtrasCount} extras)`
+                  : "Actualizar"
+                : selectedExtrasCount > 0
+                  ? `Agregar (${selectedExtrasCount} extras)`
+                  : "Agregar"}
             </Button>
           </div>
         </DialogContent>
