@@ -34,6 +34,31 @@ class CatalogProductInventoryLink(models.Model):
         ordering = ["catalog_product_id", "inventory_item_id"]
 
 
+class CategoryInventoryLink(models.Model):
+    category = models.ForeignKey("menu.Category", on_delete=models.CASCADE, related_name="inventory_links")
+    inventory_item = models.ForeignKey(InventoryItem, on_delete=models.CASCADE, related_name="category_links")
+    quantity_required = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0.001)])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (("category", "inventory_item"),)
+        ordering = ["category_id", "inventory_item_id"]
+
+
+class ProductInventoryOverride(models.Model):
+    product = models.ForeignKey("menu.Product", on_delete=models.CASCADE, related_name="inventory_overrides")
+    category_link = models.ForeignKey(CategoryInventoryLink, on_delete=models.CASCADE, related_name="product_overrides")
+    quantity_required = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    is_disabled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (("product", "category_link"),)
+        ordering = ["product_id", "category_link_id"]
+
+
 class InventoryMovement(models.Model):
     TYPE_INITIAL_STOCK = "initial_stock"
     TYPE_STOCK_ADD = "stock_add"

@@ -2,7 +2,13 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from apps.inventory.models import CatalogProductInventoryLink, InventoryItem, InventoryMovement
+from apps.inventory.models import (
+    CatalogProductInventoryLink,
+    CategoryInventoryLink,
+    InventoryItem,
+    InventoryMovement,
+    ProductInventoryOverride,
+)
 
 INVENTORY_UNITS = {
     "unidad",
@@ -132,3 +138,25 @@ class CatalogInventoryLinkWriteSerializer(serializers.Serializer):
         if missing:
             raise serializers.ValidationError(f"Items no encontrados: {sorted(missing)}")
         return [{"inventory_item": item_id, "quantity_required": qty} for item_id, qty in normalized.items()]
+
+
+class CategoryInventoryLinkSerializer(serializers.ModelSerializer):
+    inventory_item_name = serializers.CharField(source="inventory_item.name", read_only=True)
+    inventory_item_unit = serializers.CharField(source="inventory_item.unit", read_only=True)
+
+    class Meta:
+        model = CategoryInventoryLink
+        fields = [
+            "id",
+            "category",
+            "inventory_item",
+            "inventory_item_name",
+            "inventory_item_unit",
+            "quantity_required",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class ProductEffectiveInventoryLinkWriteSerializer(serializers.Serializer):
+    links = serializers.ListField(child=serializers.DictField(), allow_empty=True)

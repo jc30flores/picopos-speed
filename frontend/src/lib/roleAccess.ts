@@ -46,7 +46,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/dte", "/settings"],
+  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/dte", "/settings"],
   manager: ["/", "/pos", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   kitchen: ["/kitchen"],
@@ -65,7 +65,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Inventario", path: "/inventory" },
     { label: "Reportes", path: "/registros/ventas" },
-    { label: "DTE", path: "/dte" },
+    { label: "DTE", path: "/registros/dte" },
     { label: "Clientes", path: "/clientes" },
     { label: "Configuración", path: "/settings" },
   ],

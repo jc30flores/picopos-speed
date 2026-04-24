@@ -8,12 +8,39 @@ from django.db import transaction
 
 from apps.inventory.models import (
     CatalogProductInventoryLink,
+    CategoryInventoryLink,
     InventoryItem,
     InventoryMovement,
     InventorySaleApplication,
+    ProductInventoryOverride,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_effective_inventory_links_for_product(product) -> dict[int, Decimal]:
+    effective: dict[int, Decimal] = {}
+    category_links = CategoryInventoryLink.objects.filter(category_id=product.category_id).select_related("inventory_item")
+    category_by_id = {}
+    for row in category_links:
+        effective[row.inventory_item_id] = Decimal(row.quantity_required)
+        category_by_id[row.id] = row
+
+    overrides = ProductInventoryOverride.objects.filter(product_id=product.id, category_link_id__in=category_by_id.keys())
+    for override in overrides:
+        link = category_by_id.get(override.category_link_id)
+        if not link:
+            continue
+        if override.is_disabled:
+            effective.pop(link.inventory_item_id, None)
+        elif override.quantity_required is not None:
+            effective[link.inventory_item_id] = Decimal(override.quantity_required)
+
+    direct_links = CatalogProductInventoryLink.objects.filter(catalog_product_id=product.id).select_related("inventory_item")
+    for direct in direct_links:
+        # Direct link has precedence to avoid duplicate deductions.
+        effective[direct.inventory_item_id] = Decimal(direct.quantity_required)
+    return effective
 
 
 def apply_inventory_for_order(order, *, user=None) -> bool:
@@ -32,9 +59,12 @@ def apply_inventory_for_order(order, *, user=None) -> bool:
         for order_item in item_rows:
             if not order_item.product_id:
                 continue
-            links = CatalogProductInventoryLink.objects.filter(catalog_product_id=order_item.product_id).select_related("inventory_item")
-            for link in links:
-                deltas[link.inventory_item_id] += Decimal(order_item.quantity) * Decimal(link.quantity_required)
+            product = order_item.product
+            if not product:
+                continue
+            effective_links = resolve_effective_inventory_links_for_product(product)
+            for inventory_item_id, qty_required in effective_links.items():
+                deltas[inventory_item_id] += Decimal(order_item.quantity) * Decimal(qty_required)
 
         for inventory_item_id, total_deduction in deltas.items():
             if total_deduction == 0:

@@ -9,4 +9,6 @@ urlpatterns = [
     path("items/<int:pk>/adjust-stock/", views.InventoryItemAdjustStockView.as_view(), name="inventory-item-adjust-stock"),
     path("movements/", views.InventoryMovementListView.as_view(), name="inventory-movements"),
     path("catalog-links/<int:product_id>/", views.CatalogProductInventoryLinksView.as_view(), name="inventory-catalog-links"),
+    path("category-links/<int:category_id>/", views.CategoryInventoryLinksView.as_view(), name="inventory-category-links"),
+    path("product-effective-links/<int:product_id>/", views.ProductEffectiveInventoryLinksView.as_view(), name="inventory-product-effective-links"),
 ]

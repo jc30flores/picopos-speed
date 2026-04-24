@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { InventoryItem, InventoryProductLink, getInventoryItems } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 
 interface Props {
   open: boolean;
@@ -113,6 +114,11 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
               />
               <div className="flex-1">
                 <p className="font-medium">{item.name}</p>
+                {value.find((row) => row.inventoryItemId === item.id)?.origin ? (
+                  <Badge variant="outline" className="mr-1 mt-1 text-[10px] uppercase">
+                    {value.find((row) => row.inventoryItemId === item.id)?.origin}
+                  </Badge>
+                ) : null}
                 <p className="text-xs text-muted-foreground">{item.unit} · Stock: {item.currentStock}</p>
               </div>
               <div className="w-36">

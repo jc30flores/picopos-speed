@@ -8,15 +8,24 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import IsAdminOrManager
-from apps.inventory.models import CatalogProductInventoryLink, InventoryItem, InventoryMovement
+from apps.inventory.models import (
+    CatalogProductInventoryLink,
+    CategoryInventoryLink,
+    InventoryItem,
+    InventoryMovement,
+    ProductInventoryOverride,
+)
 from apps.inventory.serializers import (
     CatalogInventoryLinkSerializer,
     CatalogInventoryLinkWriteSerializer,
+    CategoryInventoryLinkSerializer,
     InventoryAddStockSerializer,
     InventoryAdjustStockSerializer,
     InventoryItemSerializer,
     InventoryMovementSerializer,
+    ProductEffectiveInventoryLinkWriteSerializer,
 )
+from apps.inventory.services import resolve_effective_inventory_links_for_product
 
 logger = logging.getLogger(__name__)
 
@@ -157,3 +166,120 @@ class CatalogProductInventoryLinksView(APIView):
         rows = CatalogProductInventoryLink.objects.filter(catalog_product_id=product_id).select_related("inventory_item")
         logger.info("inventory.catalog_links.save product_id=%s links=%s user_id=%s", product_id, len(to_create), request.user.id)
         return Response(CatalogInventoryLinkSerializer(rows, many=True).data)
+
+
+class CategoryInventoryLinksView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def get(self, request, category_id: int):
+        rows = CategoryInventoryLink.objects.filter(category_id=category_id).select_related("inventory_item")
+        return Response(CategoryInventoryLinkSerializer(rows, many=True).data)
+
+    @transaction.atomic
+    def put(self, request, category_id: int):
+        serializer = CatalogInventoryLinkWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        CategoryInventoryLink.objects.filter(category_id=category_id).delete()
+        to_create = [
+            CategoryInventoryLink(
+                category_id=category_id,
+                inventory_item_id=row["inventory_item"],
+                quantity_required=row["quantity_required"],
+            )
+            for row in serializer.validated_data["links"]
+        ]
+        CategoryInventoryLink.objects.bulk_create(to_create)
+        rows = CategoryInventoryLink.objects.filter(category_id=category_id).select_related("inventory_item")
+        return Response(CategoryInventoryLinkSerializer(rows, many=True).data)
+
+
+class ProductEffectiveInventoryLinksView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def get(self, request, product_id: int):
+        from apps.menu.models import Product
+
+        product = Product.objects.select_related("category").filter(id=product_id).first()
+        if not product:
+            return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        effective = resolve_effective_inventory_links_for_product(product)
+        category_links = {
+            row.inventory_item_id: row
+            for row in CategoryInventoryLink.objects.filter(category_id=product.category_id).select_related("inventory_item")
+        }
+        overrides = {
+            row.category_link_id: row
+            for row in ProductInventoryOverride.objects.filter(product_id=product.id).select_related("category_link", "category_link__inventory_item")
+        }
+        direct_links = {
+            row.inventory_item_id: row
+            for row in CatalogProductInventoryLink.objects.filter(catalog_product_id=product.id).select_related("inventory_item")
+        }
+
+        rows = []
+        for inventory_item_id, quantity in effective.items():
+            if inventory_item_id in direct_links:
+                direct = direct_links[inventory_item_id]
+                rows.append({
+                    "inventory_item": inventory_item_id,
+                    "inventory_item_name": direct.inventory_item.name,
+                    "inventory_item_unit": direct.inventory_item.unit,
+                    "quantity_required": quantity,
+                    "origin": "direct",
+                })
+                continue
+            category_link = category_links.get(inventory_item_id)
+            if not category_link:
+                continue
+            override = overrides.get(category_link.id)
+            rows.append({
+                "inventory_item": inventory_item_id,
+                "inventory_item_name": category_link.inventory_item.name,
+                "inventory_item_unit": category_link.inventory_item.unit,
+                "quantity_required": quantity,
+                "origin": "override" if override and not override.is_disabled and override.quantity_required is not None else "inherited",
+                "category_link_id": category_link.id,
+            })
+        return Response(rows)
+
+    @transaction.atomic
+    def put(self, request, product_id: int):
+        from apps.menu.models import Product
+
+        serializer = ProductEffectiveInventoryLinkWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = Product.objects.select_related("category").filter(id=product_id).first()
+        if not product:
+            return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload_links = serializer.validated_data["links"]
+        category_links = {
+            row.inventory_item_id: row
+            for row in CategoryInventoryLink.objects.filter(category_id=product.category_id)
+        }
+        payload_by_item = {int(row.get("inventory_item")): row for row in payload_links if row.get("inventory_item")}
+
+        # Sync direct links
+        direct_to_create = []
+        CatalogProductInventoryLink.objects.filter(catalog_product_id=product.id).delete()
+        ProductInventoryOverride.objects.filter(product_id=product.id).delete()
+
+        for item_id, row in payload_by_item.items():
+            qty = Decimal(str(row.get("quantity_required")))
+            if qty <= 0:
+                continue
+            category_link = category_links.get(item_id)
+            if category_link:
+                if Decimal(category_link.quantity_required) != qty:
+                    ProductInventoryOverride.objects.create(product_id=product.id, category_link=category_link, quantity_required=qty, is_disabled=False)
+            else:
+                direct_to_create.append(CatalogProductInventoryLink(catalog_product_id=product.id, inventory_item_id=item_id, quantity_required=qty))
+
+        # Disabled inherited links
+        for item_id, category_link in category_links.items():
+            if item_id not in payload_by_item:
+                ProductInventoryOverride.objects.create(product_id=product.id, category_link=category_link, is_disabled=True)
+
+        CatalogProductInventoryLink.objects.bulk_create(direct_to_create)
+        return self.get(request, product_id)

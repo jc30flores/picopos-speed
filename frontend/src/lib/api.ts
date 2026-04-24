@@ -98,6 +98,8 @@ export type InventoryProductLink = {
   inventoryItemName: string;
   inventoryItemUnit: string;
   quantityRequired: number;
+  origin?: "inherited" | "override" | "direct";
+  categoryLinkId?: number;
 };
 
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
@@ -1307,6 +1309,73 @@ export const getCatalogInventoryLinks = async (productId: number): Promise<Inven
     inventoryItemName: row.inventory_item_name,
     inventoryItemUnit: row.inventory_item_unit,
     quantityRequired: Number(row.quantity_required),
+  }));
+};
+
+export const getCategoryInventoryLinks = async (categoryId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/category-links/${categoryId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: "direct",
+  }));
+};
+
+export const saveCategoryInventoryLinks = async (categoryId: number, links: Array<{ inventoryItemId: number; quantityRequired: number }>): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/category-links/${categoryId}/`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      links: links.map((row) => ({ inventory_item: row.inventoryItemId, quantity_required: row.quantityRequired })),
+    }),
+  });
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: "direct",
+  }));
+};
+
+export const getProductEffectiveInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/product-effective-links/${productId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: row.origin,
+    categoryLinkId: row.category_link_id ?? undefined,
+  }));
+};
+
+export const saveProductEffectiveInventoryLinks = async (
+  productId: number,
+  links: Array<{ inventoryItemId: number; quantityRequired: number }>
+): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/product-effective-links/${productId}/`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      links: links.map((row) => ({ inventory_item: row.inventoryItemId, quantity_required: row.quantityRequired })),
+    }),
+  });
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: row.origin,
+    categoryLinkId: row.category_link_id ?? undefined,
   }));
 };
 

@@ -18,7 +18,9 @@ import {
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
+  getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
+  saveProductEffectiveInventoryLinks,
   updateProduct,
   updateProductSpecialPrice,
 } from "@/lib/api";
@@ -132,6 +134,13 @@ export const ProductFormDialog = ({
   }, [open, editingProduct]);
 
   useEffect(() => {
+    if (!open || !editingProduct) return;
+    getProductEffectiveInventoryLinks(editingProduct.id)
+      .then((links) => setInventoryLinks(links))
+      .catch(() => setInventoryLinks(editingProduct.inventoryLinks ?? []));
+  }, [open, editingProduct]);
+
+  useEffect(() => {
     if (!imageFile) {
       setLocalImageUrl(null);
       return;
@@ -200,7 +209,6 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
-        inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
     } else {
       await createProduct({
@@ -217,6 +225,12 @@ export const ProductFormDialog = ({
       });
     }
     await onSaved();
+    if (editingProduct) {
+      await saveProductEffectiveInventoryLinks(
+        editingProduct.id,
+        inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
+      );
+    }
     onOpenChange(false);
   };
 

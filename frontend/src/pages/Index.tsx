@@ -3360,7 +3360,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     setCustomerServerErrors({});
                     setActivitySearch("");
                     setIsCustomerCreateOpen(true);
-                    void preloadCustomerFormFromDTE(dteDocumentType);
+                    void preloadCustomerFormFromDTE(dteDocumentType === "SX" ? "CF" : dteDocumentType);
                   }}
                 >
                   Administrar
@@ -3460,18 +3460,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerCreateOpen} onOpenChange={(open) => !isSavingCustomer && setIsCustomerCreateOpen(open)}>
-        <DialogContent className="w-[94vw] max-w-xl rounded-2xl p-5">
+        <DialogContent className="w-[96vw] max-w-3xl rounded-2xl p-0">
           <DialogHeader>
-            <DialogTitle>Nuevo cliente</DialogTitle>
-            <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
+            <div className="border-b px-5 py-4">
+              <DialogTitle>Nuevo cliente</DialogTitle>
+              <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
+            </div>
           </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto px-5 pb-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
               <Label>Tipo DTE</Label>
               <div className="flex gap-2">
                 <Button type="button" variant={customerForm.clientType === "CF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CF")}>CF</Button>
                 <Button type="button" variant={customerForm.clientType === "CCF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CCF")}>CCF</Button>
-                <Button type="button" variant={customerForm.clientType === "SX" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-1 sm:col-span-2">
@@ -3498,7 +3500,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               {customerServerErrors.email && <p className="text-xs text-destructive">{customerServerErrors.email}</p>}
             </div>
             <div className="space-y-1">
-              <Label>{customerForm.clientType === "SX" ? "Documento" : "DUI"}</Label>
+              <Label>DUI</Label>
               <Input value={customerForm.dui} onChange={(event) => setCustomerForm((prev) => ({ ...prev, dui: event.target.value }))} className="h-12" />
               {customerFormErrors.dui && <p className="text-xs text-destructive">{customerFormErrors.dui}</p>}
               {customerServerErrors.dui && <p className="text-xs text-destructive">{customerServerErrors.dui}</p>}
@@ -3603,13 +3605,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             )}
           </div>
-          <div className="mt-4 flex gap-2">
+          </div>
+          <div className="sticky bottom-0 border-t bg-background px-5 py-4">
+          <div className="flex gap-2">
             <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setIsCustomerCreateOpen(false)} disabled={isSavingCustomer}>
               Cancelar
             </Button>
             <Button type="button" className="h-12 flex-1" onClick={() => void handleCreateCustomerFromPOS()} disabled={isSavingCustomer}>
               {isSavingCustomer ? "Guardando..." : "Guardar"}
             </Button>
+          </div>
           </div>
         </DialogContent>
       </Dialog>

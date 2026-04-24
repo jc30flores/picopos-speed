@@ -71,7 +71,7 @@ const JsonBlock = ({ title, payload }: { title: string; payload: unknown }) => {
   );
 };
 
-export default function DTEPage() {
+export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [rows, setRows] = useState<DTERecord[]>([]);
@@ -308,12 +308,7 @@ export default function DTEPage() {
 
   const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
-  return (
-    <PageLayout
-      title="DTE"
-      subtitle="Consulta, reenvía e invalida documentos electrónicos."
-      maxWidthClassName="max-w-[1600px]"
-    >
+  const content = (
       <div className="space-y-4">
         <div className="space-y-3 rounded-xl border bg-card/40 p-4">
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-12">
@@ -344,11 +339,11 @@ export default function DTEPage() {
             </Select>
             <Input className="lg:col-span-1" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
             <Input className="lg:col-span-1" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
-            <div className="flex gap-2 lg:col-span-1">
+            <div className="flex gap-2 lg:col-span-2">
               <Button variant="outline" className="w-full" onClick={load}>Aplicar</Button>
               <Button
                 variant="ghost"
-                className="w-full"
+                className="w-full min-w-[96px]"
                 onClick={() => {
                   setSearchInput("");
                   setSearch("");
@@ -431,7 +426,6 @@ export default function DTEPage() {
         </div>
 
         {error && <div className="rounded border border-red-600/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>}
-      </div>
 
       <Dialog
         open={invalidateDialogOpen}
@@ -546,6 +540,18 @@ export default function DTEPage() {
           )}
         </DialogContent>
       </Dialog>
+      </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <PageLayout
+      title="DTE"
+      subtitle="Consulta, reenvía e invalida documentos electrónicos."
+      maxWidthClassName="max-w-[1600px]"
+    >
+      {content}
     </PageLayout>
   );
 }

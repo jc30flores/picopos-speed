@@ -12,10 +12,10 @@ import Menu from "./pages/Menu";
 import RegistrosVentas from "./pages/RegistrosVentas";
 import RegistrosCaja from "./pages/RegistrosCaja";
 import RegistrosReportes from "./pages/RegistrosReportes";
+import RegistrosDTE from "./pages/RegistrosDTE";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
-import DTEPage from "./pages/DTE";
 import CustomersPage from "./pages/Customers";
 import PendientesPage from "./pages/Pendientes";
 import InventoryPage from "./pages/Inventory";
@@ -116,15 +116,16 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/reports-history" element={<Navigate to="/" replace />} />
             <Route
-              path="/dte"
+              path="/registros/dte"
               element={
-                <ProtectedRoute allowedRoles={["admin"]}>
-                  <DTEPage />
+                <ProtectedRoute allowedRoles={["admin"]} deniedRedirectTo="/registros/ventas" deniedMessage="Acceso restringido">
+                  <RegistrosDTE />
                 </ProtectedRoute>
               }
             />
+            <Route path="/reports-history" element={<Navigate to="/" replace />} />
+            <Route path="/dte" element={<Navigate to="/registros/dte" replace />} />
             <Route
               path="/settings"
               element={

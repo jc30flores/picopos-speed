@@ -22,6 +22,11 @@ export const RegistrosTabs = () => {
           <Link to="/registros/caja">Caja</Link>
         </Button>
       ) : null}
+      {canViewReports ? (
+        <Button asChild variant={location.pathname === "/registros/dte" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
+          <Link to="/registros/dte">DTE</Link>
+        </Button>
+      ) : null}
     </div>
   );
 };
