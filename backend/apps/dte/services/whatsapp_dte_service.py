@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import re
@@ -79,6 +80,10 @@ def _json_for_form(value) -> str:
     return str(value)
 
 
+def _sha256_hex(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
 def _sanitize_payload_for_log(payload: dict) -> dict:
     cloned = dict(payload or {})
     if "num_receptor" in cloned:
@@ -97,24 +102,34 @@ def _sanitize_payload_for_log(payload: dict) -> dict:
 def _build_whatsapp_files(record: DTERecord, payload: dict) -> tuple[dict, list[dict]]:
     files = {}
     meta = []
-    dte_json = payload.get("dte") if isinstance(payload.get("dte"), dict) else {}
-    json_bytes = _json_pretty(dte_json).encode("utf-8")
-    json_name = f"dte_{record.id}_{record.control_number or 'sin_control'}.json"
+    tipo_dte = str(payload.get("tipo_dte") or "01").strip() or "01"
+    generation_code = str(payload.get("generation_code") or record.generation_code or record.codigo_generacion or "").strip() or str(record.id)
+    invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
+    json_payload = invoice_json if invoice_json else {
+        "dte": payload.get("dte") if isinstance(payload.get("dte"), dict) else {},
+        "respuesta_hacienda": payload.get("respuesta_hacienda") if isinstance(payload.get("respuesta_hacienda"), dict) else {},
+    }
+    json_bytes = _json_pretty(json_payload).encode("utf-8")
+    json_name = f"DTE-{tipo_dte}-{generation_code}.json"
     files["json_file"] = (json_name, json_bytes, "application/json")
-    meta.append({"field": "json_file", "name": json_name, "mime": "application/json", "size": len(json_bytes)})
+    meta.append(
+        {"field": "json_file", "name": json_name, "mime": "application/json", "size": len(json_bytes), "sha256": _sha256_hex(json_bytes)}
+    )
     try:
         ticket = render_customer_ticket(record.order)
         pdf_result = build_receipt_pdf_from_text(
             text=str(ticket.get("text") or ""),
-            filename=f"dte_{record.id}_{record.control_number or 'sin_control'}.pdf",
+            filename=f"DTE-{tipo_dte}-{generation_code}.pdf",
             receipt_context=ticket.get("meta", {}).get("receipt_context"),
             center_lines=ticket.get("meta", {}).get("pdf_center_lines"),
         )
-        pdf_name = str(pdf_result.filename or f"dte_{record.id}.pdf")
+        pdf_name = str(pdf_result.filename or f"DTE-{tipo_dte}-{generation_code}.pdf")
         pdf_bytes = bytes(pdf_result.pdf_bytes or b"")
         if pdf_bytes:
             files["pdf_file"] = (pdf_name, pdf_bytes, "application/pdf")
-            meta.append({"field": "pdf_file", "name": pdf_name, "mime": "application/pdf", "size": len(pdf_bytes)})
+            meta.append(
+                {"field": "pdf_file", "name": pdf_name, "mime": "application/pdf", "size": len(pdf_bytes), "sha256": _sha256_hex(pdf_bytes)}
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("WHATSAPP_ATTACHMENTS_PDF_BUILD_FAILED order_id=%s error=%s", record.order_id, exc)
     return files, meta
@@ -508,10 +523,34 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         return attempt
 
     files, file_meta = _build_whatsapp_files(record, payload)
+    has_pdf_attachment = any(item.get("field") == "pdf_file" for item in file_meta)
+    if not has_pdf_attachment:
+        error = "pdf_attachment_missing"
+        attempt.status = "FAILED"
+        attempt.provider_body = {
+            "error": error,
+            "provider_message": "No se pudo generar el PDF completo del DTE para WhatsApp.",
+            "request_payload": _sanitize_payload_for_log(payload),
+            "to_phone": destination.normalized_phone,
+            "destination_source": destination.source,
+            "endpoint": endpoint,
+            "attachments": file_meta,
+        }
+        attempt.save(update_fields=["status", "provider_body", "retries"])
+        logger.error(
+            "WHATSAPP_ATTACHMENTS_INVALID job_id=%s order_id=%s issued_id=%s reason=%s attachments=%s",
+            attempt.id,
+            record.order_id,
+            record.id,
+            error,
+            file_meta,
+        )
+        return attempt
+
     form_data = _build_whatsapp_form_data(payload)
     request_headers = {"X-API-Key": key}
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_num_cliente=%s num_cliente=%s num_receptor_intacto=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
+        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_num_cliente=%s num_cliente=%s num_receptor_intacto=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s attachment_meta=%s",
         attempt.id,
         record.order_id,
         record.id,
@@ -531,6 +570,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         payload.get("control_number"),
         bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("selloRecibido") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("sello_recibido")),
         bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fhProcesamiento") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fh_procesamiento")),
+        file_meta,
     )
     _log_whatsapp_request_debug(
         attempt=attempt,
@@ -621,6 +661,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         "endpoint": endpoint,
         "queued": queued,
         "job_id": (provider_body or {}).get("job_id"),
+        "attachments": file_meta,
     }
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info(

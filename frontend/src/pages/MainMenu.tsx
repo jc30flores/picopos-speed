@@ -30,7 +30,10 @@ const MainMenu = () => {
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const cards = useMemo(
-    () => filterModulesForUser(user, appModules).map((module) => ({ ...module, icon: iconByModule[module.key] })),
+    () =>
+      filterModulesForUser(user, appModules)
+        .filter((module) => module.key !== "dte")
+        .map((module) => ({ ...module, icon: iconByModule[module.key] })),
     [user]
   );
   const isWorker = user?.role === "worker";
