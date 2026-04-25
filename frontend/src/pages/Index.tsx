@@ -359,7 +359,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
-  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
