@@ -165,6 +165,44 @@ class DTEResendEndpointAndOutboxTests(TestCase):
         self.assertIn("faltan correlativos", (updated.error_message or "").lower())
         mock_send_or_queue.assert_not_called()
 
+    @patch("apps.dte.services.dte_retry.send_or_queue_dte")
+    def test_resend_normalizes_extension_for_consumer_final_snapshot(self, mock_send_or_queue):
+        self.order.customer = None
+        self.order.customer_name = "CONSUMIDOR FINAL"
+        self.order.save(update_fields=["customer_name"])
+        self.record.request_payload = {
+            "dte": {
+                "identificacion": {
+                    "tipoDte": "01",
+                    "numeroControl": "DTE-01-X001X001-000000000000101",
+                    "codigoGeneracion": "B" * 36,
+                },
+                "receptor": {"nombre": "CONSUMIDOR FINAL", "numDocumento": None},
+                "emisor": {"nit": "12171409901063", "nombreComercial": "Pico de Gallo Centro"},
+                "cuerpoDocumento": [{"numItem": 1}],
+                "resumen": {"totalPagar": 2},
+                "extension": {"docuRecibe": "", "nombRecibe": "", "docuEntrega": "", "nombEntrega": ""},
+            }
+        }
+        self.record.save(update_fields=["request_payload"])
+        mock_send_or_queue.return_value = DTEOutbox(
+            id=89,
+            order=self.order,
+            payment=None,
+            dte_record=self.record,
+            status=DTEOutbox.STATUS_PENDING,
+            attempts=1,
+        )
+
+        resend_record(self.record)
+
+        sent_payload = mock_send_or_queue.call_args.kwargs["payload"]
+        ext = sent_payload["dte"]["extension"]
+        self.assertEqual(ext["docuRecibe"], "00000000-0")
+        self.assertEqual(ext["nombRecibe"], "CONSUMIDOR FINAL")
+        self.assertEqual(ext["docuEntrega"], "12171409901063")
+        self.assertEqual(ext["nombEntrega"], "Pico de Gallo Centro")
+
     @patch("apps.dte.outbox._health_snapshot", return_value=_HealthUp())
     @patch("apps.dte.outbox.DTEClient.send")
     def test_outbox_enqueue_on_5xx(self, mock_send, _health):
