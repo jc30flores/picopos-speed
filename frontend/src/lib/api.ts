@@ -4460,7 +4460,7 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
 export const dteDeliver = async (
   id: number,
   channels: Array<"whatsapp" | "email">,
-  options?: { phone?: string }
+  options?: { phone?: string; numCliente?: string; clienteTelefono?: string; destinationSource?: "manual" | "client_phone" }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4483,6 +4483,9 @@ export const dteDeliver = async (
     body: JSON.stringify({
       channels,
       ...(options?.phone ? { phone: options.phone } : {}),
+      ...(options?.numCliente ? { num_cliente: options.numCliente } : {}),
+      ...(options?.clienteTelefono ? { cliente_telefono: options.clienteTelefono, telefono_cliente: options.clienteTelefono, customer_phone: options.clienteTelefono } : {}),
+      ...(options?.destinationSource ? { destination_source: options.destinationSource } : {}),
     }),
   });
   const payload = await handleJson<any>(res);
@@ -4510,7 +4513,7 @@ export const dteDeliver = async (
 export const dteDeliverByOrder = async (
   orderId: number,
   channels: Array<"whatsapp" | "email">,
-  options?: { phone?: string }
+  options?: { phone?: string; numCliente?: string; clienteTelefono?: string; destinationSource?: "manual" | "client_phone" }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4533,6 +4536,9 @@ export const dteDeliverByOrder = async (
     body: JSON.stringify({
       channels,
       ...(options?.phone ? { phone: options.phone } : {}),
+      ...(options?.numCliente ? { num_cliente: options.numCliente } : {}),
+      ...(options?.clienteTelefono ? { cliente_telefono: options.clienteTelefono, telefono_cliente: options.clienteTelefono, customer_phone: options.clienteTelefono } : {}),
+      ...(options?.destinationSource ? { destination_source: options.destinationSource } : {}),
     }),
   });
   const payload = await handleJson<any>(res);

@@ -7,6 +7,8 @@ from apps.core.models import Branch, Customer, ServiceType
 from apps.dte.models import DTERecord
 from apps.dte.services.whatsapp_dte_service import (
     build_whatsapp_payload,
+    _build_whatsapp_form_data,
+    _build_whatsapp_files,
     resolve_whatsapp_destination,
     send_dte_whatsapp,
     validate_whatsapp_target,
@@ -49,16 +51,15 @@ class DTEWhatsAppServiceTests(TestCase):
         destination = resolve_whatsapp_destination(self.record)
         payload = build_whatsapp_payload(self.record, destination)
         self.assertEqual(payload["num_receptor"], "50370001111")
-        self.assertNotIn("num_cliente", payload)
+        self.assertEqual(payload["num_cliente"], "50370001111")
         self.assertTrue(payload["send_json"])
         self.assertEqual(payload["tipo_dte"], "01")
         self.assertEqual(payload["doc_type"], "CF")
         self.assertIn("descripcion_msg", payload)
-        self.assertNotIn("Numero de telefono del cliente", payload["descripcion_msg"])
+        self.assertEqual(payload["estado_mh"], "")
         self.assertEqual(payload["empresa"], payload["empresa_nombre"])
         self.assertIsInstance(payload["invoice_json"]["respuesta_hacienda"], dict)
-        self.assertNotIn("sello_recibido", payload)
-        self.assertNotIn("fhProcesamiento", payload)
+        self.assertIn("metadata", payload["invoice_json"])
 
     def test_build_whatsapp_payload_includes_optional_num_cliente_without_changing_num_receptor(self):
         self.order.whatsapp_num_cliente = "+50379378279"
@@ -67,7 +68,7 @@ class DTEWhatsAppServiceTests(TestCase):
         destination = resolve_whatsapp_destination(self.record, to_phone="50378889999")
         payload = build_whatsapp_payload(self.record, destination)
         self.assertEqual(payload["num_receptor"], "50378889999")
-        self.assertEqual(payload["num_cliente"], "+50379378279")
+        self.assertEqual(payload["num_cliente"], "50378889999")
 
     def test_validate_whatsapp_target_rejects_invalid_number(self):
         ok, error, phone = validate_whatsapp_target(self.record, to_phone="abc", allow_default_fallback=False)
@@ -80,7 +81,7 @@ class DTEWhatsAppServiceTests(TestCase):
         destination = resolve_whatsapp_destination(self.record, to_phone="50379998888")
         self.assertTrue(destination.is_valid)
         self.assertEqual(destination.normalized_phone, "50379998888")
-        self.assertEqual(destination.source, "client_phone")
+        self.assertEqual(destination.source, "manual")
 
     @override_settings(WHATSAPP_DEFAULT_TO_PHONE="50370000000", WHATSAPP_ALLOW_DEFAULT_FALLBACK="false")
     def test_missing_phone_without_fallback_returns_error(self):
@@ -129,7 +130,7 @@ class DTEWhatsAppServiceTests(TestCase):
         self.assertIn("json_file", kwargs["files"])
         self.assertEqual(mock_post.call_count, 3)
         self.assertEqual(attempt.provider_body.get("to_phone"), "50379998888")
-        self.assertEqual(attempt.provider_body.get("destination_source"), "client_phone")
+        self.assertEqual(attempt.provider_body.get("destination_source"), "manual")
         self.assertIn("http_400", str(attempt.provider_body.get("error") or ""))
 
     def test_build_payload_handles_missing_receptor_direccion(self):
@@ -181,7 +182,7 @@ class DTEWhatsAppServiceTests(TestCase):
 
         _, kwargs = mock_post.call_args
         self.assertEqual(kwargs["data"]["num_receptor"], "50379998888")
-        self.assertEqual(kwargs["data"]["num_cliente"], "+50379378279")
+        self.assertEqual(kwargs["data"]["num_cliente"], "50379998888")
 
     @override_settings(WHATSAPP_DTE_API_BASE="https://wa.example", WHATSAPP_DTE_API_KEY="k1")
     @patch("apps.dte.services.whatsapp_dte_service.time.sleep", return_value=None)
@@ -250,3 +251,43 @@ class DTEWhatsAppServiceTests(TestCase):
 
         self.assertEqual(attempt.status, "QUEUED")
         self.assertTrue(any("WHATSAPP_OUTGOING_REQUEST" in str(call.args[0]) for call in mock_info.call_args_list))
+
+    def test_build_payload_and_form_include_respuesta_aliases(self):
+        self.record.response_payload = {
+            "respuesta_hacienda": {
+                "estado": "PROCESADO",
+                "selloRecibido": "SELLO_TEST",
+                "fhProcesamiento": "25/04/2026 17:00:57",
+                "descripcionMsg": "RECIBIDO",
+            }
+        }
+        self.record.save(update_fields=["response_payload"])
+        destination = resolve_whatsapp_destination(self.record, to_phone="+503 7913-0580")
+        payload = build_whatsapp_payload(self.record, destination)
+        self.assertEqual(payload["num_receptor"], "50379130580")
+        self.assertEqual(payload["num_cliente"], "50379130580")
+        self.assertEqual(payload["estado_mh"], "PROCESADO")
+        self.assertEqual(payload["estadoMH"], "PROCESADO")
+        self.assertEqual(payload["selloRecibido"], "SELLO_TEST")
+        self.assertEqual(payload["fhProcesamiento"], "25/04/2026 17:00:57")
+        form = _build_whatsapp_form_data(payload)
+        self.assertEqual(form["selloRecibido"], "SELLO_TEST")
+        self.assertEqual(form["sello_recibido"], "SELLO_TEST")
+        self.assertEqual(form["fhProcesamiento"], "25/04/2026 17:00:57")
+        self.assertEqual(form["fh_procesamiento"], "25/04/2026 17:00:57")
+        self.assertEqual(form["estado_mh"], "PROCESADO")
+        self.assertEqual(form["estadoMH"], "PROCESADO")
+
+    def test_json_file_is_generated_from_invoice_json_wrapper(self):
+        self.record.request_payload = {"dte": {"identificacion": {"tipoDte": "01"}, "receptor": {"telefono": "0000-0000"}}}
+        self.record.response_payload = {"respuesta_hacienda": {"estado": "PROCESADO", "selloRecibido": "SELLO_TEST"}}
+        self.record.save(update_fields=["request_payload", "response_payload"])
+        destination = resolve_whatsapp_destination(self.record, to_phone="+503 7913-0580")
+        payload = build_whatsapp_payload(self.record, destination)
+        files, _ = _build_whatsapp_files(self.record, payload)
+        json_name, json_bytes, _ = files["json_file"]
+        self.assertIn("DTE-01", json_name)
+        body = json_bytes.decode("utf-8")
+        self.assertIn('"dte"', body)
+        self.assertIn('"respuesta_hacienda"', body)
+        self.assertIn("SELLO_TEST", body)

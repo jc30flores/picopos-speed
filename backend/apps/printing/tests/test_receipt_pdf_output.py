@@ -9,7 +9,7 @@ try:
 except Exception:  # pragma: no cover
     PdfReader = None
 
-from apps.printing.receipt_pdf import build_receipt_pdf, build_receipt_pdf_from_text
+from apps.printing.receipt_pdf import build_receipt_pdf, build_receipt_pdf_from_text, build_sale_receipt_pdf
 
 
 class ReceiptPdfOutputTests(SimpleTestCase):
@@ -67,3 +67,40 @@ class ReceiptPdfOutputTests(SimpleTestCase):
                 receipt_context={"order_number": 200},
             )
         self.assertTrue(result.pdf_bytes.startswith(b"%PDF"))
+
+    def test_sale_pdf_displays_hacienda_values_and_hides_none(self):
+        if PdfReader is None:
+            self.skipTest("pypdf no está instalado en el entorno de pruebas")
+        result = build_sale_receipt_pdf(
+            receipt_context={
+                "restaurant_name": "Pico de Gallo",
+                "tagline": "Pico de Gallo POS",
+                "address": "San Salvador",
+                "service_type_label": "DINE IN",
+                "cashier_name": "Caja 1",
+                "order_number": 999,
+                "items": [{"qty": 1, "name": "Combo", "unit_price": "10.00", "line_total": "10.00"}],
+                "totals": {"subtotal": "8.85", "iva": "1.15", "total": "10.00"},
+                "payment": {"method_label_es": "Efectivo", "amount_paid": "10.00"},
+                "dte": {
+                    "numero_control": "DTE-01-X001X001-000000000000001",
+                    "codigo_generacion": "A" * 36,
+                    "fecha_dte": "2026-04-25",
+                    "estado_hacienda": "PROCESADO",
+                    "sello_recibido": "SELLO_TEST",
+                    "fh_procesamiento": "25/04/2026 17:00:57",
+                    "responsable_emisor_nombre": None,
+                    "responsable_emisor_documento": "0614-010101-001-1",
+                    "responsable_receptor_nombre": None,
+                    "responsable_receptor_documento": None,
+                },
+            },
+            filename="venta_999.pdf",
+        )
+        reader = PdfReader(BytesIO(result.pdf_bytes))
+        text = (reader.pages[0].extract_text() or "").upper()
+        self.assertIn("SELLO_TEST", text)
+        self.assertIn("PROCESADO", text)
+        self.assertIn("25/04/2026 17:00:57", text)
+        self.assertNotIn("NONE", text)
+        self.assertNotIn("SELLO DE RECEPCION: -", text)

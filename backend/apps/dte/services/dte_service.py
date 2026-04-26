@@ -507,6 +507,47 @@ def _mask_document(value: str) -> str:
     return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
 
 
+def _resolve_extension_payload(*, order, customer, emisor_payload: dict, receptor: dict) -> dict:
+    employee = getattr(order, "employee", None)
+    full_name = ""
+    for candidate in (
+        getattr(employee, "full_name", ""),
+        getattr(employee, "name", ""),
+        getattr(order, "cashier_name", ""),
+        getattr(getattr(order, "created_by", None), "get_full_name", lambda: "")(),
+        getattr(getattr(order, "created_by", None), "username", ""),
+        emisor_payload.get("nombreComercial"),
+        emisor_payload.get("nombre"),
+    ):
+        candidate_text = str(candidate or "").strip()
+        if candidate_text:
+            full_name = candidate_text
+            break
+
+    employee_doc = ""
+    for candidate in (
+        getattr(employee, "document", ""),
+        getattr(employee, "dui", ""),
+        getattr(employee, "nit", ""),
+        emisor_payload.get("nit"),
+    ):
+        candidate_text = str(candidate or "").strip()
+        if candidate_text:
+            employee_doc = candidate_text
+            break
+
+    receptor_name = str(receptor.get("nombre") or "").strip() or "CONSUMIDOR FINAL"
+    receptor_doc = str(receptor.get("numDocumento") or "").strip()
+    return {
+        "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if order.iva_exempt else ""),
+        "placaVehiculo": None,
+        "docuRecibe": receptor_doc or "",
+        "nombEntrega": full_name or "",
+        "nombRecibe": receptor_name,
+        "docuEntrega": employee_doc or "",
+    }
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -1211,10 +1252,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "receptor": receptor,
         "cuerpoDocumento": cuerpo,
         "resumen": resumen,
-        "extension": {
-            "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if order.iva_exempt else ""),
-            "placaVehiculo": None, "docuRecibe": None, "nombEntrega": None, "nombRecibe": None, "docuEntrega": None,
-        },
+        "extension": _resolve_extension_payload(order=order, customer=customer, emisor_payload=emisor_payload, receptor=receptor),
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
     validate_dte_preflight_payload(payload)

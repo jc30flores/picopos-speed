@@ -21,7 +21,7 @@ import { DteRowActions } from "@/components/dte/DteRowActions";
 import { PageLayout } from "@/components/layout/PageLayout";
 import { useAuth } from "@/context/useAuth";
 import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
-import { maskPhoneForLog, resolveWhatsappDestination, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
+import { formatPhoneDisplay, maskPhoneForLog, resolveWhatsappDestination, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -289,7 +289,13 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
     setWhatsError("");
     setActionsLoading((prev) => ({ ...prev, [whatsTarget.id]: "whatsapp" }));
     try {
-      const result = await dteDeliver(whatsTarget.id, ["whatsapp"], { phone: resolved.phone });
+      const displayPhone = formatPhoneDisplay(resolved.phone);
+      const result = await dteDeliver(whatsTarget.id, ["whatsapp"], {
+        phone: resolved.phone,
+        numCliente: resolved.phone,
+        clienteTelefono: displayPhone,
+        destinationSource: resolved.source === "manual" ? "manual" : "client_phone",
+      });
       const channel = result.results?.whatsapp;
       toast({
         title: "WhatsApp",

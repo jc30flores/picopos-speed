@@ -73,3 +73,15 @@ export const maskPhoneForLog = (value: string): string => {
   if (!digits) return "***";
   return `***${digits.slice(-4)}`;
 };
+
+export const formatPhoneDisplay = (value: string): string => {
+  const digits = digitsOnly(value);
+  if (!digits) return "";
+  if (digits.startsWith("503") && digits.length === 11) {
+    return `+503 ${digits.slice(3, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.startsWith("1") && digits.length === 11) {
+    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return value;
+};
