@@ -339,9 +339,16 @@ class AttendanceHistoryRowSerializer(serializers.Serializer):
     clock_out = serializers.DateTimeField(allow_null=True)
 
 
-def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict:
-    cycles_qs = list(record.cycles.all().order_by("sequence", "id"))
-    if not cycles_qs and (record.clock_in or record.check_in):
+def build_attendance_state(record: AttendanceRecord | None, employee: Employee) -> dict:
+    record_date = timezone.localdate()
+    cycles_qs: list[AttendanceCycle] = []
+
+    if record is not None:
+        record_date = record.date
+        if record.pk:
+            cycles_qs = list(record.cycles.all().order_by("sequence", "id"))
+
+    if record is not None and not cycles_qs and (record.clock_in or record.check_in):
         legacy_clock_in = record.clock_in or record.check_in
         legacy_clock_out = record.clock_out or record.check_out
         cycles_qs = [
@@ -397,7 +404,7 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
     ]
     return {
         "employee": {"id": employee.id, "name": employee.full_name, "role": employee.role},
-        "date": record.date,
+        "date": record_date,
         "clock_in": clock_in,
         "break_start": break_start,
         "break_end": break_end,

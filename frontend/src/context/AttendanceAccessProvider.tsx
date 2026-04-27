@@ -15,6 +15,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   const [attendanceResolved, setAttendanceResolved] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const refreshSeqRef = useRef(0);
+  const lastUserIdRef = useRef<number | null>(null);
 
   const bypassAttendance = Boolean(user?.isSuperuser || user?.role === "admin");
 
@@ -87,8 +88,18 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   );
 
   useEffect(() => {
+    const currentUserId = user?.id ?? null;
+    if (lastUserIdRef.current !== currentUserId) {
+      lastUserIdRef.current = currentUserId;
+      refreshSeqRef.current += 1;
+      setAttendance(null);
+      setAttendanceError(null);
+      setAttendanceLoading(false);
+      setAttendanceResolved(Boolean(!user || bypassAttendance));
+      attendanceLog("user_changed_reset", { userId: currentUserId, bypassAttendance });
+    }
     void refreshAttendance("user_change");
-  }, [refreshAttendance]);
+  }, [bypassAttendance, refreshAttendance, user]);
 
   const accessState = useMemo(() => {
     const next = getAttendanceAccessState(attendance, {

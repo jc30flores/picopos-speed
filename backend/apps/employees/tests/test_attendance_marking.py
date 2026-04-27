@@ -3,7 +3,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch
-from apps.employees.models import Employee
+from apps.employees.models import AttendanceRecord, Employee
+from apps.employees.serializers import build_attendance_state
 from apps.users.models import UserProfile
 
 
@@ -41,6 +42,10 @@ class AttendanceMarkingTests(TestCase):
 
         clock_out_invalid = self.client.post("/api/employees/attendance/clock-out/")
         self.assertEqual(clock_out_invalid.status_code, 400)
+        self.assertEqual(
+            clock_out_invalid.json()["detail"],
+            "Debes completar el break (salida y regreso) antes de marcar salida.",
+        )
 
         break_end = self.client.post("/api/employees/attendance/break-end/")
         self.assertEqual(break_end.status_code, 200)
@@ -106,3 +111,25 @@ class AttendanceMarkingTests(TestCase):
         clock_in = self.client.post("/api/employees/attendance/clock-in/")
         self.assertEqual(clock_in.status_code, 404)
         self.assertEqual(clock_in.json().get("state"), "NO_EMPLOYEE")
+
+    def test_today_without_record_does_not_create_empty_attendance_row(self):
+        self.assertEqual(AttendanceRecord.objects.filter(employee=self.employee).count(), 0)
+        today = self.client.get("/api/employees/attendance/today/")
+        self.assertEqual(today.status_code, 200)
+        self.assertEqual(today.json()["state"], "NO_RECORD_TODAY")
+        self.assertEqual(today.json()["attendance"]["state"], "OFF_SHIFT")
+        self.assertEqual(AttendanceRecord.objects.filter(employee=self.employee).count(), 0)
+
+    def test_build_attendance_state_handles_none_and_unsaved_record(self):
+        payload_none = build_attendance_state(None, self.employee)
+        self.assertEqual(payload_none["state"], "OFF_SHIFT")
+        self.assertEqual(payload_none["total_entries_today"], 0)
+        self.assertEqual(payload_none["total_exits_today"], 0)
+        self.assertIsNone(payload_none["clock_in"])
+
+        unsaved = AttendanceRecord(employee=self.employee, date=payload_none["date"])
+        payload_unsaved = build_attendance_state(unsaved, self.employee)
+        self.assertEqual(payload_unsaved["state"], "OFF_SHIFT")
+        self.assertEqual(payload_unsaved["total_entries_today"], 0)
+        self.assertEqual(payload_unsaved["total_exits_today"], 0)
+        self.assertIsNone(payload_unsaved["clock_in"])

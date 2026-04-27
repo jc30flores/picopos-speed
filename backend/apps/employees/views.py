@@ -121,13 +121,12 @@ class AttendanceTodayView(APIView):
     def get(self, request, *args, **kwargs):
         employee = _get_employee_for_user(request.user)
         if not employee:
-            logger.info("attendance.today.no_employee user_id=%s", request.user.id)
+            logger.info("ATTENDANCE_USER_NO_EMPLOYEE user_id=%s", request.user.id)
             return Response({"attendance": None, "state": "NO_EMPLOYEE"}, status=status.HTTP_200_OK)
         record = _today_record_if_exists(employee)
         if not record:
-            empty_record = AttendanceRecord(employee=employee, date=timezone.localdate())
-            payload = build_attendance_state(empty_record, employee)
-            logger.info("attendance.today.no_record user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
+            payload = build_attendance_state(None, employee)
+            logger.info("ATTENDANCE_TODAY_NO_RECORD user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
             return Response(
                 {
                     "attendance": AttendanceStateSerializer(payload).data,
@@ -136,7 +135,7 @@ class AttendanceTodayView(APIView):
                 status=status.HTTP_200_OK,
             )
         payload = build_attendance_state(record, employee)
-        logger.info("attendance.today.ok user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
+        logger.info("ATTENDANCE_TODAY_STATE user_id=%s employee_id=%s payload=%s", request.user.id, employee.id, payload)
         return Response({"attendance": AttendanceStateSerializer(payload).data, "state": "OK"}, status=status.HTTP_200_OK)
 
 
@@ -225,11 +224,11 @@ class AttendanceActionView(APIView):
             if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
             if not active_cycle.break_start_at:
-                return Response({"detail": "Debes salir y regresar de break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
             if not active_cycle.break_end_at:
-                return Response({"detail": "Debes regresar del break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
             if active_cycle.break_start_at and not active_cycle.break_end_at:
-                return Response({"detail": "Debes regresar del break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
             active_cycle.clock_out_at = now
             active_cycle.save(update_fields=["clock_out_at", "updated_at"])
             record.clock_out = now
