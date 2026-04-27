@@ -574,6 +574,10 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   canBreakStart: false,
   canBreakEnd: false,
   canClockOut: false,
+  state: "OFF_SHIFT",
+  accessAllowed: false,
+  activeCycle: null,
+  cyclesToday: [],
 });
 
 const request = async (path: string, options: RequestInit = {}) => {
@@ -3322,6 +3326,22 @@ export type AttendanceState = {
   canBreakStart: boolean;
   canBreakEnd: boolean;
   canClockOut: boolean;
+  state: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  accessAllowed: boolean;
+  activeCycle: {
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  } | null;
+  cyclesToday: Array<{
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  }>;
 };
 
 export type AttendanceHistoryRow = {
@@ -3349,6 +3369,22 @@ const mapAttendanceState = (data: {
   can_break_start: boolean;
   can_break_end: boolean;
   can_clock_out: boolean;
+  state?: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  access_allowed?: boolean;
+  active_cycle?: {
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  } | null;
+  cycles_today?: Array<{
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  }>;
 }): AttendanceState => ({
   employee: data.employee,
   date: data.date,
@@ -3368,6 +3404,10 @@ const mapAttendanceState = (data: {
   canBreakStart: data.can_break_start,
   canBreakEnd: data.can_break_end,
   canClockOut: data.can_clock_out,
+  state: data.state ?? "OFF_SHIFT",
+  accessAllowed: typeof data.access_allowed === "boolean" ? data.access_allowed : Boolean(data.has_active_session),
+  activeCycle: data.active_cycle ?? null,
+  cyclesToday: data.cycles_today ?? [],
 });
 
 export const getMyAttendanceToday = async (): Promise<AttendanceState> => {

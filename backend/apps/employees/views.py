@@ -8,7 +8,7 @@ from apps.core.audit import log_audit
 from apps.core.permissions import IsAdminOrManager, IsAuthenticatedAndActive
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.employees.models import Employee, AttendanceRecord, Schedule
+from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, Schedule
 from apps.employees.serializers import (
     EmployeeSerializer,
     AttendanceSerializer,
@@ -156,9 +156,26 @@ class AttendanceActionView(APIView):
         today = timezone.localdate()
         record, _ = AttendanceRecord.objects.select_for_update().get_or_create(employee=employee, date=today)
         now = timezone.now()
-        clock_in = record.clock_in or record.check_in
-        clock_out = record.clock_out or record.check_out
-        has_active_session = bool(clock_in and (clock_out is None or clock_in > clock_out))
+        active_cycle = (
+            AttendanceCycle.objects.select_for_update()
+            .filter(attendance_record=record, clock_out_at__isnull=True)
+            .order_by("-sequence", "-id")
+            .first()
+        )
+        if not active_cycle and (record.clock_in or record.check_in) and not (record.clock_out or record.check_out):
+            next_sequence = (AttendanceCycle.objects.filter(attendance_record=record).order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
+            active_cycle = AttendanceCycle.objects.create(
+                attendance_record=record,
+                sequence=next_sequence,
+                clock_in_at=record.clock_in or record.check_in,
+                break_start_at=record.break_start,
+                break_end_at=record.break_end,
+            )
+        clock_in = active_cycle.clock_in_at if active_cycle else (record.clock_in or record.check_in)
+        clock_out = active_cycle.clock_out_at if active_cycle else (record.clock_out or record.check_out)
+        has_active_session = active_cycle is not None
+        break_start = active_cycle.break_start_at if active_cycle else None
+        break_end = active_cycle.break_end_at if active_cycle else None
         logger.info(
             "attendance.action.start user_id=%s employee_id=%s action=%s clock_in=%s clock_out=%s has_active_session=%s break_start=%s break_end=%s",
             request.user.id,
@@ -167,16 +184,18 @@ class AttendanceActionView(APIView):
             clock_in,
             clock_out,
             has_active_session,
-            record.break_start,
-            record.break_end,
+            break_start,
+            break_end,
         )
 
         if self.action == "clock_in":
             if has_active_session:
                 payload = build_attendance_state(record, employee)
                 return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
-            record.clock_in = now
-            record.check_in = now
+            next_sequence = (AttendanceCycle.objects.filter(attendance_record=record).order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
+            active_cycle = AttendanceCycle.objects.create(attendance_record=record, sequence=next_sequence, clock_in_at=now)
+            record.clock_in = active_cycle.clock_in_at
+            record.check_in = active_cycle.clock_in_at
             record.clock_out = None
             record.check_out = None
             record.break_start = None
@@ -184,23 +203,35 @@ class AttendanceActionView(APIView):
             record.total_clock_ins = int(record.total_clock_ins or 0) + 1
         elif self.action == "break_start":
             if not has_active_session:
-                return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
-            if record.break_start:
-                return Response({"detail": "Break ya iniciado."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Debes marcar entrada antes de salir a break."}, status=status.HTTP_400_BAD_REQUEST)
+            if active_cycle.break_start_at and not active_cycle.break_end_at:
+                return Response({"detail": "Ya estás en break."}, status=status.HTTP_400_BAD_REQUEST)
+            if active_cycle.break_start_at and active_cycle.break_end_at:
+                return Response({"detail": "Ya completaste el break de este ciclo."}, status=status.HTTP_400_BAD_REQUEST)
+            active_cycle.break_start_at = now
+            active_cycle.save(update_fields=["break_start_at", "updated_at"])
             record.break_start = now
         elif self.action == "break_end":
-            if not record.break_start:
-                return Response({"detail": "Debes iniciar break primero."}, status=status.HTTP_400_BAD_REQUEST)
-            if record.break_end:
-                return Response({"detail": "Break ya finalizado."}, status=status.HTTP_400_BAD_REQUEST)
             if not has_active_session:
                 return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
+            if not active_cycle.break_start_at:
+                return Response({"detail": "Debes marcar salida a break primero."}, status=status.HTTP_400_BAD_REQUEST)
+            if active_cycle.break_end_at:
+                return Response({"detail": "Break ya finalizado."}, status=status.HTTP_400_BAD_REQUEST)
+            active_cycle.break_end_at = now
+            active_cycle.save(update_fields=["break_end_at", "updated_at"])
             record.break_end = now
         elif self.action == "clock_out":
             if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
-            if record.break_start and not record.break_end:
-                return Response({"detail": "Debes finalizar el break antes de salida."}, status=status.HTTP_400_BAD_REQUEST)
+            if not active_cycle.break_start_at:
+                return Response({"detail": "Debes salir y regresar de break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+            if not active_cycle.break_end_at:
+                return Response({"detail": "Debes regresar del break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+            if active_cycle.break_start_at and not active_cycle.break_end_at:
+                return Response({"detail": "Debes regresar del break antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+            active_cycle.clock_out_at = now
+            active_cycle.save(update_fields=["clock_out_at", "updated_at"])
             record.clock_out = now
             record.check_out = now
             record.total_clock_outs = int(record.total_clock_outs or 0) + 1
@@ -241,16 +272,30 @@ class AttendanceMeHistoryView(APIView):
             queryset = queryset.filter(date__gte=start)
         if end:
             queryset = queryset.filter(date__lte=end)
-        rows = [
-            {
-                "date": row.date,
-                "clock_in": row.clock_in or row.check_in,
-                "break_start": row.break_start,
-                "break_end": row.break_end,
-                "clock_out": row.clock_out or row.check_out,
-            }
-            for row in queryset[:200]
-        ]
+        rows = []
+        for row in queryset[:200]:
+            cycles = list(row.cycles.all().order_by("sequence", "id"))
+            if not cycles and (row.clock_in or row.check_in):
+                rows.append(
+                    {
+                        "date": row.date,
+                        "clock_in": row.clock_in or row.check_in,
+                        "break_start": row.break_start,
+                        "break_end": row.break_end,
+                        "clock_out": row.clock_out or row.check_out,
+                    }
+                )
+                continue
+            for cycle in cycles:
+                rows.append(
+                    {
+                        "date": row.date,
+                        "clock_in": cycle.clock_in_at,
+                        "break_start": cycle.break_start_at,
+                        "break_end": cycle.break_end_at,
+                        "clock_out": cycle.clock_out_at,
+                    }
+                )
         return Response(
             {
                 "attendance": {"employee_id": employee.id},
@@ -275,16 +320,30 @@ class AttendanceEmployeeHistoryView(APIView):
             queryset = queryset.filter(date__gte=start)
         if end:
             queryset = queryset.filter(date__lte=end)
-        rows = [
-            {
-                "date": row.date,
-                "clock_in": row.clock_in or row.check_in,
-                "break_start": row.break_start,
-                "break_end": row.break_end,
-                "clock_out": row.clock_out or row.check_out,
-            }
-            for row in queryset[:365]
-        ]
+        rows = []
+        for row in queryset[:365]:
+            cycles = list(row.cycles.all().order_by("sequence", "id"))
+            if not cycles and (row.clock_in or row.check_in):
+                rows.append(
+                    {
+                        "date": row.date,
+                        "clock_in": row.clock_in or row.check_in,
+                        "break_start": row.break_start,
+                        "break_end": row.break_end,
+                        "clock_out": row.clock_out or row.check_out,
+                    }
+                )
+                continue
+            for cycle in cycles:
+                rows.append(
+                    {
+                        "date": row.date,
+                        "clock_in": cycle.clock_in_at,
+                        "break_start": cycle.break_start_at,
+                        "break_end": cycle.break_end_at,
+                        "clock_out": cycle.clock_out_at,
+                    }
+                )
         return Response(AttendanceHistoryRowSerializer(rows, many=True).data)
 
 

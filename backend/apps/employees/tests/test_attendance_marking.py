@@ -26,11 +26,16 @@ class AttendanceMarkingTests(TestCase):
         self.assertEqual(clock_in.status_code, 200)
         self.assertEqual(clock_in.json()["total_entries_today"], 1)
         self.assertEqual(clock_in.json()["total_exits_today"], 0)
+        self.assertEqual(clock_in.json()["state"], "WORKING_BEFORE_BREAK")
+        self.assertTrue(clock_in.json()["access_allowed"])
         self.assertTrue(clock_in.json()["can_break_start"])
-        self.assertTrue(clock_in.json()["can_clock_out"])
+        self.assertFalse(clock_in.json()["can_clock_out"])
 
         break_start = self.client.post("/api/employees/attendance/break-start/")
         self.assertEqual(break_start.status_code, 200)
+        self.assertEqual(break_start.json()["state"], "ON_BREAK")
+        self.assertFalse(break_start.json()["access_allowed"])
+        self.assertFalse(break_start.json()["can_break_start"])
         self.assertTrue(break_start.json()["can_break_end"])
         self.assertFalse(break_start.json()["can_clock_out"])
 
@@ -39,10 +44,16 @@ class AttendanceMarkingTests(TestCase):
 
         break_end = self.client.post("/api/employees/attendance/break-end/")
         self.assertEqual(break_end.status_code, 200)
+        self.assertEqual(break_end.json()["state"], "WORKING_AFTER_BREAK")
+        self.assertTrue(break_end.json()["access_allowed"])
+        self.assertFalse(break_end.json()["can_break_start"])
+        self.assertFalse(break_end.json()["can_break_end"])
         self.assertTrue(break_end.json()["can_clock_out"])
 
         clock_out = self.client.post("/api/employees/attendance/clock-out/")
         self.assertEqual(clock_out.status_code, 200)
+        self.assertEqual(clock_out.json()["state"], "OFF_SHIFT")
+        self.assertFalse(clock_out.json()["access_allowed"])
         self.assertFalse(clock_out.json()["has_active_session"])
         self.assertEqual(clock_out.json()["total_entries_today"], 1)
         self.assertEqual(clock_out.json()["total_exits_today"], 1)
@@ -54,7 +65,10 @@ class AttendanceMarkingTests(TestCase):
         self.assertEqual(first_clock_in.status_code, 200)
         self.assertTrue(first_clock_in.json()["has_active_session"])
         self.assertFalse(first_clock_in.json()["can_clock_in"])
-        self.assertTrue(first_clock_in.json()["can_clock_out"])
+        self.assertFalse(first_clock_in.json()["can_clock_out"])
+
+        self.client.post("/api/employees/attendance/break-start/")
+        self.client.post("/api/employees/attendance/break-end/")
 
         first_clock_out = self.client.post("/api/employees/attendance/clock-out/")
         self.assertEqual(first_clock_out.status_code, 200)
@@ -68,7 +82,15 @@ class AttendanceMarkingTests(TestCase):
         self.assertEqual(second_clock_in.json()["total_entries_today"], 2)
         self.assertEqual(second_clock_in.json()["total_exits_today"], 1)
         self.assertFalse(second_clock_in.json()["can_clock_in"])
-        self.assertTrue(second_clock_in.json()["can_clock_out"])
+        self.assertTrue(second_clock_in.json()["can_break_start"])
+
+        self.client.post("/api/employees/attendance/break-start/")
+        self.client.post("/api/employees/attendance/break-end/")
+        second_clock_out = self.client.post("/api/employees/attendance/clock-out/")
+        self.assertEqual(second_clock_out.status_code, 200)
+        self.assertEqual(second_clock_out.json()["total_entries_today"], 2)
+        self.assertEqual(second_clock_out.json()["total_exits_today"], 2)
+        self.assertEqual(len(second_clock_out.json()["cycles_today"]), 2)
 
     def test_attendance_endpoints_without_employee_return_200_payload(self):
         self.employee.delete()

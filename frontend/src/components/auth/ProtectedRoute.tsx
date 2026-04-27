@@ -35,6 +35,8 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
     if (blockedByAttendance) {
       if (attendanceError) {
         toast.error(`No se pudo validar asistencia: ${attendanceError}`);
+      } else if (accessState.blockReason === "ON_BREAK") {
+        toast.error("No puedes acceder mientras estás en break. Marca regreso de break para continuar.");
       } else if (accessState.blockReason === "CLOCKED_OUT") {
         toast.error("Tu jornada ya fue cerrada. Debes marcar Entrada en un nuevo turno.");
       } else {

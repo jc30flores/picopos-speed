@@ -1,6 +1,6 @@
 import type { AttendanceState } from "@/lib/api";
 
-export type AttendanceBlockReason = "MISSING_CLOCK_IN" | "CLOCKED_OUT" | "ERROR" | "NONE";
+export type AttendanceBlockReason = "MISSING_CLOCK_IN" | "CLOCKED_OUT" | "ON_BREAK" | "ERROR" | "NONE";
 
 export type AttendanceAccessState = {
   hasClockInToday: boolean;
@@ -25,7 +25,8 @@ export const getAttendanceAccessState = (
   const hasClockInToday = Boolean(attendance?.clockIn);
   const hasClockOutToday = Boolean(attendance?.clockOut);
   const hasActiveSession = Boolean(attendance?.hasActiveSession);
-  const canAccessDashboard = hasActiveSession;
+  const isOnBreak = attendance?.state === "ON_BREAK";
+  const canAccessDashboard = Boolean(attendance?.accessAllowed) && !isOnBreak;
 
   if (options?.hasError) {
     return {
@@ -33,6 +34,15 @@ export const getAttendanceAccessState = (
       hasClockOutToday,
       canAccessDashboard: false,
       blockReason: "ERROR",
+    };
+  }
+
+  if (isOnBreak) {
+    return {
+      hasClockInToday,
+      hasClockOutToday,
+      canAccessDashboard: false,
+      blockReason: "ON_BREAK",
     };
   }
 
