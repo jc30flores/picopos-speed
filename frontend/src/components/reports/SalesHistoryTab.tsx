@@ -243,18 +243,33 @@ export const SalesHistoryTab = () => {
       toast.error("Selecciona un método de pago");
       return;
     }
+    const selectedMethod = paymentMethodOptions.find((method) => method.code === selectedMethodCode);
+    const currentCode = String(selectedSale.paymentMethodCode || "").trim().toLowerCase();
+    const nextCode = String(selectedMethodCode || "").trim().toLowerCase();
+    if (currentCode && nextCode && currentCode === nextCode) {
+      toast.message("El método de pago ya está aplicado.");
+      return;
+    }
+    console.info("sales.payment_method_change.payload", {
+      paymentId: selectedSale.paymentId,
+      selectedMethodCode: selectedMethodCode || null,
+      selectedMethodId: selectedMethod?.id ?? null,
+      selectedMethodName: selectedMethod?.name ?? null,
+    });
     try {
       setIsChangingMethod(true);
       await changeInternalPaymentMethod(selectedSale.paymentId, {
-        paymentMethodCode: selectedMethodCode,
+        paymentMethodCode: selectedMethodCode || undefined,
+        paymentMethodId: selectedMethod?.id,
         reason: methodChangeReason.trim(),
       });
-      toast.success("Método actualizado");
+      toast.success("Método de pago actualizado.");
       setIsMethodChangeOpen(false);
       await loadSales(debouncedSearchQuery);
     } catch (error) {
       console.error("Failed to update payment method", error);
-      toast.error(error instanceof Error ? error.message : "No se pudo actualizar el método");
+      const fallback = "No se pudo cambiar el método de pago. Verifica que el método esté activo.";
+      toast.error(error instanceof Error && error.message ? error.message : fallback);
     } finally {
       setIsChangingMethod(false);
     }
@@ -665,7 +680,7 @@ export const SalesHistoryTab = () => {
                     <SelectValue placeholder="Seleccionar método" />
                   </SelectTrigger>
                   <SelectContent>
-                    {paymentMethodOptions.map((method) => (
+                    {paymentMethodOptions.filter((method) => method.isActive).map((method) => (
                       <SelectItem key={method.id} value={method.code}>
                         {method.name}
                       </SelectItem>
@@ -681,7 +696,15 @@ export const SalesHistoryTab = () => {
                 <Button variant="outline" className="flex-1" onClick={() => setIsMethodChangeOpen(false)}>
                   Cancelar
                 </Button>
-                <Button className="flex-1" onClick={handlePaymentMethodChange} disabled={isChangingMethod}>
+                <Button
+                  className="flex-1"
+                  onClick={handlePaymentMethodChange}
+                  disabled={
+                    isChangingMethod ||
+                    !selectedMethodCode ||
+                    String(selectedMethodCode || "").trim().toLowerCase() === String(selectedSale.paymentMethodCode || "").trim().toLowerCase()
+                  }
+                >
                   {isChangingMethod ? "Guardando..." : "Confirmar"}
                 </Button>
               </div>

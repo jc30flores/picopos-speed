@@ -5,6 +5,7 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
@@ -345,12 +346,46 @@ class PaymentInternalMethodUpdateView(APIView):
             )
 
         serializer = InternalPaymentMethodChangeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        previous_method = payment.reporting_payment_method or payment.payment_method
+        logger.info(
+            "PAYMENT_INTERNAL_METHOD_CHANGE_REQUEST payment_id=%s order_id=%s old_method=%s requested_method_code=%s requested_method_id=%s user_id=%s",
+            payment.id,
+            payment.order_id,
+            getattr(previous_method, "code", None),
+            request.data.get("payment_method_code") or request.data.get("code") or request.data.get("payment_method"),
+            request.data.get("payment_method_id") or request.data.get("method_id"),
+            getattr(request.user, "id", None),
+        )
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            valid_methods = serializer.context.get("valid_methods") or []
+            logger.info(
+                "PAYMENT_INTERNAL_METHOD_CHANGE_INVALID payment_id=%s requested_value=%s valid_active_codes=%s",
+                payment.id,
+                request.data.get("payment_method_code")
+                or request.data.get("code")
+                or request.data.get("payment_method")
+                or request.data.get("payment_method_id")
+                or request.data.get("method_id")
+                or request.data.get("name")
+                or request.data.get("label"),
+                [item.get("code") for item in valid_methods],
+            )
+            raise
         new_method: PaymentMethod = serializer.context["new_method"]
         reason = (serializer.validated_data.get("reason") or "").strip()
-        previous_method = payment.reporting_payment_method or payment.payment_method
         if previous_method and previous_method.id == new_method.id:
-            return Response({"detail": "El método seleccionado ya está aplicado."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "id": payment.id,
+                    "order_id": payment.order_id,
+                    "payment_method_code": new_method.code,
+                    "payment_method_name": new_method.name,
+                    "detail": f"El método de pago ya es {new_method.name}.",
+                },
+                status=status.HTTP_200_OK,
+            )
 
         payment.reporting_payment_method = new_method
         payment.save(update_fields=["reporting_payment_method"])
@@ -374,6 +409,13 @@ class PaymentInternalMethodUpdateView(APIView):
                 "new_method": new_method.code,
                 "reason": reason,
             },
+        )
+        logger.info(
+            "PAYMENT_INTERNAL_METHOD_CHANGE_SUCCESS payment_id=%s old_method=%s new_method=%s reason_present=%s",
+            payment.id,
+            previous_method.code if previous_method else None,
+            new_method.code,
+            bool(reason),
         )
 
         return Response(

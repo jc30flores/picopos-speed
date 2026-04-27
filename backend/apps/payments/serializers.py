@@ -207,15 +207,54 @@ class RefundSerializer(serializers.ModelSerializer):
 
 
 class InternalPaymentMethodChangeSerializer(serializers.Serializer):
-    payment_method_code = serializers.CharField()
+    payment_method_code = serializers.CharField(required=False, allow_blank=True)
+    payment_method_id = serializers.IntegerField(required=False)
+    method_id = serializers.IntegerField(required=False)
+    code = serializers.CharField(required=False, allow_blank=True)
+    payment_method = serializers.CharField(required=False, allow_blank=True)
+    name = serializers.CharField(required=False, allow_blank=True)
+    label = serializers.CharField(required=False, allow_blank=True)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=240)
 
-    def validate_payment_method_code(self, value: str) -> str:
-        code = normalize_payment_method_code(value)
-        if not code:
-            raise serializers.ValidationError("Seleccione un método válido.")
-        method = PaymentMethod.objects.filter(code__iexact=code, is_active=True).first()
-        if not method:
-            raise serializers.ValidationError("Método de pago no válido o inactivo.")
+    def validate(self, attrs):
+        valid_methods = list(PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name"))
+        valid_methods_payload = [{"id": item.id, "code": item.code, "name": item.name} for item in valid_methods]
+        self.context["valid_methods"] = valid_methods_payload
+
+        requested_code = (
+            attrs.get("payment_method_code")
+            or attrs.get("code")
+            or attrs.get("payment_method")
+            or ""
+        )
+        requested_name = attrs.get("name") or attrs.get("label") or ""
+        requested_id = attrs.get("payment_method_id") or attrs.get("method_id")
+        self.context["requested_payment_method_code"] = requested_code
+        self.context["requested_payment_method_id"] = requested_id
+
+        method: PaymentMethod | None = None
+        if requested_id is not None:
+            method = PaymentMethod.objects.filter(id=requested_id, is_active=True).first()
+
+        normalized_code = normalize_payment_method_code(str(requested_code or ""))
+        if method is None and normalized_code:
+            method = resolve_payment_method(normalized_code, active_only=True)
+
+        if method is None and requested_name:
+            normalized_name = normalize_payment_method_code(str(requested_name or ""))
+            for candidate in valid_methods:
+                if normalize_payment_method_code(candidate.name) == normalized_name:
+                    method = candidate
+                    break
+
+        if method is None:
+            raise serializers.ValidationError(
+                {
+                    "payment_method_code": ["Método de pago no válido o inactivo."],
+                    "valid_methods": valid_methods_payload,
+                }
+            )
+
+        attrs["payment_method_code"] = normalize_payment_method_code(method.code)
         self.context["new_method"] = method
-        return code
+        return attrs

@@ -3844,20 +3844,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="rounded-xl border bg-muted/20 px-4 py-4 text-center">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">TOTAL A PAGAR</p>
-              <p className="mt-2 text-4xl font-extrabold text-secondary">
-                {formatMoney(saleCompletionSummary?.totalToPay ?? checkoutSummaryTotal)}
-              </p>
-              {shouldShowChange(saleCompletionSummary) ? (
-                <div className="mt-4 border-t border-border/60 pt-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">CAMBIO</p>
-                  <p className="mt-1 text-4xl font-extrabold text-amber-500">
-                    {formatMoney(saleCompletionSummary?.changeAmount ?? 0)}
-                  </p>
-                </div>
-              ) : null}
-            </div>
+            {shouldShowChange(saleCompletionSummary) ? (
+              <div className="rounded-xl border bg-muted/20 px-4 py-4 text-center">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">CAMBIO</p>
+                <p className="mt-1 text-4xl font-extrabold text-amber-500">
+                  {formatMoney(saleCompletionSummary?.changeAmount ?? 0)}
+                </p>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />

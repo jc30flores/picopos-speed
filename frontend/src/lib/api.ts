@@ -341,6 +341,7 @@ export type PaymentMethodOption = {
   name: string;
   isCash: boolean;
   sortOrder: number;
+  isActive: boolean;
 };
 
 export type CashSessionSnapshot = {
@@ -2817,12 +2818,13 @@ export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; 
 
 export const changeInternalPaymentMethod = async (
   paymentId: number,
-  payload: { paymentMethodCode: string; reason?: string }
+  payload: { paymentMethodCode?: string; paymentMethodId?: number; reason?: string }
 ): Promise<{ paymentMethodCode: string; paymentMethodName: string }> => {
   const response = await request(`/payments/${paymentId}/internal-payment-method/`, {
     method: "PATCH",
     body: JSON.stringify({
-      payment_method_code: payload.paymentMethodCode,
+      payment_method_code: payload.paymentMethodCode ?? "",
+      payment_method_id: payload.paymentMethodId ?? null,
       reason: payload.reason ?? "",
     }),
   });
@@ -3721,6 +3723,7 @@ export const getPaymentMethods = async (): Promise<PaymentMethodOption[]> => {
     name: m.name,
     isCash: Boolean(m.is_cash),
     sortOrder: Number(m.sort_order ?? 0),
+    isActive: Boolean(m.is_active ?? true),
   }));
 };
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
