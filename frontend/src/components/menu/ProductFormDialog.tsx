@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
 import {
   Category,
+  InventoryProductLink,
   Product,
   ProductSpecialPriceRule,
   createCategory,
@@ -17,12 +18,15 @@ import {
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
+  getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
+  saveProductEffectiveInventoryLinks,
   updateProduct,
   updateProductSpecialPrice,
 } from "@/lib/api";
 import { toast } from "sonner";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { ProductInventoryLinksDialog } from "./ProductInventoryLinksDialog";
 
 interface ProductFormDialogProps {
   open: boolean;
@@ -79,6 +83,8 @@ export const ProductFormDialog = ({
   const [requiresKitchen, setRequiresKitchen] = useState(false);
   const [disposableFee, setDisposableFee] = useState("0");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
+  const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
+  const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
   const { activeServiceTypes: serviceTypes } = useServiceTypes();
   const [specialRules, setSpecialRules] = useState<ProductSpecialPriceRule[]>([]);
@@ -99,6 +105,7 @@ export const ProductFormDialog = ({
       setRequiresKitchen(editingProduct.requiresKitchen);
       setDisposableFee(String(editingProduct.disposableFee ?? 0));
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
+      setInventoryLinks(editingProduct.inventoryLinks ?? []);
     } else {
       setName("");
       setDescription("");
@@ -111,6 +118,7 @@ export const ProductFormDialog = ({
       setRequiresKitchen(false);
       setDisposableFee("0");
       setDisposableApplyTo([]);
+      setInventoryLinks([]);
     }
   }, [editingProduct, open]);
 
@@ -123,6 +131,13 @@ export const ProductFormDialog = ({
     listProductSpecialPrices(editingProduct.id)
       .then(setSpecialRules)
       .catch(() => setSpecialRules([]));
+  }, [open, editingProduct]);
+
+  useEffect(() => {
+    if (!open || !editingProduct) return;
+    getProductEffectiveInventoryLinks(editingProduct.id)
+      .then((links) => setInventoryLinks(links))
+      .catch(() => setInventoryLinks(editingProduct.inventoryLinks ?? []));
   }, [open, editingProduct]);
 
   useEffect(() => {
@@ -206,9 +221,16 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
+        inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
     }
     await onSaved();
+    if (editingProduct) {
+      await saveProductEffectiveInventoryLinks(
+        editingProduct.id,
+        inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
+      );
+    }
     onOpenChange(false);
   };
 
@@ -409,6 +431,28 @@ export const ProductFormDialog = ({
                 <Label htmlFor="available" className="cursor-pointer">Disponible</Label>
               </div>
 
+              <div className="md:col-span-2 space-y-2 rounded-xl border p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold">Inventario vinculado</p>
+                    <p className="text-xs text-muted-foreground">Configura qué insumos se descuentan por cada venta.</p>
+                  </div>
+                  <Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>Gestionar vínculos</Button>
+                </div>
+                {inventoryLinks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Sin vínculos configurados.</p>
+                ) : (
+                  <div className="space-y-1 text-sm">
+                    {inventoryLinks.map((row) => (
+                      <div key={row.inventoryItemId} className="flex justify-between rounded-md bg-muted/40 px-2 py-1">
+                        <span>{row.inventoryItemName}</span>
+                        <span>{row.quantityRequired} {row.inventoryItemUnit}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="md:col-span-2 space-y-3 rounded-xl border p-3">
                 <div className="flex items-center justify-between">
                   <div>
@@ -451,6 +495,13 @@ export const ProductFormDialog = ({
           </div>
         </div>
       </DialogContent>
+
+      <ProductInventoryLinksDialog
+        open={inventoryModalOpen}
+        onOpenChange={setInventoryModalOpen}
+        value={inventoryLinks}
+        onSave={setInventoryLinks}
+      />
 
       <Dialog open={ruleOpen} onOpenChange={setRuleOpen}>
         <DialogContent className="max-w-2xl p-0">

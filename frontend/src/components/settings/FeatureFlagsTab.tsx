@@ -31,6 +31,12 @@ export const FeatureFlagsTab = () => {
   }, []);
 
   const handleToggle = async (flag: FeatureFlag, enabled: boolean) => {
+    if (flag.key === "FF_CASH_CLOSE_ALLOW_PENDING_ORDERS" && enabled) {
+      const confirmed = window.confirm(
+        "Esta opción permite cerrar caja con órdenes pendientes. ¿Deseas activarla?"
+      );
+      if (!confirmed) return;
+    }
     const previous = flag.isEnabled;
     setFlags((current) =>
       current.map((item) => (item.id === flag.id ? { ...item, isEnabled: enabled } : item))
@@ -79,7 +85,10 @@ export const FeatureFlagsTab = () => {
                 className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
-                  <p className="text-sm font-semibold text-foreground">{flag.label}</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    {flag.label}
+                    {flag.key === "FF_CASH_CLOSE_ALLOW_PENDING_ORDERS" ? " · Cierre de caja" : ""}
+                  </p>
                   {flag.description && (
                     <p className="text-xs text-muted-foreground">{flag.description}</p>
                   )}

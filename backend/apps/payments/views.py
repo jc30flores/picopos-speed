@@ -5,6 +5,7 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
@@ -35,6 +36,7 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
+from apps.inventory.services import apply_inventory_for_order
 
 
 logger = logging.getLogger(__name__)
@@ -244,6 +246,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
 
         if remaining <= 0:
             persist_sale_snapshot(payment.order)
+            apply_inventory_for_order(payment.order, user=request.user)
             log_audit(
                 request,
                 "payment.completed",
@@ -343,12 +346,46 @@ class PaymentInternalMethodUpdateView(APIView):
             )
 
         serializer = InternalPaymentMethodChangeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        previous_method = payment.reporting_payment_method or payment.payment_method
+        logger.info(
+            "PAYMENT_INTERNAL_METHOD_CHANGE_REQUEST payment_id=%s order_id=%s old_method=%s requested_method_code=%s requested_method_id=%s user_id=%s",
+            payment.id,
+            payment.order_id,
+            getattr(previous_method, "code", None),
+            request.data.get("payment_method_code") or request.data.get("code") or request.data.get("payment_method"),
+            request.data.get("payment_method_id") or request.data.get("method_id"),
+            getattr(request.user, "id", None),
+        )
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            valid_methods = serializer.context.get("valid_methods") or []
+            logger.info(
+                "PAYMENT_INTERNAL_METHOD_CHANGE_INVALID payment_id=%s requested_value=%s valid_active_codes=%s",
+                payment.id,
+                request.data.get("payment_method_code")
+                or request.data.get("code")
+                or request.data.get("payment_method")
+                or request.data.get("payment_method_id")
+                or request.data.get("method_id")
+                or request.data.get("name")
+                or request.data.get("label"),
+                [item.get("code") for item in valid_methods],
+            )
+            raise
         new_method: PaymentMethod = serializer.context["new_method"]
         reason = (serializer.validated_data.get("reason") or "").strip()
-        previous_method = payment.reporting_payment_method or payment.payment_method
         if previous_method and previous_method.id == new_method.id:
-            return Response({"detail": "El método seleccionado ya está aplicado."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "id": payment.id,
+                    "order_id": payment.order_id,
+                    "payment_method_code": new_method.code,
+                    "payment_method_name": new_method.name,
+                    "detail": f"El método de pago ya es {new_method.name}.",
+                },
+                status=status.HTTP_200_OK,
+            )
 
         payment.reporting_payment_method = new_method
         payment.save(update_fields=["reporting_payment_method"])
@@ -372,6 +409,13 @@ class PaymentInternalMethodUpdateView(APIView):
                 "new_method": new_method.code,
                 "reason": reason,
             },
+        )
+        logger.info(
+            "PAYMENT_INTERNAL_METHOD_CHANGE_SUCCESS payment_id=%s old_method=%s new_method=%s reason_present=%s",
+            payment.id,
+            previous_method.code if previous_method else None,
+            new_method.code,
+            bool(reason),
         )
 
         return Response(
@@ -685,11 +729,6 @@ class PaymentPrintTicketView(APIView):
 
             drawer_opened = False
             drawer_error = None
-            should_open_drawer = payment.method == "cash" and bool(print_result["printed"])
-            if should_open_drawer:
-                drawer_opened, drawer_error = printer.open_cash_drawer(context=context, endpoint="payments.print-ticket.drawer")
-            elif payment.method == "cash" and not print_result["printed"]:
-                drawer_error = "No se pudo abrir la gaveta: impresora no detectada."
             job = PrintJob.objects.filter(order=payment.order, type="customer").order_by("-created_at").first()
             if job:
                 if print_result["receipt_pdf_path"]:

@@ -331,6 +331,15 @@ def _brand_name(ctx: dict) -> str:
     return raw or "Pico de Gallo"
 
 
+def clean_display(value, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "undefined"}:
+        return fallback
+    return text
+
+
 def build_sale_receipt_pdf(
     *,
     receipt_context: dict,
@@ -391,9 +400,12 @@ def build_sale_receipt_pdf(
         _brand_name(receipt_context),
         *address_lines,
         "DATOS DTE",
-        f"No. Control: {dte.get('numero_control') or '-'}",
-        f"Codigo Gen: {dte.get('codigo_generacion') or '-'}",
-        f"Fecha DTE: {dte.get('fecha_dte') or '-'}",
+        f"No. Control: {clean_display(dte.get('numero_control'), '-')}",
+        f"Codigo Gen: {clean_display(dte.get('codigo_generacion'), '-')}",
+        f"Fecha DTE: {clean_display(dte.get('fecha_dte'), '-')}",
+        f"Estado Hacienda: {clean_display(dte.get('estado_hacienda'), '-')}",
+        f"Sello de Recepcion: {clean_display(dte.get('sello_recibido'), '-')}",
+        f"Fecha y Hora de Procesamiento: {clean_display(dte.get('fh_procesamiento'), '-')}",
     ]
     center_lines = [line for line in center_lines if str(line).strip()]
 
@@ -424,6 +436,18 @@ def build_sale_receipt_pdf(
         f"Metodo de pago: {payment.get('method_label_es') or '-'}",
         f"Monto pagado: ${_money(payment.get('amount_paid') or 0):.2f}",
     ]
+    if clean_display(dte.get("telefono_cliente_display")):
+        payment_lines.append(f"Numero del cliente: {clean_display(dte.get('telefono_cliente_display'))}")
+    if clean_display(dte.get("descripcion_msg")):
+        payment_lines.append(f"Mensaje MH: {clean_display(dte.get('descripcion_msg'))}")
+    payment_lines.extend(
+        [
+            f"Resp. Emisor Nombre: {clean_display(dte.get('responsable_emisor_nombre'))}",
+            f"Resp. Emisor Documento: {clean_display(dte.get('responsable_emisor_documento'))}",
+            f"Resp. Receptor Nombre: {clean_display(dte.get('responsable_receptor_nombre'), 'CONSUMIDOR FINAL')}",
+            f"Resp. Receptor Documento: {clean_display(dte.get('responsable_receptor_documento'))}",
+        ]
+    )
     if payment.get("reference"):
         payment_lines.append(f"Referencia: {payment.get('reference')}")
     if _money(payment.get("change_due") or 0) > 0:

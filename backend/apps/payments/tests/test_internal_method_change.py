@@ -36,7 +36,9 @@ class PaymentInternalMethodChangeTests(TestCase):
         )
         self.service_type = ServiceType.objects.create(key="dine_in", label="En local")
         self.pm_cash = PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True)
+        self.pm_card_credit = PaymentMethod.objects.create(code="card_credit", name="Tarjeta crédito", is_cash=False)
         self.pm_paypal = PaymentMethod.objects.create(code="paypal", name="PayPal", is_cash=False)
+        self.pm_inactive = PaymentMethod.objects.create(code="transfer_legacy", name="Transfer Legacy", is_cash=False, is_active=False)
 
     def _create_paid_payment(self) -> Payment:
         order = Order.objects.create(
@@ -72,6 +74,80 @@ class PaymentInternalMethodChangeTests(TestCase):
                 changed_by=self.admin,
             ).exists()
         )
+
+    def test_admin_can_change_internal_method_using_method_id(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_id": self.pm_card_credit.id, "reason": "Corrección"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        payment.refresh_from_db()
+        self.assertEqual(payment.reporting_payment_method_id, self.pm_card_credit.id)
+
+    def test_admin_can_change_internal_method_using_label_alias(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_code": "Tarjeta", "reason": "Corrección"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        payment.refresh_from_db()
+        self.assertEqual(payment.reporting_payment_method_id, self.pm_card_credit.id)
+
+    def test_method_change_rejects_inactive_method(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_code": self.pm_inactive.code},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("payment_method_code", response.data)
+        self.assertIn("valid_methods", response.data)
+
+    def test_method_change_same_method_is_noop_200(self):
+        payment = self._create_paid_payment()
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_code": "cash"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn("ya es", response.data.get("detail", ""))
+        payment.refresh_from_db()
+        self.assertIsNone(payment.reporting_payment_method_id)
+
+    def test_method_change_does_not_modify_dte_payloads(self):
+        payment = self._create_paid_payment()
+        dte = DTERecord.objects.create(
+            order=payment.order,
+            branch=self.branch,
+            payment=payment,
+            dte_type="CF_01",
+            status=DTERecord.STATUS_ACCEPTED,
+            control_number="DTE-NO-CHANGE",
+            generation_code="D" * 36,
+            request_payload={"foo": "bar"},
+            response_payload={"ok": True},
+            total_amount=Decimal("10.00"),
+        )
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f"/api/payments/{payment.id}/internal-payment-method/",
+            {"payment_method_code": "paypal", "reason": "Corrección interna"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        dte.refresh_from_db()
+        self.assertEqual(dte.request_payload, {"foo": "bar"})
+        self.assertEqual(dte.response_payload, {"ok": True})
 
     def test_manager_cannot_change_internal_payment_method(self):
         payment = self._create_paid_payment()

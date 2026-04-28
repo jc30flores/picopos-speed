@@ -63,6 +63,43 @@ export type Product = {
   modifierGroups: number[];
   modifierGroupsPos?: number[];
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
+  inventoryLinks?: InventoryProductLink[];
+};
+
+export type InventoryItem = {
+  id: number;
+  name: string;
+  sku: string;
+  unit: string;
+  currentStock: number;
+  minStock?: number | null;
+  notes?: string;
+  isActive: boolean;
+};
+
+export type InventoryMovement = {
+  id: number;
+  inventoryItem: number;
+  inventoryItemName: string;
+  movementType: string;
+  quantityChange: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  reason?: string;
+  referenceType?: string;
+  referenceId?: string;
+  createdByUsername?: string;
+  createdAt: string;
+};
+
+export type InventoryProductLink = {
+  id?: number;
+  inventoryItemId: number;
+  inventoryItemName: string;
+  inventoryItemUnit: string;
+  quantityRequired: number;
+  origin?: "inherited" | "override" | "direct";
+  categoryLinkId?: number;
 };
 
 export const resolveImageUrl = (imagePath?: string | null): string | null => {
@@ -304,6 +341,7 @@ export type PaymentMethodOption = {
   name: string;
   isCash: boolean;
   sortOrder: number;
+  isActive: boolean;
 };
 
 export type CashSessionSnapshot = {
@@ -337,9 +375,14 @@ export type CashSessionSnapshot = {
 
 export type CashTransaction = {
   id: number;
-  type: "cash_out" | "cash_in" | "expense" | "payout";
+  type: "cash_out" | "cash_in" | "expense" | "payout" | "card" | "transfer" | "pedidosya" | "paypal";
+  displayType?: string;
+  impactsCash?: boolean;
   amount: number;
   description: string;
+  paymentId?: number | null;
+  refundId?: number | null;
+  orderId?: number | null;
   createdAt: string;
 };
 
@@ -452,6 +495,14 @@ export type EmployeeWorkedHoursRow = {
   totalHours: number;
 };
 
+export type EmployeeWorkedHoursReport = {
+  rows: EmployeeWorkedHoursRow[];
+  totals: {
+    totalMinutes: number;
+    totalHours: number;
+  };
+};
+
 export type Refund = {
   id: number;
   orderId: number;
@@ -537,6 +588,10 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   canBreakStart: false,
   canBreakEnd: false,
   canClockOut: false,
+  state: "OFF_SHIFT",
+  accessAllowed: false,
+  activeCycle: null,
+  cyclesToday: [],
 });
 
 const request = async (path: string, options: RequestInit = {}) => {
@@ -886,6 +941,7 @@ export const getProducts = async (options?: {
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>>(response);
   return data.map((item) => {
     const normalizedImageUrl = normalizeImageUrl(item);
@@ -919,6 +975,13 @@ export const getProducts = async (options?: {
         groupId: link.group_id,
         showInPos: Boolean(link.show_in_pos),
       })),
+      inventoryLinks: (item.inventory_links ?? []).map((link) => ({
+        id: link.id,
+        inventoryItemId: link.inventory_item,
+        inventoryItemName: link.inventory_item_name,
+        inventoryItemUnit: link.inventory_item_unit,
+        quantityRequired: Number(link.quantity_required),
+      })),
     };
   });
 };
@@ -934,6 +997,7 @@ export const createProduct = async (payload: {
   disposableFee?: number;
   disposableApplyTo?: string[];
   modifierGroupIds?: number[];
+  inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
 }): Promise<Product> => {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -949,6 +1013,12 @@ export const createProduct = async (payload: {
   }
   if (payload.modifierGroupIds?.length) {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+  if (payload.inventoryLinks) {
+    formData.append("inventory_links", JSON.stringify(payload.inventoryLinks.map((row) => ({
+      inventory_item: row.inventoryItemId,
+      quantity_required: row.quantityRequired,
+    }))));
   }
 
   const response = await request("/menu/products/", {
@@ -980,6 +1050,7 @@ export const createProduct = async (payload: {
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>(response);
   return {
     id: data.id,
@@ -1009,6 +1080,13 @@ export const createProduct = async (payload: {
       groupId: link.group_id,
       showInPos: Boolean(link.show_in_pos),
     })),
+    inventoryLinks: (data.inventory_links ?? []).map((link) => ({
+      id: link.id,
+      inventoryItemId: link.inventory_item,
+      inventoryItemName: link.inventory_item_name,
+      inventoryItemUnit: link.inventory_item_unit,
+      quantityRequired: Number(link.quantity_required),
+    })),
   };
 };
 
@@ -1026,6 +1104,7 @@ export const updateProduct = async (
     disposableFee?: number;
     disposableApplyTo?: string[];
     modifierGroupIds?: number[];
+    inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
   }
 ): Promise<Product> => {
   const formData = new FormData();
@@ -1042,6 +1121,12 @@ export const updateProduct = async (
   }
   if (payload.modifierGroupIds?.length) {
     payload.modifierGroupIds.forEach((id) => formData.append("modifier_group_ids", id.toString()));
+  }
+  if (payload.inventoryLinks) {
+    formData.append("inventory_links", JSON.stringify(payload.inventoryLinks.map((row) => ({
+      inventory_item: row.inventoryItemId,
+      quantity_required: row.quantityRequired,
+    }))));
   }
 
   const response = await request(`/menu/products/${productId}/`, {
@@ -1070,6 +1155,7 @@ export const updateProduct = async (
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+    inventory_links?: Array<{ id: number; inventory_item: number; inventory_item_name: string; inventory_item_unit: string; quantity_required: string }>;
   }>(response);
   return {
     id: data.id,
@@ -1096,6 +1182,13 @@ export const updateProduct = async (
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
       groupId: link.group_id,
       showInPos: Boolean(link.show_in_pos),
+    })),
+    inventoryLinks: (data.inventory_links ?? []).map((link) => ({
+      id: link.id,
+      inventoryItemId: link.inventory_item,
+      inventoryItemName: link.inventory_item_name,
+      inventoryItemUnit: link.inventory_item_unit,
+      quantityRequired: Number(link.quantity_required),
     })),
   };
 };
@@ -1126,6 +1219,182 @@ export const changeProductPrice = async (productId: number, payload: { code: str
     newPrice: data.new_price != null ? Number(data.new_price) : undefined,
     updatedAt: data.updated_at,
   };
+};
+
+export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> => {
+  const params = new URLSearchParams();
+  if (q?.trim()) params.set("q", q.trim());
+  const response = await request(`/inventory/items/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    name: row.name,
+    sku: row.sku ?? "",
+    unit: row.unit,
+    currentStock: Number(row.current_stock ?? 0),
+    minStock: row.min_stock != null ? Number(row.min_stock) : null,
+    notes: row.notes ?? "",
+    isActive: Boolean(row.is_active),
+  }));
+};
+
+export const createInventoryItem = async (payload: {
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; notes?: string; isActive: boolean;
+}): Promise<InventoryItem> => {
+  const response = await request("/inventory/items/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      sku: payload.sku ?? "",
+      unit: payload.unit,
+      initial_stock: payload.initialStock ?? 0,
+      min_stock: payload.minStock,
+      notes: payload.notes ?? "",
+      is_active: payload.isActive,
+    }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const updateInventoryItem = async (id: number, payload: {
+  name: string; sku?: string; unit: string; minStock?: number | null; notes?: string; isActive: boolean;
+}): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      sku: payload.sku ?? "",
+      unit: payload.unit,
+      min_stock: payload.minStock,
+      notes: payload.notes ?? "",
+      is_active: payload.isActive,
+    }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/add-stock/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quantity, reason: reason ?? "" }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
+  const response = await request(`/inventory/items/${id}/adjust-stock/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
+  });
+  const row = await handleJson<any>(response);
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+};
+
+export const getInventoryMovements = async (inventoryItemId?: number): Promise<InventoryMovement[]> => {
+  const params = new URLSearchParams();
+  if (inventoryItemId) params.set("inventory_item", String(inventoryItemId));
+  const response = await request(`/inventory/movements/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItem: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    movementType: row.movement_type,
+    quantityChange: Number(row.quantity_change),
+    quantityBefore: Number(row.quantity_before),
+    quantityAfter: Number(row.quantity_after),
+    reason: row.reason ?? "",
+    referenceType: row.reference_type ?? "",
+    referenceId: row.reference_id ?? "",
+    createdByUsername: row.created_by_username ?? "",
+    createdAt: row.created_at,
+  }));
+};
+
+export const getCatalogInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/catalog-links/${productId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+  }));
+};
+
+export const getCategoryInventoryLinks = async (categoryId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/category-links/${categoryId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: "direct",
+  }));
+};
+
+export const saveCategoryInventoryLinks = async (categoryId: number, links: Array<{ inventoryItemId: number; quantityRequired: number }>): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/category-links/${categoryId}/`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      links: links.map((row) => ({ inventory_item: row.inventoryItemId, quantity_required: row.quantityRequired })),
+    }),
+  });
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: "direct",
+  }));
+};
+
+export const getProductEffectiveInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/product-effective-links/${productId}/`);
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: row.origin,
+    categoryLinkId: row.category_link_id ?? undefined,
+  }));
+};
+
+export const saveProductEffectiveInventoryLinks = async (
+  productId: number,
+  links: Array<{ inventoryItemId: number; quantityRequired: number }>
+): Promise<InventoryProductLink[]> => {
+  const response = await request(`/inventory/product-effective-links/${productId}/`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      links: links.map((row) => ({ inventory_item: row.inventoryItemId, quantity_required: row.quantityRequired })),
+    }),
+  });
+  const data = await handleJson<Array<any>>(response);
+  return data.map((row) => ({
+    inventoryItemId: row.inventory_item,
+    inventoryItemName: row.inventory_item_name,
+    inventoryItemUnit: row.inventory_item_unit,
+    quantityRequired: Number(row.quantity_required),
+    origin: row.origin,
+    categoryLinkId: row.category_link_id ?? undefined,
+  }));
 };
 
 export const deleteProduct = async (productId: number): Promise<{ detail?: string }> => {
@@ -2543,7 +2812,7 @@ export const getSalesBreakdown = async (filters: {
 
 
 
-export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursRow[]> => {
+export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursReport> => {
   const params = new URLSearchParams({
     start: filters.dateFrom,
     end: filters.dateTo,
@@ -2551,23 +2820,33 @@ export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; 
     date_to: filters.dateTo,
   });
   const response = await request(`/reports/employee-worked-hours/?${params.toString()}`, { signal: filters.signal });
-  const data = await handleJson<{ employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }> }>(response);
-  return (data.employees ?? []).map((row) => ({
-    employeeId: Number(row.employee_id),
-    employeeName: row.employee_name,
-    totalMinutes: Number(row.total_minutes ?? 0),
-    totalHours: Number(row.total_hours ?? 0),
-  }));
+  const data = await handleJson<{
+    employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }>;
+    totals?: { total_minutes?: number; total_hours?: string | number };
+  }>(response);
+  return {
+    rows: (data.employees ?? []).map((row) => ({
+      employeeId: Number(row.employee_id),
+      employeeName: row.employee_name,
+      totalMinutes: Number(row.total_minutes ?? 0),
+      totalHours: Number(row.total_hours ?? 0),
+    })),
+    totals: {
+      totalMinutes: Number(data.totals?.total_minutes ?? 0),
+      totalHours: Number(data.totals?.total_hours ?? 0),
+    },
+  };
 };
 
 export const changeInternalPaymentMethod = async (
   paymentId: number,
-  payload: { paymentMethodCode: string; reason?: string }
+  payload: { paymentMethodCode?: string; paymentMethodId?: number; reason?: string }
 ): Promise<{ paymentMethodCode: string; paymentMethodName: string }> => {
   const response = await request(`/payments/${paymentId}/internal-payment-method/`, {
     method: "PATCH",
     body: JSON.stringify({
-      payment_method_code: payload.paymentMethodCode,
+      payment_method_code: payload.paymentMethodCode ?? "",
+      payment_method_id: payload.paymentMethodId ?? null,
       reason: payload.reason ?? "",
     }),
   });
@@ -3071,6 +3350,22 @@ export type AttendanceState = {
   canBreakStart: boolean;
   canBreakEnd: boolean;
   canClockOut: boolean;
+  state: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  accessAllowed: boolean;
+  activeCycle: {
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  } | null;
+  cyclesToday: Array<{
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  }>;
 };
 
 export type AttendanceHistoryRow = {
@@ -3098,6 +3393,22 @@ const mapAttendanceState = (data: {
   can_break_start: boolean;
   can_break_end: boolean;
   can_clock_out: boolean;
+  state?: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  access_allowed?: boolean;
+  active_cycle?: {
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  } | null;
+  cycles_today?: Array<{
+    sequence?: number;
+    clock_in_at: string | null;
+    break_start_at: string | null;
+    break_end_at: string | null;
+    clock_out_at: string | null;
+  }>;
 }): AttendanceState => ({
   employee: data.employee,
   date: data.date,
@@ -3117,6 +3428,10 @@ const mapAttendanceState = (data: {
   canBreakStart: data.can_break_start,
   canBreakEnd: data.can_break_end,
   canClockOut: data.can_clock_out,
+  state: data.state ?? "OFF_SHIFT",
+  accessAllowed: typeof data.access_allowed === "boolean" ? data.access_allowed : Boolean(data.has_active_session),
+  activeCycle: data.active_cycle ?? null,
+  cyclesToday: data.cycles_today ?? [],
 });
 
 export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
@@ -3416,7 +3731,7 @@ export const printPaymentTicket = async (
 export const getPrintingStatus = async (): Promise<{ available: boolean; queue: string }> => {
   const response = await request("/printing/status/");
   const data = await handleJson<{ available: boolean; queue: string }>(response);
-  return { available: Boolean(data.available), queue: data.queue || "star_tsp100" };
+  return { available: Boolean(data.available), queue: data.queue || "TSP143-(STR_T-001)" };
 };
 
 
@@ -3430,6 +3745,7 @@ export const getPaymentMethods = async (): Promise<PaymentMethodOption[]> => {
     name: m.name,
     isCash: Boolean(m.is_cash),
     sortOrder: Number(m.sort_order ?? 0),
+    isActive: Boolean(m.is_active ?? true),
   }));
 };
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
@@ -3910,16 +4226,22 @@ export const closeCashSession = async (
   };
 };
 
-export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
+export const getCashTransactions = async (sessionId?: number, options?: { includeAll?: boolean }): Promise<CashTransaction[]> => {
   const params = new URLSearchParams();
   if (sessionId) params.set('session_id', String(sessionId));
+  if (options?.includeAll) params.set('include', 'all');
   const response = await request(`/cashier/transactions/${params.toString() ? `?${params.toString()}` : ''}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((tx) => ({
     id: tx.id,
     type: tx.type,
+    displayType: tx.display_type,
+    impactsCash: Boolean(tx.impacts_cash),
     amount: Number(tx.amount),
     description: tx.description,
+    paymentId: tx.payment_id ?? null,
+    refundId: tx.refund_id ?? null,
+    orderId: tx.order_id ?? null,
     createdAt: tx.created_at,
   }));
 };
@@ -4209,7 +4531,7 @@ export const dteSendWhatsapp = async (id: number): Promise<{ message: string; re
 export const dteDeliver = async (
   id: number,
   channels: Array<"whatsapp" | "email">,
-  options?: { phone?: string }
+  options?: { numCliente?: string; clienteTelefono?: string; destinationSource?: "manual_extra" | "none" }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4231,7 +4553,9 @@ export const dteDeliver = async (
     method: "POST",
     body: JSON.stringify({
       channels,
-      ...(options?.phone ? { phone: options.phone } : {}),
+      ...(options?.numCliente ? { num_cliente: options.numCliente } : {}),
+      ...(options?.clienteTelefono ? { cliente_telefono: options.clienteTelefono, telefono_cliente: options.clienteTelefono, customer_phone: options.clienteTelefono } : {}),
+      ...(options?.destinationSource ? { destination_source: options.destinationSource } : {}),
     }),
   });
   const payload = await handleJson<any>(res);
@@ -4259,7 +4583,7 @@ export const dteDeliver = async (
 export const dteDeliverByOrder = async (
   orderId: number,
   channels: Array<"whatsapp" | "email">,
-  options?: { phone?: string }
+  options?: { numCliente?: string; clienteTelefono?: string; destinationSource?: "manual_extra" | "none" }
 ): Promise<{
   success: boolean;
   summary: string;
@@ -4281,7 +4605,9 @@ export const dteDeliverByOrder = async (
     method: "POST",
     body: JSON.stringify({
       channels,
-      ...(options?.phone ? { phone: options.phone } : {}),
+      ...(options?.numCliente ? { num_cliente: options.numCliente } : {}),
+      ...(options?.clienteTelefono ? { cliente_telefono: options.clienteTelefono, telefono_cliente: options.clienteTelefono, customer_phone: options.clienteTelefono } : {}),
+      ...(options?.destinationSource ? { destination_source: options.destinationSource } : {}),
     }),
   });
   const payload = await handleJson<any>(res);

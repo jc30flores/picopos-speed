@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiRequestError, getCSRF, login as loginRequest, pinLogin, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCSRF, login as loginRequest, pinLogin, logout as logoutRequest, me, type AuthUser } from "@/lib/api";
 import { AuthContext } from "./authContext";
 
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
@@ -13,8 +13,10 @@ const authDebugLog = (...args: unknown[]) => {
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const loginInFlightRef = useRef(false);
 
-  const loadUser = useCallback(async () => {
+  const loadUser = useCallback(async (reason: "bootstrap" | "manual" = "bootstrap") => {
+    authDebugLog("AUTH_REFRESH_ME_START", { reason });
     try {
       const current = await me();
       setUser(current);
@@ -27,42 +29,47 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   useEffect(() => {
-    loadUser();
+    void loadUser("bootstrap");
   }, [loadUser]);
 
   const login = useCallback(async ({ identifier, password }: { identifier: string; password: string }) => {
+    if (loginInFlightRef.current) {
+      throw new Error("AUTH_LOGIN_IN_FLIGHT");
+    }
+    loginInFlightRef.current = true;
+    authDebugLog("AUTH_LOGIN_REQUEST_START", { method: "password" });
     await getCSRF();
     const payload = identifier.includes("@")
       ? { email: identifier, password }
       : { username: identifier, password };
-    await loginRequest(payload);
-    const verified = await me();
-    setUser(verified);
-    return verified;
+    try {
+      const authenticated = await loginRequest(payload);
+      setUser(authenticated);
+      authDebugLog("AUTH_LOGIN_SUCCESS", { method: "password", user: authenticated.username });
+      return authenticated;
+    } finally {
+      loginInFlightRef.current = false;
+    }
   }, []);
 
   const loginWithPin = useCallback(async ({ pin }: { pin: string }) => {
+    if (loginInFlightRef.current) {
+      throw new Error("AUTH_LOGIN_IN_FLIGHT");
+    }
+    loginInFlightRef.current = true;
+    authDebugLog("AUTH_LOGIN_REQUEST_START", { method: "pin" });
     await getCSRF();
-    const pinResponse = await pinLogin({ pin });
-    authDebugLog("loginWithPin.pinLogin.ok", {
-      user: pinResponse.username,
-      role: pinResponse.role,
-    });
     try {
-      const verified = await me();
-      authDebugLog("loginWithPin.me.ok", { user: verified.username, role: verified.role, redirectTo: verified.redirectTo });
-      setUser(verified);
-      return verified;
-    } catch (error) {
-      authDebugLog("loginWithPin.me.failed", error instanceof Error ? error.message : String(error));
-      if (error instanceof ApiRequestError) {
-        throw new ApiRequestError("SESSION_VERIFY_FAILED", {
-          code: "SESSION_VERIFY_FAILED",
-          status: error.status,
-          isNetworkError: error.isNetworkError,
-        });
-      }
-      throw new Error("SESSION_VERIFY_FAILED");
+      const authenticated = await pinLogin({ pin });
+      authDebugLog("AUTH_LOGIN_SUCCESS", {
+        method: "pin",
+        user: authenticated.username,
+        role: authenticated.role,
+      });
+      setUser(authenticated);
+      return authenticated;
+    } finally {
+      loginInFlightRef.current = false;
     }
   }, []);
 

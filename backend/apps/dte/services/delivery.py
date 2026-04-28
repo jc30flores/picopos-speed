@@ -128,7 +128,7 @@ def deliver_dte_to_client(
                     recipient=target_phone or None,
                 )
             else:
-                attempt = send_dte_whatsapp(target, to_phone=target_phone)
+                attempt = send_dte_whatsapp(target, to_phone=to_phone)
                 provider_error = str((attempt.provider_body or {}).get("error") or "").strip()
                 provider_message = str((attempt.provider_body or {}).get("provider_message") or "").strip()
                 queued = bool((attempt.provider_body or {}).get("queued"))

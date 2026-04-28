@@ -4,7 +4,10 @@ import { useAuth } from "@/context/useAuth";
 import { AttendanceAccessContext } from "./attendanceAccessContext";
 import { getAttendanceAccessState } from "@/lib/attendanceAccess";
 
+const ATTENDANCE_DEBUG = String(import.meta.env.VITE_ATTENDANCE_DEBUG ?? "").toLowerCase() === "true";
+
 const attendanceLog = (event: string, payload: Record<string, unknown>) => {
+  if (!ATTENDANCE_DEBUG) return;
   console.info(`attendance.access.${event}`, payload);
 };
 
@@ -15,6 +18,9 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   const [attendanceResolved, setAttendanceResolved] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const refreshSeqRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const lastUserIdRef = useRef<number | null>(null);
+  const loadedForUserIdRef = useRef<number | null>(null);
 
   const bypassAttendance = Boolean(user?.isSuperuser || user?.role === "admin");
 
@@ -22,22 +28,30 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
     async (reason = "manual") => {
       const seq = ++refreshSeqRef.current;
       if (!user || bypassAttendance) {
+        refreshInFlightRef.current = false;
         setAttendance(null);
         setAttendanceError(null);
         setAttendanceLoading(false);
         setAttendanceResolved(true);
-        attendanceLog("refresh_skipped", { reason, userId: user?.id ?? null, bypassAttendance });
+        attendanceLog("ATTENDANCE_REFRESH_SKIP", { reason: "no_user_or_bypass", triggerReason: reason, userId: user?.id ?? null, bypassAttendance });
         return;
       }
+      if (refreshInFlightRef.current) {
+        attendanceLog("ATTENDANCE_REFRESH_SKIP", { reason: "in_flight", triggerReason: reason, userId: user.id });
+        return;
+      }
+      refreshInFlightRef.current = true;
 
       setAttendanceLoading(true);
       setAttendanceResolved(false);
+      attendanceLog("ATTENDANCE_REFRESH_START", { reason, userId: user.id });
       try {
         const next = await getMyAttendanceToday();
         if (seq !== refreshSeqRef.current) return;
         setAttendance(next);
         setAttendanceError(null);
         setAttendanceResolved(true);
+        loadedForUserIdRef.current = user.id;
         attendanceLog("today_response", {
           reason,
           userId: user.id,
@@ -60,6 +74,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
           error: message,
         });
       } finally {
+        refreshInFlightRef.current = false;
         if (seq !== refreshSeqRef.current) return;
         setAttendanceLoading(false);
       }
@@ -87,8 +102,28 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   );
 
   useEffect(() => {
-    void refreshAttendance("user_change");
-  }, [refreshAttendance]);
+    const currentUserId = user?.id ?? null;
+    if (lastUserIdRef.current !== currentUserId) {
+      lastUserIdRef.current = currentUserId;
+      refreshSeqRef.current += 1;
+      refreshInFlightRef.current = false;
+      loadedForUserIdRef.current = null;
+      setAttendance(null);
+      setAttendanceError(null);
+      setAttendanceLoading(false);
+      setAttendanceResolved(Boolean(!user || bypassAttendance));
+      attendanceLog("user_changed_reset", { userId: currentUserId, bypassAttendance });
+    }
+    if (!user?.id || bypassAttendance) {
+      void refreshAttendance("user_change_skip");
+      return;
+    }
+    if (loadedForUserIdRef.current === user.id) {
+      attendanceLog("ATTENDANCE_REFRESH_SKIP", { reason: "already_loaded_for_user", userId: user.id });
+      return;
+    }
+    void refreshAttendance("user_changed");
+  }, [bypassAttendance, refreshAttendance, user?.id]);
 
   const accessState = useMemo(() => {
     const next = getAttendanceAccessState(attendance, {

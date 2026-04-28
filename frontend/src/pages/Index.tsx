@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, PencilLine, BadgePercent, LayoutGrid, RefreshCw } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
@@ -31,6 +31,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   createOrder,
   Customer,
@@ -65,6 +71,7 @@ import {
   setOrderPending,
   printPaymentTicket,
   getPrintingStatus,
+  getFeatureFlags,
   Category,
   Discount,
   ModifierGroup,
@@ -104,6 +111,14 @@ interface CartItem {
   appliedSpecialPriceRuleName?: string | null;
   requiresKitchen?: boolean;
   modifiers: Array<{ id?: number; name: string; price: number }>;
+}
+
+interface SaleCompletionSummary {
+  totalToPay: number;
+  amountReceived: number;
+  changeAmount: number;
+  paymentMethod: PaymentMethod;
+  paymentMethodCode: string;
 }
 
 const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
@@ -169,6 +184,35 @@ const DrawerIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+const shouldOpenCashDrawer = (method: PaymentMethod, methodCode?: string): boolean => {
+  if (method === "cash") return true;
+  const normalizedCode = String(methodCode || "").trim().toLowerCase();
+  return normalizedCode === "cash" || normalizedCode === "efectivo";
+};
+
+const shouldShowChange = (summary: SaleCompletionSummary | null): boolean => {
+  if (!summary) return false;
+  if (!shouldOpenCashDrawer(summary.paymentMethod, summary.paymentMethodCode)) return false;
+  return summary.changeAmount > 0.009;
+};
+
+const buildSaleCompletionSummary = (params: {
+  totalToPay: number;
+  amountReceived: number;
+  paymentMethod: PaymentMethod;
+  paymentMethodCode: string;
+}): SaleCompletionSummary => {
+  const { totalToPay, amountReceived, paymentMethod, paymentMethodCode } = params;
+  const rawChange = amountReceived - totalToPay;
+  return {
+    totalToPay,
+    amountReceived,
+    changeAmount: rawChange > 0 ? rawChange : 0,
+    paymentMethod,
+    paymentMethodCode,
+  };
+};
+
 
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
@@ -187,10 +231,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+  const [allowCloseWithPendingOrders, setAllowCloseWithPendingOrders] = useState(false);
   const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [lastClosedSessionId, setLastClosedSessionId] = useState<number | null>(() => {
+    const raw = localStorage.getItem("last_closed_cash_session_id");
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  });
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closeBillsInput, setCloseBillsInput] = useState("");
   const [closeCoinsInput, setCloseCoinsInput] = useState("");
@@ -207,6 +257,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const postOpenSessionActionRef = useRef<(() => Promise<void>) | null>(null);
   const openSessionResolverRef = useRef<((opened: boolean) => void) | null>(null);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
+  const [editingModifiersItemId, setEditingModifiersItemId] = useState<string | null>(null);
   const [selectedModifiers, setSelectedModifiers] = useState<Record<string, string[]>>({});
   const [openModifierGroups, setOpenModifierGroups] = useState<Record<string, boolean>>({});
   const [modifierValidationErrors, setModifierValidationErrors] = useState<Record<string, string>>({});
@@ -276,6 +327,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isSubmittingKitchenChoice, setIsSubmittingKitchenChoice] = useState(false);
   const [postSaleKitchenChoice, setPostSaleKitchenChoice] = useState(true);
   const [postSalePrintChoice, setPostSalePrintChoice] = useState(true);
+  const [saleCompletionSummary, setSaleCompletionSummary] = useState<SaleCompletionSummary | null>(null);
   const [printerAvailable, setPrinterAvailable] = useState(true);
   const [fallbackPdfModal, setFallbackPdfModal] = useState<{
     open: boolean;
@@ -314,7 +366,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isManualProductOpen, setIsManualProductOpen] = useState(false);
   const [isDiscountDialogOpen, setIsDiscountDialogOpen] = useState(false);
   const [discountSearch, setDiscountSearch] = useState("");
-  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "cashier");
+  const canManageCashOperations = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
@@ -680,6 +732,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }, {});
     setOpenModifierGroups(collapsed);
     setIsExtrasOpen(true);
+  };
+
+  const cycleServiceType = () => {
+    if (serviceTypes.length === 0) return;
+    const currentIndex = serviceTypes.findIndex((type) => type.key === serviceType);
+    const nextType = serviceTypes[(currentIndex + 1) % serviceTypes.length] ?? serviceTypes[0];
+    if (!nextType) return;
+    setServiceType(nextType.key);
   };
 
   useLayoutEffect(() => {
@@ -1191,9 +1251,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("Completa los modificadores obligatorios");
       return;
     }
-    addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
+    if (editingModifiersItemId) {
+      setCart((prev) =>
+        prev.map((item) =>
+          item.id === editingModifiersItemId
+            ? {
+                ...item,
+                modifiers: pendingSelectionValidation.selectedMods,
+                price: getItemBaseEffective(item) + pendingSelectionValidation.selectedMods.reduce((sum, mod) => sum + Number(mod.price || 0), 0),
+              }
+            : item
+        )
+      );
+    } else {
+      addToCart(pendingProduct, pendingSelectionValidation.selectedMods);
+    }
     setIsExtrasOpen(false);
     setPendingProduct(null);
+    setEditingModifiersItemId(null);
     setSelectedModifiers({});
     setOpenModifierGroups({});
     setModifierValidationErrors({});
@@ -1204,7 +1279,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       const [snapshot, transactions] = await Promise.all([
         getCurrentCashSession(),
-        getCashTransactions(),
+        getCashTransactions(undefined, { includeAll: true }),
       ]);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
@@ -1244,6 +1319,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   useEffect(() => {
+    getFeatureFlags()
+      .then((flags) => {
+        const enabled = flags.some((flag) => flag.key === "FF_CASH_CLOSE_ALLOW_PENDING_ORDERS" && flag.isEnabled);
+        setAllowCloseWithPendingOrders(enabled);
+      })
+      .catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -1474,7 +1555,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No tienes permisos para cerrar caja.");
       return;
     }
-    if (pendingOrdersCount > 0) {
+    if (pendingOrdersCount > 0 && !allowCloseWithPendingOrders) {
       toast.error(`You cannot close the register because there are ${pendingOrdersCount} open orders.`);
       return;
     }
@@ -1504,6 +1585,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
+      }
+      if (closeResp.sessionId) {
+        setLastClosedSessionId(closeResp.sessionId);
+        localStorage.setItem("last_closed_cash_session_id", String(closeResp.sessionId));
       }
       if (closeResp.printed) {
         setCashCloseFlowState("idle");
@@ -1566,6 +1651,84 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       assignedName: item.assignedName,
       modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
     }));
+
+  const buildQuickPrintPendingReference = () => {
+    const existing = pendingReferenceDraft.trim();
+    if (existing) return existing;
+    const label = selectedCustomer?.fullName || selectedCustomer?.name || "POS";
+    return `QuickPrint ${label}`.slice(0, 120);
+  };
+
+  const ensureOrderForQuickPrint = async (): Promise<Order> => {
+    if (activeOrder) return activeOrder;
+    if (cart.length === 0) {
+      throw new Error("No hay productos en el pedido");
+    }
+    const created = await createOrder({
+      serviceType,
+      customerName: selectedCustomer?.fullName || selectedCustomer?.name || "CONSUMIDOR FINAL",
+      customerId: selectedCustomer ? Number(selectedCustomer.id) : undefined,
+      whatsappNumCliente: normalizedWhatsappClient ?? "",
+      whatsappNumClienteCountry: normalizedWhatsappClient ? whatsappClientCountry : "",
+      dteDocumentType,
+      ivaExempt,
+      source: "pos",
+      channel: "pos",
+      items: cart.map((item) => ({
+        productId: item.productId,
+        productName: item.name,
+        price: getItemBaseEffective(item),
+        quantity: item.quantity,
+        isCustom: Boolean(item.isCustom),
+        type: item.isCustom ? "manual" : "menu",
+        unitPriceOverride: item.unitPriceOverride ?? null,
+        customCode: item.customCode,
+        assignedName: item.assignedName,
+        modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
+      })),
+    });
+    setActiveOrder(created);
+    setCreatedOrderId(created.id);
+    setCreatedOrderNumber(created.orderNumber ?? null);
+    return created;
+  };
+
+  const saveCurrentOrderAsHeld = async (order: Order): Promise<Order> => {
+    const pendingState = order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment";
+    const payloadItems = cart.length > 0
+      ? buildPendingPayloadItems(cart)
+      : buildPendingPayloadItems(order.items.map((item) => mapOrderItemToCartItem(item)));
+    const saved = await setOrderPending(order.id, {
+      isPending: true,
+      pendingState,
+      pendingReference: buildQuickPrintPendingReference(),
+      authorizationPin: pendingEditAuthorizationPin || undefined,
+      items: payloadItems,
+    });
+    setActiveOrder(saved);
+    return saved;
+  };
+
+  const printSalesTicketOnly = async (orderId: number) => {
+    const job = await createPrintJob({ orderId, type: "customer" });
+    setReceiptJob(job);
+    return job;
+  };
+
+  const handleQuickPrintTicket = async () => {
+    if (cart.length === 0 && !(activeOrder?.items?.length)) {
+      toast.info("No hay pedido para imprimir");
+      return;
+    }
+    try {
+      const baseOrder = await ensureOrderForQuickPrint();
+      const heldOrder = baseOrder.isPending ? baseOrder : await saveCurrentOrderAsHeld(baseOrder);
+      await printSalesTicketOnly(heldOrder.id);
+      toast.success("Ticket enviado a impresión");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket");
+    }
+  };
 
   const syncExistingOpenOrder = async (order: Order) => {
     const pricing = calculatePosPricing({
@@ -1723,10 +1886,46 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsExtrasOpen(open);
     if (!open) {
       setPendingProduct(null);
+      setEditingModifiersItemId(null);
       setSelectedModifiers({});
       setOpenModifierGroups({});
       setModifierValidationErrors({});
     }
+  };
+
+  const handleEditLineModifiers = (itemId: string) => {
+    const cartItem = cart.find((item) => item.id === itemId);
+    if (!cartItem?.productId) {
+      toast.error("Esta línea no permite modificadores");
+      return;
+    }
+    const product = products.find((candidate) => candidate.id === cartItem.productId);
+    if (!product) {
+      toast.error("No se encontró el producto");
+      return;
+    }
+    const visibleGroups = getPosModifierGroups(product);
+    if (!visibleGroups.length) {
+      toast.error("Este producto no tiene modificadores disponibles");
+      return;
+    }
+    const modifiersByGroup = visibleGroups.reduce<Record<string, string[]>>((acc, group) => {
+      const selected = cartItem.modifiers
+        .filter((mod) => mod.id != null && group.modifiers.some((candidate) => candidate.id === mod.id))
+        .map((mod) => String(mod.id));
+      acc[String(group.id)] = selected;
+      return acc;
+    }, {});
+    const openState = visibleGroups.reduce<Record<string, boolean>>((acc, group) => {
+      acc[String(group.id)] = false;
+      return acc;
+    }, {});
+    setPendingProduct(product);
+    setEditingModifiersItemId(itemId);
+    setSelectedModifiers(modifiersByGroup);
+    setOpenModifierGroups(openState);
+    setModifierValidationErrors({});
+    setIsExtrasOpen(true);
   };
 
   const focusTenderField = (field: "payment" | "tip") => {
@@ -1798,6 +1997,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsKitchenPromptOpen(false);
     setPostSaleKitchenChoice(true);
     setPostSalePrintChoice(true);
+    setSaleCompletionSummary(null);
     setFallbackPdfModal({
       open: false,
       title: "",
@@ -2030,6 +2230,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
       });
       setLastPaymentId(paymentResult.id);
+      if (shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode)) {
+        await triggerDrawerOpen({ showSuccessToast: false });
+      }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
       if (splitEnabled) {
@@ -2043,6 +2246,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
+        const finalTotalToPay = toNumber(refreshed.totalPayable ?? refreshed.total ?? checkoutSummaryTotal);
+        setSaleCompletionSummary(
+          buildSaleCompletionSummary({
+            totalToPay: finalTotalToPay,
+            amountReceived,
+            paymentMethod,
+            paymentMethodCode: selectedPaymentMethodCode,
+          })
+        );
         if (refreshed.isPending) {
           try {
             const finalizedOrder = await setOrderPending(refreshed.id, {
@@ -2511,17 +2723,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="flex-none border-b px-4 py-3">
               <div className="flex flex-wrap gap-2">
                 {serviceTypes.length > 0 ? (
-                  serviceTypes.map((type) => (
-                    <Button
-                      key={type.id}
-                      variant={serviceType === type.key ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setServiceType(type.key)}
-                      className="min-h-14 min-w-fit whitespace-nowrap px-4 text-base"
-                    >
-                      {type.label}
-                    </Button>
-                  ))
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={cycleServiceType}
+                    className="relative min-h-16 w-full bg-primary px-4 text-primary-foreground hover:bg-primary/90"
+                  >
+                    <span className="flex w-full flex-col items-center justify-center leading-tight">
+                      <span className="text-[10px] font-medium uppercase tracking-[1px] text-primary-foreground/60">TIPO DE PEDIDO</span>
+                      <span className="mt-1 text-[18px] font-bold text-primary-foreground">
+                        {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}
+                      </span>
+                    </span>
+                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary-foreground/80" />
+                  </Button>
                 ) : (
                   <span className="text-sm text-muted-foreground">
                     Configura tipos de pedido en Configuración.
@@ -2538,76 +2753,72 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   <p className="text-sm">Agrega productos para empezar</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {cart.map((item) => (
-                    <Card key={item.id} className="p-3">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-semibold text-sm">{item.name}</h4>
-                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase">Manual</Badge>}
+                    <Card key={item.id} className="p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="whitespace-normal break-words text-sm font-semibold leading-snug">{item.name}</h4>
+                            {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase leading-none">Manual</Badge>}
                           </div>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
                               <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
-                              <span className="text-emerald-600 font-medium">Oferta aplicada</span>
+                              <span className="font-medium text-secondary">Oferta aplicada</span>
                             </p>
                           )}
                           {item.appliedSpecialPriceRuleName && (
-                            <p className="text-[11px] text-emerald-600/90">{item.appliedSpecialPriceRuleName}</p>
+                            <p className="text-[11px] text-secondary/90">{item.appliedSpecialPriceRuleName}</p>
                           )}
                           {!item.appliedSpecialPriceRuleName && item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
-                            <p className="text-[11px] text-emerald-600/90">OFERTA</p>
+                            <p className="text-[11px] text-secondary/90">OFERTA</p>
                           )}
                           {item.unitPriceOverride != null && (
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
                           )}
                           {item.modifiers.length > 0 && (
-                            <div className="text-xs text-muted-foreground mt-1">
+                            <div className="mt-1 whitespace-normal break-words text-[11px] leading-snug text-secondary">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
                             </div>
                           )}
                         </div>
                         <div className="flex items-center gap-1">
-                          {!item.isCustom && (
-                            <Button variant="ghost" size="icon" onClick={() => openItemPriceEditor(item.id)} className="h-10 w-10" title="Cambiar precio para esta venta">
-                              <PencilLine className="h-4 w-4" />
+                          <div className="flex items-center rounded-lg border bg-muted/20">
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-10 w-10 rounded-none">
+                              <Minus className="h-4 w-4" />
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeItem(item.id)}
-                            className="h-10 w-10 text-danger"
-                            disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
-                            title={activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))) ? "Orden enviada a cocina: no se puede eliminar." : "Eliminar producto"}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                            <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none">
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <span className="w-20 text-right text-sm font-bold">{formatMoney(getItemUnitTotal(item) * item.quantity)}</span>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-10 w-10" title="Acciones de línea">
+                                <Settings2 className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleEditLineModifiers(item.id)}>
+                                Modificadores
+                              </DropdownMenuItem>
+                              {!item.isCustom && (
+                                <DropdownMenuItem onClick={() => openItemPriceEditor(item.id)}>
+                                  Precio
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={() => removeItem(item.id)}
+                                disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
+                              >
+                                Eliminar
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => updateQuantity(item.id, -1)}
-                            className="h-10 w-10"
-                          >
-                            <Minus className="h-3 w-3" />
-                          </Button>
-                          <span className="w-8 text-center font-semibold">{item.quantity}</span>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => updateQuantity(item.id, 1)}
-                            className="h-10 w-10"
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <span className="font-bold">${(getItemUnitTotal(item) * item.quantity).toFixed(2)}</span>
                       </div>
                     </Card>
                   ))}
@@ -2640,19 +2851,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="default"
-                  className="h-14 w-full text-base font-bold"
-                  size="lg"
-                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
-                  onClick={handleCheckout}
+                  variant="outline"
+                  className="h-14 w-14 p-0"
+                  onClick={() => void handleQuickPrintTicket()}
+                  title="Imprimir ticket"
+                  aria-label="Imprimir ticket"
                 >
-                  Cobrar {formatMoney(total)}
+                  <Printer className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="secondary"
-                  className="h-14 w-full text-base"
+                  className="h-14 w-14 p-0"
                   onClick={() => {
                     const isCurrentOrderEmpty = cart.length === 0;
                     if (isCurrentOrderEmpty) {
@@ -2662,23 +2873,34 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     void handleSendOrderToPending();
                   }}
                   disabled={isSendingToPending}
+                  title={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
+                  aria-label={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
                 >
-                  {isSendingToPending
-                    ? "Guardando..."
-                    : cart.length === 0
-                      ? "Guardadas"
-                      : "Guardar"}
+                  <Save className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant="default"
+                  className="h-14 flex-1 text-base font-bold"
+                  size="lg"
+                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
+                  onClick={handleCheckout}
+                >
+                  <span className="flex flex-col leading-tight">
+                    <span className="text-base font-semibold">Cobrar</span>
+                    <span className="text-sm font-medium opacity-90">{formatMoney(total)}</span>
+                  </span>
                 </Button>
                 <Button
                   variant="outline"
-                  className="h-14 w-full text-base"
+                  className="h-14 w-14 p-0"
                   onClick={() => {
                     setCart([]);
                     setSelectedDiscount(null);
                     clearPersistedDraft();
                   }}
+                  title="Cancelar orden"
                 >
-                  Cancelar
+                  <XCircle className="h-5 w-5" />
                 </Button>
               </div>
             </div>
@@ -2991,14 +3213,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
-                    {pendingOrdersCount > 0 ? (
+                    {pendingOrdersCount > 0 && !allowCloseWithPendingOrders ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
                         You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
                       </div>
                     ) : null}
+                    {pendingOrdersCount > 0 && allowCloseWithPendingOrders ? (
+                      <div className="rounded-md border border-blue-500/30 bg-blue-500/10 p-2 text-sm text-blue-700 dark:text-blue-300">
+                        Hay {pendingOrdersCount} órdenes pendientes, pero el cierre con pendientes está habilitado por configuración.
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || pendingOrdersCount > 0}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>Confirmar cierre</Button>
                     </div>
                   </>
                 ) : null}
@@ -3006,20 +3233,39 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ) : null}
 
             {canViewSensitiveCash ? (
-              <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
+              <div className="space-y-2 rounded-md border p-2 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold">Transacciones</div>
+                  {lastClosedSessionId ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void downloadCashSessionTicketPdf(lastClosedSessionId)}
+                    >
+                      Ver ticket de cierre
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="max-h-52 space-y-2 overflow-y-auto">
                 {cashTransactions.length === 0 ? (
-                  <div className="text-muted-foreground">Sin gastos registrados.</div>
+                  <div className="text-muted-foreground">Sin transacciones registradas.</div>
                 ) : (
                   cashTransactions.map((tx) => (
                     <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
                       <div>
-                        <div className="font-medium">{tx.description}</div>
-                        <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+                        <div className="font-medium">{tx.description || tx.displayType || tx.type}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {tx.displayType || tx.type.toUpperCase()} · {formatDateTimeSV(tx.createdAt)}
+                          {tx.orderId ? ` · Pedido #${tx.orderId}` : ""}
+                        </div>
                       </div>
-                      <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
+                      <div className={tx.impactsCash ? "font-semibold text-destructive" : "font-semibold text-foreground"}>
+                        {tx.impactsCash ? "-" : ""}{formatMoney(tx.amount)}
+                      </div>
                     </div>
                   ))
                 )}
+                </div>
               </div>
             ) : null}
           </div>
@@ -3131,9 +3377,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             {checkoutDraft ? (
               <>
                 <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                  <div className="rounded-lg border bg-muted/30 p-4">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Total a pagar</div>
-                    <div className="mt-2 text-3xl font-bold text-secondary">{formatMoney(paymentTotal)}</div>
+                  <div className="rounded-xl border bg-muted/20 px-4 py-5 text-center shadow-sm">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
+                    <div className="mt-3 text-5xl font-extrabold leading-none text-secondary sm:text-6xl">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -3289,10 +3535,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
               </div>
             </div>
-            <div className="rounded-lg border p-3 text-center text-lg font-semibold">
+            <div
+              className={cn(
+                "rounded-lg border p-3 text-center font-semibold",
+                isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
+              )}
+            >
               {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
               {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-              {changeCents > 1 && <span className="text-emerald-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+              {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
             </div>
             {activeTenderField ? (
               <div ref={keypadRef} className="grid grid-cols-4 gap-2">
@@ -3355,7 +3606,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     setCustomerServerErrors({});
                     setActivitySearch("");
                     setIsCustomerCreateOpen(true);
-                    void preloadCustomerFormFromDTE(dteDocumentType);
+                    void preloadCustomerFormFromDTE(dteDocumentType === "SX" ? "CF" : dteDocumentType);
                   }}
                 >
                   Administrar
@@ -3363,8 +3614,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             </div>
             <WhatsAppPhoneInput
-              label="Número extra del cliente que recibirá DTE por WhatsApp"
-              helpText="Opcional. Solo se usará como num_cliente en el mensaje de WhatsApp. No reemplaza el teléfono del receptor del DTE ni el num_receptor del servicio."
+              label="Número extra del cliente que se mostrará en WhatsApp"
+              helpText="Este número solo se usará para el mensaje 'Número del cliente'. No reemplaza el teléfono fiscal del DTE ni el número destino de WhatsApp."
               country={whatsappClientCountry}
               onCountryChange={(nextCountry) => {
                 setWhatsappClientCountry(nextCountry);
@@ -3455,18 +3706,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerCreateOpen} onOpenChange={(open) => !isSavingCustomer && setIsCustomerCreateOpen(open)}>
-        <DialogContent className="w-[94vw] max-w-xl rounded-2xl p-5">
+        <DialogContent className="w-[96vw] max-w-3xl rounded-2xl p-0">
           <DialogHeader>
-            <DialogTitle>Nuevo cliente</DialogTitle>
-            <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
+            <div className="border-b px-5 py-4">
+              <DialogTitle>Nuevo cliente</DialogTitle>
+              <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
+            </div>
           </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto px-5 pb-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
               <Label>Tipo DTE</Label>
               <div className="flex gap-2">
                 <Button type="button" variant={customerForm.clientType === "CF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CF")}>CF</Button>
                 <Button type="button" variant={customerForm.clientType === "CCF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CCF")}>CCF</Button>
-                <Button type="button" variant={customerForm.clientType === "SX" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-1 sm:col-span-2">
@@ -3493,7 +3746,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               {customerServerErrors.email && <p className="text-xs text-destructive">{customerServerErrors.email}</p>}
             </div>
             <div className="space-y-1">
-              <Label>{customerForm.clientType === "SX" ? "Documento" : "DUI"}</Label>
+              <Label>DUI</Label>
               <Input value={customerForm.dui} onChange={(event) => setCustomerForm((prev) => ({ ...prev, dui: event.target.value }))} className="h-12" />
               {customerFormErrors.dui && <p className="text-xs text-destructive">{customerFormErrors.dui}</p>}
               {customerServerErrors.dui && <p className="text-xs text-destructive">{customerServerErrors.dui}</p>}
@@ -3598,7 +3851,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             )}
           </div>
-          <div className="mt-4 flex gap-2">
+          </div>
+          <div className="sticky bottom-0 border-t bg-background px-5 py-4">
+          <div className="flex gap-2">
             <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setIsCustomerCreateOpen(false)} disabled={isSavingCustomer}>
               Cancelar
             </Button>
@@ -3606,11 +3861,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               {isSavingCustomer ? "Guardando..." : "Guardar"}
             </Button>
           </div>
+          </div>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isKitchenPromptOpen} onOpenChange={(open) => !isSubmittingKitchenChoice && setIsKitchenPromptOpen(open)}>
-        <DialogContent className="w-[92vw] max-w-md rounded-2xl p-6">
+      <Dialog
+        open={isKitchenPromptOpen}
+        onOpenChange={(open) => {
+          if (!open) return;
+          if (!isSubmittingKitchenChoice) setIsKitchenPromptOpen(open);
+        }}
+      >
+        <DialogContent
+          className="w-[92vw] max-w-md rounded-2xl p-6"
+          showCloseButton={false}
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle className="text-2xl">Finalizar venta</DialogTitle>
             <DialogDescription className="text-base">
@@ -3618,6 +3885,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {shouldShowChange(saleCompletionSummary) ? (
+              <div className="rounded-xl border bg-muted/20 px-4 py-4 text-center">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">CAMBIO</p>
+                <p className="mt-1 text-4xl font-extrabold text-amber-500">
+                  {formatMoney(saleCompletionSummary?.changeAmount ?? 0)}
+                </p>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
               <span>Enviar a cocina</span>
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
@@ -3751,9 +4026,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
         <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
           <DialogHeader>
-            <DialogTitle>Extras (opcional)</DialogTitle>
+            <DialogTitle>{editingModifiersItemId ? "Editar modificadores" : "Extras (opcional)"}</DialogTitle>
             <DialogDescription>
-              {pendingProduct ? `Selecciona extras de pago para ${pendingProduct.name}.` : "Selecciona extras de pago."}
+              {pendingProduct
+                ? editingModifiersItemId
+                  ? `Actualiza los modificadores de ${pendingProduct.name}.`
+                  : `Selecciona extras de pago para ${pendingProduct.name}.`
+                : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
@@ -3852,7 +4131,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
           <div className="pt-2">
             <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
-              {selectedExtrasCount > 0 ? `Agregar (${selectedExtrasCount} extras)` : "Agregar"}
+              {editingModifiersItemId
+                ? selectedExtrasCount > 0
+                  ? `Actualizar (${selectedExtrasCount} extras)`
+                  : "Actualizar"
+                : selectedExtrasCount > 0
+                  ? `Agregar (${selectedExtrasCount} extras)`
+                  : "Agregar"}
             </Button>
           </div>
         </DialogContent>

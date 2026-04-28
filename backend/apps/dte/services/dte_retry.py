@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from apps.dte.models import DTERecord
 from apps.dte.outbox import send_or_queue_dte
-from apps.dte.services.dte_service import DTEPreflightError, build_payload_cf
+from apps.dte.services.dte_service import DTEPreflightError, build_payload_cf, normalize_dte_extension_for_hacienda
 from apps.orders.models import OrderInvoice
 
 LOGGER = logging.getLogger("apps.dte")
@@ -34,7 +34,14 @@ def _payload_is_sendable(payload: dict[str, Any]) -> bool:
 def _resolve_resend_payload(record: DTERecord) -> tuple[dict[str, Any], str]:
     raw_payload = record.request_payload if isinstance(record.request_payload, dict) else {}
     if _payload_is_sendable(raw_payload):
-        return raw_payload, "snapshot"
+        dte_payload = raw_payload.get("dte") if isinstance(raw_payload.get("dte"), dict) else {}
+        normalized_dte, _ = normalize_dte_extension_for_hacienda(
+            dte_payload,
+            client=getattr(record.order, "customer", None),
+            branch=getattr(record.order, "branch", None),
+            order=record.order,
+        )
+        return {**raw_payload, "dte": normalized_dte}, "snapshot"
 
     invoice = OrderInvoice.objects.filter(order=record.order).first()
     ident = _extract_payload_ident(raw_payload)
@@ -61,7 +68,14 @@ def _resolve_resend_payload(record: DTERecord) -> tuple[dict[str, Any], str]:
         generation_code=codigo_generacion,
         ambiente=ambiente,
     )
-    return rebuilt, "rebuild"
+    rebuilt_dte = rebuilt.get("dte") if isinstance(rebuilt.get("dte"), dict) else {}
+    normalized_rebuilt_dte, _ = normalize_dte_extension_for_hacienda(
+        rebuilt_dte,
+        client=getattr(record.order, "customer", None),
+        branch=getattr(record.order, "branch", None),
+        order=record.order,
+    )
+    return {**rebuilt, "dte": normalized_rebuilt_dte}, "rebuild"
 
 
 def resend_record(record: DTERecord) -> DTERecord:

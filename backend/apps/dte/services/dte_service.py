@@ -507,6 +507,134 @@ def _mask_document(value: str) -> str:
     return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
 
 
+def _clean_display_value(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"none", "null", "undefined"}:
+        return ""
+    return text
+
+
+def _extract_customer_document(customer) -> str:
+    if not customer:
+        return ""
+    for attr in ("document", "documento", "dui", "dui_nit", "nit", "nit_dui", "num_documento", "numDocumento"):
+        value = _clean_display_value(getattr(customer, attr, ""))
+        if value:
+            return value
+    return ""
+
+
+def _extract_actor_name(order, user=None) -> str:
+    employee = getattr(order, "employee", None)
+    for candidate in (
+        getattr(employee, "full_name", ""),
+        getattr(employee, "name", ""),
+        getattr(order, "cashier_name", ""),
+        getattr(getattr(order, "created_by", None), "get_full_name", lambda: "")(),
+        getattr(getattr(order, "created_by", None), "username", ""),
+        getattr(user, "get_full_name", lambda: "")() if user else "",
+        getattr(user, "username", "") if user else "",
+    ):
+        value = _clean_display_value(candidate)
+        if value:
+            return value
+    return ""
+
+
+def _extract_actor_document(order, user=None) -> str:
+    employee = getattr(order, "employee", None)
+    for candidate in (
+        getattr(employee, "document", ""),
+        getattr(employee, "dui", ""),
+        getattr(employee, "nit", ""),
+        getattr(getattr(order, "created_by", None), "document", ""),
+        getattr(getattr(order, "created_by", None), "dui", ""),
+        getattr(user, "document", "") if user else "",
+        getattr(user, "dui", "") if user else "",
+        getattr(user, "nit", "") if user else "",
+    ):
+        value = _clean_display_value(candidate)
+        if value:
+            return value
+    return ""
+
+
+def normalize_dte_extension_for_hacienda(dte: dict, client=None, branch=None, user=None, order=None) -> tuple[dict, dict]:
+    normalized = dict(dte or {})
+    receptor = normalized.get("receptor") if isinstance(normalized.get("receptor"), dict) else {}
+    emisor = normalized.get("emisor") if isinstance(normalized.get("emisor"), dict) else {}
+    extension = dict(normalized.get("extension") or {}) if isinstance(normalized.get("extension"), dict) else {}
+    receptor_nombre = _clean_display_value(receptor.get("nombre"))
+    client_name = _clean_display_value(getattr(client, "name", "") or getattr(client, "nombre", "") or getattr(client, "full_name", ""))
+    is_consumer_final = receptor_nombre.upper() == "CONSUMIDOR FINAL" or client_name.upper() == "CONSUMIDOR FINAL" or bool(getattr(client, "is_consumer_final", False) or getattr(client, "is_default_consumer_final", False))
+    client_doc = _extract_customer_document(client)
+    receptor_doc = _clean_display_value(receptor.get("numDocumento"))
+    existing_docu_recibe = _clean_display_value(extension.get("docuRecibe"))
+
+    source_docu_recibe = "null"
+    if existing_docu_recibe:
+        docu_recibe = existing_docu_recibe
+        source_docu_recibe = "existing"
+    elif client_doc:
+        docu_recibe = client_doc
+        source_docu_recibe = "client"
+    elif receptor_doc:
+        docu_recibe = receptor_doc
+        source_docu_recibe = "receptor"
+    elif is_consumer_final:
+        docu_recibe = "00000000-0"
+        source_docu_recibe = "default_consumer_final"
+    else:
+        docu_recibe = None
+
+    nomb_recibe = _clean_display_value(extension.get("nombRecibe")) or receptor_nombre or client_name or ("CONSUMIDOR FINAL" if is_consumer_final else "")
+    order_ctx = order
+    docu_entrega = _clean_display_value(extension.get("docuEntrega"))
+    if not docu_entrega and order_ctx:
+        docu_entrega = _extract_actor_document(order_ctx, user=user)
+    if not docu_entrega:
+        docu_entrega = _clean_display_value(emisor.get("nit"))
+    nomb_entrega = _clean_display_value(extension.get("nombEntrega"))
+    if not nomb_entrega and order_ctx:
+        nomb_entrega = _extract_actor_name(order_ctx, user=user)
+    nomb_entrega = nomb_entrega or _clean_display_value(emisor.get("nombreComercial")) or _clean_display_value(emisor.get("nombre"))
+
+    extension["docuRecibe"] = docu_recibe
+    extension["nombRecibe"] = nomb_recibe
+    extension["docuEntrega"] = docu_entrega or ""
+    extension["nombEntrega"] = nomb_entrega or ""
+    extension["observaciones"] = extension.get("observaciones")
+    extension["placaVehiculo"] = extension.get("placaVehiculo")
+    normalized["extension"] = extension
+    meta = {
+        "is_consumer_final": is_consumer_final,
+        "source_docuRecibe": source_docu_recibe,
+    }
+    return normalized, meta
+
+
+def _resolve_extension_payload(*, order, customer, emisor_payload: dict, receptor: dict) -> dict:
+    raw_extension = {
+        "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if order.iva_exempt else ""),
+        "placaVehiculo": None,
+        "docuRecibe": None,
+        "nombEntrega": "",
+        "nombRecibe": "",
+        "docuEntrega": "",
+    }
+    normalized_dte, _ = normalize_dte_extension_for_hacienda(
+        {"emisor": emisor_payload, "receptor": receptor, "extension": raw_extension},
+        client=customer,
+        branch=None,
+        user=getattr(order, "created_by", None),
+        order=order,
+    )
+    extension = normalized_dte.get("extension") if isinstance(normalized_dte.get("extension"), dict) else raw_extension
+    return extension
+
+
 def validate_receptor_payload(receptor: dict[str, Any]) -> None:
     tipo_documento = receptor.get("tipoDocumento")
     num_documento = receptor.get("numDocumento")
@@ -1211,10 +1339,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "receptor": receptor,
         "cuerpoDocumento": cuerpo,
         "resumen": resumen,
-        "extension": {
-            "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if order.iva_exempt else ""),
-            "placaVehiculo": None, "docuRecibe": None, "nombEntrega": None, "nombRecibe": None, "docuEntrega": None,
-        },
+        "extension": _resolve_extension_payload(order=order, customer=customer, emisor_payload=emisor_payload, receptor=receptor),
         "apendice": None, "documentoRelacionado": None, "ventaTercero": None, "otrosDocumentos": None,
     }}
     validate_dte_preflight_payload(payload)
@@ -1237,6 +1362,22 @@ def send_to_bridge(
     payment_id: int | None = None,
     branch_id: int | None = None,
 ) -> dict:
+    if dte_type != "INVALIDACION" and isinstance(payload, dict) and isinstance(payload.get("dte"), dict):
+        normalized_dte, norm_meta = normalize_dte_extension_for_hacienda(payload.get("dte") or {})
+        payload = {**payload, "dte": normalized_dte}
+        ident_meta = normalized_dte.get("identificacion") if isinstance(normalized_dte.get("identificacion"), dict) else {}
+        logger.info(
+            "DTE_EXTENSION_NORMALIZED tipoDte=%s codigoGeneracion=%s numeroControl=%s is_consumer_final=%s docuRecibe_present=%s nombRecibe_present=%s docuEntrega_present=%s nombEntrega_present=%s source_docuRecibe=%s",
+            ident_meta.get("tipoDte"),
+            ident_meta.get("codigoGeneracion"),
+            ident_meta.get("numeroControl"),
+            norm_meta.get("is_consumer_final"),
+            bool(_clean_display_value((normalized_dte.get("extension") or {}).get("docuRecibe"))),
+            bool(_clean_display_value((normalized_dte.get("extension") or {}).get("nombRecibe"))),
+            bool(_clean_display_value((normalized_dte.get("extension") or {}).get("docuEntrega"))),
+            bool(_clean_display_value((normalized_dte.get("extension") or {}).get("nombEntrega"))),
+            norm_meta.get("source_docuRecibe"),
+        )
     validate_dte_preflight_payload(payload)
     root_key = "invalidacion" if dte_type == "INVALIDACION" else "dte"
     ident = payload.get(root_key, {}).get("identificacion", {})

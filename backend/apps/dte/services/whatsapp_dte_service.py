@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import re
@@ -22,6 +23,22 @@ MAX_LOG_TEXT = 3000
 
 def _normalize_phone(value: str | None) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _normalize_phone_for_whatsapp(value: str | None) -> str:
+    digits = _normalize_phone(value)
+    if len(digits) == 8:
+        return f"503{digits}"
+    return digits
+
+
+def _format_display_phone(value: str | None) -> str:
+    digits = _normalize_phone_for_whatsapp(value)
+    if len(digits) == 11 and digits.startswith("503"):
+        return f"+503 {digits[3:7]}-{digits[7:]}"
+    if not digits:
+        return ""
+    return f"+{digits}"
 
 
 def _mask_phone(value: str | None) -> str:
@@ -79,6 +96,10 @@ def _json_for_form(value) -> str:
     return str(value)
 
 
+def _sha256_hex(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
 def _sanitize_payload_for_log(payload: dict) -> dict:
     cloned = dict(payload or {})
     if "num_receptor" in cloned:
@@ -97,24 +118,57 @@ def _sanitize_payload_for_log(payload: dict) -> dict:
 def _build_whatsapp_files(record: DTERecord, payload: dict) -> tuple[dict, list[dict]]:
     files = {}
     meta = []
-    dte_json = payload.get("dte") if isinstance(payload.get("dte"), dict) else {}
-    json_bytes = _json_pretty(dte_json).encode("utf-8")
-    json_name = f"dte_{record.id}_{record.control_number or 'sin_control'}.json"
+    tipo_dte = str(payload.get("tipo_dte") or "01").strip() or "01"
+    generation_code = str(payload.get("generation_code") or record.generation_code or record.codigo_generacion or "").strip() or str(record.id)
+    invoice_json = payload.get("invoice_json") if isinstance(payload.get("invoice_json"), dict) else {}
+    json_payload = invoice_json if invoice_json else {
+        "dte": payload.get("dte") if isinstance(payload.get("dte"), dict) else {},
+        "respuesta_hacienda": payload.get("respuesta_hacienda") if isinstance(payload.get("respuesta_hacienda"), dict) else {},
+    }
+    json_bytes = _json_pretty(json_payload).encode("utf-8")
+    json_name = f"DTE-{tipo_dte}-{generation_code}.json"
     files["json_file"] = (json_name, json_bytes, "application/json")
-    meta.append({"field": "json_file", "name": json_name, "mime": "application/json", "size": len(json_bytes)})
+    meta.append(
+        {"field": "json_file", "name": json_name, "mime": "application/json", "size": len(json_bytes), "sha256": _sha256_hex(json_bytes)}
+    )
     try:
         ticket = render_customer_ticket(record.order)
+        receipt_context = ticket.get("meta", {}).get("receipt_context") if isinstance(ticket.get("meta"), dict) else {}
+        if not isinstance(receipt_context, dict):
+            receipt_context = {}
+        dte_payload = json_payload.get("dte") if isinstance(json_payload.get("dte"), dict) else {}
+        mh_payload = json_payload.get("respuesta_hacienda") if isinstance(json_payload.get("respuesta_hacienda"), dict) else {}
+        dte_block = receipt_context.get("dte") if isinstance(receipt_context.get("dte"), dict) else {}
+        receptor = dte_payload.get("receptor") if isinstance(dte_payload.get("receptor"), dict) else {}
+        emisor = dte_payload.get("emisor") if isinstance(dte_payload.get("emisor"), dict) else {}
+        extension = dte_payload.get("extension") if isinstance(dte_payload.get("extension"), dict) else {}
+        metadata = json_payload.get("metadata") if isinstance(json_payload.get("metadata"), dict) else {}
+        receipt_context["dte"] = {
+            **dte_block,
+            "estado_hacienda": str(mh_payload.get("estado") or "").strip(),
+            "sello_recibido": str(mh_payload.get("selloRecibido") or mh_payload.get("sello_recibido") or dte_block.get("sello_recibido") or "").strip(),
+            "fh_procesamiento": str(mh_payload.get("fhProcesamiento") or mh_payload.get("fh_procesamiento") or dte_block.get("fh_procesamiento") or "").strip(),
+            "descripcion_msg": str(mh_payload.get("descripcionMsg") or "").strip(),
+            "responsable_emisor_nombre": str(extension.get("nombEntrega") or "").strip() or str(emisor.get("nombreComercial") or emisor.get("nombre") or "").strip(),
+            "responsable_emisor_documento": str(extension.get("docuEntrega") or "").strip() or str(emisor.get("nit") or "").strip(),
+            "responsable_receptor_nombre": str(extension.get("nombRecibe") or "").strip() or str(receptor.get("nombre") or "").strip(),
+            "responsable_receptor_documento": str(extension.get("docuRecibe") or "").strip() or str(receptor.get("numDocumento") or "").strip(),
+            "telefono_cliente_display": str(metadata.get("delivery_phone_display") or "").strip(),
+        }
+        ticket.setdefault("meta", {})["receipt_context"] = receipt_context
         pdf_result = build_receipt_pdf_from_text(
             text=str(ticket.get("text") or ""),
-            filename=f"dte_{record.id}_{record.control_number or 'sin_control'}.pdf",
-            receipt_context=ticket.get("meta", {}).get("receipt_context"),
+            filename=f"DTE-{tipo_dte}-{generation_code}.pdf",
+            receipt_context=receipt_context,
             center_lines=ticket.get("meta", {}).get("pdf_center_lines"),
         )
-        pdf_name = str(pdf_result.filename or f"dte_{record.id}.pdf")
+        pdf_name = str(pdf_result.filename or f"DTE-{tipo_dte}-{generation_code}.pdf")
         pdf_bytes = bytes(pdf_result.pdf_bytes or b"")
         if pdf_bytes:
             files["pdf_file"] = (pdf_name, pdf_bytes, "application/pdf")
-            meta.append({"field": "pdf_file", "name": pdf_name, "mime": "application/pdf", "size": len(pdf_bytes)})
+            meta.append(
+                {"field": "pdf_file", "name": pdf_name, "mime": "application/pdf", "size": len(pdf_bytes), "sha256": _sha256_hex(pdf_bytes)}
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("WHATSAPP_ATTACHMENTS_PDF_BUILD_FAILED order_id=%s error=%s", record.order_id, exc)
     return files, meta
@@ -125,6 +179,10 @@ def _build_whatsapp_form_data(payload: dict) -> dict:
     respuesta_hacienda = invoice_json.get("respuesta_hacienda") if isinstance(invoice_json.get("respuesta_hacienda"), dict) else {}
     data = {
         "num_receptor": _json_for_form(payload.get("num_receptor")),
+        "destination_phone": _json_for_form(payload.get("destination_phone")),
+        "destination_source": _json_for_form(payload.get("destination_source")),
+        "show_customer_phone_message": _json_for_form(payload.get("show_customer_phone_message")),
+        "show_destination_as_customer_phone": _json_for_form(payload.get("show_destination_as_customer_phone")),
         "send_json": _json_for_form(payload.get("send_json")),
         "tipo_dte": _json_for_form(payload.get("tipo_dte")),
         "doc_type": _json_for_form(payload.get("doc_type")),
@@ -132,16 +190,27 @@ def _build_whatsapp_form_data(payload: dict) -> dict:
         "order_id": _json_for_form(payload.get("order_id")),
         "generation_code": _json_for_form(payload.get("generation_code")),
         "control_number": _json_for_form(payload.get("control_number")),
+        "codigoGeneracion": _json_for_form(payload.get("codigoGeneracion")),
+        "numeroControl": _json_for_form(payload.get("numeroControl")),
         "receiver_name": _json_for_form(payload.get("receiver_name")),
         "estado_mh": _json_for_form(payload.get("estado_mh")),
+        "estadoMH": _json_for_form(payload.get("estadoMH")),
+        "selloRecibido": _json_for_form(payload.get("selloRecibido")),
+        "sello_recibido": _json_for_form(payload.get("sello_recibido")),
+        "fhProcesamiento": _json_for_form(payload.get("fhProcesamiento")),
+        "fh_procesamiento": _json_for_form(payload.get("fh_procesamiento")),
+        "descripcion_msg": _json_for_form(payload.get("descripcion_msg")),
         "empresa": _json_for_form(payload.get("empresa")),
+        "empresa_nombre": _json_for_form(payload.get("empresa_nombre")),
         "total": _json_for_form(payload.get("total")),
         "dte": _json_for_form(payload.get("dte") if isinstance(payload.get("dte"), dict) else {}),
         "respuesta_hacienda": _json_for_form(respuesta_hacienda),
         "invoice_json": _json_for_form(invoice_json),
     }
-    if str(payload.get("num_cliente") or "").strip():
-        data["num_cliente"] = _json_for_form(payload.get("num_cliente"))
+    for optional_key in ("num_cliente", "cliente_telefono", "telefono_cliente", "customer_phone", "customer_phone_display"):
+        value = payload.get(optional_key)
+        if value is not None and str(value).strip():
+            data[optional_key] = _json_for_form(value)
     return data
 
 
@@ -299,74 +368,21 @@ def resolve_whatsapp_destination(
     allow_default_fallback: bool | None = None,
 ) -> WhatsAppDestinationResolution:
     config = resolve_delivery_config()
-    dte_payload = _safe_dte_for_whatsapp(record)
-    receptor_payload = dte_payload.get("receptor") if isinstance(dte_payload.get("receptor"), dict) else {}
-    receptor_phone = _normalize_phone(receptor_payload.get("telefono"))
-    customer_phone = _normalize_phone(getattr(getattr(record.order, "customer", None), "telefono", ""))
-    requested_raw = str(to_phone or "").strip()
-    requested_phone = _normalize_phone(requested_raw)
-    default_phone = _normalize_phone(config.whatsapp_default_phone)
-    fallback_enabled = config.whatsapp_allow_default_fallback if allow_default_fallback is None else bool(allow_default_fallback)
-
-    if requested_raw:
-        if not requested_phone:
-            return WhatsAppDestinationResolution(
-                raw_phone=requested_raw,
-                normalized_phone="",
-                source="client_phone",
-                rejected_reason="Teléfono de cliente inválido para WhatsApp.",
-                is_valid=False,
-            )
-        if not _is_valid_phone(requested_phone):
-            return WhatsAppDestinationResolution(
-                raw_phone=requested_raw,
-                normalized_phone=requested_phone,
-                source="client_phone",
-                rejected_reason="Teléfono de cliente inválido para WhatsApp.",
-                is_valid=False,
-            )
+    default_phone = _normalize_phone_for_whatsapp(config.whatsapp_default_phone)
+    if default_phone and _is_valid_phone(default_phone):
         return WhatsAppDestinationResolution(
-            raw_phone=requested_raw,
-            normalized_phone=requested_phone,
-            source="client_phone",
-            rejected_reason="",
-            is_valid=True,
-        )
-
-    if receptor_phone and _is_valid_phone(receptor_phone):
-        return WhatsAppDestinationResolution(
-            raw_phone=receptor_phone,
-            normalized_phone=receptor_phone,
-            source="dte_receptor_phone",
-            rejected_reason="",
-            is_valid=True,
-        )
-
-    if customer_phone and _is_valid_phone(customer_phone):
-        return WhatsAppDestinationResolution(
-            raw_phone=customer_phone,
-            normalized_phone=customer_phone,
-            source="client_phone",
-            rejected_reason="",
-            is_valid=True,
-        )
-
-    if fallback_enabled and default_phone and _is_valid_phone(default_phone):
-        return WhatsAppDestinationResolution(
-            raw_phone=default_phone,
+            raw_phone=str(config.whatsapp_default_phone or ""),
             normalized_phone=default_phone,
-            source="default_fallback",
+            source="env_default",
             rejected_reason="",
             is_valid=True,
         )
 
-    reason = "Sin teléfono válido (manual o receptor.telefono en DTE)."
-    if not fallback_enabled:
-        reason = "Sin teléfono válido y fallback por defecto deshabilitado."
+    reason = "WHATSAPP_DEFAULT_TO_PHONE no está configurado o es inválido."
     return WhatsAppDestinationResolution(
-        raw_phone=requested_raw or customer_phone or default_phone,
+        raw_phone=str(config.whatsapp_default_phone or ""),
         normalized_phone="",
-        source="client_phone" if (requested_raw or customer_phone) else "default_fallback",
+        source="env_default",
         rejected_reason=reason,
         is_valid=False,
     )
@@ -406,13 +422,23 @@ def _safe_dte_for_whatsapp(record: DTERecord) -> dict:
     return {**dte, "receptor": safe_receptor}
 
 
-def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationResolution) -> dict:
+def _resolve_manual_customer_phone(record: DTERecord, manual_input: str | None) -> tuple[str, str, str]:
+    manual_raw = str(manual_input or "").strip()
+    if not manual_raw:
+        manual_raw = str(getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
+    normalized = _normalize_phone_for_whatsapp(manual_raw)
+    if not normalized or not _is_valid_phone(normalized):
+        return "", "", "none"
+    return normalized, _format_display_phone(normalized), "manual_extra"
+
+
+def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationResolution, customer_phone: str | None = None) -> dict:
     base = build_delivery_base_payload(record)
     invoice_json = base.get("invoice_json") if isinstance(base.get("invoice_json"), dict) else {}
     dte = _safe_dte_for_whatsapp(record) or (invoice_json.get("dte") if isinstance(invoice_json.get("dte"), dict) else {})
     receptor = dte.get("receptor") if isinstance(dte.get("receptor"), dict) else {}
-    if not str(receptor.get("telefono") or "").strip():
-        dte["receptor"] = {**receptor, "telefono": destination.normalized_phone}
+    dte["receptor"] = {**receptor}
+    dte_receptor_phone = str(dte["receptor"].get("telefono") or "").strip()
     respuesta_hacienda = base.get("respuesta_hacienda") if isinstance(base.get("respuesta_hacienda"), dict) else {}
     tipo_dte = "01"
     doc_type = "CF"
@@ -426,10 +452,35 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
     empresa_nombre = base.get("company_name") or resolve_delivery_config().whatsapp_company_name or "PicoPOS"
     resumen = dte.get("resumen") if isinstance(dte.get("resumen"), dict) else {}
     total = float(resumen.get("totalPagar") or base.get("total") or record.total_amount or 0)
-    num_cliente = str(getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
-    return {
+    estado_mh = str(
+        respuesta_hacienda.get("estado")
+        or base.get("estado_mh")
+        or ""
+    ).strip()
+    sello = str(respuesta_hacienda.get("selloRecibido") or respuesta_hacienda.get("sello_recibido") or "").strip()
+    fh = str(respuesta_hacienda.get("fhProcesamiento") or respuesta_hacienda.get("fh_procesamiento") or "").strip()
+    manual_customer_normalized, manual_customer_display, customer_phone_source = _resolve_manual_customer_phone(record, customer_phone)
+    show_customer_phone_message = bool(manual_customer_display)
+    metadata = {
+        "issued_id": base.get("issued_id"),
+        "order_id": base.get("order_id"),
+        "destination_phone": destination.normalized_phone,
+        "delivery_phone": destination.normalized_phone,
+        "delivery_phone_display": _format_display_phone(destination.normalized_phone),
+        "destination_source": destination.source,
+        "customer_phone_display": manual_customer_display or None,
+        "customer_phone_source": customer_phone_source,
+        "show_customer_phone_message": show_customer_phone_message,
+        "dte_receptor_phone": dte_receptor_phone or None,
+        "dte_receptor_phone_source": "dte_payload",
+    }
+    invoice_json = {"dte": dte, "respuesta_hacienda": respuesta_hacienda, "metadata": metadata}
+    payload = {
         "num_receptor": destination.normalized_phone,
-        **({"num_cliente": num_cliente} if num_cliente else {}),
+        "destination_phone": destination.normalized_phone,
+        "destination_source": destination.source,
+        "show_customer_phone_message": show_customer_phone_message,
+        "show_destination_as_customer_phone": False,
         "send_json": True,
         "dte": dte,
         "tipo_dte": tipo_dte,
@@ -441,14 +492,26 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         "control_number": base.get("control_number"),
         "numeroControl": base.get("control_number"),
         "receiver_name": base.get("receiver_name"),
-        "estado_mh": base.get("estado_mh"),
-        "estadoMH": base.get("estado_mh"),
+        "estado_mh": estado_mh,
+        "estadoMH": estado_mh,
+        "selloRecibido": sello,
+        "sello_recibido": sello,
+        "fhProcesamiento": fh,
+        "fh_procesamiento": fh,
         "empresa": empresa_nombre,
         "empresa_nombre": empresa_nombre,
         "total": total,
-        "invoice_json": {"dte": dte, "respuesta_hacienda": respuesta_hacienda},
-        "descripcion_msg": f"DTE {record.control_number} estado {record.status}",
+        "invoice_json": invoice_json,
+        "respuesta_hacienda": respuesta_hacienda,
+        "descripcion_msg": str(respuesta_hacienda.get("descripcionMsg") or f"DTE {record.control_number} estado {record.status}"),
     }
+    if manual_customer_display:
+        payload["customer_phone_display"] = manual_customer_display
+        payload["cliente_telefono"] = manual_customer_display
+        payload["telefono_cliente"] = manual_customer_display
+        payload["customer_phone"] = manual_customer_display
+        payload["num_cliente"] = manual_customer_normalized
+    return payload
 
 
 def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeliveryAttempt:
@@ -483,7 +546,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         )
         return attempt
 
-    payload = build_whatsapp_payload(record, destination)
+    payload = build_whatsapp_payload(record, destination, customer_phone=to_phone)
     contract_missing = _validate_whatsapp_payload_contract(payload)
     if contract_missing:
         error = f"payload_missing_required:{','.join(contract_missing)}"
@@ -508,10 +571,49 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         return attempt
 
     files, file_meta = _build_whatsapp_files(record, payload)
+    has_pdf_attachment = any(item.get("field") == "pdf_file" for item in file_meta)
+    if not has_pdf_attachment:
+        error = "pdf_attachment_missing"
+        attempt.status = "FAILED"
+        attempt.provider_body = {
+            "error": error,
+            "provider_message": "No se pudo generar el PDF completo del DTE para WhatsApp.",
+            "request_payload": _sanitize_payload_for_log(payload),
+            "to_phone": destination.normalized_phone,
+            "destination_source": destination.source,
+            "endpoint": endpoint,
+            "attachments": file_meta,
+        }
+        attempt.save(update_fields=["status", "provider_body", "retries"])
+        logger.error(
+            "WHATSAPP_ATTACHMENTS_INVALID job_id=%s order_id=%s issued_id=%s reason=%s attachments=%s",
+            attempt.id,
+            record.order_id,
+            record.id,
+            error,
+            file_meta,
+        )
+        return attempt
+
     form_data = _build_whatsapp_form_data(payload)
     request_headers = {"X-API-Key": key}
+    invoice_metadata = (payload.get("invoice_json") or {}).get("metadata") if isinstance((payload.get("invoice_json") or {}).get("metadata"), dict) else {}
+    dte_receptor_phone = str((invoice_metadata or {}).get("dte_receptor_phone") or "")
+    dte_receptor_mask = "placeholder_0000" if dte_receptor_phone == "0000-0000" else _mask_phone(dte_receptor_phone)
     logger.info(
-        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_num_cliente=%s num_cliente=%s num_receptor_intacto=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s",
+        "WHATSAPP_OUTGOING_PHONE_FIELDS destination_phone=%s destination_source=%s default_env_phone_present=%s customer_phone_display_present=%s customer_phone_source=%s show_customer_phone_message=%s dte_receptor_phone=%s dte_receptor_phone_source=%s manual_extra_present=%s",
+        _mask_phone(payload.get("destination_phone") or payload.get("num_receptor")),
+        payload.get("destination_source"),
+        bool(destination.raw_phone),
+        bool(payload.get("customer_phone_display")),
+        (invoice_metadata or {}).get("customer_phone_source") or "none",
+        bool(payload.get("show_customer_phone_message")),
+        dte_receptor_mask,
+        (invoice_metadata or {}).get("dte_receptor_phone_source") or "unknown",
+        bool(payload.get("num_cliente")),
+    )
+    logger.info(
+        "WHATSAPP_JOB_START job_id=%s order_id=%s issued_id=%s channel=whatsapp destination_source=%s destination=%s endpoint=%s has_num_receptor=%s has_num_cliente=%s num_cliente=%s num_receptor_intacto=%s has_dte=%s has_respuesta_hacienda=%s has_pdf=%s has_json=%s tipo_dte=%s gen=%s control=%s has_sello=%s has_fh=%s attachment_meta=%s",
         attempt.id,
         record.order_id,
         record.id,
@@ -531,6 +633,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         payload.get("control_number"),
         bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("selloRecibido") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("sello_recibido")),
         bool(((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fhProcesamiento") or ((payload.get("invoice_json") or {}).get("respuesta_hacienda") or {}).get("fh_procesamiento")),
+        file_meta,
     )
     _log_whatsapp_request_debug(
         attempt=attempt,
@@ -621,6 +724,7 @@ def send_dte_whatsapp(record: DTERecord, to_phone: str | None = None) -> DteDeli
         "endpoint": endpoint,
         "queued": queued,
         "job_id": (provider_body or {}).get("job_id"),
+        "attachments": file_meta,
     }
     attempt.save(update_fields=["status", "provider_status", "provider_body", "retries"])
     logger.info(

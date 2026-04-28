@@ -61,7 +61,7 @@ class CashDrawerService:
             "enabled": bool(settings.CASH_DRAWER_ENABLED),
             "mode": (settings.CASH_DRAWER_MODE or "cups"),
             "configured": bool(available),
-            "missing": [] if available else ["star_tsp100"],
+            "missing": [] if available else ["TSP143-(STR_T-001)"],
             "vendor_id": None,
             "product_id": None,
             "interface": None,

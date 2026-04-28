@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
-import { BarChart3, ChefHat, ClipboardList, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
+import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
@@ -16,6 +16,7 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
   kitchen: ChefHat,
   orders_customers: ClipboardList,
   menu_discounts: Tags,
+  inventory: Boxes,
   registers: BarChart3,
   dte: FileText,
   clients: Users,
@@ -29,7 +30,10 @@ const MainMenu = () => {
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
 
   const cards = useMemo(
-    () => filterModulesForUser(user, appModules).map((module) => ({ ...module, icon: iconByModule[module.key] })),
+    () =>
+      filterModulesForUser(user, appModules)
+        .filter((module) => module.key !== "dte")
+        .map((module) => ({ ...module, icon: iconByModule[module.key] })),
     [user]
   );
   const isWorker = user?.role === "worker";
@@ -102,6 +106,8 @@ const MainMenu = () => {
                   if (blockedByAttendance) {
                     if (attendanceError) {
                       toast.error(`No se pudo validar asistencia: ${attendanceError}`);
+                    } else if (accessState.blockReason === "ON_BREAK") {
+                      toast.error("No puedes acceder mientras estás en break. Marca regreso de break para continuar.");
                     } else if (accessState.blockReason === "CLOCKED_OUT") {
                       toast.error("Tu jornada ya fue cerrada. Debes marcar Entrada en un nuevo turno.");
                     } else {

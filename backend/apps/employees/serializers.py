@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 from apps.core.models import Branch
-from apps.employees.models import Employee, AttendanceRecord, Schedule
+from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, Schedule
 from apps.users.models import UserProfile
 from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format
 
@@ -325,6 +325,10 @@ class AttendanceStateSerializer(serializers.Serializer):
     can_break_start = serializers.BooleanField()
     can_break_end = serializers.BooleanField()
     can_clock_out = serializers.BooleanField()
+    state = serializers.ChoiceField(choices=["OFF_SHIFT", "WORKING_BEFORE_BREAK", "ON_BREAK", "WORKING_AFTER_BREAK"])
+    access_allowed = serializers.BooleanField()
+    active_cycle = serializers.DictField()
+    cycles_today = serializers.ListField(child=serializers.DictField())
 
 
 class AttendanceHistoryRowSerializer(serializers.Serializer):
@@ -335,24 +339,72 @@ class AttendanceHistoryRowSerializer(serializers.Serializer):
     clock_out = serializers.DateTimeField(allow_null=True)
 
 
-def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict:
-    clock_in = record.clock_in or record.check_in
-    clock_out = record.clock_out or record.check_out
-    break_start = record.break_start
-    break_end = record.break_end
-    has_active_session = bool(clock_in and (clock_out is None or clock_in > clock_out))
-    break_active = bool(has_active_session and break_start and not break_end)
-    if clock_in and (clock_out is None or clock_in >= clock_out):
+def build_attendance_state(record: AttendanceRecord | None, employee: Employee) -> dict:
+    record_date = timezone.localdate()
+    cycles_qs: list[AttendanceCycle] = []
+
+    if record is not None:
+        record_date = record.date
+        if record.pk:
+            cycles_qs = list(record.cycles.all().order_by("sequence", "id"))
+
+    if record is not None and not cycles_qs and (record.clock_in or record.check_in):
+        legacy_clock_in = record.clock_in or record.check_in
+        legacy_clock_out = record.clock_out or record.check_out
+        cycles_qs = [
+            AttendanceCycle(
+                attendance_record=record,
+                sequence=1,
+                clock_in_at=legacy_clock_in,
+                break_start_at=record.break_start,
+                break_end_at=record.break_end,
+                clock_out_at=legacy_clock_out,
+            )
+        ]
+    active_cycle = next((cycle for cycle in reversed(cycles_qs) if cycle.clock_out_at is None), None)
+    current_cycle = active_cycle or (cycles_qs[-1] if cycles_qs else None)
+    clock_in = current_cycle.clock_in_at if current_cycle else None
+    break_start = current_cycle.break_start_at if current_cycle else None
+    break_end = current_cycle.break_end_at if current_cycle else None
+    clock_out = current_cycle.clock_out_at if current_cycle else None
+
+    has_active_session = active_cycle is not None
+    if not has_active_session:
+        state = "OFF_SHIFT"
+    elif break_start and not break_end:
+        state = "ON_BREAK"
+    elif break_start and break_end:
+        state = "WORKING_AFTER_BREAK"
+    else:
+        state = "WORKING_BEFORE_BREAK"
+
+    if state in {"WORKING_BEFORE_BREAK", "ON_BREAK"}:
         latest_event = "CLOCK_IN"
-    elif clock_out:
+    elif state == "OFF_SHIFT" and cycles_qs and cycles_qs[-1].clock_out_at:
         latest_event = "CLOCK_OUT"
     else:
         latest_event = "NONE"
-    total_entries_today = max(int(record.total_clock_ins or 0), 1 if clock_in else 0)
-    total_exits_today = max(int(record.total_clock_outs or 0), 1 if clock_out else 0)
+
+    total_entries_today = len(cycles_qs)
+    total_exits_today = len([cycle for cycle in cycles_qs if cycle.clock_out_at is not None])
+    access_allowed = state in {"WORKING_BEFORE_BREAK", "WORKING_AFTER_BREAK"}
+
+    can_break_start = state == "WORKING_BEFORE_BREAK"
+    can_break_end = state == "ON_BREAK"
+    can_clock_out = state == "WORKING_AFTER_BREAK"
+    cycle_rows = [
+        {
+            "sequence": cycle.sequence,
+            "clock_in_at": cycle.clock_in_at,
+            "break_start_at": cycle.break_start_at,
+            "break_end_at": cycle.break_end_at,
+            "clock_out_at": cycle.clock_out_at,
+        }
+        for cycle in cycles_qs
+    ]
     return {
         "employee": {"id": employee.id, "name": employee.full_name, "role": employee.role},
-        "date": record.date,
+        "date": record_date,
         "clock_in": clock_in,
         "break_start": break_start,
         "break_end": break_end,
@@ -363,8 +415,12 @@ def build_attendance_state(record: AttendanceRecord, employee: Employee) -> dict
         "last_clock_out": clock_out,
         "total_entries_today": total_entries_today,
         "total_exits_today": total_exits_today,
-        "can_clock_in": not has_active_session,
-        "can_break_start": bool(has_active_session and not break_start),
-        "can_break_end": bool(break_active and not clock_out),
-        "can_clock_out": bool(has_active_session and not break_active),
+        "can_clock_in": state == "OFF_SHIFT",
+        "can_break_start": can_break_start,
+        "can_break_end": can_break_end,
+        "can_clock_out": can_clock_out,
+        "state": state,
+        "access_allowed": access_allowed,
+        "active_cycle": next((row for row in cycle_rows if row["clock_out_at"] is None), None),
+        "cycles_today": cycle_rows,
     }

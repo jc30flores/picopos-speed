@@ -5,7 +5,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from rest_framework.test import APIClient
 
-from apps.core.models import Branch
+from apps.core.models import Branch, FeatureFlag
 from apps.users.models import UserProfile
 from apps.cashier.models import CashSession, Register
 from apps.orders.models import Order
@@ -144,6 +144,47 @@ class CashierFlowTests(TestCase):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         res = self.client.post('/api/cashier/transactions/', {'type': 'cash_out', 'amount': '5.00', 'description': 'Proveedor'}, format='json')
         self.assertEqual(res.status_code, 201)
+
+    def test_close_session_allows_pending_orders_when_feature_flag_enabled(self):
+        FeatureFlag.objects.create(
+            key="FF_CASH_CLOSE_ALLOW_PENDING_ORDERS",
+            label="Cierre de caja con órdenes pendientes",
+            is_enabled=True,
+        )
+        open_res = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.assertEqual(open_res.status_code, 201)
+        session_branch_id = open_res.data["session"]["branch"]
+        Order.objects.create(
+            order_number=1001,
+            branch_id=session_branch_id,
+            service_type=self.service_type,
+            status="waiting_payment",
+            payment_status="unpaid",
+            subtotal="10.00",
+            tax="0.00",
+            total="10.00",
+            is_pending=True,
+            pending_state="pending_payment",
+        )
+
+        close = self.client.post('/api/cashier/session/close/', {'total_billetes': '90.00', 'total_monedas': '10.00', 'total_contado': '100.00'}, format='json')
+        self.assertEqual(close.status_code, 200)
+
+    def test_transactions_include_all_contains_cash_in_when_requested(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        self.client.post('/api/cashier/transactions/', {'type': 'cash_in', 'amount': '3.00', 'description': 'Ajuste entrada'}, format='json')
+
+        admin_client = APIClient()
+        admin_client.force_authenticate(self.admin)
+
+        default_res = admin_client.get('/api/cashier/transactions/')
+        self.assertEqual(default_res.status_code, 200)
+        self.assertEqual(default_res.data, [])
+
+        all_res = admin_client.get('/api/cashier/transactions/?include=all')
+        self.assertEqual(all_res.status_code, 200)
+        self.assertEqual(len(all_res.data), 1)
+        self.assertEqual(all_res.data[0]["type"], "cash_in")
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

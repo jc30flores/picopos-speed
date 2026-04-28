@@ -30,7 +30,7 @@ logger = logging.getLogger("apps.dte")
 
 
 def _extract_delivery_phone(request) -> str | None:
-    for key in ("phone", "telefono", "telefono_cliente", "customer_phone", "receiver_phone", "whatsapp_phone"):
+    for key in ("num_cliente", "customer_phone_display", "cliente_telefono", "telefono_cliente", "customer_phone"):
         value = request.data.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()

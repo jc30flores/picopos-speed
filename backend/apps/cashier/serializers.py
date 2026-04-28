@@ -60,10 +60,27 @@ class CashTransactionSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
     display_type = serializers.SerializerMethodField()
     impacts_cash = serializers.SerializerMethodField()
+    payment_id = serializers.IntegerField(source="payment_id", read_only=True)
+    refund_id = serializers.IntegerField(source="refund_id", read_only=True)
+    order_id = serializers.SerializerMethodField()
 
     class Meta:
         model = CashTransaction
-        fields = ["id", "session", "type", "display_type", "impacts_cash", "amount", "description", "created_by", "created_by_username", "created_at"]
+        fields = [
+            "id",
+            "session",
+            "type",
+            "display_type",
+            "impacts_cash",
+            "amount",
+            "description",
+            "payment_id",
+            "refund_id",
+            "order_id",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
         read_only_fields = ["session", "created_by", "created_at"]
 
     def get_display_type(self, obj: CashTransaction) -> str:
@@ -81,6 +98,13 @@ class CashTransactionSerializer(serializers.ModelSerializer):
 
     def get_impacts_cash(self, obj: CashTransaction) -> bool:
         return obj.type in {"cash_in", "cash_out", "expense", "payout"}
+
+    def get_order_id(self, obj: CashTransaction):
+        if obj.payment_id and getattr(obj, "payment", None):
+            return obj.payment.order_id
+        if obj.refund_id and getattr(obj, "refund", None):
+            return obj.refund.order_id
+        return None
 
 
 class CashSessionSummarySerializer(serializers.Serializer):

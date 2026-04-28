@@ -11,7 +11,8 @@ import { getEntityImageSrc } from "@/lib/media";
 import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
 import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, type CategoryDeleteConflictError } from "@/lib/api";
+import { ProductInventoryLinksDialog } from "./ProductInventoryLinksDialog";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useReorderableList } from "@/hooks/useReorderableList";
@@ -90,6 +91,8 @@ export const ProductsTab = () => {
   const [draggingProductId, setDraggingProductId] = useState<number | null>(null);
   const [dragOverProductId, setDragOverProductId] = useState<number | null>(null);
   const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
+  const [inventoryCategoryTarget, setInventoryCategoryTarget] = useState<Category | null>(null);
+  const [categoryInventoryLinks, setCategoryInventoryLinks] = useState<InventoryProductLink[]>([]);
 
   const loadMenuData = useCallback(async (productId: number | null = selectedProduct?.id ?? null) => {
     setIsMenuLoading(true);
@@ -642,6 +645,21 @@ export const ProductsTab = () => {
                       <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
                         Editar
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            const links = await getCategoryInventoryLinks(category.id);
+                            setCategoryInventoryLinks(links);
+                            setInventoryCategoryTarget(category);
+                          } catch {
+                            toast.error("No se pudieron cargar vínculos de inventario");
+                          }
+                        }}
+                      >
+                        Inventario
+                      </Button>
                       <Button size="sm" variant="outline" onClick={() => { setCategoryDeleteError(null); setCategoryDeleteActiveProducts([]); setCategoryToDelete(category); }}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
@@ -675,6 +693,25 @@ export const ProductsTab = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ProductInventoryLinksDialog
+        open={Boolean(inventoryCategoryTarget)}
+        onOpenChange={(open) => { if (!open) setInventoryCategoryTarget(null); }}
+        value={categoryInventoryLinks}
+        onSave={async (rows) => {
+          if (!inventoryCategoryTarget) return;
+          try {
+            const saved = await saveCategoryInventoryLinks(
+              inventoryCategoryTarget.id,
+              rows.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
+            );
+            setCategoryInventoryLinks(saved);
+            toast.success("Inventario de categoría actualizado");
+          } catch {
+            toast.error("No se pudo guardar inventario de categoría");
+          }
+        }}
+      />
     </div>
   );
 };

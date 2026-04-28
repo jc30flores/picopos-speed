@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import {
   AttendanceHistoryRow,
+  attendanceBreakEnd,
+  attendanceBreakStart,
   attendanceClockIn,
   attendanceClockOut,
   getMyAttendanceHistory,
@@ -23,7 +25,7 @@ export const AttendancePanel = () => {
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [history, setHistory] = useState<AttendanceHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"clockIn" | "clockOut" | null>(null);
+  const [actionLoading, setActionLoading] = useState<"clockIn" | "break" | "clockOut" | null>(null);
 
   const actions = useMemo(() => ({
     clockIn: async () => {
@@ -34,14 +36,26 @@ export const AttendancePanel = () => {
       const next = await attendanceClockOut();
       applyAttendanceState(next, "clock_out");
     },
+    breakStart: async () => {
+      const next = await attendanceBreakStart();
+      applyAttendanceState(next, "break_start");
+    },
+    breakEnd: async () => {
+      const next = await attendanceBreakEnd();
+      applyAttendanceState(next, "break_end");
+    },
   }), [applyAttendanceState]);
 
-  const runAction = async (key: "clockIn" | "clockOut", fn: () => Promise<void>) => {
+  const runAction = async (
+    key: "clockIn" | "break" | "clockOut",
+    fn: () => Promise<void>,
+    successMessage: string,
+  ) => {
     if (actionLoading) return;
     setActionLoading(key);
     try {
       await fn();
-      toast.success("Marcaje guardado");
+      toast.success(successMessage);
     }
     catch (error) {
       toast.error(error instanceof Error ? error.message : "Acción inválida");
@@ -73,18 +87,47 @@ export const AttendancePanel = () => {
       <p className="mb-3 text-xs text-muted-foreground">
         Ciclos hoy: {attendance?.totalEntriesToday ?? 0} entradas / {attendance?.totalExitsToday ?? 0} salidas
       </p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break salida</p><p className="font-semibold">{fmtHM(attendance?.breakStart ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break regreso</p><p className="font-semibold">{fmtHM(attendance?.breakEnd ?? null)}</p></div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
         <Button
           className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50"
           disabled={attendanceLoading || actionLoading !== null || !attendance?.canClockIn}
-          onClick={() => void runAction("clockIn", actions.clockIn)}
+          onClick={() => void runAction("clockIn", actions.clockIn, "Entrada registrada correctamente.")}
         >
           Entrada
         </Button>
         <Button
+          className={`h-12 text-white disabled:opacity-35 disabled:saturate-50 ${
+            attendance?.state === "ON_BREAK"
+              ? "bg-violet-600 enabled:hover:bg-violet-700"
+              : attendance?.state === "WORKING_BEFORE_BREAK"
+                ? "bg-amber-500 enabled:hover:bg-amber-600"
+                : "bg-zinc-500"
+          }`}
+          disabled={attendanceLoading || actionLoading !== null || !(attendance?.canBreakStart || attendance?.canBreakEnd)}
+          onClick={() =>
+            void runAction(
+              "break",
+              attendance?.canBreakEnd ? actions.breakEnd : actions.breakStart,
+              attendance?.canBreakEnd ? "Regreso de break registrado." : "Salida a break registrada.",
+            )
+          }
+        >
+          {attendance?.state === "ON_BREAK"
+            ? "Regresar de Break"
+            : attendance?.state === "WORKING_AFTER_BREAK"
+              ? "Break completado"
+              : attendance?.state === "WORKING_BEFORE_BREAK"
+                ? "Salir a Break"
+                : "Break"}
+        </Button>
+        <Button
           className="h-12 bg-rose-600 text-white enabled:hover:bg-rose-500 disabled:opacity-35 disabled:saturate-50"
           disabled={attendanceLoading || actionLoading !== null || !attendance?.canClockOut}
-          onClick={() => void runAction("clockOut", actions.clockOut)}
+          onClick={() => void runAction("clockOut", actions.clockOut, "Salida registrada correctamente.")}
         >
           Salida
         </Button>
