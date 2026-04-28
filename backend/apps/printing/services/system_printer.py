@@ -14,8 +14,8 @@ from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 logger = logging.getLogger(__name__)
 
 
-STAR_QUEUE = "star_tsp100"
-DRAWER_RAW_COMMAND = r"""printf '\x1b\x07\x0b\x19\x07' | lp -d star_tsp100 -o raw"""
+STAR_QUEUE = "TSP143-(STR_T-001)"
+DRAWER_RAW_COMMAND = r"""printf '\x1b\x07\x0b\x19\x07' | lp -d TSP143-(STR_T-001) -o raw"""
 DRAWER_RAW_BYTES = bytes((0x1B, 0x07, 0x0B, 0x19, 0x07))
 @dataclass
 class CommandResult:

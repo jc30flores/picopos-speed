@@ -3731,7 +3731,7 @@ export const printPaymentTicket = async (
 export const getPrintingStatus = async (): Promise<{ available: boolean; queue: string }> => {
   const response = await request("/printing/status/");
   const data = await handleJson<{ available: boolean; queue: string }>(response);
-  return { available: Boolean(data.available), queue: data.queue || "star_tsp100" };
+  return { available: Boolean(data.available), queue: data.queue || "TSP143-(STR_T-001)" };
 };
 
 
