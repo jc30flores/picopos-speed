@@ -23,34 +23,49 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [usePassword, setUsePassword] = useState(false);
   const loginInFlightRef = useRef(false);
+  const pinRef = useRef("");
+  const lastSubmittedPinRef = useRef<string | null>(null);
 
   const pinDots = useMemo(() => Array.from({ length: PIN_LENGTH }), []);
 
   const sanitizePin = (value: string) => value.replace(/\D/g, "").slice(0, PIN_LENGTH);
 
-  const submitPin = useCallback(async (forcedPin?: string) => {
-    if (loginInFlightRef.current) return;
-    if (AUTH_DEBUG) {
-      // eslint-disable-next-line no-console
-      console.info("AUTH_LOGIN_SUBMIT", { method: "pin" });
-    }
-    const value = sanitizePin((forcedPin ?? pin).trim());
-    if (!/^\d{6}$/.test(value)) {
-      toast.error("PIN inválido (exactamente 6 dígitos)");
+  const clearPinState = useCallback(() => {
+    pinRef.current = "";
+    setPin("");
+  }, []);
+
+  const submitPin = useCallback(async (forcedPin: string, source: "auto" | "enter" | "button") => {
+    const value = sanitizePin(forcedPin.trim());
+    if (value.length !== PIN_LENGTH) {
+      if (AUTH_DEBUG) console.info("AUTH_LOGIN_SUBMIT_SKIPPED", { source, reason: "incomplete_pin", length: value.length });
       return;
     }
+    if (loginInFlightRef.current) {
+      if (AUTH_DEBUG) console.info("AUTH_LOGIN_SUBMIT_SKIPPED", { source, reason: "in_flight" });
+      return;
+    }
+    if (lastSubmittedPinRef.current === value) {
+      if (AUTH_DEBUG) console.info("AUTH_LOGIN_SUBMIT_SKIPPED", { source, reason: "already_submitted" });
+      return;
+    }
+    if (AUTH_DEBUG) {
+      console.info("AUTH_LOGIN_SUBMIT", { method: "pin", source });
+    }
     loginInFlightRef.current = true;
+    lastSubmittedPinRef.current = value;
     setLoading(true);
     try {
       const session = await loginWithPin({ pin: value });
       toast.success("Sesión iniciada", { id: "login-success" });
       if (AUTH_DEBUG) {
-        // eslint-disable-next-line no-console
+        console.info("AUTH_LOGIN_SUCCESS", { source });
         console.info("AUTH_LOGIN_NAVIGATE", session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser));
       }
       navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (AUTH_DEBUG) console.info("AUTH_LOGIN_FAILED", { source, message: message || "unknown" });
       if (message.includes("PIN_DUPLICATE") || message.includes("duplicado")) {
         toast.error("PIN duplicado, contacte al administrador");
       } else if (message.includes("PIN_INVALID")) {
@@ -68,30 +83,57 @@ const Login = () => {
       } else {
         toast.error(message || "No se pudo iniciar sesión.");
       }
-      setPin("");
+      lastSubmittedPinRef.current = null;
+      clearPinState();
     } finally {
       loginInFlightRef.current = false;
       setLoading(false);
     }
-  }, [loginWithPin, navigate, pin]);
+  }, [clearPinState, loginWithPin, navigate]);
+
+  const setAndMaybeSubmitPin = useCallback((nextValue: string) => {
+    const nextPin = sanitizePin(nextValue);
+    pinRef.current = nextPin;
+    setPin(nextPin);
+    if (nextPin.length < PIN_LENGTH) {
+      lastSubmittedPinRef.current = null;
+    }
+    if (AUTH_DEBUG) console.info("AUTH_PIN_DIGIT", { length: nextPin.length });
+    if (nextPin.length === PIN_LENGTH) {
+      if (AUTH_DEBUG) console.info("AUTH_PIN_AUTOSUBMIT", { source: "auto", length: nextPin.length });
+      void submitPin(nextPin, "auto");
+    }
+  }, [submitPin]);
 
   useEffect(() => {
     if (usePassword) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (pinRef.current.length === PIN_LENGTH) {
+          void submitPin(pinRef.current, "enter");
+        }
+        return;
+      }
       if (loginInFlightRef.current) return;
       if (event.key >= "0" && event.key <= "9") {
         event.preventDefault();
-        setPin((prev) => sanitizePin(`${prev}${event.key}`));
+        setAndMaybeSubmitPin(`${pinRef.current}${event.key}`);
         return;
       }
       if (event.key === "Backspace" || event.key === "Delete") {
         event.preventDefault();
-        setPin((prev) => prev.slice(0, -1));
+        setAndMaybeSubmitPin(pinRef.current.slice(0, -1));
+        return;
+      }
+      if (event.key === "Escape" || event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        setAndMaybeSubmitPin("");
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [usePassword]);
+  }, [setAndMaybeSubmitPin, submitPin, usePassword]);
 
   const handlePasswordSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -129,7 +171,7 @@ const Login = () => {
   };
   const handlePinSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    void submitPin();
+    void submitPin(pinRef.current, "enter");
   };
 
   return (
@@ -170,8 +212,13 @@ const Login = () => {
                   <span key={idx} className={`h-4 w-4 rounded-full border ${idx < pin.length ? "bg-primary border-primary" : "border-muted-foreground"}`} />
                 ))}
               </div>
-              <PinKeypad value={pin} onChange={(next) => setPin(sanitizePin(next))} disabled={loading} maxLength={PIN_LENGTH} />
-              <Button type="submit" className="w-full h-14 text-base" disabled={loading || pin.length !== PIN_LENGTH}>
+              <PinKeypad value={pin} onChange={setAndMaybeSubmitPin} disabled={loading} maxLength={PIN_LENGTH} />
+              <Button
+                type="button"
+                className="w-full h-14 text-base"
+                onClick={() => void submitPin(pinRef.current, "button")}
+                disabled={loading || pin.length !== PIN_LENGTH}
+              >
                 {loading ? "Validando..." : "Ingresar"}
               </Button>
             </form>
