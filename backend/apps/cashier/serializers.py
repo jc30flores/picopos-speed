@@ -60,8 +60,8 @@ class CashTransactionSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
     display_type = serializers.SerializerMethodField()
     impacts_cash = serializers.SerializerMethodField()
-    payment_id = serializers.IntegerField(source="payment_id", read_only=True)
-    refund_id = serializers.IntegerField(source="refund_id", read_only=True)
+    payment_id = serializers.IntegerField(read_only=True)
+    refund_id = serializers.IntegerField(read_only=True)
     order_id = serializers.SerializerMethodField()
 
     class Meta:

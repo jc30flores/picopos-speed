@@ -9,6 +9,7 @@ from apps.core.models import Branch, FeatureFlag
 from apps.users.models import UserProfile
 from apps.cashier.models import CashSession, Register
 from apps.orders.models import Order
+from apps.cashier.serializers import CashTransactionSerializer
 from apps.cashier.printing import build_end_of_day_ticket_pdf
 from apps.dte.models import DTEBranchConfig
 from apps.core.models import ServiceType
@@ -185,6 +186,36 @@ class CashierFlowTests(TestCase):
         self.assertEqual(all_res.status_code, 200)
         self.assertEqual(len(all_res.data), 1)
         self.assertEqual(all_res.data[0]["type"], "cash_in")
+
+    def test_transactions_include_all_without_open_session_returns_200(self):
+        admin_client = APIClient()
+        admin_client.force_authenticate(self.admin)
+
+        response = admin_client.get('/api/cashier/transactions/?include=all')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_cash_transaction_serializer_accepts_payment_id_without_assertion(self):
+        payload = {
+            "id": 1,
+            "session": 1,
+            "type": "cash_in",
+            "display_type": "Pago",
+            "impacts_cash": True,
+            "amount": "10.00",
+            "description": "Prueba",
+            "payment_id": 10,
+            "refund_id": None,
+            "order_id": 20,
+            "created_by": self.admin.id,
+            "created_by_username": self.admin.username,
+            "created_at": timezone.now(),
+        }
+
+        serializer = CashTransactionSerializer(payload)
+        data = serializer.data
+        self.assertEqual(data["payment_id"], 10)
+        self.assertIsNone(data["refund_id"])
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')

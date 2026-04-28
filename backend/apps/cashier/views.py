@@ -482,6 +482,13 @@ class CashTransactionListCreateView(APIView):
 
     def get(self, request):
         if not _can_view_sensitive_cash_data(request):
+            logger.info(
+                "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+                request.query_params.get("include") or "",
+                0,
+                False,
+                getattr(request.user, "id", None),
+            )
             return Response([], status=status.HTTP_200_OK)
         session_id = request.query_params.get("session_id")
         start_at, end_at = parse_business_date_range(
@@ -493,6 +500,13 @@ class CashTransactionListCreateView(APIView):
         else:
             _, session = _get_open_session_for_request(request)
         if not session:
+            logger.info(
+                "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+                request.query_params.get("include") or "",
+                0,
+                False,
+                getattr(request.user, "id", None),
+            )
             return Response([], status=status.HTTP_200_OK)
         include_all = str(request.query_params.get("include", "")).strip().lower() == "all"
         items = CashTransaction.objects.filter(session=session).select_related("payment", "refund").order_by("-created_at")
@@ -506,6 +520,13 @@ class CashTransactionListCreateView(APIView):
             items = items.filter(created_at__gte=start_at)
         if end_at:
             items = items.filter(created_at__lte=end_at)
+        logger.info(
+            "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+            request.query_params.get("include") or "",
+            items.count(),
+            True,
+            getattr(request.user, "id", None),
+        )
         return Response(CashTransactionSerializer(items, many=True).data)
 
     @transaction.atomic
