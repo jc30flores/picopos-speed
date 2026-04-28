@@ -1,13 +1,17 @@
 from django.db import models, transaction
 from django.db.models import Case, IntegerField, Value, When
+import logging
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
-from apps.core.permissions import IsAuthenticatedAndActive
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
+
+
+logger = logging.getLogger(__name__)
 
 
 FEATURE_FLAG_DEFAULTS = {
@@ -126,7 +130,26 @@ class FeatureFlagDetailView(generics.RetrieveUpdateAPIView):
 class FeatureSettingsView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
 
+    def get_permissions(self):
+        if self.request.method in {"GET", "HEAD", "OPTIONS"}:
+            return [IsAuthenticatedAndActive()]
+        role = getattr(getattr(self.request.user, "profile", None), "role", None)
+        if role != "admin" and not getattr(self.request.user, "is_superuser", False):
+            logger.warning(
+                "FEATURE_FLAGS_WRITE_DENIED user_id=%s role=%s",
+                getattr(self.request.user, "id", None),
+                role or "unknown",
+            )
+        return [IsAdmin()]
+
     def get(self, request):
+        role = getattr(getattr(request.user, "profile", None), "role", None)
+        print_role = role or "unknown"
+        logger.info(
+            "FEATURE_FLAGS_READ user_id=%s role=%s allowed=true",
+            getattr(request.user, "id", None),
+            print_role,
+        )
         return Response(get_feature_settings_payload())
 
     @transaction.atomic

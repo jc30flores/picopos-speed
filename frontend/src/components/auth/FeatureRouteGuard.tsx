@@ -19,7 +19,15 @@ export const FeatureRouteGuard = ({ feature, children }: Props) => {
         else if (feature === "kitchen") setEnabled(settings.kitchenEnabled);
         else setEnabled(settings.customerDisplayEnabled);
       })
-      .catch(() => setEnabled(true));
+      .catch((error) => {
+        const status = error instanceof Error && "status" in error ? (error as { status?: number }).status : undefined;
+        console.warn("FEATURE_FLAGS_LOAD_FAILED", {
+          status: status ?? null,
+          non_blocking: true,
+          keep_authenticated: true,
+        });
+        setEnabled(true);
+      });
   }, [feature]);
 
   if (enabled === null) {

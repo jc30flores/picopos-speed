@@ -11,6 +11,8 @@ class FeatureFlagApiTests(TestCase):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(username="admin", password="pass1234")
         UserProfile.objects.create(user=self.user, role="admin", is_active=True)
+        self.worker = get_user_model().objects.create_user(username="worker", password="pass1234")
+        UserProfile.objects.create(user=self.worker, role="worker", is_active=True)
         self.client.force_authenticate(user=self.user)
 
     def test_list_feature_flags(self):
@@ -64,3 +66,15 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         role_codes = [row["code"] for row in response.data["roles"]]
         self.assertNotIn("admin", role_codes)
+
+    def test_worker_can_read_but_cannot_patch_settings_features(self):
+        self.client.force_authenticate(user=self.worker)
+        read_response = self.client.get("/api/settings/features/")
+        self.assertEqual(read_response.status_code, 200)
+
+        patch_response = self.client.patch(
+            "/api/settings/features/",
+            {"kiosk_enabled": False},
+            format="json",
+        )
+        self.assertEqual(patch_response.status_code, 403)

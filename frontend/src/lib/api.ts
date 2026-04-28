@@ -697,8 +697,19 @@ const request = async (path: string, options: RequestInit = {}) => {
     "/auth/logout",
     "/auth/me",
   ]);
-  if ((response.status === 401 || response.status === 403) && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+  if (response.status === 401 && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+    console.info("AUTH_SESSION_EXPIRED", {
+      status: 401,
+      endpoint: normalizedPath,
+      action: "logout",
+    });
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+  }
+  if (response.status === 403 && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+    console.info("AUTH_FORBIDDEN_NON_AUTH", {
+      endpoint: normalizedPath,
+      action: "keep_session",
+    });
   }
   return response;
 };
