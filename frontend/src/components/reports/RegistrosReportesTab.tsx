@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Category,
+  EmployeeWorkedHoursReport,
   EmployeeWorkedHoursRow,
   Product,
   ReportsComparisonMode,
@@ -114,6 +115,7 @@ export const RegistrosReportesTab = () => {
   const [series, setSeries] = useState<SalesTimeseriesResponse | null>(null);
   const [breakdownRows, setBreakdownRows] = useState<SalesBreakdownRow[]>([]);
   const [employeeHoursRows, setEmployeeHoursRows] = useState<EmployeeWorkedHoursRow[]>([]);
+  const [employeeHoursTotals, setEmployeeHoursTotals] = useState<EmployeeWorkedHoursReport["totals"]>({ totalMinutes: 0, totalHours: 0 });
   const [isLoading, setIsLoading] = useState(false);
   const [hoursLoading, setHoursLoading] = useState(false);
   const [filterError, setFilterError] = useState<string | null>(null);
@@ -196,8 +198,9 @@ export const RegistrosReportesTab = () => {
     hoursRequestRef.current = controller;
     setHoursLoading(true);
     try {
-      const rows = await getEmployeeWorkedHoursReport({ dateFrom, dateTo, signal: controller.signal });
-      setEmployeeHoursRows(rows.sort((a, b) => b.totalMinutes - a.totalMinutes));
+      const report = await getEmployeeWorkedHoursReport({ dateFrom, dateTo, signal: controller.signal });
+      setEmployeeHoursRows(report.rows.sort((a, b) => b.totalMinutes - a.totalMinutes));
+      setEmployeeHoursTotals(report.totals);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         throw error;
@@ -352,6 +355,10 @@ export const RegistrosReportesTab = () => {
           <CardTitle className="text-lg">Horas trabajadas por empleado</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm">
+            <span className="text-muted-foreground">Total general del rango:</span>{" "}
+            <span className="font-semibold text-primary">{formatHours(employeeHoursTotals.totalMinutes)}</span>
+          </div>
           <Table>
             <TableHeader>
               <TableRow>

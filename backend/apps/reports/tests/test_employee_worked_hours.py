@@ -42,6 +42,8 @@ class EmployeeWorkedHoursReportTests(TestCase):
         self.assertEqual(response.data["employees"][0]["employee_name"], "Ana López")
         self.assertEqual(response.data["employees"][0]["total_minutes"], 450)
         self.assertEqual(response.data["employees"][0]["total_hours"], "7.50")
+        self.assertEqual(response.data["totals"]["total_minutes"], 450)
+        self.assertEqual(response.data["totals"]["total_hours"], "7.50")
 
     def test_requires_valid_date_range(self):
         day = timezone.localdate().isoformat()

@@ -375,9 +375,14 @@ export type CashSessionSnapshot = {
 
 export type CashTransaction = {
   id: number;
-  type: "cash_out" | "cash_in" | "expense" | "payout";
+  type: "cash_out" | "cash_in" | "expense" | "payout" | "card" | "transfer" | "pedidosya" | "paypal";
+  displayType?: string;
+  impactsCash?: boolean;
   amount: number;
   description: string;
+  paymentId?: number | null;
+  refundId?: number | null;
+  orderId?: number | null;
   createdAt: string;
 };
 
@@ -488,6 +493,14 @@ export type EmployeeWorkedHoursRow = {
   employeeName: string;
   totalMinutes: number;
   totalHours: number;
+};
+
+export type EmployeeWorkedHoursReport = {
+  rows: EmployeeWorkedHoursRow[];
+  totals: {
+    totalMinutes: number;
+    totalHours: number;
+  };
 };
 
 export type Refund = {
@@ -2799,7 +2812,7 @@ export const getSalesBreakdown = async (filters: {
 
 
 
-export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursRow[]> => {
+export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeWorkedHoursReport> => {
   const params = new URLSearchParams({
     start: filters.dateFrom,
     end: filters.dateTo,
@@ -2807,13 +2820,22 @@ export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; 
     date_to: filters.dateTo,
   });
   const response = await request(`/reports/employee-worked-hours/?${params.toString()}`, { signal: filters.signal });
-  const data = await handleJson<{ employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }> }>(response);
-  return (data.employees ?? []).map((row) => ({
-    employeeId: Number(row.employee_id),
-    employeeName: row.employee_name,
-    totalMinutes: Number(row.total_minutes ?? 0),
-    totalHours: Number(row.total_hours ?? 0),
-  }));
+  const data = await handleJson<{
+    employees?: Array<{ employee_id: number; employee_name: string; total_minutes: number; total_hours: string | number }>;
+    totals?: { total_minutes?: number; total_hours?: string | number };
+  }>(response);
+  return {
+    rows: (data.employees ?? []).map((row) => ({
+      employeeId: Number(row.employee_id),
+      employeeName: row.employee_name,
+      totalMinutes: Number(row.total_minutes ?? 0),
+      totalHours: Number(row.total_hours ?? 0),
+    })),
+    totals: {
+      totalMinutes: Number(data.totals?.total_minutes ?? 0),
+      totalHours: Number(data.totals?.total_hours ?? 0),
+    },
+  };
 };
 
 export const changeInternalPaymentMethod = async (
@@ -4204,16 +4226,22 @@ export const closeCashSession = async (
   };
 };
 
-export const getCashTransactions = async (sessionId?: number): Promise<CashTransaction[]> => {
+export const getCashTransactions = async (sessionId?: number, options?: { includeAll?: boolean }): Promise<CashTransaction[]> => {
   const params = new URLSearchParams();
   if (sessionId) params.set('session_id', String(sessionId));
+  if (options?.includeAll) params.set('include', 'all');
   const response = await request(`/cashier/transactions/${params.toString() ? `?${params.toString()}` : ''}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((tx) => ({
     id: tx.id,
     type: tx.type,
+    displayType: tx.display_type,
+    impactsCash: Boolean(tx.impacts_cash),
     amount: Number(tx.amount),
     description: tx.description,
+    paymentId: tx.payment_id ?? null,
+    refundId: tx.refund_id ?? null,
+    orderId: tx.order_id ?? null,
     createdAt: tx.created_at,
   }));
 };

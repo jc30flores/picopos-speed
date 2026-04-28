@@ -22,6 +22,7 @@ from apps.cashier.serializers import (
 )
 from apps.core.audit import log_audit
 from apps.core.models import Branch
+from apps.core.feature_flags import is_feature_enabled
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
@@ -329,7 +330,8 @@ class CashSessionCloseView(APIView):
             branch_id=session.register.branch_id,
             is_pending=True,
         ).exclude(status__in=["canceled", "delivered"]).count()
-        if pending_count > 0:
+        allow_close_with_pending = is_feature_enabled("FF_CASH_CLOSE_ALLOW_PENDING_ORDERS")
+        if pending_count > 0 and not allow_close_with_pending:
             return Response(
                 {
                     "code": "PENDING_ORDERS_BLOCK_CASH_CLOSE",
@@ -457,12 +459,14 @@ class CashTransactionListCreateView(APIView):
             _, session = _get_open_session_for_request(request)
         if not session:
             return Response([], status=status.HTTP_200_OK)
-        items = CashTransaction.objects.filter(
-            session=session,
-            type__in=["cash_out", "expense", "payout"],
-            payment__isnull=True,
-            refund__isnull=True,
-        ).order_by("-created_at")
+        include_all = str(request.query_params.get("include", "")).strip().lower() == "all"
+        items = CashTransaction.objects.filter(session=session).select_related("payment", "refund").order_by("-created_at")
+        if not include_all:
+            items = items.filter(
+                type__in=["cash_out", "expense", "payout"],
+                payment__isnull=True,
+                refund__isnull=True,
+            )
         if start_at:
             items = items.filter(created_at__gte=start_at)
         if end_at:

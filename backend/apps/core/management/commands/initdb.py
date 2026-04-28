@@ -33,6 +33,11 @@ DEFAULT_FEATURE_FLAGS = [
         "description": "Requiere apertura/cierre de caja y movimientos.",
     },
     {
+        "key": "FF_CASH_CLOSE_ALLOW_PENDING_ORDERS",
+        "label": "Cierre de caja con órdenes pendientes",
+        "description": "Permite cerrar caja aunque existan órdenes pendientes.",
+    },
+    {
         "key": "FF_ADV_PERMISSIONS",
         "label": "Roles y permisos avanzados",
         "description": "Habilita permisos finos, PIN supervisor y auditoría avanzada.",

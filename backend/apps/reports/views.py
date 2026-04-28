@@ -585,10 +585,12 @@ class EmployeeWorkedHoursReportView(generics.GenericAPIView):
         )
 
         payload = []
+        total_minutes_all = 0
         for row in rows:
             seconds = int((row["total_worked"] or timedelta(0)).total_seconds())
             if seconds < 0:
                 seconds = 0
+            total_minutes_all += seconds // 60
             total_hours = (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             payload.append(
                 {
@@ -603,5 +605,9 @@ class EmployeeWorkedHoursReportView(generics.GenericAPIView):
             {
                 "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
                 "employees": payload,
+                "totals": {
+                    "total_minutes": total_minutes_all,
+                    "total_hours": f"{(Decimal(total_minutes_all) / Decimal(60)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}",
+                },
             }
         )

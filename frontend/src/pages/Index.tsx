@@ -71,6 +71,7 @@ import {
   setOrderPending,
   printPaymentTicket,
   getPrintingStatus,
+  getFeatureFlags,
   Category,
   Discount,
   ModifierGroup,
@@ -230,10 +231,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
   const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
+  const [allowCloseWithPendingOrders, setAllowCloseWithPendingOrders] = useState(false);
   const [isPendingChoiceOpen, setIsPendingChoiceOpen] = useState(false);
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [lastClosedSessionId, setLastClosedSessionId] = useState<number | null>(() => {
+    const raw = localStorage.getItem("last_closed_cash_session_id");
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  });
   const [openSessionAmount, setOpenSessionAmount] = useState("0.00");
   const [closeBillsInput, setCloseBillsInput] = useState("");
   const [closeCoinsInput, setCloseCoinsInput] = useState("");
@@ -1272,7 +1279,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       const [snapshot, transactions] = await Promise.all([
         getCurrentCashSession(),
-        getCashTransactions(),
+        getCashTransactions(undefined, { includeAll: true }),
       ]);
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
@@ -1312,6 +1319,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   useEffect(() => {
+    getFeatureFlags()
+      .then((flags) => {
+        const enabled = flags.some((flag) => flag.key === "FF_CASH_CLOSE_ALLOW_PENDING_ORDERS" && flag.isEnabled);
+        setAllowCloseWithPendingOrders(enabled);
+      })
+      .catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -1542,7 +1555,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No tienes permisos para cerrar caja.");
       return;
     }
-    if (pendingOrdersCount > 0) {
+    if (pendingOrdersCount > 0 && !allowCloseWithPendingOrders) {
       toast.error(`You cannot close the register because there are ${pendingOrdersCount} open orders.`);
       return;
     }
@@ -1572,6 +1585,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
+      }
+      if (closeResp.sessionId) {
+        setLastClosedSessionId(closeResp.sessionId);
+        localStorage.setItem("last_closed_cash_session_id", String(closeResp.sessionId));
       }
       if (closeResp.printed) {
         setCashCloseFlowState("idle");
@@ -3196,14 +3213,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
-                    {pendingOrdersCount > 0 ? (
+                    {pendingOrdersCount > 0 && !allowCloseWithPendingOrders ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
                         You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
                       </div>
                     ) : null}
+                    {pendingOrdersCount > 0 && allowCloseWithPendingOrders ? (
+                      <div className="rounded-md border border-blue-500/30 bg-blue-500/10 p-2 text-sm text-blue-700 dark:text-blue-300">
+                        Hay {pendingOrdersCount} órdenes pendientes, pero el cierre con pendientes está habilitado por configuración.
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || pendingOrdersCount > 0}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>Confirmar cierre</Button>
                     </div>
                   </>
                 ) : null}
@@ -3211,20 +3233,39 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ) : null}
 
             {canViewSensitiveCash ? (
-              <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2 text-sm">
+              <div className="space-y-2 rounded-md border p-2 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold">Transacciones</div>
+                  {lastClosedSessionId ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void downloadCashSessionTicketPdf(lastClosedSessionId)}
+                    >
+                      Ver ticket de cierre
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="max-h-52 space-y-2 overflow-y-auto">
                 {cashTransactions.length === 0 ? (
-                  <div className="text-muted-foreground">Sin gastos registrados.</div>
+                  <div className="text-muted-foreground">Sin transacciones registradas.</div>
                 ) : (
                   cashTransactions.map((tx) => (
                     <div key={tx.id} className="flex items-center justify-between rounded border px-2 py-1">
                       <div>
-                        <div className="font-medium">{tx.description}</div>
-                        <div className="text-xs text-muted-foreground">{formatDateTimeSV(tx.createdAt)}</div>
+                        <div className="font-medium">{tx.description || tx.displayType || tx.type}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {tx.displayType || tx.type.toUpperCase()} · {formatDateTimeSV(tx.createdAt)}
+                          {tx.orderId ? ` · Pedido #${tx.orderId}` : ""}
+                        </div>
                       </div>
-                      <div className="font-semibold text-destructive">-{formatMoney(tx.amount)}</div>
+                      <div className={tx.impactsCash ? "font-semibold text-destructive" : "font-semibold text-foreground"}>
+                        {tx.impactsCash ? "-" : ""}{formatMoney(tx.amount)}
+                      </div>
                     </div>
                   ))
                 )}
+                </div>
               </div>
             ) : null}
           </div>
