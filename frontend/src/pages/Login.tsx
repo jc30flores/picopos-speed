@@ -30,6 +30,10 @@ const Login = () => {
 
   const submitPin = useCallback(async (forcedPin?: string) => {
     if (loginInFlightRef.current) return;
+    if (AUTH_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.info("AUTH_LOGIN_SUBMIT", { method: "pin" });
+    }
     const value = sanitizePin((forcedPin ?? pin).trim());
     if (!/^\d{6}$/.test(value)) {
       toast.error("PIN inválido (exactamente 6 dígitos)");
@@ -39,10 +43,10 @@ const Login = () => {
     setLoading(true);
     try {
       const session = await loginWithPin({ pin: value });
-      toast.success("Sesión iniciada");
+      toast.success("Sesión iniciada", { id: "login-success" });
       if (AUTH_DEBUG) {
         // eslint-disable-next-line no-console
-        console.info("[auth-debug] login.navigate", session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser));
+        console.info("AUTH_LOGIN_NAVIGATE", session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser));
       }
       navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch (error) {
@@ -53,8 +57,6 @@ const Login = () => {
         toast.error("PIN incorrecto");
       } else if (message.includes("PIN_THROTTLED")) {
         toast.error("Demasiados intentos, espera 30 segundos");
-      } else if (message.includes("SESSION_VERIFY_FAILED")) {
-        toast.error("No se pudo verificar sesión. Intenta nuevamente.");
       } else if (isApiStatusError(error, [401])) {
         toast.error("PIN incorrecto.");
       } else if (isApiStatusError(error, [403])) {
@@ -91,16 +93,13 @@ const Login = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [usePassword]);
 
-  useEffect(() => {
-    if (usePassword || loading || loginInFlightRef.current) return;
-    if (pin.length === PIN_LENGTH) {
-      void submitPin(pin);
-    }
-  }, [pin, loading, submitPin, usePassword]);
-
   const handlePasswordSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (loginInFlightRef.current) return;
+    if (AUTH_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.info("AUTH_LOGIN_SUBMIT", { method: "password" });
+    }
     if (!identifier || !password) {
       toast.error("Completa usuario/correo y PIN");
       return;
@@ -115,7 +114,11 @@ const Login = () => {
     setLoading(true);
     try {
       const session = await login({ identifier, password: numericPassword });
-      toast.success("Sesión iniciada");
+      toast.success("Sesión iniciada", { id: "login-success" });
+      if (AUTH_DEBUG) {
+        // eslint-disable-next-line no-console
+        console.info("AUTH_LOGIN_NAVIGATE", session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser));
+      }
       navigate(session.redirectTo || getLandingRouteForRole(session.role, session.isSuperuser), { replace: true });
     } catch {
       toast.error("Credenciales inválidas");
@@ -123,6 +126,10 @@ const Login = () => {
       loginInFlightRef.current = false;
       setLoading(false);
     }
+  };
+  const handlePinSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    void submitPin();
   };
 
   return (
@@ -157,17 +164,17 @@ const Login = () => {
               </Button>
             </form>
           ) : (
-            <div className="space-y-4">
+            <form onSubmit={handlePinSubmit} className="space-y-4" noValidate>
               <div className="flex justify-center gap-2">
                 {pinDots.map((_, idx) => (
                   <span key={idx} className={`h-4 w-4 rounded-full border ${idx < pin.length ? "bg-primary border-primary" : "border-muted-foreground"}`} />
                 ))}
               </div>
               <PinKeypad value={pin} onChange={(next) => setPin(sanitizePin(next))} disabled={loading} maxLength={PIN_LENGTH} />
-              <Button className="w-full h-14 text-base" onClick={() => void submitPin()} disabled={loading || pin.length !== PIN_LENGTH}>
+              <Button type="submit" className="w-full h-14 text-base" disabled={loading || pin.length !== PIN_LENGTH}>
                 {loading ? "Validando..." : "Ingresar"}
               </Button>
-            </div>
+            </form>
           )}
           <button
             type="button"
