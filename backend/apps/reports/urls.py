@@ -8,4 +8,7 @@ urlpatterns = [
     path("sales-book/json/", views.SalesBookJsonView.as_view(), name="reports-sales-book-json"),
     path("sales-book/pdf/", views.SalesBookPdfView.as_view(), name="reports-sales-book-pdf"),
     path("employee-worked-hours/", views.EmployeeWorkedHoursReportView.as_view(), name="reports-employee-worked-hours"),
+    path("transactions/<int:payment_id>/ticket/", views.TransactionTicketView.as_view(), name="reports-transaction-ticket"),
+    path("employee-hours/", views.EmployeeHoursReportView.as_view(), name="reports-employee-hours"),
+    path("employee-hours/<int:employee_id>/", views.EmployeeHoursDetailView.as_view(), name="reports-employee-hours-detail"),
 ]

@@ -15,7 +15,7 @@ export const RegistrosTabs = () => {
         </Button>
       ) : null}
       <Button asChild variant={location.pathname === "/registros/ventas" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
-        <Link to="/registros/ventas">Ventas</Link>
+        <Link to="/registros/ventas">Transacciones</Link>
       </Button>
       {canViewCash ? (
         <Button asChild variant={location.pathname === "/registros/caja" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
@@ -25,6 +25,11 @@ export const RegistrosTabs = () => {
       {canViewReports ? (
         <Button asChild variant={location.pathname === "/registros/dte" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
           <Link to="/registros/dte">DTE</Link>
+        </Button>
+      ) : null}
+      {canViewReports ? (
+        <Button asChild variant={location.pathname === "/registros/empleados" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
+          <Link to="/registros/empleados">Empleados</Link>
         </Button>
       ) : null}
     </div>

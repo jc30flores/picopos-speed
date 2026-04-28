@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
 import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
+import { getFeatureSettings } from "@/lib/api";
 import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
@@ -28,13 +29,26 @@ const MainMenu = () => {
   const { user, logout } = useAuth();
   const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
+  const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true });
+
+  useEffect(() => {
+    getFeatureSettings()
+      .then((data) => setFeatureVisibility({ kiosk: data.kioskEnabled, kitchen: data.kitchenEnabled, customerDisplay: data.customerDisplayEnabled }))
+      .catch(() => undefined);
+  }, []);
 
   const cards = useMemo(
     () =>
       filterModulesForUser(user, appModules)
         .filter((module) => module.key !== "dte")
+        .filter((module) => {
+          if (module.key === "kiosk") return featureVisibility.kiosk;
+          if (module.key === "kitchen") return featureVisibility.kitchen;
+          if (module.key === "orders_customers") return featureVisibility.customerDisplay;
+          return true;
+        })
         .map((module) => ({ ...module, icon: iconByModule[module.key] })),
-    [user]
+    [featureVisibility.customerDisplay, featureVisibility.kiosk, featureVisibility.kitchen, user]
   );
   const isWorker = user?.role === "worker";
 

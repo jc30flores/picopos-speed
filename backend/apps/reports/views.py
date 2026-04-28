@@ -15,8 +15,9 @@ from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.core.service_types import SERVICE_TYPE_LABELS, normalize_service_type
 from apps.orders.models import OrderItem, OrderItemModifier
 from apps.payments.models import Payment, Refund
-from apps.employees.models import AttendanceRecord
+from apps.employees.models import AttendanceRecord, AttendanceCycle, Employee
 from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
+from apps.printing.services.renderers import render_customer_ticket
 from apps.reports.serializers import SalesReportSerializer
 
 MONEY_Q = Decimal("0.01")
@@ -611,3 +612,145 @@ class EmployeeWorkedHoursReportView(generics.GenericAPIView):
                 },
             }
         )
+
+
+class TransactionTicketView(generics.GenericAPIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request, payment_id: int):
+        payment = Payment.objects.select_related("order").filter(pk=payment_id).first()
+        if not payment:
+            return Response({"detail": "Transacción no encontrada."}, status=404)
+        payload = render_customer_ticket(payment.order)
+        return Response(
+            {
+                "payment_id": payment.id,
+                "order_id": payment.order_id,
+                "ticket_text": payload.get("text", ""),
+                "ticket_html": payload.get("html", ""),
+            }
+        )
+
+
+def _cycle_status(cycle: AttendanceCycle) -> str:
+    if cycle.clock_in_at and not cycle.clock_out_at and not cycle.break_start_at:
+        return "en_curso"
+    if cycle.break_start_at and not cycle.break_end_at:
+        return "break_en_curso"
+    if cycle.clock_in_at and cycle.clock_out_at:
+        return "completo"
+    return "incompleto"
+
+
+def _duration_minutes(start, end):
+    if not start or not end:
+        return 0
+    seconds = int((end - start).total_seconds())
+    return max(0, seconds // 60)
+
+
+class EmployeeHoursReportView(generics.GenericAPIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request):
+        start_date, end_date = _parse_report_dates(request)
+        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles").filter(date__gte=start_date, date__lte=end_date).exclude(employee__role="admin")
+        by_employee = {}
+        total_shift = total_break = total_net = 0
+        for record in records:
+            emp = record.employee
+            row = by_employee.setdefault(emp.id, {
+                "employee_id": emp.id,
+                "name": emp.full_name,
+                "role": emp.get_role_display(),
+                "days_worked": 0,
+                "entries_count": 0,
+                "exits_count": 0,
+                "shift_minutes": 0,
+                "break_minutes": 0,
+                "net_minutes": 0,
+                "current_state": "OFF_SHIFT",
+                "last_clock_in_at": None,
+                "status": emp.status,
+            })
+            shift = brk = 0
+            entries = exits = 0
+            for cycle in record.cycles.all():
+                entries += 1 if cycle.clock_in_at else 0
+                exits += 1 if cycle.clock_out_at else 0
+                shift += _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
+                brk += _duration_minutes(cycle.break_start_at, cycle.break_end_at)
+            if entries:
+                row["days_worked"] += 1
+            row["entries_count"] += entries
+            row["exits_count"] += exits
+            row["shift_minutes"] += shift
+            row["break_minutes"] += brk
+            row["net_minutes"] += max(0, shift - brk)
+            if record.clock_in and (not row["last_clock_in_at"] or record.clock_in > row["last_clock_in_at"]):
+                row["last_clock_in_at"] = record.clock_in
+            if record.clock_in and not record.clock_out:
+                row["current_state"] = "ON_SHIFT"
+            total_shift += shift
+            total_break += brk
+            total_net += max(0, shift - brk)
+
+        return Response({
+            "date_from": start_date.isoformat(),
+            "date_to": end_date.isoformat(),
+            "totals": {
+                "employee_count": len(by_employee),
+                "total_shift_minutes": total_shift,
+                "total_break_minutes": total_break,
+                "total_net_minutes": total_net,
+                "total_hours": float((Decimal(total_net) / Decimal("60")).quantize(Decimal("0.01"))),
+            },
+            "employees": list(by_employee.values()),
+        })
+
+
+class EmployeeHoursDetailView(generics.GenericAPIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request, employee_id: int):
+        start_date, end_date = _parse_report_dates(request)
+        employee = Employee.objects.filter(pk=employee_id).exclude(role="admin").first()
+        if not employee:
+            return Response({"detail": "Empleado no encontrado."}, status=404)
+        records = AttendanceRecord.objects.prefetch_related("cycles").filter(employee=employee, date__gte=start_date, date__lte=end_date).order_by("date")
+        days = []
+        total_shift = total_break = total_net = 0
+        for record in records:
+            cycles_payload = []
+            day_shift = day_break = day_net = 0
+            for cycle in record.cycles.all():
+                shift = _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
+                brk = _duration_minutes(cycle.break_start_at, cycle.break_end_at)
+                net = max(0, shift - brk)
+                day_shift += shift
+                day_break += brk
+                day_net += net
+                cycles_payload.append({
+                    "clock_in_at": cycle.clock_in_at,
+                    "break_start_at": cycle.break_start_at,
+                    "break_end_at": cycle.break_end_at,
+                    "clock_out_at": cycle.clock_out_at,
+                    "shift_minutes": shift,
+                    "break_minutes": brk,
+                    "net_minutes": net,
+                    "status": _cycle_status(cycle),
+                })
+            total_shift += day_shift
+            total_break += day_break
+            total_net += day_net
+            days.append({
+                "date": record.date,
+                "daily_totals": {"shift_minutes": day_shift, "break_minutes": day_break, "net_minutes": day_net},
+                "cycles": cycles_payload,
+            })
+
+        return Response({
+            "employee": {"id": employee.id, "name": employee.full_name, "role": employee.get_role_display()},
+            "totals": {"shift_minutes": total_shift, "break_minutes": total_break, "net_minutes": total_net},
+            "days": days,
+        })

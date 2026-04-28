@@ -39,3 +39,28 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         flag.refresh_from_db()
         self.assertTrue(flag.is_enabled)
+
+    def test_settings_features_get_and_patch(self):
+        response = self.client.get("/api/settings/features/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("kiosk_enabled", response.data)
+
+        patch = self.client.patch(
+            "/api/settings/features/",
+            {
+                "kiosk_enabled": False,
+                "kitchen_display_enabled": False,
+                "customer_display_enabled": False,
+                "cash_close_expected_totals_allowed_roles": ["cashier"],
+                "cash_close_expected_totals_visible_fields": ["expected_cash_in_drawer"],
+            },
+            format="json",
+        )
+        self.assertEqual(patch.status_code, 200)
+        self.assertEqual(patch.data["cash_close_expected_totals_allowed_roles"], ["cashier"])
+
+    def test_settings_features_options_excludes_admin(self):
+        response = self.client.get("/api/settings/features/options/")
+        self.assertEqual(response.status_code, 200)
+        role_codes = [row["code"] for row in response.data["roles"]]
+        self.assertNotIn("admin", role_codes)

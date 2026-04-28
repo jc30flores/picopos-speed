@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2 } from "lucide-react";
+import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
@@ -32,6 +32,7 @@ import {
   refundSaleRecord,
   getPaymentMethods,
   getSalesReport,
+  getTransactionTicket,
   PaymentMethodOption,
   SalesReportRow,
 } from "@/lib/api";
@@ -111,6 +112,10 @@ export const SalesHistoryTab = () => {
   const [methodChangeReason, setMethodChangeReason] = useState("");
   const [isChangingMethod, setIsChangingMethod] = useState(false);
   const [sendingByOrderId, setSendingByOrderId] = useState<number | null>(null);
+  const [isTicketOpen, setIsTicketOpen] = useState(false);
+  const [ticketLoading, setTicketLoading] = useState(false);
+  const [ticketError, setTicketError] = useState<string | null>(null);
+  const [ticketHtml, setTicketHtml] = useState("");
   const canChangePaymentMethod = user?.role === "admin" || Boolean(user?.isSuperuser);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
@@ -321,14 +326,29 @@ export const SalesHistoryTab = () => {
     }
   };
 
+  const openTicketDialog = async (sale: Sale) => {
+    setIsTicketOpen(true);
+    setTicketLoading(true);
+    setTicketError(null);
+    setTicketHtml("");
+    try {
+      const payload = await getTransactionTicket(sale.paymentId);
+      setTicketHtml(payload.ticketHtml || `<pre class='whitespace-pre-wrap'>${payload.ticketText}</pre>`);
+    } catch (error) {
+      setTicketError(error instanceof Error ? error.message : "No se pudo cargar el ticket.");
+    } finally {
+      setTicketLoading(false);
+    }
+  };
+
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold mb-2">Historial de Ventas</h1>
+        <h1 className="text-3xl font-bold mb-2">Historial de Transacciones</h1>
         <p className="text-sm text-muted-foreground">
-          Consulta y analiza todas las ventas realizadas en el restaurante.
+          Consulta y analiza todas las transacciones realizadas en el restaurante.
         </p>
       </div>
 
@@ -541,7 +561,7 @@ export const SalesHistoryTab = () => {
                       colSpan={9}
                       className="text-center text-muted-foreground py-8"
                     >
-                      No se encontraron ventas
+                      No se encontraron transacciones
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -565,6 +585,16 @@ export const SalesHistoryTab = () => {
                       <TableCell>{getStatusBadge(sale.status)}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 w-9 rounded-lg p-0"
+                            title="Ver ticket"
+                            aria-label="Ver ticket"
+                            onClick={() => void openTicketDialog(sale)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -650,6 +680,19 @@ export const SalesHistoryTab = () => {
           ) : (
             <div className="text-sm text-muted-foreground">No hay orden seleccionada.</div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isTicketOpen} onOpenChange={setIsTicketOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Ticket de transacción</DialogTitle>
+          </DialogHeader>
+          {ticketLoading ? <p className="text-sm text-muted-foreground">Cargando ticket...</p> : null}
+          {ticketError ? <p className="text-sm text-destructive">{ticketError}</p> : null}
+          {!ticketLoading && !ticketError ? (
+            <div className="max-h-[70vh] overflow-auto rounded-md border bg-white p-3 text-black" dangerouslySetInnerHTML={{ __html: ticketHtml }} />
+          ) : null}
         </DialogContent>
       </Dialog>
 

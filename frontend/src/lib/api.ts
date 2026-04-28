@@ -220,6 +220,27 @@ export type FeatureFlag = {
   isEnabled: boolean;
 };
 
+export type FeatureSettings = {
+  kioskEnabled: boolean;
+  customerDisplayEnabled: boolean;
+  kitchenDisplayEnabled: boolean;
+  cashCloseExpectedTotalsControlEnabled: boolean;
+  cashCloseExpectedTotalsAllowedRoles: string[];
+  cashCloseExpectedTotalsVisibleFields: string[];
+};
+
+export type FeatureSettingsOptions = {
+  roles: Array<{ code: string; label: string }>;
+  cashCloseExpectedTotalFields: Array<{ code: string; label: string }>;
+};
+
+export type TransactionTicketPayload = {
+  paymentId: number;
+  orderId: number;
+  ticketText: string;
+  ticketHtml: string;
+};
+
 export type OrderItem = {
   id: number;
   productName: string;
@@ -501,6 +522,52 @@ export type EmployeeWorkedHoursReport = {
     totalMinutes: number;
     totalHours: number;
   };
+};
+
+export type EmployeeHoursSummaryRow = {
+  employeeId: number;
+  name: string;
+  role: string;
+  daysWorked: number;
+  entriesCount: number;
+  exitsCount: number;
+  shiftMinutes: number;
+  breakMinutes: number;
+  netMinutes: number;
+  currentState: string;
+  status: string;
+};
+
+export type EmployeeHoursSummaryResponse = {
+  dateFrom: string;
+  dateTo: string;
+  totals: {
+    employeeCount: number;
+    totalShiftMinutes: number;
+    totalBreakMinutes: number;
+    totalNetMinutes: number;
+    totalHours: number;
+  };
+  employees: EmployeeHoursSummaryRow[];
+};
+
+export type EmployeeHoursDetailResponse = {
+  employee: { id: number; name: string; role: string };
+  totals: { shiftMinutes: number; breakMinutes: number; netMinutes: number };
+  days: Array<{
+    date: string;
+    dailyTotals: { shiftMinutes: number; breakMinutes: number; netMinutes: number };
+    cycles: Array<{
+      clockInAt: string | null;
+      breakStartAt: string | null;
+      breakEndAt: string | null;
+      clockOutAt: string | null;
+      shiftMinutes: number;
+      breakMinutes: number;
+      netMinutes: number;
+      status: string;
+    }>;
+  }>;
 };
 
 export type Refund = {
@@ -820,6 +887,62 @@ export const updateFeatureFlag = async (
     label: data.label,
     description: data.description,
     isEnabled: data.is_enabled,
+  };
+};
+
+export const getFeatureSettings = async (): Promise<FeatureSettings> => {
+  const response = await request("/settings/features/");
+  const data = await handleJson<any>(response);
+  return {
+    kioskEnabled: Boolean(data.kiosk_enabled),
+    customerDisplayEnabled: Boolean(data.customer_display_enabled),
+    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
+    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
+    cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+  };
+};
+
+export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): Promise<FeatureSettings> => {
+  const response = await request("/settings/features/", {
+    method: "PATCH",
+    body: JSON.stringify({
+      kiosk_enabled: payload.kioskEnabled,
+      customer_display_enabled: payload.customerDisplayEnabled,
+      kitchen_display_enabled: payload.kitchenDisplayEnabled,
+      cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
+      cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
+      cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return {
+    kioskEnabled: Boolean(data.kiosk_enabled),
+    customerDisplayEnabled: Boolean(data.customer_display_enabled),
+    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
+    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
+    cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+  };
+};
+
+export const getFeatureSettingsOptions = async (): Promise<FeatureSettingsOptions> => {
+  const response = await request("/settings/features/options/");
+  const data = await handleJson<any>(response);
+  return {
+    roles: data.roles ?? [],
+    cashCloseExpectedTotalFields: data.cash_close_expected_total_fields ?? [],
+  };
+};
+
+export const getTransactionTicket = async (paymentId: number): Promise<TransactionTicketPayload> => {
+  const response = await request(`/reports/transactions/${paymentId}/ticket/`);
+  const data = await handleJson<any>(response);
+  return {
+    paymentId: Number(data.payment_id),
+    orderId: Number(data.order_id),
+    ticketText: String(data.ticket_text ?? ""),
+    ticketHtml: String(data.ticket_html ?? ""),
   };
 };
 
@@ -2835,6 +2958,72 @@ export const getEmployeeWorkedHoursReport = async (filters: { dateFrom: string; 
       totalMinutes: Number(data.totals?.total_minutes ?? 0),
       totalHours: Number(data.totals?.total_hours ?? 0),
     },
+  };
+};
+
+export const getEmployeeHoursSummary = async (filters: { dateFrom: string; dateTo: string; groupBy?: "month" | "week" | "custom"; signal?: AbortSignal }): Promise<EmployeeHoursSummaryResponse> => {
+  const params = new URLSearchParams({
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    group_by: filters.groupBy ?? "month",
+  });
+  const response = await request(`/reports/employee-hours/?${params.toString()}`, { signal: filters.signal });
+  const data = await handleJson<any>(response);
+  return {
+    dateFrom: data.date_from,
+    dateTo: data.date_to,
+    totals: {
+      employeeCount: Number(data.totals?.employee_count ?? 0),
+      totalShiftMinutes: Number(data.totals?.total_shift_minutes ?? 0),
+      totalBreakMinutes: Number(data.totals?.total_break_minutes ?? 0),
+      totalNetMinutes: Number(data.totals?.total_net_minutes ?? 0),
+      totalHours: Number(data.totals?.total_hours ?? 0),
+    },
+    employees: (data.employees ?? []).map((row: any) => ({
+      employeeId: Number(row.employee_id),
+      name: row.name,
+      role: row.role,
+      daysWorked: Number(row.days_worked ?? 0),
+      entriesCount: Number(row.entries_count ?? 0),
+      exitsCount: Number(row.exits_count ?? 0),
+      shiftMinutes: Number(row.shift_minutes ?? 0),
+      breakMinutes: Number(row.break_minutes ?? 0),
+      netMinutes: Number(row.net_minutes ?? 0),
+      currentState: String(row.current_state ?? "OFF_SHIFT"),
+      status: String(row.status ?? "active"),
+    })),
+  };
+};
+
+export const getEmployeeHoursDetail = async (employeeId: number, filters: { dateFrom: string; dateTo: string; signal?: AbortSignal }): Promise<EmployeeHoursDetailResponse> => {
+  const params = new URLSearchParams({ date_from: filters.dateFrom, date_to: filters.dateTo });
+  const response = await request(`/reports/employee-hours/${employeeId}/?${params.toString()}`, { signal: filters.signal });
+  const data = await handleJson<any>(response);
+  return {
+    employee: { id: Number(data.employee.id), name: data.employee.name, role: data.employee.role },
+    totals: {
+      shiftMinutes: Number(data.totals?.shift_minutes ?? 0),
+      breakMinutes: Number(data.totals?.break_minutes ?? 0),
+      netMinutes: Number(data.totals?.net_minutes ?? 0),
+    },
+    days: (data.days ?? []).map((day: any) => ({
+      date: String(day.date),
+      dailyTotals: {
+        shiftMinutes: Number(day.daily_totals?.shift_minutes ?? 0),
+        breakMinutes: Number(day.daily_totals?.break_minutes ?? 0),
+        netMinutes: Number(day.daily_totals?.net_minutes ?? 0),
+      },
+      cycles: (day.cycles ?? []).map((cycle: any) => ({
+        clockInAt: cycle.clock_in_at,
+        breakStartAt: cycle.break_start_at,
+        breakEndAt: cycle.break_end_at,
+        clockOutAt: cycle.clock_out_at,
+        shiftMinutes: Number(cycle.shift_minutes ?? 0),
+        breakMinutes: Number(cycle.break_minutes ?? 0),
+        netMinutes: Number(cycle.net_minutes ?? 0),
+        status: String(cycle.status ?? "incompleto"),
+      })),
+    })),
   };
 };
 

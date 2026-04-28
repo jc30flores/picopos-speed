@@ -91,6 +91,7 @@ class FeatureFlag(models.Model):
     label = models.CharField(max_length=120)
     description = models.TextField(blank=True)
     is_enabled = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["key"]
