@@ -21,7 +21,7 @@ import { DteRowActions } from "@/components/dte/DteRowActions";
 import { PageLayout } from "@/components/layout/PageLayout";
 import { useAuth } from "@/context/useAuth";
 import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
-import { formatPhoneDisplay, maskPhoneForLog, resolveWhatsappDestination, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
+import { formatPhoneDisplay, normalizeWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -257,44 +257,26 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
 
   const submitWhatsAppDelivery = async () => {
     if (!whatsTarget) return;
-    const receptorPhone = String(
-      (whatsTarget.requestPayload?.dte?.receptor?.telefono ||
-        whatsTarget.responsePayload?.dte?.receptor?.telefono ||
-        "")
-    ).trim();
-    const resolved = resolveWhatsappDestination({
-      manualPhone: whatsInput,
-      manualCountry: whatsCountry,
-      receptorPhone,
-    });
-    console.info("dte.whatsapp.modal.submit", {
-      dte_id: whatsTarget.id,
-      selected_country: whatsCountry,
-      raw_input: whatsInput,
-      fallback_receptor_phone: maskPhoneForLog(receptorPhone),
-      resolved_ok: resolved.ok,
-      resolved_source: resolved.ok ? resolved.source : "invalid",
-      resolved_phone: resolved.ok ? maskPhoneForLog(resolved.phone) : "***",
-      reason: resolved.ok ? "" : resolved.reason,
-    });
-    if (!resolved.ok) {
-      setWhatsError(resolved.reason);
-      toast({
-        title: "WhatsApp",
-        description: resolved.reason,
-        variant: "destructive",
-      });
-      return;
+    let manualNormalized = "";
+    if (whatsInput.trim()) {
+      const normalizedManual = normalizeWhatsAppClientPhone(whatsCountry, whatsInput.trim());
+      if (!normalizedManual.ok) {
+        setWhatsError(normalizedManual.error);
+        toast({
+          title: "WhatsApp",
+          description: normalizedManual.error,
+          variant: "destructive",
+        });
+        return;
+      }
+      manualNormalized = normalizedManual.e164;
     }
     setWhatsError("");
     setActionsLoading((prev) => ({ ...prev, [whatsTarget.id]: "whatsapp" }));
     try {
-      const displayPhone = formatPhoneDisplay(resolved.phone);
+      const displayPhone = manualNormalized ? formatPhoneDisplay(manualNormalized) : "";
       const result = await dteDeliver(whatsTarget.id, ["whatsapp"], {
-        phone: resolved.phone,
-        numCliente: resolved.phone,
-        clienteTelefono: displayPhone,
-        destinationSource: resolved.source === "manual" ? "manual" : "client_phone",
+        ...(manualNormalized ? { numCliente: manualNormalized, clienteTelefono: displayPhone, destinationSource: "manual_extra" } : { destinationSource: "none" }),
       });
       const channel = result.results?.whatsapp;
       toast({
@@ -491,8 +473,8 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
           </DialogHeader>
           <div className="space-y-3">
             <WhatsAppPhoneInput
-              label="Número para envío por WhatsApp"
-              helpText="Déjalo vacío para usar receptor.telefono del JSON del DTE."
+              label="Número del cliente para mostrar en WhatsApp"
+              helpText="El DTE se enviará al número configurado en WHATSAPP_DEFAULT_TO_PHONE. Este campo solo se usa para el mensaje 'Número del cliente'."
               country={whatsCountry}
               onCountryChange={(country) => {
                 setWhatsCountry(country);

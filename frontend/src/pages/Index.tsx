@@ -3573,8 +3573,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             </div>
             <WhatsAppPhoneInput
-              label="Número extra del cliente que recibirá DTE por WhatsApp"
-              helpText="Opcional. Solo se usará como num_cliente en el mensaje de WhatsApp. No reemplaza el teléfono del receptor del DTE ni el num_receptor del servicio."
+              label="Número extra del cliente que se mostrará en WhatsApp"
+              helpText="Este número solo se usará para el mensaje 'Número del cliente'. No reemplaza el teléfono fiscal del DTE ni el número destino de WhatsApp."
               country={whatsappClientCountry}
               onCountryChange={(nextCountry) => {
                 setWhatsappClientCountry(nextCountry);
