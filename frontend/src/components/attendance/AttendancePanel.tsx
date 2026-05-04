@@ -21,7 +21,7 @@ const fmtHM = (value: string | null) => {
 };
 
 const fmtBreakTotal = (seconds?: number | null) => {
-  if (seconds == null) return "—";
+  if (seconds == null || seconds <= 0) return "—";
   const total = Math.max(0, Math.floor(seconds));
   if (total < 60) return `${total}s`;
   const h = Math.floor(total / 3600);
@@ -100,7 +100,7 @@ export const AttendancePanel = () => {
       </div>
       <div className="mb-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal((() => { const base = attendance?.activeCycle?.breakSeconds ?? 0; const started = attendance?.activeCycle?.current_break_started_at; if (attendance?.state === "ON_BREAK" && started) { const d = new Date(started); if (!Number.isNaN(d.getTime())) { return Math.max(base, Math.floor((Date.now() - d.getTime()) / 1000)); } } return base; })())}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal((() => { const hasActive = Boolean(attendance?.activeCycle?.clock_in_at) && !attendance?.activeCycle?.clock_out_at; const base = hasActive ? (attendance?.activeCycle?.breakSeconds ?? 0) : 0; const started = attendance?.activeCycle?.current_break_started_at; if (attendance?.state === "ON_BREAK" && started) { const d = new Date(started); if (!Number.isNaN(d.getTime())) { return Math.max(base, Math.floor((Date.now() - d.getTime()) / 1000)); } } return base; })())}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
