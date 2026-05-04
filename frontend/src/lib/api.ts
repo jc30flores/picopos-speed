@@ -190,6 +190,44 @@ export type ServiceType = {
 
 
 
+
+
+type FeatureFlagsNormalized = {
+  kioskEnabled: boolean;
+  customerDisplayEnabled: boolean;
+  kitchenDisplayEnabled: boolean;
+  cashCloseExpectedTotalsControlEnabled: boolean;
+};
+
+export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
+  const defaults: FeatureFlagsNormalized = {
+    kioskEnabled: true,
+    customerDisplayEnabled: true,
+    kitchenDisplayEnabled: true,
+    cashCloseExpectedTotalsControlEnabled: true,
+  };
+  const fromMap = (obj: any, keys: string[], fallback: boolean) => {
+    for (const k of keys) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, k) && typeof obj[k] === 'boolean') return obj[k];
+    }
+    return fallback;
+  };
+  if (Array.isArray(raw)) {
+    const byKey = Object.fromEntries(raw.map((r: any) => [String(r?.key ?? ''), Boolean(r?.enabled ?? r?.is_enabled)]));
+    return {
+      kioskEnabled: fromMap(byKey, ['FF_KIOSK_ENABLED'], defaults.kioskEnabled),
+      customerDisplayEnabled: fromMap(byKey, ['FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
+      kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+      cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+    };
+  }
+  return {
+    kioskEnabled: fromMap(raw, ['kioskEnabled', 'kiosk_enabled', 'FF_KIOSK_ENABLED'], defaults.kioskEnabled),
+    customerDisplayEnabled: fromMap(raw, ['customerDisplayEnabled', 'customer_display_enabled', 'FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
+    kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+    cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+  };
+};
 export type ProductSpecialPriceRule = {
   id: number;
   productId?: number;
@@ -680,6 +718,11 @@ const request = async (path: string, options: RequestInit = {}) => {
   }
 
   let response: Response;
+  if (options.body === 0 || options.body === "0") {
+    console.error("INVALID_API_BODY_ZERO", { path, method, body: options.body });
+    throw new Error("Invalid API body: 0");
+  }
+
   try {
     response = await fetch(buildApiUrl(path), {
       credentials: "include",
@@ -807,7 +850,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
 };
 
 export const logout = async (): Promise<void> => {
-  const response = await request("/auth/logout/", { method: "POST" });
+  const response = await request("/auth/logout/", { method: "POST", body: JSON.stringify({}) });
   if (!response.ok && response.status !== 204 && response.status !== 401 && response.status !== 403) {
     const message = await response.text();
     throw new Error(message || "Logout failed");
@@ -904,11 +947,12 @@ export const updateFeatureFlag = async (
 export const getFeatureSettings = async (): Promise<FeatureSettings> => {
   const response = await request("/settings/features/");
   const data = await handleJson<any>(response);
+  const normalized = normalizeFeatureFlags(data);
   return {
-    kioskEnabled: Boolean(data.kiosk_enabled),
-    customerDisplayEnabled: Boolean(data.customer_display_enabled),
-    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
-    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    kioskEnabled: normalized.kioskEnabled,
+    customerDisplayEnabled: normalized.customerDisplayEnabled,
+    kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
   };
@@ -927,11 +971,12 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     }),
   });
   const data = await handleJson<any>(response);
+  const normalized = normalizeFeatureFlags(data);
   return {
-    kioskEnabled: Boolean(data.kiosk_enabled),
-    customerDisplayEnabled: Boolean(data.customer_display_enabled),
-    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
-    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    kioskEnabled: normalized.kioskEnabled,
+    customerDisplayEnabled: normalized.customerDisplayEnabled,
+    kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
   };
@@ -3025,12 +3070,14 @@ export const getEmployeeHoursDetail = async (employeeId: number, filters: { date
         netMinutes: Number(day.daily_totals?.net_minutes ?? 0),
       },
       cycles: (day.cycles ?? []).map((cycle: any) => ({
+        id: Number(cycle.id ?? 0),
         clockInAt: cycle.clock_in_at,
         breakStartAt: cycle.break_start_at,
         breakEndAt: cycle.break_end_at,
         clockOutAt: cycle.clock_out_at,
         shiftMinutes: Number(cycle.shift_minutes ?? 0),
         breakMinutes: Number(cycle.break_minutes ?? 0),
+        breakSeconds: Number(cycle.break_seconds ?? Math.round(Number(cycle.break_minutes ?? 0) * 60)),
         netMinutes: Number(cycle.net_minutes ?? 0),
         status: String(cycle.status ?? "incompleto"),
       })),
@@ -3561,6 +3608,8 @@ export type AttendanceState = {
   activeCycle: {
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3569,6 +3618,7 @@ export type AttendanceState = {
   cyclesToday: Array<{
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3606,6 +3656,7 @@ const mapAttendanceState = (data: {
   active_cycle?: {
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3614,6 +3665,7 @@ const mapAttendanceState = (data: {
   cycles_today?: Array<{
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3658,7 +3710,7 @@ export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
 };
 
 const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
-  const response = await request(path, { method: "POST" });
+  const response = await request(path, { method: "POST", body: JSON.stringify({}) });
   if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
     const payload = await response.json().catch(() => null);
     if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();
@@ -5003,4 +5055,14 @@ export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> =>
   const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
   if (!response.ok) throw new Error("No se pudo descargar PDF");
   return response.blob();
+};
+
+
+export const updateEmployeeHoursCycle = async (cycleId: number, payload: { clockInAt: string; clockOutAt: string | null; breakSecondsOverride: number; reason: string; }) => {
+  const response = await request(`/reports/employee-hours/cycles/${cycleId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clock_in_at: payload.clockInAt, clock_out_at: payload.clockOutAt, break_seconds_override: payload.breakSecondsOverride, reason: payload.reason }),
+  });
+  return handleJson<any>(response);
 };

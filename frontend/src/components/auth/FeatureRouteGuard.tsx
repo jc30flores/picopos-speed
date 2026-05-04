@@ -16,7 +16,7 @@ export const FeatureRouteGuard = ({ feature, children }: Props) => {
     getFeatureSettings()
       .then((settings) => {
         if (feature === "kiosk") setEnabled(settings.kioskEnabled);
-        else if (feature === "kitchen") setEnabled(settings.kitchenEnabled);
+        else if (feature === "kitchen") setEnabled(settings.kitchenDisplayEnabled);
         else setEnabled(settings.customerDisplayEnabled);
       })
       .catch((error) => {
