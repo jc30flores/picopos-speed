@@ -45,6 +45,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "branch_name",
             "branch_name_input",
             "status",
+            "is_deleted",
             "create_user",
             "user",
             "user_id",

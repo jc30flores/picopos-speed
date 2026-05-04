@@ -667,15 +667,12 @@ class EmployeeHoursReportView(generics.GenericAPIView):
 
     def get(self, request):
         start_date, end_date = _parse_report_dates(request)
-        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles__breaks").filter(date__gte=start_date, date__lte=end_date).exclude(employee__role="admin")
-        by_employee = {}
-        total_shift = total_break = total_net = 0
-        for record in records:
-            emp = record.employee
-            row = by_employee.setdefault(emp.id, {
+        employees = Employee.objects.select_related("user").filter(is_deleted=False).exclude(role="admin").exclude(full_name__istartswith="Empleado eliminado")
+        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles__breaks").filter(date__gte=start_date, date__lte=end_date, employee__in=employees)
+        by_employee = {emp.id: {
                 "employee_id": emp.id,
                 "name": emp.full_name,
-                "role": emp.get_role_display(),
+                "role": "Team Member" if str(emp.get_role_display()).lower() == "worker" else emp.get_role_display(),
                 "days_worked": 0,
                 "entries_count": 0,
                 "exits_count": 0,
@@ -685,7 +682,11 @@ class EmployeeHoursReportView(generics.GenericAPIView):
                 "current_state": "OFF_SHIFT",
                 "last_clock_in_at": None,
                 "status": emp.status,
-            })
+            } for emp in employees}
+        total_shift = total_break = total_net = 0
+        for record in records:
+            emp = record.employee
+            row = by_employee[emp.id]
             shift = brk = 0
             entries = exits = 0
             for cycle in record.cycles.all():
@@ -727,7 +728,7 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
 
     def get(self, request, employee_id: int):
         start_date, end_date = _parse_report_dates(request)
-        employee = Employee.objects.filter(pk=employee_id).exclude(role="admin").first()
+        employee = Employee.objects.filter(pk=employee_id, is_deleted=False).exclude(role="admin").exclude(full_name__istartswith="Empleado eliminado").first()
         if not employee:
             return Response({"detail": "Empleado no encontrado."}, status=404)
         tz = timezone.get_current_timezone()

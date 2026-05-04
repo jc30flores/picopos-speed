@@ -22,11 +22,15 @@ from apps.employees.serializers import (
 logger = logging.getLogger(__name__)
 
 
+def active_employee_queryset():
+    return Employee.objects.select_related("branch", "user").filter(is_deleted=False).exclude(full_name__istartswith="Empleado eliminado")
+
+
 class EmployeeListCreateView(generics.ListCreateAPIView):
     serializer_class = EmployeeSerializer
 
     def get_queryset(self):
-        queryset = Employee.objects.select_related("branch").all()
+        queryset = active_employee_queryset()
         search = (self.request.query_params.get("search") or "").strip()
         role = (self.request.query_params.get("role") or "").strip()
         status = self.request.query_params.get("status")
@@ -46,7 +50,7 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
 
 
 class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Employee.objects.select_related("branch").all()
+    queryset = active_employee_queryset()
     serializer_class = EmployeeSerializer
     permission_classes = [IsAdminOrManager]
 
@@ -71,8 +75,9 @@ class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
         employee.email = None
         employee.phone = ""
         employee.status = "inactive"
+        employee.is_deleted = True
         employee.user = None
-        employee.save(update_fields=["full_name", "email", "phone", "status", "user", "updated_at"])
+        employee.save(update_fields=["full_name", "email", "phone", "status", "is_deleted", "user", "updated_at"])
         log_audit(request, "employees.delete.safe", "Employee", employee.id, {"mode": "safe_soft_delete"})
         return Response({"ok": True, "deleted": True, "mode": "safe_soft_delete", "message": "Empleado eliminado correctamente."})
 
@@ -81,9 +86,9 @@ class EmployeeStatsView(generics.GenericAPIView):
     permission_classes = [IsAdminOrManager]
     def get(self, request, *args, **kwargs):
         today = timezone.localdate()
-        total_employees = Employee.objects.count()
-        active_employees = Employee.objects.filter(status="active").count()
-        inactive_employees = Employee.objects.filter(status="inactive").count()
+        total_employees = active_employee_queryset().count()
+        active_employees = active_employee_queryset().filter(status="active").count()
+        inactive_employees = active_employee_queryset().filter(status="inactive").count()
         attendance_today = AttendanceRecord.objects.filter(date=today)
         attendance_today_count = attendance_today.values("employee_id").distinct().count()
         late_today_count = attendance_today.filter(minutes_late__gt=0).count()

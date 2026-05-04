@@ -71,3 +71,22 @@ class EmployeeHoursCardTests(TestCase):
         AttendanceCycle.objects.create(attendance_record=rec, sequence=1, clock_in_at=timezone.make_aware(datetime(2026,5,3,23,50)))
         resp = self.client.post('/api/reports/employee-hours/cycles/', {'employee_id': self.employee.id, 'date': '2026-05-04', 'clock_in_time': '08:00', 'shift_seconds': 3600, 'break_seconds': 60}, format='json')
         self.assertEqual(resp.status_code, 400)
+
+
+    def test_new_employee_without_records_appears_in_summary(self):
+        resp = self.client.get('/api/reports/employee-hours/?date_from=2026-05-01&date_to=2026-05-04&group_by=custom')
+        self.assertEqual(resp.status_code, 200)
+        row = next((e for e in resp.data['employees'] if e['employee_id'] == self.employee.id), None)
+        self.assertIsNotNone(row)
+        self.assertEqual(row['shift_minutes'], 0)
+        self.assertEqual(row['break_minutes'], 0)
+        self.assertEqual(row['net_minutes'], 0)
+
+    def test_deleted_employee_hidden_in_summary_and_detail(self):
+        self.employee.is_deleted = True
+        self.employee.full_name = 'Empleado eliminado #99'
+        self.employee.save(update_fields=['is_deleted', 'full_name'])
+        summary = self.client.get('/api/reports/employee-hours/?date_from=2026-05-01&date_to=2026-05-04&group_by=custom')
+        self.assertFalse(any(e['employee_id'] == self.employee.id for e in summary.data['employees']))
+        detail = self.client.get(f'/api/reports/employee-hours/{self.employee.id}/?date_from=2026-05-01&date_to=2026-05-04')
+        self.assertEqual(detail.status_code, 404)
