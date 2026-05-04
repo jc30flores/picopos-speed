@@ -5058,11 +5058,20 @@ export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> =>
 };
 
 
-export const updateEmployeeHoursCycle = async (cycleId: number, payload: { clockInAt: string; clockOutAt: string | null; breakSecondsOverride: number; reason: string; }) => {
+export const updateEmployeeHoursCycle = async (cycleId: number, payload: { date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; shiftSeconds: number; breakSeconds: number; reason: string; }) => {
   const response = await request(`/reports/employee-hours/cycles/${cycleId}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ clock_in_at: payload.clockInAt, clock_out_at: payload.clockOutAt, break_seconds_override: payload.breakSecondsOverride, reason: payload.reason }),
+    body: JSON.stringify({ date: payload.date, clock_in_time: payload.clockInTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
+  });
+  return handleJson<any>(response);
+};
+
+export const createEmployeeHoursCycle = async (payload: { employeeId: number; date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; shiftSeconds: number; breakSeconds: number; reason: string; }) => {
+  const response = await request(`/reports/employee-hours/cycles/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
   });
   return handleJson<any>(response);
 };
