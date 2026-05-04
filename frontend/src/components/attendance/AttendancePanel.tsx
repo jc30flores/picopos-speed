@@ -89,8 +89,8 @@ export const AttendancePanel = () => {
         Ciclos hoy: {attendance?.totalEntriesToday ?? 0} entradas / {attendance?.totalExitsToday ?? 0} salidas
       </p>
       <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break salida</p><p className="font-semibold">{fmtHM(attendance?.breakStart ?? null)}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break regreso</p><p className="font-semibold">{fmtHM(attendance?.breakEnd ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Total break</p><p className="font-semibold">{attendance?.activeCycle?.breakMinutes != null ? `${Math.floor(attendance.activeCycle.breakMinutes/60)}h ${String(attendance.activeCycle.breakMinutes%60).padStart(2,"0")}m` : "—"}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break actual</p><p className="font-semibold">{fmtHM(attendance?.activeCycle?.currentBreakStartedAt ?? null)}</p></div>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2">
         <Button
@@ -104,7 +104,7 @@ export const AttendancePanel = () => {
           className={`h-12 text-white disabled:opacity-35 disabled:saturate-50 ${
             attendance?.state === "ON_BREAK"
               ? "bg-violet-600 enabled:hover:bg-violet-700"
-              : attendance?.state === "WORKING_BEFORE_BREAK"
+              : attendance?.state === "WORKING"
                 ? "bg-amber-500 enabled:hover:bg-amber-600"
                 : "bg-zinc-500"
           }`}
@@ -121,7 +121,7 @@ export const AttendancePanel = () => {
             ? "Regresar de Break"
             : attendance?.state === "WORKING_AFTER_BREAK"
               ? "Break completado"
-              : attendance?.state === "WORKING_BEFORE_BREAK"
+              : attendance?.state === "WORKING"
                 ? "Salir a Break"
                 : "Break"}
         </Button>

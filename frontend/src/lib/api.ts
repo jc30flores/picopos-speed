@@ -3550,20 +3550,22 @@ export type AttendanceState = {
   canBreakStart: boolean;
   canBreakEnd: boolean;
   canClockOut: boolean;
-  state: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  state: "OFF_SHIFT" | "WORKING" | "ON_BREAK";
   accessAllowed: boolean;
   activeCycle: {
     sequence?: number;
     clock_in_at: string | null;
-    break_start_at: string | null;
-    break_end_at: string | null;
+    break_minutes?: number;
+    current_break_started_at?: string | null;
+    breaks_count?: number;
     clock_out_at: string | null;
   } | null;
   cyclesToday: Array<{
     sequence?: number;
     clock_in_at: string | null;
-    break_start_at: string | null;
-    break_end_at: string | null;
+    break_minutes?: number;
+    current_break_started_at?: string | null;
+    breaks_count?: number;
     clock_out_at: string | null;
   }>;
 };
@@ -3593,20 +3595,22 @@ const mapAttendanceState = (data: {
   can_break_start: boolean;
   can_break_end: boolean;
   can_clock_out: boolean;
-  state?: "OFF_SHIFT" | "WORKING_BEFORE_BREAK" | "ON_BREAK" | "WORKING_AFTER_BREAK";
+  state?: "OFF_SHIFT" | "WORKING" | "ON_BREAK";
   access_allowed?: boolean;
   active_cycle?: {
     sequence?: number;
     clock_in_at: string | null;
-    break_start_at: string | null;
-    break_end_at: string | null;
+    break_minutes?: number;
+    current_break_started_at?: string | null;
+    breaks_count?: number;
     clock_out_at: string | null;
   } | null;
   cycles_today?: Array<{
     sequence?: number;
     clock_in_at: string | null;
-    break_start_at: string | null;
-    break_end_at: string | null;
+    break_minutes?: number;
+    current_break_started_at?: string | null;
+    breaks_count?: number;
     clock_out_at: string | null;
   }>;
 }): AttendanceState => ({

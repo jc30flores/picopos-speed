@@ -89,6 +89,19 @@ class AttendanceCycle(models.Model):
         return f"{self.attendance_record.employee.full_name} {self.attendance_record.date} ciclo {self.sequence}"
 
 
+class AttendanceBreak(models.Model):
+    cycle = models.ForeignKey(AttendanceCycle, on_delete=models.CASCADE, related_name="breaks")
+    sequence = models.PositiveIntegerField(default=1)
+    start_at = models.DateTimeField()
+    end_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sequence", "id"]
+        constraints = [models.UniqueConstraint(fields=["cycle", "sequence"], name="unique_attendance_break_sequence")]
+
+
 class Schedule(models.Model):
     TYPE_CHOICES = [
         ("Fijo", "Fijo"),

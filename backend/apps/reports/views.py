@@ -15,7 +15,7 @@ from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.core.service_types import SERVICE_TYPE_LABELS, normalize_service_type
 from apps.orders.models import OrderItem, OrderItemModifier
 from apps.payments.models import Payment, Refund
-from apps.employees.models import AttendanceRecord, AttendanceCycle, Employee
+from apps.employees.models import AttendanceRecord, AttendanceCycle, AttendanceBreak, Employee
 from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
 from apps.printing.services.renderers import render_customer_ticket
 from apps.reports.serializers import SalesReportSerializer
@@ -649,12 +649,27 @@ def _duration_minutes(start, end):
     return max(0, seconds // 60)
 
 
+
+
+def _cycle_break_minutes(cycle: AttendanceCycle):
+    now = timezone.now()
+    breaks = list(cycle.breaks.all()) if hasattr(cycle, "breaks") else []
+    if not breaks and cycle.break_start_at:
+        minutes = _duration_minutes(cycle.break_start_at, cycle.break_end_at or now)
+        return minutes, [{"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": minutes}]
+    rows=[]
+    total=0
+    for br in breaks:
+        m = _duration_minutes(br.start_at, br.end_at or now)
+        total += m
+        rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": m})
+    return total, rows
 class EmployeeHoursReportView(generics.GenericAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
         start_date, end_date = _parse_report_dates(request)
-        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles").filter(date__gte=start_date, date__lte=end_date).exclude(employee__role="admin")
+        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles__breaks").filter(date__gte=start_date, date__lte=end_date).exclude(employee__role="admin")
         by_employee = {}
         total_shift = total_break = total_net = 0
         for record in records:
@@ -679,7 +694,7 @@ class EmployeeHoursReportView(generics.GenericAPIView):
                 entries += 1 if cycle.clock_in_at else 0
                 exits += 1 if cycle.clock_out_at else 0
                 shift += _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
-                brk += _duration_minutes(cycle.break_start_at, cycle.break_end_at)
+                brk += _cycle_break_minutes(cycle)[0]
             if entries:
                 row["days_worked"] += 1
             row["entries_count"] += entries
@@ -717,7 +732,7 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
         employee = Employee.objects.filter(pk=employee_id).exclude(role="admin").first()
         if not employee:
             return Response({"detail": "Empleado no encontrado."}, status=404)
-        records = AttendanceRecord.objects.prefetch_related("cycles").filter(employee=employee, date__gte=start_date, date__lte=end_date).order_by("date")
+        records = AttendanceRecord.objects.prefetch_related("cycles__breaks").filter(employee=employee, date__gte=start_date, date__lte=end_date).order_by("date")
         days = []
         total_shift = total_break = total_net = 0
         for record in records:
@@ -725,15 +740,15 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
             day_shift = day_break = day_net = 0
             for cycle in record.cycles.all():
                 shift = _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
-                brk = _duration_minutes(cycle.break_start_at, cycle.break_end_at)
+                brk, break_rows = _cycle_break_minutes(cycle)
                 net = max(0, shift - brk)
                 day_shift += shift
                 day_break += brk
                 day_net += net
                 cycles_payload.append({
                     "clock_in_at": cycle.clock_in_at,
-                    "break_start_at": cycle.break_start_at,
-                    "break_end_at": cycle.break_end_at,
+                    "breaks_count": len(break_rows),
+                    "breaks": break_rows,
                     "clock_out_at": cycle.clock_out_at,
                     "shift_minutes": shift,
                     "break_minutes": brk,

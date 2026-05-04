@@ -48,6 +48,7 @@ export const EmployeeHoursTab = () => {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<EmployeeHoursDetailResponse | null>(null);
   const [open, setOpen] = useState(false);
+  const [dateError, setDateError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -60,7 +61,16 @@ export const EmployeeHoursTab = () => {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if (!dateFrom || !dateTo) return;
+      if (dateFrom > dateTo) { setDateError("La fecha desde no puede ser mayor que la fecha hasta."); return; }
+      setDateError(null);
+      void load();
+      if (open && selected) void detail(selected.employee.id);
+    }, 320);
+    return () => clearTimeout(id);
+  }, [dateFrom, dateTo]);
 
   const detail = async (employeeId: number) => {
     const payload = await getEmployeeHoursDetail(employeeId, { dateFrom, dateTo });
@@ -88,7 +98,7 @@ export const EmployeeHoursTab = () => {
           <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
           <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           <Button variant="outline" onClick={() => { const r = monthRange(); setDateFrom(r.from); setDateTo(r.to); }}>Mes actual</Button>
-          <Button onClick={() => void load()}>Aplicar</Button>
+          
         </CardContent>
       </Card>
 
@@ -102,7 +112,7 @@ export const EmployeeHoursTab = () => {
           <Table>
             <TableHeader><TableRow><TableHead>Empleado</TableHead><TableHead>Rol</TableHead><TableHead>Días</TableHead><TableHead>Entradas</TableHead><TableHead>Salidas</TableHead><TableHead>Horas turno</TableHead><TableHead>Breaks</TableHead><TableHead>Horas netas</TableHead></TableRow></TableHeader>
             <TableBody>
-              {loading ? <TableRow><TableCell colSpan={8} className="text-center">Cargando...</TableCell></TableRow> : null}
+              {loading ? <TableRow><TableCell colSpan={6} className="text-center">Cargando...</TableCell></TableRow> : null}
               {!loading && rows.map((r) => (
                 <TableRow
                   key={r.employeeId}
@@ -129,7 +139,7 @@ export const EmployeeHoursTab = () => {
         <DialogContent className="max-w-6xl border-border/70 bg-background/95">
           <DialogHeader><DialogTitle>Tarjeta de Horas — {selected?.employee.name}</DialogTitle></DialogHeader>
 
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+          {dateError ? <p className="text-sm text-red-500">{dateError}</p> : null}<div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
             <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} aria-label="Desde" className="h-11" />
             <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} aria-label="Hasta" className="h-11" />
             <div className="flex gap-2">
@@ -148,17 +158,15 @@ export const EmployeeHoursTab = () => {
             <table className="w-full min-w-[980px] text-sm">
               <thead className="sticky top-0 bg-muted/70 backdrop-blur-sm">
                 <tr className="border-b border-border/70 text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="p-2 text-left">Fecha</th><th className="p-2 text-left">Entrada</th><th className="p-2 text-left">Break In</th><th className="p-2 text-left">Break Out</th><th className="p-2 text-left">Salida</th><th className="p-2 text-left">Total de horas trabajadas</th><th className="p-2 text-left">Total de descanso</th><th className="p-2 text-left">Total final</th>
+                  <th className="p-2 text-left">Fecha</th><th className="p-2 text-left">Entrada</th><th className="p-2 text-left">Salida</th><th className="p-2 text-left">Total de horas trabajadas</th><th className="p-2 text-left">Total de descanso</th><th className="p-2 text-left">Total final</th>
                 </tr>
               </thead>
               <tbody>
-                {flatCycles.length === 0 ? <tr><td className="p-4 text-center text-muted-foreground" colSpan={8}>Sin registros</td></tr> : null}
+                {flatCycles.length === 0 ? <tr><td className="p-4 text-center text-muted-foreground" colSpan={6}>Sin registros</td></tr> : null}
                 {flatCycles.map((c, i) => (
                   <tr key={`${c.date}-${i}`} className="border-b border-border/40 transition-colors hover:bg-muted/40">
                     <td className="p-2 font-medium">{formatDate(c.date)}</td>
                     <td className="p-2">{formatTime(c.clockInAt)}</td>
-                    <td className="p-2">{formatTime(c.breakStartAt)}</td>
-                    <td className="p-2">{c.breakStartAt && !c.breakEndAt ? "Break en curso" : formatTime(c.breakEndAt)}</td>
                     <td className="p-2">{c.clockInAt && !c.clockOutAt ? "En curso" : formatTimeWithNextDay(c.clockOutAt, c.baseDate)}</td>
                     <td className="p-2 text-emerald-700 dark:text-emerald-300">{formatDuration(c.shiftMinutes)}</td>
                     <td className="p-2 text-amber-700 dark:text-amber-300">{formatDuration(c.breakMinutes)}</td>
