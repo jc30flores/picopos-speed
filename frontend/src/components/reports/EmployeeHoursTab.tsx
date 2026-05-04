@@ -15,7 +15,10 @@ const monthRange = () => {
 };
 const formatDuration = (m: number | null | undefined) => {
   const minutes = Number(m || 0);
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+  const totalSeconds = Math.max(0, Math.round(minutes * 60));
+  if (totalSeconds > 0 && totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  return `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, "0")}m`;
 };
 const formatDate = (value: string | null | undefined) => {
   if (!value) return "—";

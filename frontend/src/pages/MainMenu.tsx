@@ -4,7 +4,7 @@ import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, S
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
-import { getFeatureSettings } from "@/lib/api";
+import { getFeatureFlags, getFeatureSettings, normalizeFeatureFlags } from "@/lib/api";
 import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
@@ -29,11 +29,19 @@ const MainMenu = () => {
   const { user, logout } = useAuth();
   const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
-  const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true });
+  const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true, loaded: false });
 
   useEffect(() => {
-    getFeatureSettings()
-      .then((data) => setFeatureVisibility({ kiosk: data.kioskEnabled, kitchen: data.kitchenEnabled, customerDisplay: data.customerDisplayEnabled }))
+    Promise.all([getFeatureSettings(), getFeatureFlags().catch(() => [])])
+      .then(([settings, coreFlags]) => {
+        const normalizedFromSettings = normalizeFeatureFlags(settings);
+        const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));
+        const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
+        console.info("FEATURE_FLAGS_RAW_SETTINGS_RESPONSE", settings);
+        console.info("FEATURE_FLAGS_RAW_CORE_RESPONSE", coreFlags);
+        console.info("FEATURE_FLAGS_NORMALIZED", normalized);
+        setFeatureVisibility({ kiosk: normalized.kioskEnabled, kitchen: normalized.kitchenDisplayEnabled, customerDisplay: normalized.customerDisplayEnabled, loaded: true });
+      })
       .catch((error) => {
         const status = error instanceof Error && "status" in error ? (error as { status?: number }).status : undefined;
         console.warn("FEATURE_FLAGS_LOAD_FAILED", {
@@ -49,9 +57,9 @@ const MainMenu = () => {
       filterModulesForUser(user, appModules)
         .filter((module) => module.key !== "dte")
         .filter((module) => {
-          if (module.key === "kiosk") return featureVisibility.kiosk;
-          if (module.key === "kitchen") return featureVisibility.kitchen;
-          if (module.key === "orders_customers") return featureVisibility.customerDisplay;
+          if (module.key === "kiosk") return featureVisibility.kiosk !== false;
+          if (module.key === "kitchen") return featureVisibility.kitchen !== false;
+          if (module.key === "orders_customers") return featureVisibility.customerDisplay !== false;
           return true;
         })
         .map((module) => ({ ...module, icon: iconByModule[module.key] })),
@@ -103,7 +111,7 @@ const MainMenu = () => {
         <AttendancePanel />
         {!isWorker ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => (
+            {cards.map((card) => { console.info("MAIN_MENU_FEATURE_DECISION", { role: user?.role, module: card.key, featureVisibility }); return (
               <Button
                 key={card.path}
                 className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90"
@@ -142,7 +150,7 @@ const MainMenu = () => {
                 <card.icon className="h-6 w-6" />
                 {card.label}
               </Button>
-            ))}
+            );})}
           </div>
         ) : null}
       </div>

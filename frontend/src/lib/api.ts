@@ -190,6 +190,44 @@ export type ServiceType = {
 
 
 
+
+
+type FeatureFlagsNormalized = {
+  kioskEnabled: boolean;
+  customerDisplayEnabled: boolean;
+  kitchenDisplayEnabled: boolean;
+  cashCloseExpectedTotalsControlEnabled: boolean;
+};
+
+export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
+  const defaults: FeatureFlagsNormalized = {
+    kioskEnabled: true,
+    customerDisplayEnabled: true,
+    kitchenDisplayEnabled: true,
+    cashCloseExpectedTotalsControlEnabled: true,
+  };
+  const fromMap = (obj: any, keys: string[], fallback: boolean) => {
+    for (const k of keys) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, k) && typeof obj[k] === 'boolean') return obj[k];
+    }
+    return fallback;
+  };
+  if (Array.isArray(raw)) {
+    const byKey = Object.fromEntries(raw.map((r: any) => [String(r?.key ?? ''), Boolean(r?.enabled ?? r?.is_enabled)]));
+    return {
+      kioskEnabled: fromMap(byKey, ['FF_KIOSK_ENABLED'], defaults.kioskEnabled),
+      customerDisplayEnabled: fromMap(byKey, ['FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
+      kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+      cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+    };
+  }
+  return {
+    kioskEnabled: fromMap(raw, ['kioskEnabled', 'kiosk_enabled', 'FF_KIOSK_ENABLED'], defaults.kioskEnabled),
+    customerDisplayEnabled: fromMap(raw, ['customerDisplayEnabled', 'customer_display_enabled', 'FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
+    kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+    cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+  };
+};
 export type ProductSpecialPriceRule = {
   id: number;
   productId?: number;
@@ -680,6 +718,11 @@ const request = async (path: string, options: RequestInit = {}) => {
   }
 
   let response: Response;
+  if (options.body === 0 || options.body === "0") {
+    console.error("INVALID_API_BODY_ZERO", { path, method, body: options.body });
+    throw new Error("Invalid API body: 0");
+  }
+
   try {
     response = await fetch(buildApiUrl(path), {
       credentials: "include",
@@ -807,7 +850,7 @@ export const pinLogin = async (payload: { pin: string }): Promise<AuthUser> => {
 };
 
 export const logout = async (): Promise<void> => {
-  const response = await request("/auth/logout/", { method: "POST" });
+  const response = await request("/auth/logout/", { method: "POST", body: JSON.stringify({}) });
   if (!response.ok && response.status !== 204 && response.status !== 401 && response.status !== 403) {
     const message = await response.text();
     throw new Error(message || "Logout failed");
@@ -904,11 +947,12 @@ export const updateFeatureFlag = async (
 export const getFeatureSettings = async (): Promise<FeatureSettings> => {
   const response = await request("/settings/features/");
   const data = await handleJson<any>(response);
+  const normalized = normalizeFeatureFlags(data);
   return {
-    kioskEnabled: Boolean(data.kiosk_enabled),
-    customerDisplayEnabled: Boolean(data.customer_display_enabled),
-    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
-    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    kioskEnabled: normalized.kioskEnabled,
+    customerDisplayEnabled: normalized.customerDisplayEnabled,
+    kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
   };
@@ -927,11 +971,12 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     }),
   });
   const data = await handleJson<any>(response);
+  const normalized = normalizeFeatureFlags(data);
   return {
-    kioskEnabled: Boolean(data.kiosk_enabled),
-    customerDisplayEnabled: Boolean(data.customer_display_enabled),
-    kitchenDisplayEnabled: Boolean(data.kitchen_display_enabled),
-    cashCloseExpectedTotalsControlEnabled: Boolean(data.cash_close_expected_totals_control_enabled),
+    kioskEnabled: normalized.kioskEnabled,
+    customerDisplayEnabled: normalized.customerDisplayEnabled,
+    kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
   };
@@ -3663,7 +3708,7 @@ export const getMyAttendanceToday = async (): Promise<AttendanceState> => {
 };
 
 const postAttendanceAction = async (path: string): Promise<AttendanceState> => {
-  const response = await request(path, { method: "POST" });
+  const response = await request(path, { method: "POST", body: JSON.stringify({}) });
   if ((response.status === 400 || response.status === 404) && response.headers.get("content-type")?.includes("application/json")) {
     const payload = await response.json().catch(() => null);
     if (payload?.state === "NO_EMPLOYEE") return buildEmptyAttendanceState();

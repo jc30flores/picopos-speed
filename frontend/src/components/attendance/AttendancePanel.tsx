@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AttendanceHistoryRow,
   attendanceBreakEnd,
@@ -37,6 +37,13 @@ export const AttendancePanel = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<"clockIn" | "break" | "clockOut" | null>(null);
   const showPersonalTimeCard = false;
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (attendance?.state !== "ON_BREAK") return;
+    const id = window.setInterval(() => setTick((v) => v + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [attendance?.state]);
 
   const actions = useMemo(() => ({
     clockIn: async () => {
@@ -93,7 +100,7 @@ export const AttendancePanel = () => {
       </div>
       <div className="mb-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal(attendance?.activeCycle?.breakSeconds ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal((() => { const base = attendance?.activeCycle?.breakSeconds ?? 0; const started = attendance?.activeCycle?.current_break_started_at; if (attendance?.state === "ON_BREAK" && started) { const d = new Date(started); if (!Number.isNaN(d.getTime())) { return Math.max(base, Math.floor((Date.now() - d.getTime()) / 1000)); } } return base; })())}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
