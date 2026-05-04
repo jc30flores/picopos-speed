@@ -8,7 +8,7 @@ from apps.core.audit import log_audit
 from apps.core.permissions import IsAdminOrManager, IsAuthenticatedAndActive
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, Schedule
+from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, AttendanceBreak, Schedule
 from apps.employees.serializers import (
     EmployeeSerializer,
     AttendanceSerializer,
@@ -44,7 +44,7 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
         log_audit(self.request, "employees.create", "Employee", employee.id, {"full_name": employee.full_name})
 
 
-class EmployeeDetailView(generics.RetrieveUpdateAPIView):
+class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Employee.objects.select_related("branch").all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsAdminOrManager]
@@ -52,6 +52,28 @@ class EmployeeDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         employee = serializer.save()
         log_audit(self.request, "employees.update", "Employee", employee.id, {"full_name": employee.full_name})
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        employee = self.get_object()
+        if employee.user_id and employee.user_id == request.user.id:
+            return Response({"ok": False, "deleted": False, "message": "No puedes eliminar tu propio usuario."}, status=status.HTTP_400_BAD_REQUEST)
+        if employee.role == "admin" and Employee.objects.filter(role="admin", status="active").exclude(id=employee.id).count() == 0:
+            return Response({"ok": False, "deleted": False, "message": "No puedes eliminar el último admin."}, status=status.HTTP_400_BAD_REQUEST)
+        if employee.user_id:
+            user = employee.user
+            user.is_active = False
+            user.set_unusable_password()
+            user.email = ""
+            user.save(update_fields=["is_active", "password", "email"])
+        employee.full_name = f"Empleado eliminado #{employee.id}"
+        employee.email = None
+        employee.phone = ""
+        employee.status = "inactive"
+        employee.user = None
+        employee.save(update_fields=["full_name", "email", "phone", "status", "user", "updated_at"])
+        log_audit(request, "employees.delete.safe", "Employee", employee.id, {"mode": "safe_soft_delete"})
+        return Response({"ok": True, "deleted": True, "mode": "safe_soft_delete", "message": "Empleado eliminado correctamente."})
 
 
 class EmployeeStatsView(generics.GenericAPIView):
@@ -205,30 +227,35 @@ class AttendanceActionView(APIView):
                 return Response({"detail": "Debes marcar entrada antes de salir a break."}, status=status.HTTP_400_BAD_REQUEST)
             if active_cycle.break_start_at and not active_cycle.break_end_at:
                 return Response({"detail": "Ya estás en break."}, status=status.HTTP_400_BAD_REQUEST)
-            if active_cycle.break_start_at and active_cycle.break_end_at:
-                return Response({"detail": "Ya completaste el break de este ciclo."}, status=status.HTTP_400_BAD_REQUEST)
-            active_cycle.break_start_at = now
+            open_break = AttendanceBreak.objects.filter(cycle=active_cycle, end_at__isnull=True).first()
+            if open_break:
+                return Response({"detail": "Ya estás en break."}, status=status.HTTP_400_BAD_REQUEST)
+            seq = (AttendanceBreak.objects.filter(cycle=active_cycle).order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
+            new_break = AttendanceBreak.objects.create(cycle=active_cycle, sequence=seq, start_at=now)
+            active_cycle.break_start_at = active_cycle.break_start_at or now
             active_cycle.save(update_fields=["break_start_at", "updated_at"])
             record.break_start = now
+            logger.info("ATTENDANCE_BREAK_START employee_id=%s cycle_id=%s break_id=%s", employee.id, active_cycle.id, new_break.id)
         elif self.action == "break_end":
             if not has_active_session:
                 return Response({"detail": "La jornada ya está cerrada."}, status=status.HTTP_400_BAD_REQUEST)
-            if not active_cycle.break_start_at:
+            open_break = AttendanceBreak.objects.filter(cycle=active_cycle, end_at__isnull=True).order_by("-sequence", "-id").first()
+            if not open_break:
                 return Response({"detail": "Debes marcar salida a break primero."}, status=status.HTTP_400_BAD_REQUEST)
-            if active_cycle.break_end_at:
-                return Response({"detail": "Break ya finalizado."}, status=status.HTTP_400_BAD_REQUEST)
+            open_break.end_at = now
+            open_break.save(update_fields=["end_at", "updated_at"])
             active_cycle.break_end_at = now
             active_cycle.save(update_fields=["break_end_at", "updated_at"])
             record.break_end = now
+            break_minutes = int((open_break.end_at - open_break.start_at).total_seconds() // 60)
+            logger.info("ATTENDANCE_BREAK_END employee_id=%s cycle_id=%s break_id=%s break_minutes=%s", employee.id, active_cycle.id, open_break.id, max(0, break_minutes))
+            all_breaks = AttendanceBreak.objects.filter(cycle=active_cycle)
+            logger.info("ATTENDANCE_BREAK_TOTAL_RECALCULATED cycle_id=%s breaks_count=%s break_minutes=%s", active_cycle.id, all_breaks.count(), sum(max(0, int(((b.end_at or now)-b.start_at).total_seconds()//60)) for b in all_breaks))
         elif self.action == "clock_out":
             if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)
-            if not active_cycle.break_start_at:
-                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
-            if not active_cycle.break_end_at:
-                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
-            if active_cycle.break_start_at and not active_cycle.break_end_at:
-                return Response({"detail": "Debes completar el break (salida y regreso) antes de marcar salida."}, status=status.HTTP_400_BAD_REQUEST)
+            if AttendanceBreak.objects.filter(cycle=active_cycle, end_at__isnull=True).exists():
+                return Response({"detail": "No puedes marcar salida mientras estás en break."}, status=status.HTTP_400_BAD_REQUEST)
             active_cycle.clock_out_at = now
             active_cycle.save(update_fields=["clock_out_at", "updated_at"])
             record.clock_out = now

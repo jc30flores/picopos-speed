@@ -20,12 +20,23 @@ const fmtHM = (value: string | null) => {
   return new Intl.DateTimeFormat("es-SV", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 };
 
+const fmtBreakTotal = (seconds?: number | null) => {
+  if (seconds == null) return "—";
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2,"0")}m`;
+  return `${m}m`;
+};
+
 export const AttendancePanel = () => {
   const { attendance, attendanceLoading, applyAttendanceState } = useAttendanceAccess();
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [history, setHistory] = useState<AttendanceHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<"clockIn" | "break" | "clockOut" | null>(null);
+  const showPersonalTimeCard = false;
 
   const actions = useMemo(() => ({
     clockIn: async () => {
@@ -78,19 +89,16 @@ export const AttendancePanel = () => {
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Marcaje del día</p>
           <p className="text-xl font-semibold leading-tight">Bienvenido, {attendance?.employee?.name ?? "—"}</p>
         </div>
-        <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button>
+        {showPersonalTimeCard ? <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button> : null}
       </div>
-      <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
+      <div className="mb-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal(attendance?.activeCycle?.breakSeconds ?? null)}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
         Ciclos hoy: {attendance?.totalEntriesToday ?? 0} entradas / {attendance?.totalExitsToday ?? 0} salidas
       </p>
-      <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break salida</p><p className="font-semibold">{fmtHM(attendance?.breakStart ?? null)}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break regreso</p><p className="font-semibold">{fmtHM(attendance?.breakEnd ?? null)}</p></div>
-      </div>
       <div className="mt-3 grid grid-cols-3 gap-2">
         <Button
           className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50"
@@ -103,7 +111,7 @@ export const AttendancePanel = () => {
           className={`h-12 text-white disabled:opacity-35 disabled:saturate-50 ${
             attendance?.state === "ON_BREAK"
               ? "bg-violet-600 enabled:hover:bg-violet-700"
-              : attendance?.state === "WORKING_BEFORE_BREAK"
+              : attendance?.state === "WORKING"
                 ? "bg-amber-500 enabled:hover:bg-amber-600"
                 : "bg-zinc-500"
           }`}
@@ -120,7 +128,7 @@ export const AttendancePanel = () => {
             ? "Regresar de Break"
             : attendance?.state === "WORKING_AFTER_BREAK"
               ? "Break completado"
-              : attendance?.state === "WORKING_BEFORE_BREAK"
+              : attendance?.state === "WORKING"
                 ? "Salir a Break"
                 : "Break"}
         </Button>

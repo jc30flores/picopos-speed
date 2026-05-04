@@ -22,7 +22,7 @@ from apps.cashier.serializers import (
 )
 from apps.core.audit import log_audit
 from apps.core.models import Branch
-from apps.core.feature_flags import is_feature_enabled
+from apps.core.feature_flags import can_view_cash_expected_totals, is_feature_enabled
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
@@ -145,6 +145,41 @@ def _can_view_sensitive_cash_data(request) -> bool:
     return bool(profile and profile.is_active and profile.role == "admin")
 
 
+def _filter_expected_totals_for_user(summary: dict, user) -> dict:
+    if not isinstance(summary, dict):
+        return summary
+    allowed, visible_fields = can_view_cash_expected_totals(user)
+    if allowed and not visible_fields:
+        return summary
+
+    filtered = dict(summary)
+    methods = dict(filtered.get("totals_by_method") or {})
+    if not allowed:
+        filtered["expected_cash_in_drawer"] = Decimal("0")
+        filtered["difference"] = Decimal("0")
+        methods.update({"cash": Decimal("0"), "card": Decimal("0"), "card_credit": Decimal("0"), "card_debit": Decimal("0"), "transfer": Decimal("0"), "pedidos_ya": Decimal("0"), "paypal": Decimal("0")})
+    else:
+        if "expected_cash_in_drawer" not in visible_fields:
+            filtered["expected_cash_in_drawer"] = Decimal("0")
+        if "difference" not in visible_fields:
+            filtered["difference"] = Decimal("0")
+        code_by_method = {
+            "cash": "card_expected",  # override below
+            "card": "card_expected",
+            "card_credit": "card_expected",
+            "card_debit": "card_expected",
+            "transfer": "transfer_expected",
+            "pedidos_ya": "pedidos_ya_expected",
+            "paypal": "paypal_expected",
+        }
+        code_by_method["cash"] = "expected_cash_in_drawer"
+        for method_key, field_code in code_by_method.items():
+            if field_code not in visible_fields:
+                methods[method_key] = Decimal("0")
+    filtered["totals_by_method"] = methods
+    return filtered
+
+
 class RegisterListCreateView(generics.ListCreateAPIView):
     queryset = Register.objects.select_related("branch").all()
     serializer_class = RegisterSerializer
@@ -185,7 +220,7 @@ class CashSessionCurrentView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        summary = calculate_shift_summary(session) if include_sensitive else None
+        summary = _filter_expected_totals_for_user(calculate_shift_summary(session), request.user) if include_sensitive else None
         return Response(
             {
                 "has_open_session": True,
@@ -447,6 +482,13 @@ class CashTransactionListCreateView(APIView):
 
     def get(self, request):
         if not _can_view_sensitive_cash_data(request):
+            logger.info(
+                "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+                request.query_params.get("include") or "",
+                0,
+                False,
+                getattr(request.user, "id", None),
+            )
             return Response([], status=status.HTTP_200_OK)
         session_id = request.query_params.get("session_id")
         start_at, end_at = parse_business_date_range(
@@ -458,6 +500,13 @@ class CashTransactionListCreateView(APIView):
         else:
             _, session = _get_open_session_for_request(request)
         if not session:
+            logger.info(
+                "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+                request.query_params.get("include") or "",
+                0,
+                False,
+                getattr(request.user, "id", None),
+            )
             return Response([], status=status.HTTP_200_OK)
         include_all = str(request.query_params.get("include", "")).strip().lower() == "all"
         items = CashTransaction.objects.filter(session=session).select_related("payment", "refund").order_by("-created_at")
@@ -471,6 +520,13 @@ class CashTransactionListCreateView(APIView):
             items = items.filter(created_at__gte=start_at)
         if end_at:
             items = items.filter(created_at__lte=end_at)
+        logger.info(
+            "CASHIER_TRANSACTIONS_LIST include=%s count=%s has_session=%s user_id=%s",
+            request.query_params.get("include") or "",
+            items.count(),
+            True,
+            getattr(request.user, "id", None),
+        )
         return Response(CashTransactionSerializer(items, many=True).data)
 
     @transaction.atomic
@@ -520,7 +576,7 @@ class CashSessionListView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         payload = []
         for session in self.get_queryset():
-            summary = calculate_shift_summary(session)
+            summary = _filter_expected_totals_for_user(calculate_shift_summary(session), request.user)
             payload.append({**CashSessionSerializer(session).data, "summary": summary})
         return Response(payload)
 
@@ -545,7 +601,7 @@ class CashSessionHistoryView(APIView):
 
         payload = []
         for session in queryset:
-            summary = calculate_shift_summary(session)
+            summary = _filter_expected_totals_for_user(calculate_shift_summary(session), request.user)
             payload.append(
                 {
                     "id": session.id,
@@ -573,7 +629,7 @@ class CashSessionDetailView(APIView):
         if not session:
             return Response({"detail": "Sesión no encontrada"}, status=status.HTTP_404_NOT_FOUND)
         txs = CashTransaction.objects.filter(session=session).order_by("-created_at")
-        return Response({"session": CashSessionSerializer(session).data, "summary": calculate_shift_summary(session), "transactions": CashTransactionSerializer(txs, many=True).data})
+        return Response({"session": CashSessionSerializer(session).data, "summary": _filter_expected_totals_for_user(calculate_shift_summary(session), request.user), "transactions": CashTransactionSerializer(txs, many=True).data})
 
 
 class CashSessionTicketPDFView(APIView):

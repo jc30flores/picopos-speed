@@ -38,6 +38,26 @@ DEFAULT_FEATURE_FLAGS = [
         "description": "Permite cerrar caja aunque existan órdenes pendientes.",
     },
     {
+        "key": "FF_KIOSK_ENABLED",
+        "label": "KIOSK",
+        "description": "Mostrar u ocultar el módulo KIOSK para todos los usuarios.",
+    },
+    {
+        "key": "FF_CUSTOMER_DISPLAY_ENABLED",
+        "label": "Pantalla Cliente",
+        "description": "Mostrar u ocultar la pantalla cliente para todos los usuarios.",
+    },
+    {
+        "key": "FF_KITCHEN_DISPLAY_ENABLED",
+        "label": "Pantalla Cocina",
+        "description": "Mostrar u ocultar Cocina para todos los usuarios.",
+    },
+    {
+        "key": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
+        "label": "Totales esperados en cierre de caja",
+        "description": "Controlar visibilidad de totales esperados en cierre de caja.",
+    },
+    {
         "key": "FF_ADV_PERMISSIONS",
         "label": "Roles y permisos avanzados",
         "description": "Habilita permisos finos, PIN supervisor y auditoría avanzada.",
@@ -112,7 +132,7 @@ class Command(BaseCommand):
                 defaults={
                     "label": flag["label"],
                     "description": flag["description"],
-                    "is_enabled": False,
+                    "is_enabled": flag["key"] in {"FF_KIOSK_ENABLED", "FF_CUSTOMER_DISPLAY_ENABLED", "FF_KITCHEN_DISPLAY_ENABLED", "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED"},
                 },
             )
 

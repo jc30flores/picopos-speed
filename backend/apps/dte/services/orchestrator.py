@@ -29,62 +29,103 @@ def _normalize_email(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def _mask_phone(value: str | None) -> str:
+def _is_valid_email(value: str | None) -> bool:
+    email = str(value or "").strip()
+    return bool(email and "@" in email and "." in email.split("@")[-1] and " " not in email)
+
+
+def _normalize_phone(value: str | None) -> str:
     digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    if not digits:
-        return "***"
-    return f"***{digits[-4:]}"
+    if len(digits) == 8:
+        return f"503{digits}"
+    return digits
+
+
+def _is_placeholder_phone(value: str | None) -> bool:
+    digits = _normalize_phone(value)
+    return not digits or digits in {"00000000", "000000000", "0000000000", "50300000000"} or set(digits) == {"0"}
+
+
+def _safe_name(value: str | None) -> str:
+    return str(value or "").strip().upper()
 
 
 def _maybe_auto_send_delivery(record: DTERecord) -> None:
-    is_cf = is_consumer_final_order(record.order)
-    DTE_LOGGER.info("dte.auto_delivery.check dte_id=%s order_id=%s is_cf=%s", record.id, record.order_id, is_cf)
-    if is_cf:
-        DTE_LOGGER.info("dte.auto_delivery.skip reason=consumer_final dte_id=%s order_id=%s", record.id, record.order_id)
+    if record.status != DTERecord.STATUS_ACCEPTED:
+        return
+    rh = (record.response_payload or {}).get("respuesta_hacienda") if isinstance(record.response_payload, dict) else {}
+    if not isinstance(rh, dict):
+        rh = {}
+    estado = str(rh.get("estado") or record.estado_mh or "").strip().upper()
+    sello = str(record.sello_recibido or record.sello_recepcion or rh.get("selloRecibido") or "").strip()
+    if estado not in {"ACEPTADO", "PROCESADO", "RECIBIDO"} and not sello:
         return
 
-    flags = evaluate_record_actions(record)
-    raw_email = str(flags.get("customer_email") or "").strip()
-    normalized_email = _normalize_email(raw_email)
-    order_phone_override = str(getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
+    customer = getattr(record.order, "customer", None)
+    receptor_name = _safe_name((record.request_payload or {}).get("dte", {}).get("receptor", {}).get("nombre")) or _safe_name(getattr(customer, "name", ""))
+    receptor_email = _normalize_email((record.request_payload or {}).get("dte", {}).get("receptor", {}).get("correo") or getattr(customer, "correo", ""))
+    emisor_email = _normalize_email((record.request_payload or {}).get("dte", {}).get("emisor", {}).get("correo"))
+    receptor_phone = str((record.request_payload or {}).get("dte", {}).get("receptor", {}).get("telefono") or getattr(customer, "telefono", "") or "").strip()
+    manual_extra = str(getattr(record.order, "whatsapp_num_cliente", "") or "").strip()
+
+    receptor_email_valid = _is_valid_email(receptor_email)
+    receptor_email_same_as_emisor = bool(receptor_email and emisor_email and receptor_email == emisor_email)
+
+    email_should_send = False
+    email_reason = ""
+    if not receptor_email_valid:
+        email_reason = "email_invalid"
+    elif receptor_name != "CONSUMIDOR FINAL":
+        email_should_send = True
+        email_reason = "non_consumer_final"
+    elif not receptor_email_same_as_emisor:
+        email_should_send = True
+        email_reason = "consumer_final_different_email"
+    else:
+        email_reason = "consumer_final_same_email"
+
+    manual_extra_present = bool(_normalize_phone(manual_extra))
+    receptor_phone_placeholder = _is_placeholder_phone(receptor_phone)
+    whatsapp_should_send = manual_extra_present or not receptor_phone_placeholder
+    whatsapp_reason = "manual_extra" if manual_extra_present else ("dte_receptor_phone" if not receptor_phone_placeholder else "no_valid_phone")
+
     DTE_LOGGER.info(
-        "dte.auto_delivery.targets dte_id=%s order_id=%s has_email=%s has_num_cliente=%s num_cliente_masked=%s",
-        record.id,
-        record.order_id,
-        bool(normalized_email),
-        bool(order_phone_override),
-        _mask_phone(order_phone_override),
+        "DTE_AUTO_DELIVERY_EVALUATED dte_record_id=%s order_id=%s codigoGeneracion=%s status=%s email_should_send=%s email_reason=%s whatsapp_should_send=%s whatsapp_reason=%s receptor_name=%s receptor_email_present=%s receptor_email_same_as_emisor=%s receptor_phone_placeholder=%s manual_extra_present=%s",
+        record.id, record.order_id, record.codigo_generacion, record.status, email_should_send, email_reason,
+        whatsapp_should_send, whatsapp_reason, receptor_name or "UNKNOWN", bool(receptor_email), receptor_email_same_as_emisor,
+        receptor_phone_placeholder, manual_extra_present,
     )
+
     channels: list[str] = []
-    if normalized_email and normalized_email != INTERNAL_BILLING_EMAIL.strip().lower():
+    if email_should_send:
         channels.append("email")
     else:
-        DTE_LOGGER.info("dte.auto_delivery.skip_channel dte_id=%s order_id=%s channel=email reason=missing_or_internal_email", record.id, record.order_id)
-    channels.append("whatsapp")
+        DTE_LOGGER.info("DTE_AUTO_DELIVERY_SKIPPED dte_record_id=%s channel=email reason=%s", record.id, email_reason)
+    if whatsapp_should_send:
+        channels.append("whatsapp")
+    else:
+        DTE_LOGGER.info("DTE_AUTO_DELIVERY_SKIPPED dte_record_id=%s channel=whatsapp reason=%s", record.id, whatsapp_reason)
     if not channels:
-        DTE_LOGGER.info("dte.auto_delivery.skip reason=no_channels dte_id=%s order_id=%s", record.id, record.order_id)
         return
+
+    for ch, dtype, ok_statuses in (("email", DteDeliveryAttempt.TYPE_EMAIL, {"SENT"}), ("whatsapp", DteDeliveryAttempt.TYPE_WA, {"SENT", "QUEUED"})):
+        if ch in channels and DteDeliveryAttempt.objects.filter(dte_record=record, delivery_type=dtype, status__in=ok_statuses).exists():
+            DTE_LOGGER.info("DTE_AUTO_DELIVERY_DUPLICATE_SKIP dte_record_id=%s channel=%s reason=already_auto_sent", record.id, ch)
+            channels.remove(ch)
+    if not channels:
+        return
+
     try:
-        DTE_LOGGER.info(
-            "dte.auto_delivery.dispatch dte_id=%s order_id=%s channels=%s reusing_manual_service=true",
-            record.id,
-            record.order_id,
-            channels,
-        )
-        result = deliver_dte_to_client(
-            record,
-            channels=tuple(channels),
-            mode="automatic",
-        )
-        DTE_LOGGER.info(
-            "dte.auto_delivery.result dte_id=%s order_id=%s success=%s summary=%s results=%s",
-            record.id,
-            record.order_id,
-            result.get("success"),
-            result.get("summary"),
-            result.get("results"),
-        )
-    except Exception as exc:  # noqa: BLE001
+        if "email" in channels:
+            DTE_LOGGER.info("DTE_AUTO_EMAIL_START dte_record_id=%s", record.id)
+        if "whatsapp" in channels:
+            DTE_LOGGER.info("DTE_AUTO_WHATSAPP_START dte_record_id=%s", record.id)
+        result = deliver_dte_to_client(record, channels=tuple(channels), mode="automatic", to_phone=manual_extra or None)
+        if "email" in channels:
+            DTE_LOGGER.info("DTE_AUTO_EMAIL_RESULT dte_record_id=%s ok=%s", record.id, bool((result.get("results", {}).get("email") or {}).get("ok")))
+        if "whatsapp" in channels:
+            DTE_LOGGER.info("DTE_AUTO_WHATSAPP_RESULT dte_record_id=%s ok=%s", record.id, bool((result.get("results", {}).get("whatsapp") or {}).get("ok")))
+    except Exception as exc:
         DTE_LOGGER.error("dte.auto_delivery.failed dte_id=%s order_id=%s error=%s", record.id, record.order_id, exc)
 
 

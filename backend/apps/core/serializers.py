@@ -70,7 +70,7 @@ class TaxConfigSerializer(serializers.ModelSerializer):
 class FeatureFlagSerializer(serializers.ModelSerializer):
     class Meta:
         model = FeatureFlag
-        fields = ["id", "key", "label", "description", "is_enabled"]
+        fields = ["id", "key", "label", "description", "is_enabled", "metadata"]
 
 
 from apps.core.models import Branch

@@ -1277,10 +1277,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const loadCashData = async () => {
     try {
-      const [snapshot, transactions] = await Promise.all([
-        getCurrentCashSession(),
-        getCashTransactions(undefined, { includeAll: true }),
-      ]);
+      const snapshot = await getCurrentCashSession();
+      let transactions = [] as Awaited<ReturnType<typeof getCashTransactions>>;
+      try {
+        transactions = await getCashTransactions(undefined, { includeAll: true });
+      } catch (transactionsError) {
+        console.warn("cash.transactions.load_failed", {
+          reason: transactionsError instanceof Error ? transactionsError.message : String(transactionsError),
+          non_blocking: true,
+        });
+        toast.warning("No se pudieron cargar transacciones de caja, pero puedes continuar.");
+      }
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-debug] current-session", {
@@ -1295,6 +1302,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
       const hasOpenCashSession = getCashSessionStatus(snapshot).hasOpenCashSession;
+      console.info("cash.open_session_modal", {
+        source: "loadCashData",
+        reason: hasOpenCashSession ? "session_open" : "session_closed",
+      });
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-debug] open-session-modal", {
@@ -1307,6 +1318,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
+      console.info("cash.open_session_modal", {
+        source: "loadCashData",
+        reason: "fetch_error",
+      });
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.info("[cash-debug] open-session-modal", { source: "loadCashData", action: "open", reason: "fetch-error" });

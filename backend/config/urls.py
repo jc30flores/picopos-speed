@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from apps.core.views import FeatureSettingsOptionsView, FeatureSettingsView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -19,6 +20,8 @@ urlpatterns = [
     path("api/dte/", include("apps.dte.urls")),
     path("api/clients/", include("apps.core.client_urls")),
     path("api/inventory/", include("apps.inventory.urls")),
+    path("api/settings/features/", FeatureSettingsView.as_view(), name="settings-features"),
+    path("api/settings/features/options/", FeatureSettingsOptionsView.as_view(), name="settings-features-options"),
 ]
 
 if settings.DEBUG:

@@ -1,13 +1,78 @@
 from django.db import models, transaction
 from django.db.models import Case, IntegerField, Value, When
+import logging
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
-from apps.core.permissions import IsAuthenticatedAndActive
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
+
+
+logger = logging.getLogger(__name__)
+
+
+FEATURE_FLAG_DEFAULTS = {
+    "FF_KIOSK_ENABLED": {
+        "label": "KIOSK",
+        "description": "Mostrar u ocultar el módulo KIOSK para todos los usuarios.",
+        "default": True,
+    },
+    "FF_CUSTOMER_DISPLAY_ENABLED": {
+        "label": "Pantalla Cliente",
+        "description": "Mostrar u ocultar la pantalla cliente para todos los usuarios.",
+        "default": True,
+    },
+    "FF_KITCHEN_DISPLAY_ENABLED": {
+        "label": "Pantalla Cocina",
+        "description": "Mostrar u ocultar Cocina para todos los usuarios.",
+        "default": True,
+    },
+    "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED": {
+        "label": "Totales esperados en cierre de caja",
+        "description": "Controlar visibilidad de totales esperados en cierre de caja.",
+        "default": True,
+    },
+}
+
+CASH_EXPECTED_FIELDS = [
+    {"code": "expected_cash_in_drawer", "label": "Efectivo esperado"},
+    {"code": "card_expected", "label": "Tarjeta esperado"},
+    {"code": "pedidos_ya_expected", "label": "Pedidos Ya esperado"},
+    {"code": "transfer_expected", "label": "Transferencia esperado"},
+    {"code": "paypal_expected", "label": "PayPal esperado"},
+    {"code": "total_expected", "label": "Total esperado general"},
+    {"code": "difference", "label": "Diferencias"},
+]
+
+
+def _ensure_feature_settings_flags():
+    for key, config in FEATURE_FLAG_DEFAULTS.items():
+        FeatureFlag.objects.get_or_create(
+            key=key,
+            defaults={
+                "label": config["label"],
+                "description": config["description"],
+                "is_enabled": bool(config["default"]),
+            },
+        )
+
+
+def get_feature_settings_payload() -> dict:
+    _ensure_feature_settings_flags()
+    flags = {item.key: item for item in FeatureFlag.objects.filter(key__in=FEATURE_FLAG_DEFAULTS.keys())}
+    totals_flag = flags["FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED"]
+    metadata = totals_flag.metadata or {}
+    return {
+        "kiosk_enabled": bool(flags["FF_KIOSK_ENABLED"].is_enabled),
+        "customer_display_enabled": bool(flags["FF_CUSTOMER_DISPLAY_ENABLED"].is_enabled),
+        "kitchen_display_enabled": bool(flags["FF_KITCHEN_DISPLAY_ENABLED"].is_enabled),
+        "cash_close_expected_totals_control_enabled": bool(totals_flag.is_enabled),
+        "cash_close_expected_totals_allowed_roles": list(metadata.get("allowed_roles") or []),
+        "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
+    }
 
 
 class ServiceTypeListView(generics.ListAPIView):
@@ -60,6 +125,69 @@ class FeatureFlagDetailView(generics.RetrieveUpdateAPIView):
     queryset = FeatureFlag.objects.all()
     serializer_class = FeatureFlagSerializer
     permission_classes = [IsAuthenticatedAndActive]
+
+
+class FeatureSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get_permissions(self):
+        if self.request.method in {"GET", "HEAD", "OPTIONS"}:
+            return [IsAuthenticatedAndActive()]
+        role = getattr(getattr(self.request.user, "profile", None), "role", None)
+        if role != "admin" and not getattr(self.request.user, "is_superuser", False):
+            logger.warning(
+                "FEATURE_FLAGS_WRITE_DENIED user_id=%s role=%s",
+                getattr(self.request.user, "id", None),
+                role or "unknown",
+            )
+        return [IsAdmin()]
+
+    def get(self, request):
+        role = getattr(getattr(request.user, "profile", None), "role", None)
+        print_role = role or "unknown"
+        logger.info(
+            "FEATURE_FLAGS_READ user_id=%s role=%s allowed=true",
+            getattr(request.user, "id", None),
+            print_role,
+        )
+        return Response(get_feature_settings_payload())
+
+    @transaction.atomic
+    def patch(self, request):
+        _ensure_feature_settings_flags()
+        mapping = {
+            "kiosk_enabled": "FF_KIOSK_ENABLED",
+            "customer_display_enabled": "FF_CUSTOMER_DISPLAY_ENABLED",
+            "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
+            "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
+        }
+        for field, key in mapping.items():
+            if field in request.data:
+                FeatureFlag.objects.filter(key=key).update(is_enabled=bool(request.data.get(field)))
+
+        totals_flag = FeatureFlag.objects.get(key="FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED")
+        metadata = dict(totals_flag.metadata or {})
+        if "cash_close_expected_totals_allowed_roles" in request.data:
+            metadata["allowed_roles"] = [str(value) for value in (request.data.get("cash_close_expected_totals_allowed_roles") or [])]
+        if "cash_close_expected_totals_visible_fields" in request.data:
+            metadata["visible_fields"] = [str(value) for value in (request.data.get("cash_close_expected_totals_visible_fields") or [])]
+        totals_flag.metadata = metadata
+        totals_flag.save(update_fields=["metadata"])
+        return Response(get_feature_settings_payload())
+
+
+class FeatureSettingsOptionsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        from apps.users.models import UserProfile
+
+        roles = []
+        for code, label in UserProfile.ROLE_CHOICES:
+            if code == "admin":
+                continue
+            roles.append({"code": code, "label": label})
+        return Response({"roles": roles, "cash_close_expected_total_fields": CASH_EXPECTED_FIELDS})
 
 
 class BranchListView(generics.ListAPIView):
