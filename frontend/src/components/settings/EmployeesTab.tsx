@@ -24,7 +24,7 @@ const ROLE_OPTIONS = [
   { value: "manager", label: "Gerente" },
   { value: "admin", label: "Administrador" },
   { value: "kiosk", label: "Kiosk" },
-  { value: "worker", label: "Worker" },
+  { value: "worker", label: "Team Member" },
 ];
 
 export const EmployeesTab = () => {
@@ -51,7 +51,7 @@ export const EmployeesTab = () => {
         role: selectedRole !== "all" ? selectedRole : undefined,
         status: selectedStatus !== "all" ? selectedStatus : undefined,
       });
-      setEmployees(data);
+      setEmployees(data.filter((e) => !e.name?.toLowerCase().startsWith("empleado eliminado")));
     } catch (error) {
       console.error("Failed to load employees", error);
       toast.error(

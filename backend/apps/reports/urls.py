@@ -11,5 +11,6 @@ urlpatterns = [
     path("transactions/<int:payment_id>/ticket/", views.TransactionTicketView.as_view(), name="reports-transaction-ticket"),
     path("employee-hours/", views.EmployeeHoursReportView.as_view(), name="reports-employee-hours"),
     path("employee-hours/<int:employee_id>/", views.EmployeeHoursDetailView.as_view(), name="reports-employee-hours-detail"),
+    path("employee-hours/cycles/", views.EmployeeHoursCycleCreateView.as_view(), name="reports-employee-hours-cycle-create"),
     path("employee-hours/cycles/<int:cycle_id>/", views.EmployeeHoursCycleUpdateView.as_view(), name="reports-employee-hours-cycle-update"),
 ]

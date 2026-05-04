@@ -33,6 +33,7 @@ export const EmployeesTable = ({
   onViewAttendance,
   onDelete,
 }: EmployeesTableProps) => {
+  const formatRole = (role: string) => role?.toLowerCase() === "worker" ? "Team Member" : role;
   const handleToggleStatus = (employee: Employee) => {
     const action = employee.status === "active" ? "desactivar" : "activar";
     if (confirm(`¿Estás seguro de ${action} a ${employee.name}?`)) {
@@ -79,7 +80,7 @@ export const EmployeesTable = ({
             employees.map((employee) => (
               <TableRow key={employee.id}>
                 <TableCell className="font-medium">{employee.name}</TableCell>
-                <TableCell className="hidden sm:table-cell">{employee.role}</TableCell>
+                <TableCell className="hidden sm:table-cell">{formatRole(employee.role)}</TableCell>
                 <TableCell className="hidden md:table-cell">
                   
                 </TableCell>

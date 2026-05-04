@@ -667,15 +667,12 @@ class EmployeeHoursReportView(generics.GenericAPIView):
 
     def get(self, request):
         start_date, end_date = _parse_report_dates(request)
-        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles__breaks").filter(date__gte=start_date, date__lte=end_date).exclude(employee__role="admin")
-        by_employee = {}
-        total_shift = total_break = total_net = 0
-        for record in records:
-            emp = record.employee
-            row = by_employee.setdefault(emp.id, {
+        employees = Employee.objects.select_related("user").filter(is_deleted=False).exclude(role="admin").exclude(full_name__istartswith="Empleado eliminado")
+        records = AttendanceRecord.objects.select_related("employee").prefetch_related("cycles__breaks").filter(date__gte=start_date, date__lte=end_date, employee__in=employees)
+        by_employee = {emp.id: {
                 "employee_id": emp.id,
                 "name": emp.full_name,
-                "role": emp.get_role_display(),
+                "role": "Team Member" if str(emp.get_role_display()).lower() == "worker" else emp.get_role_display(),
                 "days_worked": 0,
                 "entries_count": 0,
                 "exits_count": 0,
@@ -685,7 +682,11 @@ class EmployeeHoursReportView(generics.GenericAPIView):
                 "current_state": "OFF_SHIFT",
                 "last_clock_in_at": None,
                 "status": emp.status,
-            })
+            } for emp in employees}
+        total_shift = total_break = total_net = 0
+        for record in records:
+            emp = record.employee
+            row = by_employee[emp.id]
             shift = brk = 0
             entries = exits = 0
             for cycle in record.cycles.all():
@@ -727,49 +728,143 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
 
     def get(self, request, employee_id: int):
         start_date, end_date = _parse_report_dates(request)
-        employee = Employee.objects.filter(pk=employee_id).exclude(role="admin").first()
+        employee = Employee.objects.filter(pk=employee_id, is_deleted=False).exclude(role="admin").exclude(full_name__istartswith="Empleado eliminado").first()
         if not employee:
             return Response({"detail": "Empleado no encontrado."}, status=404)
-        records = AttendanceRecord.objects.prefetch_related("cycles__breaks").filter(employee=employee, date__gte=start_date, date__lte=end_date).order_by("date")
-        days = []
-        total_shift = total_break = total_net = 0
-        for record in records:
-            cycles_payload = []
-            day_shift = day_break = day_net = 0
-            for cycle in record.cycles.all():
-                shift = _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
-                brk, break_rows, brk_seconds = _cycle_break_minutes(cycle)
-                net = max(0, shift - brk)
-                day_shift += shift
-                day_break += brk
-                day_net += net
-                cycles_payload.append({
-                    "clock_in_at": cycle.clock_in_at,
-                    "breaks_count": len(break_rows),
-                    "breaks": break_rows,
-                    "clock_out_at": cycle.clock_out_at,
-                    "shift_minutes": shift,
-                    "break_minutes": brk,
-                    "break_seconds": brk_seconds,
-                    "id": cycle.id,
-                    "break_seconds_override": cycle.break_seconds_override,
-                    "net_minutes": net,
-                    "status": _cycle_status(cycle),
-                })
-            total_shift += day_shift
-            total_break += day_break
-            total_net += day_net
-            days.append({
-                "date": record.date,
-                "daily_totals": {"shift_minutes": day_shift, "break_minutes": day_break, "net_minutes": day_net},
-                "cycles": cycles_payload,
+        tz = timezone.get_current_timezone()
+        today_local = timezone.localdate()
+        effective_end = min(end_date, today_local)
+        if start_date > effective_end:
+            return Response({
+                "employee": {"id": employee.id, "name": employee.full_name, "role": employee.get_role_display()},
+                "totals": {"shift_minutes": 0, "break_minutes": 0, "net_minutes": 0},
+                "days": [],
             })
+        start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+        end_dt = timezone.make_aware(datetime.combine(effective_end, time.max), tz)
+        cycles = AttendanceCycle.objects.select_related("attendance_record").prefetch_related("breaks").filter(
+            attendance_record__employee=employee,
+            clock_in_at__gte=start_dt,
+            clock_in_at__lte=end_dt,
+        ).order_by("clock_in_at", "id")
+        day_map = {}
+        current = start_date
+        while current <= effective_end:
+            day_map[current.isoformat()] = {"date": current.isoformat(), "daily_totals": {"shift_minutes": 0, "break_minutes": 0, "net_minutes": 0}, "cycles": []}
+            current += timedelta(days=1)
+        total_shift = total_break = total_net = 0
+        for cycle in cycles:
+            local_date = timezone.localtime(cycle.clock_in_at, tz).date()
+            if local_date < start_date or local_date > end_date:
+                continue
+            key = local_date.isoformat()
+            shift = _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
+            brk, break_rows, brk_seconds = _cycle_break_minutes(cycle)
+            net = max(0, shift - brk)
+            total_shift += shift
+            total_break += brk
+            total_net += net
+            day_map[key]["daily_totals"]["shift_minutes"] += shift
+            day_map[key]["daily_totals"]["break_minutes"] += brk
+            day_map[key]["daily_totals"]["net_minutes"] += net
+            day_map[key]["cycles"].append({
+                "clock_in_at": cycle.clock_in_at,
+                "breaks_count": len(break_rows),
+                "breaks": break_rows,
+                "clock_out_at": cycle.clock_out_at,
+                "shift_minutes": shift,
+                "break_minutes": brk,
+                "break_seconds": brk_seconds,
+                "id": cycle.id,
+                "break_seconds_override": cycle.break_seconds_override,
+                "net_minutes": net,
+                "status": _cycle_status(cycle),
+                "clock_out_next_day": bool(cycle.clock_out_at and timezone.localtime(cycle.clock_out_at, tz).date() > local_date),
+            })
+        days = list(day_map.values())
 
         return Response({
             "employee": {"id": employee.id, "name": employee.full_name, "role": employee.get_role_display()},
             "totals": {"shift_minutes": total_shift, "break_minutes": total_break, "net_minutes": total_net},
             "days": days,
         })
+
+
+
+
+def _parse_cycle_payload(data):
+    cycle_date = parse_date(str(data.get("date") or ""))
+    if not cycle_date:
+        raise ValueError("Fecha es obligatoria.")
+    clock_in_time = str(data.get("clock_in_time") or "").strip()
+    if not clock_in_time:
+        raise ValueError("La hora de entrada es obligatoria.")
+    shift_seconds = data.get("shift_seconds")
+    clock_out_time = data.get("clock_out_time")
+    next_day = bool(data.get("clock_out_next_day"))
+    break_seconds = int(data.get("break_seconds", data.get("break_seconds_override", 0)) or 0)
+    if break_seconds < 0:
+        raise ValueError("break_seconds no puede ser negativo.")
+
+    ci_h, ci_m = [int(x) for x in clock_in_time.split(":")[:2]]
+    tz = timezone.get_current_timezone()
+    clock_in_at = timezone.make_aware(datetime.combine(cycle_date, time(ci_h, ci_m)), tz)
+
+    clock_out_at = None
+    if clock_out_time:
+        co_h, co_m = [int(x) for x in str(clock_out_time).split(":")[:2]]
+        clock_out_at = timezone.make_aware(datetime.combine(cycle_date, time(co_h, co_m)), tz)
+        if next_day:
+            clock_out_at += timedelta(days=1)
+        elif clock_out_at < clock_in_at:
+            raise ValueError("Salida no puede ser menor que entrada.")
+    elif shift_seconds is not None and str(shift_seconds) != "":
+        shift_seconds = int(shift_seconds)
+        if shift_seconds < 0:
+            raise ValueError("shift_seconds no puede ser negativo.")
+        clock_out_at = clock_in_at + timedelta(seconds=shift_seconds)
+    else:
+        raise ValueError("clock_out_time o shift_seconds es obligatorio.")
+
+    shift_seconds = duration_seconds(clock_in_at, clock_out_at)
+    if break_seconds > shift_seconds:
+        raise ValueError("break_seconds no puede ser mayor que duración del turno.")
+    return cycle_date, clock_in_at, clock_out_at, break_seconds
+
+class EmployeeHoursCycleCreateView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        if getattr(getattr(request.user, "profile", None), "role", "") != "admin":
+            return Response({"detail": "Solo admin puede editar tarjetas de horas."}, status=status.HTTP_403_FORBIDDEN)
+        employee_id = request.data.get("employee_id")
+        employee = Employee.objects.filter(pk=employee_id).exclude(role="admin").first()
+        if not employee:
+            return Response({"detail": "Empleado no encontrado."}, status=404)
+        try:
+            cycle_date, clock_in_at, clock_out_at, break_seconds = _parse_cycle_payload(request.data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        reason = str(request.data.get("reason") or "Registro manual")
+        if cycle_date > timezone.localdate():
+            return Response({"detail": "No se pueden crear registros en fechas futuras."}, status=400)
+        if AttendanceCycle.objects.filter(attendance_record__employee=employee, clock_out_at__isnull=True).exists():
+            return Response({"detail": "Existe un turno abierto anterior. Cierra o edita ese turno antes de crear otro."}, status=400)
+        record, _ = AttendanceRecord.objects.get_or_create(employee=employee, date=cycle_date)
+        seq = (record.cycles.order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
+        cycle = AttendanceCycle.objects.create(
+            attendance_record=record,
+            sequence=seq,
+            clock_in_at=clock_in_at,
+            clock_out_at=clock_out_at,
+            break_seconds_override=break_seconds,
+            adjusted_by=request.user,
+            adjusted_at=timezone.now(),
+            adjustment_reason=reason,
+        )
+        shift_seconds = duration_seconds(clock_in_at, clock_out_at)
+        AttendanceCycleAdjustment.objects.create(cycle=cycle, employee=employee, changed_by=request.user, new_clock_in_at=clock_in_at, new_clock_out_at=clock_out_at, new_break_seconds_override=break_seconds, old_computed_break_seconds=0, new_break_seconds=break_seconds, reason=reason)
+        return Response({"ok": True, "cycle": {"id": cycle.id, "date": cycle_date, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "shift_seconds": shift_seconds, "break_seconds": break_seconds, "net_seconds": max(0, shift_seconds-break_seconds), "adjusted": True, "created_manually": True}})
 
 
 class EmployeeHoursCycleUpdateView(APIView):
@@ -783,26 +878,16 @@ class EmployeeHoursCycleUpdateView(APIView):
             return Response({"detail": "Ciclo no encontrado."}, status=404)
         old_ci, old_co, old_override = cycle.clock_in_at, cycle.clock_out_at, cycle.break_seconds_override
         old_computed = sum_cycle_break_seconds(cycle, include_open=False)
-        clock_in_at = request.data.get("clock_in_at")
-        clock_out_at = request.data.get("clock_out_at")
-        reason = str(request.data.get("reason") or "")
-        bso = request.data.get("break_seconds_override", request.data.get("break_seconds"))
-        if clock_in_at is not None:
-            cycle.clock_in_at = datetime.fromisoformat(clock_in_at.replace("Z", "+00:00"))
-        if clock_out_at is not None:
-            cycle.clock_out_at = datetime.fromisoformat(clock_out_at.replace("Z", "+00:00"))
-        if not cycle.clock_in_at:
-            return Response({"detail": "Entrada es obligatoria."}, status=400)
-        if cycle.clock_out_at and cycle.clock_out_at < cycle.clock_in_at:
-            return Response({"detail": "Salida no puede ser menor que entrada."}, status=400)
-        if bso is not None:
-            bso = int(bso)
-            if bso < 0:
-                return Response({"detail": "break_seconds no puede ser negativo."}, status=400)
-            shift_seconds = duration_seconds(cycle.clock_in_at, cycle.clock_out_at) if cycle.clock_out_at else 0
-            if cycle.clock_out_at and bso > shift_seconds:
-                return Response({"detail": "break_seconds no puede ser mayor que duración del turno."}, status=400)
-            cycle.break_seconds_override = bso
+        reason = str(request.data.get("reason") or "Corrección manual")
+        try:
+            cycle_date, clock_in_at, clock_out_at, break_seconds = _parse_cycle_payload(request.data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        cycle.attendance_record.date = cycle_date
+        cycle.attendance_record.save(update_fields=["date"])
+        cycle.clock_in_at = clock_in_at
+        cycle.clock_out_at = clock_out_at
+        cycle.break_seconds_override = break_seconds
         cycle.adjusted_by = request.user
         cycle.adjusted_at = timezone.now()
         cycle.adjustment_reason = reason

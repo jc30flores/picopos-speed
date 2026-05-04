@@ -19,6 +19,15 @@ const fmtHM = (value: string | null) => {
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("es-SV", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 };
+const fmtEntryWithDay = (value: string | null, startedPrev?: boolean) => {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  const hm = new Intl.DateTimeFormat("es-SV", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+  if (!startedPrev) return hm;
+  const dm = new Intl.DateTimeFormat("es-SV", { day: "2-digit", month: "2-digit" }).format(d);
+  return `${hm} (${dm})`;
+};
 
 const fmtBreakTotal = (seconds?: number | null) => {
   if (seconds == null || seconds <= 0) return "—";
@@ -99,7 +108,7 @@ export const AttendancePanel = () => {
         {showPersonalTimeCard ? <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button> : null}
       </div>
       <div className="mb-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtEntryWithDay(attendance?.activeCycle?.clock_in_at ?? attendance?.clockIn ?? null, attendance?.activeCycle?.started_on_previous_day)}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal((() => { const hasActive = Boolean(attendance?.activeCycle?.clock_in_at) && !attendance?.activeCycle?.clock_out_at; const base = hasActive ? (attendance?.activeCycle?.breakSeconds ?? 0) : 0; const started = attendance?.activeCycle?.current_break_started_at; if (attendance?.state === "ON_BREAK" && started) { const d = new Date(started); if (!Number.isNaN(d.getTime())) { return Math.max(base, Math.floor((Date.now() - d.getTime()) / 1000)); } } return base; })())}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>

@@ -22,11 +22,15 @@ from apps.employees.serializers import (
 logger = logging.getLogger(__name__)
 
 
+def active_employee_queryset():
+    return Employee.objects.select_related("branch", "user").filter(is_deleted=False).exclude(full_name__istartswith="Empleado eliminado")
+
+
 class EmployeeListCreateView(generics.ListCreateAPIView):
     serializer_class = EmployeeSerializer
 
     def get_queryset(self):
-        queryset = Employee.objects.select_related("branch").all()
+        queryset = active_employee_queryset()
         search = (self.request.query_params.get("search") or "").strip()
         role = (self.request.query_params.get("role") or "").strip()
         status = self.request.query_params.get("status")
@@ -46,7 +50,7 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
 
 
 class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Employee.objects.select_related("branch").all()
+    queryset = active_employee_queryset()
     serializer_class = EmployeeSerializer
     permission_classes = [IsAdminOrManager]
 
@@ -71,8 +75,9 @@ class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
         employee.email = None
         employee.phone = ""
         employee.status = "inactive"
+        employee.is_deleted = True
         employee.user = None
-        employee.save(update_fields=["full_name", "email", "phone", "status", "user", "updated_at"])
+        employee.save(update_fields=["full_name", "email", "phone", "status", "is_deleted", "user", "updated_at"])
         log_audit(request, "employees.delete.safe", "Employee", employee.id, {"mode": "safe_soft_delete"})
         return Response({"ok": True, "deleted": True, "mode": "safe_soft_delete", "message": "Empleado eliminado correctamente."})
 
@@ -81,9 +86,9 @@ class EmployeeStatsView(generics.GenericAPIView):
     permission_classes = [IsAdminOrManager]
     def get(self, request, *args, **kwargs):
         today = timezone.localdate()
-        total_employees = Employee.objects.count()
-        active_employees = Employee.objects.filter(status="active").count()
-        inactive_employees = Employee.objects.filter(status="inactive").count()
+        total_employees = active_employee_queryset().count()
+        active_employees = active_employee_queryset().filter(status="active").count()
+        inactive_employees = active_employee_queryset().filter(status="inactive").count()
         attendance_today = AttendanceRecord.objects.filter(date=today)
         attendance_today_count = attendance_today.values("employee_id").distinct().count()
         late_today_count = attendance_today.filter(minutes_late__gt=0).count()
@@ -180,19 +185,10 @@ class AttendanceActionView(APIView):
         now = timezone.now()
         active_cycle = (
             AttendanceCycle.objects.select_for_update()
-            .filter(attendance_record=record, clock_out_at__isnull=True)
-            .order_by("-sequence", "-id")
+            .filter(attendance_record__employee=employee, clock_out_at__isnull=True)
+            .order_by("-clock_in_at", "-id")
             .first()
         )
-        if not active_cycle and (record.clock_in or record.check_in) and not (record.clock_out or record.check_out):
-            next_sequence = (AttendanceCycle.objects.filter(attendance_record=record).order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
-            active_cycle = AttendanceCycle.objects.create(
-                attendance_record=record,
-                sequence=next_sequence,
-                clock_in_at=record.clock_in or record.check_in,
-                break_start_at=record.break_start,
-                break_end_at=record.break_end,
-            )
         clock_in = active_cycle.clock_in_at if active_cycle else (record.clock_in or record.check_in)
         clock_out = active_cycle.clock_out_at if active_cycle else (record.clock_out or record.check_out)
         has_active_session = active_cycle is not None
@@ -212,8 +208,7 @@ class AttendanceActionView(APIView):
 
         if self.action == "clock_in":
             if has_active_session:
-                payload = build_attendance_state(record, employee)
-                return Response(AttendanceStateSerializer(payload).data, status=status.HTTP_200_OK)
+                return Response({"detail": "Ya existe un turno abierto. Debes marcar salida antes de iniciar otro turno."}, status=status.HTTP_400_BAD_REQUEST)
             next_sequence = (AttendanceCycle.objects.filter(attendance_record=record).order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
             active_cycle = AttendanceCycle.objects.create(attendance_record=record, sequence=next_sequence, clock_in_at=now)
             record.clock_in = active_cycle.clock_in_at
