@@ -5070,7 +5070,7 @@ export const updateEmployeeHoursCycle = async (cycleId: number, payload: { date:
   return handleJson<any>(response);
 };
 
-export const createEmployeeHoursCycle = async (payload: { employeeId: number; date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; shiftSeconds: number; breakSeconds: number; reason: string; }) => {
+export const createEmployeeHoursCycle = async (payload: { employeeId: number; date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; reason: string; shiftSeconds?: number; breakSeconds?: number; breakStartTime?: string | null; breakEndTime?: string | null; }) => {
   const response = await request(`/reports/employee-hours/cycles/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

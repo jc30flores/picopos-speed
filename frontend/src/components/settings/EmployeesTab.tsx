@@ -16,6 +16,7 @@ import { Employee } from "@/types/employee";
 import { createEmployee, deleteEmployee, getEmployeeAttendanceHistory, getEmployees, updateEmployee, type AttendanceHistoryRow } from "@/lib/api";
 import { toast } from "sonner";
 import { AttendanceRecordsModal } from "@/components/attendance/AttendanceRecordsModal";
+import { ManualTimeCardModal } from "@/components/employees/ManualTimeCardModal";
 
 const ROLE_OPTIONS = [
   { value: "all", label: "Todos" },
@@ -42,6 +43,8 @@ export const EmployeesTab = () => {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceEmployee, setAttendanceEmployee] = useState<Employee | null>(null);
   const [attendanceFilters, setAttendanceFilters] = useState<{ start?: string; end?: string }>({});
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualEmployee, setManualEmployee] = useState<Employee | null>(null);
 
   const loadEmployees = async () => {
     try {
@@ -242,6 +245,7 @@ export const EmployeesTab = () => {
         onViewProfile={handleOpenProfile}
         onViewAttendance={handleOpenAttendance}
         onDelete={handlePermanentDelete}
+        onAddTimeCard={(employee) => { setManualEmployee(employee); setManualOpen(true); }}
       />
 
       <EmployeeFormDialog
@@ -256,6 +260,7 @@ export const EmployeesTab = () => {
         onOpenChange={setIsProfileOpen}
         employee={selectedEmployee}
       />
+      <ManualTimeCardModal open={manualOpen} onClose={() => setManualOpen(false)} employees={employees.map((e) => ({ id: e.id, name: e.name, role: e.role, status: e.status }))} initialEmployeeId={manualEmployee?.id} lockEmployeeSelection={true} onSaved={() => { void loadEmployees(); if (attendanceEmployee) void loadAttendance(attendanceFilters); }} />
       <AttendanceRecordsModal
         open={attendanceOpen}
         onOpenChange={setAttendanceOpen}

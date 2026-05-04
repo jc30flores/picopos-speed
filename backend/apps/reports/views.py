@@ -801,6 +801,8 @@ def _parse_cycle_payload(data):
         raise ValueError("La hora de entrada es obligatoria.")
     shift_seconds = data.get("shift_seconds")
     clock_out_time = data.get("clock_out_time")
+    break_start_time = str(data.get("break_start_time") or "").strip()
+    break_end_time = str(data.get("break_end_time") or "").strip()
     next_day = bool(data.get("clock_out_next_day"))
     break_seconds = int(data.get("break_seconds", data.get("break_seconds_override", 0)) or 0)
     if break_seconds < 0:
@@ -827,9 +829,25 @@ def _parse_cycle_payload(data):
         raise ValueError("clock_out_time o shift_seconds es obligatorio.")
 
     shift_seconds = duration_seconds(clock_in_at, clock_out_at)
-    if break_seconds > shift_seconds:
-        raise ValueError("break_seconds no puede ser mayor que duración del turno.")
-    return cycle_date, clock_in_at, clock_out_at, break_seconds
+    break_start_at = None
+    break_end_at = None
+    if bool(break_start_time) ^ bool(break_end_time):
+        raise ValueError("Debes completar salida y regreso de break.")
+    if break_start_time and break_end_time:
+        bs_h, bs_m = [int(x) for x in break_start_time.split(":")[:2]]
+        be_h, be_m = [int(x) for x in break_end_time.split(":")[:2]]
+        break_start_at = timezone.make_aware(datetime.combine(cycle_date, time(bs_h, bs_m)), tz)
+        break_end_at = timezone.make_aware(datetime.combine(cycle_date, time(be_h, be_m)), tz)
+        if break_start_at < clock_in_at:
+            break_start_at += timedelta(days=1)
+        if break_end_at <= break_start_at:
+            break_end_at += timedelta(days=1)
+        if break_start_at < clock_in_at or break_end_at > clock_out_at:
+            raise ValueError("El break debe estar dentro del turno.")
+        break_seconds = duration_seconds(break_start_at, break_end_at)
+    if break_seconds >= shift_seconds:
+        raise ValueError("break_seconds no puede ser mayor o igual que duración del turno.")
+    return cycle_date, clock_in_at, clock_out_at, break_seconds, break_start_at, break_end_at
 
 class EmployeeHoursCycleCreateView(APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
@@ -842,7 +860,7 @@ class EmployeeHoursCycleCreateView(APIView):
         if not employee:
             return Response({"detail": "Empleado no encontrado."}, status=404)
         try:
-            cycle_date, clock_in_at, clock_out_at, break_seconds = _parse_cycle_payload(request.data)
+            cycle_date, clock_in_at, clock_out_at, break_seconds, break_start_at, break_end_at = _parse_cycle_payload(request.data)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
         reason = str(request.data.get("reason") or "Registro manual")
@@ -863,6 +881,8 @@ class EmployeeHoursCycleCreateView(APIView):
             adjustment_reason=reason,
         )
         shift_seconds = duration_seconds(clock_in_at, clock_out_at)
+        if break_start_at and break_end_at:
+            AttendanceBreak.objects.create(cycle=cycle, sequence=1, start_at=break_start_at, end_at=break_end_at)
         AttendanceCycleAdjustment.objects.create(cycle=cycle, employee=employee, changed_by=request.user, new_clock_in_at=clock_in_at, new_clock_out_at=clock_out_at, new_break_seconds_override=break_seconds, old_computed_break_seconds=0, new_break_seconds=break_seconds, reason=reason)
         return Response({"ok": True, "cycle": {"id": cycle.id, "date": cycle_date, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "shift_seconds": shift_seconds, "break_seconds": break_seconds, "net_seconds": max(0, shift_seconds-break_seconds), "adjusted": True, "created_manually": True}})
 
@@ -880,7 +900,7 @@ class EmployeeHoursCycleUpdateView(APIView):
         old_computed = sum_cycle_break_seconds(cycle, include_open=False)
         reason = str(request.data.get("reason") or "Corrección manual")
         try:
-            cycle_date, clock_in_at, clock_out_at, break_seconds = _parse_cycle_payload(request.data)
+            cycle_date, clock_in_at, clock_out_at, break_seconds, break_start_at, break_end_at = _parse_cycle_payload(request.data)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
         cycle.attendance_record.date = cycle_date

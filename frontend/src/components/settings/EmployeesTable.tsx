@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Pencil, Power, Eye, Clock3, Trash2 } from "lucide-react";
+import { KeyRound, Pencil, Power, Eye, Clock3, Trash2, CalendarPlus } from "lucide-react";
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
 
@@ -21,6 +21,7 @@ interface EmployeesTableProps {
   onViewProfile: (employee: Employee) => void;
   onViewAttendance: (employee: Employee) => void;
   onDelete: (employee: Employee) => void;
+  onAddTimeCard: (employee: Employee) => void;
 }
 
 export const EmployeesTable = ({
@@ -32,6 +33,7 @@ export const EmployeesTable = ({
   onViewProfile,
   onViewAttendance,
   onDelete,
+  onAddTimeCard,
 }: EmployeesTableProps) => {
   const formatRole = (role: string) => role?.toLowerCase() === "worker" ? "Team Member" : role;
   const handleToggleStatus = (employee: Employee) => {
@@ -94,6 +96,7 @@ export const EmployeesTable = ({
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="icon" onClick={() => onAddTimeCard(employee)} title="Agregar tarjeta de horas" className="h-10 w-10"><CalendarPlus className="h-4 w-4" /></Button>
                     <Button
                       variant="ghost"
                       size="icon"
