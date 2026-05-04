@@ -9,6 +9,7 @@ from apps.core.permissions import IsAdminOrManager, IsAuthenticatedAndActive
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, AttendanceBreak, Schedule
+from apps.employees.attendance_utils import duration_seconds, sum_cycle_break_seconds
 from apps.employees.serializers import (
     EmployeeSerializer,
     AttendanceSerializer,
@@ -247,10 +248,10 @@ class AttendanceActionView(APIView):
             active_cycle.break_end_at = now
             active_cycle.save(update_fields=["break_end_at", "updated_at"])
             record.break_end = now
-            break_minutes = int((open_break.end_at - open_break.start_at).total_seconds() // 60)
-            logger.info("ATTENDANCE_BREAK_END employee_id=%s cycle_id=%s break_id=%s break_minutes=%s", employee.id, active_cycle.id, open_break.id, max(0, break_minutes))
+            break_seconds = duration_seconds(open_break.start_at, open_break.end_at)
+            logger.info("ATTENDANCE_BREAK_END employee_id=%s cycle_id=%s break_id=%s break_seconds=%s", employee.id, active_cycle.id, open_break.id, break_seconds)
             all_breaks = AttendanceBreak.objects.filter(cycle=active_cycle)
-            logger.info("ATTENDANCE_BREAK_TOTAL_RECALCULATED cycle_id=%s breaks_count=%s break_minutes=%s", active_cycle.id, all_breaks.count(), sum(max(0, int(((b.end_at or now)-b.start_at).total_seconds()//60)) for b in all_breaks))
+            logger.info("ATTENDANCE_BREAK_TOTAL_RECALCULATED cycle_id=%s breaks_count=%s break_seconds=%s uses_override=%s", active_cycle.id, all_breaks.count(), sum_cycle_break_seconds(active_cycle, include_open=False, now=now), active_cycle.break_seconds_override is not None)
         elif self.action == "clock_out":
             if not has_active_session:
                 return Response({"detail": "Debes marcar entrada primero."}, status=status.HTTP_400_BAD_REQUEST)

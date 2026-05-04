@@ -3561,6 +3561,8 @@ export type AttendanceState = {
   activeCycle: {
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3569,6 +3571,7 @@ export type AttendanceState = {
   cyclesToday: Array<{
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3606,6 +3609,7 @@ const mapAttendanceState = (data: {
   active_cycle?: {
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -3614,6 +3618,7 @@ const mapAttendanceState = (data: {
   cycles_today?: Array<{
     sequence?: number;
     clock_in_at: string | null;
+    break_seconds?: number;
     break_minutes?: number;
     current_break_started_at?: string | null;
     breaks_count?: number;
@@ -5003,4 +5008,14 @@ export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> =>
   const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
   if (!response.ok) throw new Error("No se pudo descargar PDF");
   return response.blob();
+};
+
+
+export const updateEmployeeHoursCycle = async (cycleId: number, payload: { clockInAt: string; clockOutAt: string | null; breakSecondsOverride: number; reason: string; }) => {
+  const response = await request(`/reports/employee-hours/cycles/${cycleId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clock_in_at: payload.clockInAt, clock_out_at: payload.clockOutAt, break_seconds_override: payload.breakSecondsOverride, reason: payload.reason }),
+  });
+  return handleJson<any>(response);
 };

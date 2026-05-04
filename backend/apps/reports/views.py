@@ -6,16 +6,18 @@ from django.db.models import Case, CharField, Count, DecimalField, DurationField
 from django.db.models.functions import Coalesce, TruncDay, TruncHour, TruncMonth, TruncWeek, TruncYear
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from rest_framework import generics
+from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.core.models import ServiceType
 from apps.core.permissions import IsCashierOrManagerOrAdmin
 from apps.core.service_types import SERVICE_TYPE_LABELS, normalize_service_type
 from apps.orders.models import OrderItem, OrderItemModifier
 from apps.payments.models import Payment, Refund
-from apps.employees.models import AttendanceRecord, AttendanceCycle, AttendanceBreak, Employee
+from apps.employees.models import AttendanceRecord, AttendanceCycle, AttendanceBreak, Employee, AttendanceCycleAdjustment
+from apps.employees.attendance_utils import duration_seconds, sum_cycle_break_seconds, cycle_break_seconds_for_reports
 from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
 from apps.printing.services.renderers import render_customer_ticket
 from apps.reports.serializers import SalesReportSerializer
@@ -643,10 +645,7 @@ def _cycle_status(cycle: AttendanceCycle) -> str:
 
 
 def _duration_minutes(start, end):
-    if not start or not end:
-        return 0
-    seconds = int((end - start).total_seconds())
-    return max(0, seconds // 60)
+    return duration_seconds(start, end) // 60
 
 
 
@@ -654,16 +653,15 @@ def _duration_minutes(start, end):
 def _cycle_break_minutes(cycle: AttendanceCycle):
     now = timezone.now()
     breaks = list(cycle.breaks.all()) if hasattr(cycle, "breaks") else []
-    if not breaks and cycle.break_start_at:
-        minutes = _duration_minutes(cycle.break_start_at, cycle.break_end_at or now)
-        return minutes, [{"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": minutes}]
     rows=[]
-    total=0
     for br in breaks:
-        m = _duration_minutes(br.start_at, br.end_at or now)
-        total += m
-        rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": m})
-    return total, rows
+        sec = duration_seconds(br.start_at, br.end_at or now)
+        rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": sec / 60, "seconds": sec})
+    if not rows and cycle.break_start_at:
+        sec = sum_cycle_break_seconds(cycle, include_open=True, now=now)
+        rows=[{"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": sec / 60, "seconds": sec}]
+    sec_total = cycle_break_seconds_for_reports(cycle)
+    return sec_total / 60, rows, sec_total
 class EmployeeHoursReportView(generics.GenericAPIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
@@ -740,7 +738,7 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
             day_shift = day_break = day_net = 0
             for cycle in record.cycles.all():
                 shift = _duration_minutes(cycle.clock_in_at, cycle.clock_out_at)
-                brk, break_rows = _cycle_break_minutes(cycle)
+                brk, break_rows, brk_seconds = _cycle_break_minutes(cycle)
                 net = max(0, shift - brk)
                 day_shift += shift
                 day_break += brk
@@ -752,6 +750,9 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
                     "clock_out_at": cycle.clock_out_at,
                     "shift_minutes": shift,
                     "break_minutes": brk,
+                    "break_seconds": brk_seconds,
+                    "id": cycle.id,
+                    "break_seconds_override": cycle.break_seconds_override,
                     "net_minutes": net,
                     "status": _cycle_status(cycle),
                 })
@@ -769,3 +770,44 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
             "totals": {"shift_minutes": total_shift, "break_minutes": total_break, "net_minutes": total_net},
             "days": days,
         })
+
+
+class EmployeeHoursCycleUpdateView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def patch(self, request, cycle_id: int):
+        if getattr(getattr(request.user, "profile", None), "role", "") != "admin":
+            return Response({"detail": "Solo admin puede editar tarjetas de horas."}, status=status.HTTP_403_FORBIDDEN)
+        cycle = AttendanceCycle.objects.select_related("attendance_record__employee").filter(pk=cycle_id).first()
+        if not cycle:
+            return Response({"detail": "Ciclo no encontrado."}, status=404)
+        old_ci, old_co, old_override = cycle.clock_in_at, cycle.clock_out_at, cycle.break_seconds_override
+        old_computed = sum_cycle_break_seconds(cycle, include_open=False)
+        clock_in_at = request.data.get("clock_in_at")
+        clock_out_at = request.data.get("clock_out_at")
+        reason = str(request.data.get("reason") or "")
+        bso = request.data.get("break_seconds_override", request.data.get("break_seconds"))
+        if clock_in_at is not None:
+            cycle.clock_in_at = datetime.fromisoformat(clock_in_at.replace("Z", "+00:00"))
+        if clock_out_at is not None:
+            cycle.clock_out_at = datetime.fromisoformat(clock_out_at.replace("Z", "+00:00"))
+        if not cycle.clock_in_at:
+            return Response({"detail": "Entrada es obligatoria."}, status=400)
+        if cycle.clock_out_at and cycle.clock_out_at < cycle.clock_in_at:
+            return Response({"detail": "Salida no puede ser menor que entrada."}, status=400)
+        if bso is not None:
+            bso = int(bso)
+            if bso < 0:
+                return Response({"detail": "break_seconds no puede ser negativo."}, status=400)
+            shift_seconds = duration_seconds(cycle.clock_in_at, cycle.clock_out_at) if cycle.clock_out_at else 0
+            if cycle.clock_out_at and bso > shift_seconds:
+                return Response({"detail": "break_seconds no puede ser mayor que duración del turno."}, status=400)
+            cycle.break_seconds_override = bso
+        cycle.adjusted_by = request.user
+        cycle.adjusted_at = timezone.now()
+        cycle.adjustment_reason = reason
+        cycle.save()
+        new_break = cycle_break_seconds_for_reports(cycle)
+        AttendanceCycleAdjustment.objects.create(cycle=cycle, employee=cycle.attendance_record.employee, changed_by=request.user, old_clock_in_at=old_ci, new_clock_in_at=cycle.clock_in_at, old_clock_out_at=old_co, new_clock_out_at=cycle.clock_out_at, old_break_seconds_override=old_override, new_break_seconds_override=cycle.break_seconds_override, old_computed_break_seconds=old_computed, new_break_seconds=new_break, reason=reason)
+        shift_seconds = duration_seconds(cycle.clock_in_at, cycle.clock_out_at)
+        return Response({"ok": True, "cycle": {"id": cycle.id, "date": cycle.attendance_record.date, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "shift_seconds": shift_seconds, "break_seconds": new_break, "net_seconds": max(0, shift_seconds-new_break), "break_seconds_override": cycle.break_seconds_override, "adjusted": cycle.break_seconds_override is not None}})

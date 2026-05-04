@@ -7,6 +7,7 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 from apps.core.models import Branch
 from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, AttendanceBreak, Schedule
+from apps.employees.attendance_utils import sum_cycle_break_seconds
 from apps.users.models import UserProfile
 from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format
 
@@ -339,32 +340,24 @@ class AttendanceHistoryRowSerializer(serializers.Serializer):
     clock_out = serializers.DateTimeField(allow_null=True)
 
 
-def _break_minutes_for_cycle(cycle: AttendanceCycle) -> tuple[int, int, list[dict], bool]:
+def _break_minutes_for_cycle(cycle: AttendanceCycle) -> tuple[float, int, list[dict], bool]:
     now = timezone.now()
     rows = []
-    total = 0
-    total_seconds = 0
     opened = False
     breaks = list(cycle.breaks.all()) if getattr(cycle, "pk", None) else []
     if breaks:
         for br in breaks:
             end = br.end_at or now
             seconds = max(0, int((end - br.start_at).total_seconds()))
-            minutes = seconds // 60
-            total += minutes
-            total_seconds += seconds
-            rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": minutes, "seconds": seconds})
+            rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": seconds / 60, "seconds": seconds})
             if br.end_at is None:
                 opened = True
     elif cycle.break_start_at:
-        end = cycle.break_end_at or now
-        seconds = max(0, int((end - cycle.break_start_at).total_seconds()))
-        minutes = seconds // 60
-        total += minutes
-        total_seconds += seconds
-        rows.append({"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": minutes, "seconds": seconds})
+        seconds = sum_cycle_break_seconds(cycle, include_open=True, now=now)
+        rows.append({"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": seconds / 60, "seconds": seconds})
         opened = cycle.break_end_at is None
-    return total, total_seconds, rows, opened
+    total_seconds = sum_cycle_break_seconds(cycle, include_open=True, now=now)
+    return total_seconds / 60, total_seconds, rows, opened
 
 
 def build_attendance_state(record: AttendanceRecord | None, employee: Employee) -> dict:

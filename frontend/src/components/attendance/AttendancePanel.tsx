@@ -101,6 +101,7 @@ export const AttendancePanel = () => {
       </p>
       <div className="mt-3 grid grid-cols-3 gap-2">
         <Button
+          type="button"
           className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50"
           disabled={attendanceLoading || actionLoading !== null || !attendance?.canClockIn}
           onClick={() => void runAction("clockIn", actions.clockIn, "Entrada registrada correctamente.")}
@@ -108,6 +109,7 @@ export const AttendancePanel = () => {
           Entrada
         </Button>
         <Button
+          type="button"
           className={`h-12 text-white disabled:opacity-35 disabled:saturate-50 ${
             attendance?.state === "ON_BREAK"
               ? "bg-violet-600 enabled:hover:bg-violet-700"
@@ -133,6 +135,7 @@ export const AttendancePanel = () => {
                 : "Break"}
         </Button>
         <Button
+          type="button"
           className="h-12 bg-rose-600 text-white enabled:hover:bg-rose-500 disabled:opacity-35 disabled:saturate-50"
           disabled={attendanceLoading || actionLoading !== null || !attendance?.canClockOut}
           onClick={() => void runAction("clockOut", actions.clockOut, "Salida registrada correctamente.")}

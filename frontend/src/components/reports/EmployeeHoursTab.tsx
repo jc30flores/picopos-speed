@@ -4,7 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getEmployeeHoursDetail, getEmployeeHoursSummary, type EmployeeHoursDetailResponse, type EmployeeHoursSummaryRow } from "@/lib/api";
+import { getEmployeeHoursDetail, getEmployeeHoursSummary, updateEmployeeHoursCycle, type EmployeeHoursDetailResponse, type EmployeeHoursSummaryRow } from "@/lib/api";
+import { useAuth } from "@/context/useAuth";
+import { toast } from "sonner";
 
 const toISODate = (date: Date) => date.toISOString().slice(0, 10);
 const monthRange = () => {
@@ -40,6 +42,8 @@ const formatTimeWithNextDay = (value: string | null | undefined, baseDate: strin
 };
 
 export const EmployeeHoursTab = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const initial = monthRange();
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
@@ -158,11 +162,11 @@ export const EmployeeHoursTab = () => {
             <table className="w-full min-w-[980px] text-sm">
               <thead className="sticky top-0 bg-muted/70 backdrop-blur-sm">
                 <tr className="border-b border-border/70 text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="p-2 text-left">Fecha</th><th className="p-2 text-left">Entrada</th><th className="p-2 text-left">Salida</th><th className="p-2 text-left">Total de horas trabajadas</th><th className="p-2 text-left">Total de descanso</th><th className="p-2 text-left">Total final</th>
+                  <th className="p-2 text-left">Fecha</th><th className="p-2 text-left">Entrada</th><th className="p-2 text-left">Salida</th><th className="p-2 text-left">Total de horas trabajadas</th><th className="p-2 text-left">Total de descanso</th><th className="p-2 text-left">Total final</th><th className="p-2 text-left">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {flatCycles.length === 0 ? <tr><td className="p-4 text-center text-muted-foreground" colSpan={6}>Sin registros</td></tr> : null}
+                {flatCycles.length === 0 ? <tr><td className="p-4 text-center text-muted-foreground" colSpan={7}>Sin registros</td></tr> : null}
                 {flatCycles.map((c, i) => (
                   <tr key={`${c.date}-${i}`} className="border-b border-border/40 transition-colors hover:bg-muted/40">
                     <td className="p-2 font-medium">{formatDate(c.date)}</td>
@@ -171,6 +175,7 @@ export const EmployeeHoursTab = () => {
                     <td className="p-2 text-emerald-700 dark:text-emerald-300">{formatDuration(c.shiftMinutes)}</td>
                     <td className="p-2 text-amber-700 dark:text-amber-300">{formatDuration(c.breakMinutes)}</td>
                     <td className="p-2 font-semibold text-primary">{formatDuration(c.netMinutes)}</td>
+                    <td className="p-2">{isAdmin && c.id ? <Button type="button" size="sm" variant="outline" onClick={async () => { const hIn = prompt("Entrada ISO", c.clockInAt || "") || c.clockInAt || ""; const hOut = prompt("Salida ISO", c.clockOutAt || "") || c.clockOutAt; const br = Number(prompt("Break total segundos", String(c.break_seconds ?? 0)) || "0"); const reason = prompt("Motivo", "Corrección manual") || ""; try { await updateEmployeeHoursCycle(c.id, { clockInAt: hIn, clockOutAt: hOut, breakSecondsOverride: br, reason }); toast.success("Tarjeta de horas actualizada."); if (selected) { await detail(selected.employee.id); await load(); } } catch (e) { toast.error(e instanceof Error ? e.message : "No se pudo actualizar"); } }}>Editar</Button> : null}</td>
                   </tr>
                 ))}
               </tbody>

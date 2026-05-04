@@ -75,6 +75,10 @@ class AttendanceCycle(models.Model):
     break_start_at = models.DateTimeField(null=True, blank=True)
     break_end_at = models.DateTimeField(null=True, blank=True)
     clock_out_at = models.DateTimeField(null=True, blank=True)
+    break_seconds_override = models.IntegerField(null=True, blank=True)
+    adjusted_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="attendance_cycles_adjusted")
+    adjusted_at = models.DateTimeField(null=True, blank=True)
+    adjustment_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -100,6 +104,22 @@ class AttendanceBreak(models.Model):
     class Meta:
         ordering = ["sequence", "id"]
         constraints = [models.UniqueConstraint(fields=["cycle", "sequence"], name="unique_attendance_break_sequence")]
+
+
+class AttendanceCycleAdjustment(models.Model):
+    cycle = models.ForeignKey(AttendanceCycle, on_delete=models.CASCADE, related_name="adjustments")
+    employee = models.ForeignKey(Employee, on_delete=models.SET_NULL, null=True, blank=True, related_name="attendance_adjustments")
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="attendance_cycle_adjustments")
+    changed_at = models.DateTimeField(auto_now_add=True)
+    old_clock_in_at = models.DateTimeField(null=True, blank=True)
+    new_clock_in_at = models.DateTimeField(null=True, blank=True)
+    old_clock_out_at = models.DateTimeField(null=True, blank=True)
+    new_clock_out_at = models.DateTimeField(null=True, blank=True)
+    old_break_seconds_override = models.IntegerField(null=True, blank=True)
+    new_break_seconds_override = models.IntegerField(null=True, blank=True)
+    old_computed_break_seconds = models.IntegerField(default=0)
+    new_break_seconds = models.IntegerField(default=0)
+    reason = models.TextField(blank=True)
 
 
 class Schedule(models.Model):
