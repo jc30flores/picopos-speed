@@ -339,27 +339,32 @@ class AttendanceHistoryRowSerializer(serializers.Serializer):
     clock_out = serializers.DateTimeField(allow_null=True)
 
 
-def _break_minutes_for_cycle(cycle: AttendanceCycle) -> tuple[int, list[dict], bool]:
+def _break_minutes_for_cycle(cycle: AttendanceCycle) -> tuple[int, int, list[dict], bool]:
     now = timezone.now()
     rows = []
     total = 0
+    total_seconds = 0
     opened = False
     breaks = list(cycle.breaks.all()) if getattr(cycle, "pk", None) else []
     if breaks:
         for br in breaks:
             end = br.end_at or now
-            minutes = max(0, int((end - br.start_at).total_seconds() // 60))
+            seconds = max(0, int((end - br.start_at).total_seconds()))
+            minutes = seconds // 60
             total += minutes
-            rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": minutes})
+            total_seconds += seconds
+            rows.append({"start_at": br.start_at, "end_at": br.end_at, "minutes": minutes, "seconds": seconds})
             if br.end_at is None:
                 opened = True
     elif cycle.break_start_at:
         end = cycle.break_end_at or now
-        minutes = max(0, int((end - cycle.break_start_at).total_seconds() // 60))
+        seconds = max(0, int((end - cycle.break_start_at).total_seconds()))
+        minutes = seconds // 60
         total += minutes
-        rows.append({"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": minutes})
+        total_seconds += seconds
+        rows.append({"start_at": cycle.break_start_at, "end_at": cycle.break_end_at, "minutes": minutes, "seconds": seconds})
         opened = cycle.break_end_at is None
-    return total, rows, opened
+    return total, total_seconds, rows, opened
 
 
 def build_attendance_state(record: AttendanceRecord | None, employee: Employee) -> dict:
@@ -376,9 +381,10 @@ def build_attendance_state(record: AttendanceRecord | None, employee: Employee) 
     current_cycle = active_cycle or (cycles_qs[-1] if cycles_qs else None)
     has_active_session = active_cycle is not None
     break_minutes = 0
+    break_seconds = 0
     current_break_started_at = None
     if current_cycle:
-        break_minutes, _, opened = _break_minutes_for_cycle(current_cycle)
+        break_minutes, break_seconds, _, opened = _break_minutes_for_cycle(current_cycle)
         if opened:
             b = list(current_cycle.breaks.all()) if getattr(current_cycle, "pk", None) else []
             current_break_started_at = (b[-1].start_at if b else current_cycle.break_start_at)
@@ -392,8 +398,8 @@ def build_attendance_state(record: AttendanceRecord | None, employee: Employee) 
 
     cycle_rows = []
     for cycle in cycles_qs:
-        br_minutes, br_rows, opened = _break_minutes_for_cycle(cycle)
+        br_minutes, br_seconds, br_rows, opened = _break_minutes_for_cycle(cycle)
         shift_minutes = max(0, int(((cycle.clock_out_at or timezone.now()) - cycle.clock_in_at).total_seconds() // 60)) if cycle.clock_in_at else 0
-        cycle_rows.append({"sequence": cycle.sequence, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "break_minutes": br_minutes, "net_minutes": max(0, shift_minutes-br_minutes), "breaks_count": len(br_rows), "breaks": br_rows, "current_break_started_at": br_rows[-1]["start_at"] if opened and br_rows else None})
+        cycle_rows.append({"sequence": cycle.sequence, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "break_minutes": br_minutes, "break_seconds": br_seconds, "net_minutes": max(0, shift_minutes-br_minutes), "breaks_count": len(br_rows), "breaks": br_rows, "current_break_started_at": br_rows[-1]["start_at"] if opened and br_rows else None})
 
-    return {"employee": {"id": employee.id, "name": employee.full_name, "role": employee.role}, "date": record_date, "clock_in": current_cycle.clock_in_at if current_cycle else None, "break_start": current_break_started_at, "break_end": None if current_break_started_at else (record.break_end if record else None), "clock_out": current_cycle.clock_out_at if current_cycle else None, "has_active_session": has_active_session, "latest_event": "CLOCK_IN" if state in {"WORKING", "ON_BREAK"} else "CLOCK_OUT", "last_clock_in": current_cycle.clock_in_at if current_cycle else None, "last_clock_out": current_cycle.clock_out_at if current_cycle else None, "total_entries_today": len(cycles_qs), "total_exits_today": len([c for c in cycles_qs if c.clock_out_at is not None]), "can_clock_in": state=="OFF_SHIFT", "can_break_start": state=="WORKING", "can_break_end": state=="ON_BREAK", "can_clock_out": state=="WORKING", "state": state, "access_allowed": state=="WORKING", "active_cycle": next((r for r in cycle_rows if r["clock_out_at"] is None), None), "cycles_today": cycle_rows}
+    return {"employee": {"id": employee.id, "name": employee.full_name, "role": employee.role}, "date": record_date, "clock_in": current_cycle.clock_in_at if current_cycle else None, "break_start": current_break_started_at, "break_end": None if current_break_started_at else (record.break_end if record else None), "clock_out": current_cycle.clock_out_at if current_cycle else None, "has_active_session": has_active_session, "latest_event": "CLOCK_IN" if state in {"WORKING", "ON_BREAK"} else "CLOCK_OUT", "last_clock_in": current_cycle.clock_in_at if current_cycle else None, "last_clock_out": current_cycle.clock_out_at if current_cycle else None, "total_entries_today": len(cycles_qs), "total_exits_today": len([c for c in cycles_qs if c.clock_out_at is not None]), "can_clock_in": state=="OFF_SHIFT", "can_break_start": state=="WORKING", "can_break_end": state=="ON_BREAK", "can_clock_out": state=="WORKING", "state": state, "access_allowed": state=="WORKING", "active_cycle": {**(next((r for r in cycle_rows if r["clock_out_at"] is None), None) or {}), "break_seconds": break_seconds, "break_minutes": break_minutes}, "cycles_today": cycle_rows}

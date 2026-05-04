@@ -3353,6 +3353,12 @@ export const createEmployee = async (
   };
 };
 
+
+export const deleteEmployee = async (id: string): Promise<{ ok: boolean; deleted: boolean; message: string }> => {
+  const response = await request(`/employees/${id}/`, { method: "DELETE" });
+  return handleJson(response);
+};
+
 export const updateEmployee = async (
   id: string,
   payload: Partial<import("@/types/employee").Employee> & {

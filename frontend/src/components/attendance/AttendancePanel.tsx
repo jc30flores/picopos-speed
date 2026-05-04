@@ -20,6 +20,16 @@ const fmtHM = (value: string | null) => {
   return new Intl.DateTimeFormat("es-SV", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 };
 
+const fmtBreakTotal = (seconds?: number | null) => {
+  if (seconds == null) return "—";
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2,"0")}m`;
+  return `${m}m`;
+};
+
 export const AttendancePanel = () => {
   const { attendance, attendanceLoading, applyAttendanceState } = useAttendanceAccess();
   const [recordsOpen, setRecordsOpen] = useState(false);
@@ -81,17 +91,14 @@ export const AttendancePanel = () => {
         </div>
         {showPersonalTimeCard ? <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button> : null}
       </div>
-      <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
+      <div className="mb-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
+        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break Total</p><p className="font-semibold">{fmtBreakTotal(attendance?.activeCycle?.breakSeconds ?? null)}</p></div>
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Salida</p><p className="font-semibold">{fmtHM(attendance?.clockOut ?? null)}</p></div>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
         Ciclos hoy: {attendance?.totalEntriesToday ?? 0} entradas / {attendance?.totalExitsToday ?? 0} salidas
       </p>
-      <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Total break</p><p className="font-semibold">{attendance?.activeCycle?.breakMinutes != null ? `${Math.floor(attendance.activeCycle.breakMinutes/60)}h ${String(attendance.activeCycle.breakMinutes%60).padStart(2,"0")}m` : "—"}</p></div>
-        <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Break actual</p><p className="font-semibold">{fmtHM(attendance?.activeCycle?.currentBreakStartedAt ?? null)}</p></div>
-      </div>
       <div className="mt-3 grid grid-cols-3 gap-2">
         <Button
           className="h-12 bg-blue-600 text-white enabled:hover:bg-blue-700 disabled:opacity-35 disabled:saturate-50"

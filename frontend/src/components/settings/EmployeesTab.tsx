@@ -13,7 +13,7 @@ import { EmployeesTable } from "./EmployeesTable";
 import { EmployeeFormDialog, EmployeeFormData } from "./EmployeeFormDialog";
 import { EmployeeProfileSheet } from "./EmployeeProfileSheet";
 import { Employee } from "@/types/employee";
-import { createEmployee, getEmployeeAttendanceHistory, getEmployees, updateEmployee, type AttendanceHistoryRow } from "@/lib/api";
+import { createEmployee, deleteEmployee, getEmployeeAttendanceHistory, getEmployees, updateEmployee, type AttendanceHistoryRow } from "@/lib/api";
 import { toast } from "sonner";
 import { AttendanceRecordsModal } from "@/components/attendance/AttendanceRecordsModal";
 
@@ -118,6 +118,19 @@ export const EmployeesTab = () => {
     } catch (error) {
       console.error("Failed to deactivate employee", error);
       toast.error("No se pudo actualizar el estado del empleado");
+    }
+  };
+
+
+  const handlePermanentDelete = async (employee: Employee) => {
+    const ok = confirm(`Eliminar empleado ${employee.name}? Esta acción no se puede deshacer.`);
+    if (!ok) return;
+    try {
+      const result = await deleteEmployee(employee.id);
+      toast.success(result.message || "Empleado eliminado correctamente.");
+      await loadEmployees();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el empleado");
     }
   };
 
@@ -228,6 +241,7 @@ export const EmployeesTab = () => {
         onResetPassword={handleResetPassword}
         onViewProfile={handleOpenProfile}
         onViewAttendance={handleOpenAttendance}
+        onDelete={handlePermanentDelete}
       />
 
       <EmployeeFormDialog

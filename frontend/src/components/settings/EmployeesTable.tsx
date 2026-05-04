@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Pencil, Power, Eye, Clock3 } from "lucide-react";
+import { KeyRound, Pencil, Power, Eye, Clock3, Trash2 } from "lucide-react";
 import { Employee } from "@/types/employee";
 import { toast } from "sonner";
 
@@ -20,6 +20,7 @@ interface EmployeesTableProps {
   onResetPassword: (employee: Employee, pin: string) => void;
   onViewProfile: (employee: Employee) => void;
   onViewAttendance: (employee: Employee) => void;
+  onDelete: (employee: Employee) => void;
 }
 
 export const EmployeesTable = ({
@@ -30,6 +31,7 @@ export const EmployeesTable = ({
   onResetPassword,
   onViewProfile,
   onViewAttendance,
+  onDelete,
 }: EmployeesTableProps) => {
   const handleToggleStatus = (employee: Employee) => {
     const action = employee.status === "active" ? "desactivar" : "activar";
@@ -56,22 +58,20 @@ export const EmployeesTable = ({
           <TableRow>
             <TableHead>Nombre</TableHead>
             <TableHead className="hidden sm:table-cell">Puesto</TableHead>
-            <TableHead className="hidden md:table-cell">Usuario</TableHead>
-            <TableHead className="hidden lg:table-cell">Rol del sistema</TableHead>
-            <TableHead>Estado</TableHead>
+                        <TableHead>Estado</TableHead>
             <TableHead className="text-right">Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {isLoading ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                 Cargando empleados...
               </TableCell>
             </TableRow>
           ) : employees.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                 No hay empleados registrados
               </TableCell>
             </TableRow>
@@ -81,10 +81,10 @@ export const EmployeesTable = ({
                 <TableCell className="font-medium">{employee.name}</TableCell>
                 <TableCell className="hidden sm:table-cell">{employee.role}</TableCell>
                 <TableCell className="hidden md:table-cell">
-                  {employee.hasUser ? "Sí" : "No"}
+                  
                 </TableCell>
                 <TableCell className="hidden lg:table-cell">
-                  {employee.hasUser ? employee.userRole || "—" : "—"}
+                  
                 </TableCell>
                 <TableCell>
                   <Badge variant={employee.status === "active" ? "default" : "secondary"}>
@@ -128,14 +128,8 @@ export const EmployeesTable = ({
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleToggleStatus(employee)}
-                      title={employee.status === "active" ? "Desactivar" : "Activar"}
-                    >
-                      <Power className="h-4 w-4" />
-                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleToggleStatus(employee)} title={employee.status === "active" ? "Desactivar" : "Activar"}><Power className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => onDelete(employee)} title="Eliminar empleado"><Trash2 className="h-4 w-4" /></Button>
                   </div>
                 </TableCell>
               </TableRow>

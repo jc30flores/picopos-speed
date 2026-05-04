@@ -44,7 +44,7 @@ class EmployeeListCreateView(generics.ListCreateAPIView):
         log_audit(self.request, "employees.create", "Employee", employee.id, {"full_name": employee.full_name})
 
 
-class EmployeeDetailView(generics.RetrieveUpdateAPIView):
+class EmployeeDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Employee.objects.select_related("branch").all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsAdminOrManager]
@@ -52,6 +52,28 @@ class EmployeeDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         employee = serializer.save()
         log_audit(self.request, "employees.update", "Employee", employee.id, {"full_name": employee.full_name})
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        employee = self.get_object()
+        if employee.user_id and employee.user_id == request.user.id:
+            return Response({"ok": False, "deleted": False, "message": "No puedes eliminar tu propio usuario."}, status=status.HTTP_400_BAD_REQUEST)
+        if employee.role == "admin" and Employee.objects.filter(role="admin", status="active").exclude(id=employee.id).count() == 0:
+            return Response({"ok": False, "deleted": False, "message": "No puedes eliminar el último admin."}, status=status.HTTP_400_BAD_REQUEST)
+        if employee.user_id:
+            user = employee.user
+            user.is_active = False
+            user.set_unusable_password()
+            user.email = ""
+            user.save(update_fields=["is_active", "password", "email"])
+        employee.full_name = f"Empleado eliminado #{employee.id}"
+        employee.email = None
+        employee.phone = ""
+        employee.status = "inactive"
+        employee.user = None
+        employee.save(update_fields=["full_name", "email", "phone", "status", "user", "updated_at"])
+        log_audit(request, "employees.delete.safe", "Employee", employee.id, {"mode": "safe_soft_delete"})
+        return Response({"ok": True, "deleted": True, "mode": "safe_soft_delete", "message": "Empleado eliminado correctamente."})
 
 
 class EmployeeStatsView(generics.GenericAPIView):
