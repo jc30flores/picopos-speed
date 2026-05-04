@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
-from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle
+from apps.employees.models import Employee, AttendanceRecord, AttendanceCycle, AttendanceBreak
 from apps.users.models import UserProfile
 
 @override_settings(TIME_ZONE='America/El_Salvador', USE_TZ=True)
@@ -90,3 +90,47 @@ class EmployeeHoursCardTests(TestCase):
         self.assertFalse(any(e['employee_id'] == self.employee.id for e in summary.data['employees']))
         detail = self.client.get(f'/api/reports/employee-hours/{self.employee.id}/?date_from=2026-05-01&date_to=2026-05-04')
         self.assertEqual(detail.status_code, 404)
+
+    def test_create_manual_cycle_with_break_persists_real_break(self):
+        resp = self.client.post('/api/reports/employee-hours/cycles/', {
+            'employee_id': self.employee.id,
+            'date': '2026-05-03',
+            'clock_in_time': '10:30',
+            'break_start_time': '14:00',
+            'break_end_time': '15:00',
+            'clock_out_time': '21:20',
+            'reason': 'Registro manual',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        cycle = AttendanceCycle.objects.get(pk=resp.data['cycle']['id'])
+        self.assertEqual(resp.data['cycle']['shift_seconds'], 39000)
+        self.assertEqual(resp.data['cycle']['break_seconds'], 3600)
+        self.assertEqual(resp.data['cycle']['net_seconds'], 35400)
+        self.assertEqual(resp.data['cycle']['breaks_count'], 1)
+        self.assertEqual(AttendanceBreak.objects.filter(cycle=cycle).count(), 1)
+
+        detail = self.client.get(f'/api/reports/employee-hours/{self.employee.id}/?date_from=2026-05-03&date_to=2026-05-03')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data['days'][0]['cycles'][0]['break_seconds'], 3600)
+
+    def test_create_manual_cycle_without_break(self):
+        resp = self.client.post('/api/reports/employee-hours/cycles/', {
+            'employee_id': self.employee.id,
+            'date': '2026-05-03',
+            'clock_in_time': '10:30',
+            'clock_out_time': '21:20',
+            'reason': 'Registro manual',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['cycle']['break_seconds'], 0)
+
+    def test_create_manual_cycle_with_incomplete_break_is_400(self):
+        resp = self.client.post('/api/reports/employee-hours/cycles/', {
+            'employee_id': self.employee.id,
+            'date': '2026-05-03',
+            'clock_in_time': '10:30',
+            'break_start_time': '14:00',
+            'clock_out_time': '21:20',
+            'reason': 'Registro manual',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)

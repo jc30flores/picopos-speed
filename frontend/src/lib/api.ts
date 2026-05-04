@@ -5074,7 +5074,7 @@ export const createEmployeeHoursCycle = async (payload: { employeeId: number; da
   const response = await request(`/reports/employee-hours/cycles/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
+    body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, break_start_time: payload.breakStartTime, break_end_time: payload.breakEndTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
   });
   return handleJson<any>(response);
 };

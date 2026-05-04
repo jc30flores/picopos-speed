@@ -21,6 +21,9 @@ from apps.employees.attendance_utils import duration_seconds, sum_cycle_break_se
 from apps.payments.normalization import PAYMENT_METHOD_LABELS, payment_code_from_payment
 from apps.printing.services.renderers import render_customer_ticket
 from apps.reports.serializers import SalesReportSerializer
+import logging
+
+logger = logging.getLogger(__name__)
 
 MONEY_Q = Decimal("0.01")
 
@@ -863,6 +866,7 @@ class EmployeeHoursCycleCreateView(APIView):
             cycle_date, clock_in_at, clock_out_at, break_seconds, break_start_at, break_end_at = _parse_cycle_payload(request.data)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
+        logger.info("MANUAL_TIME_CARD_CREATE_START", extra={"employee_id": employee_id, "date": str(cycle_date), "has_break": bool(break_start_at and break_end_at)})
         reason = str(request.data.get("reason") or "Registro manual")
         if cycle_date > timezone.localdate():
             return Response({"detail": "No se pueden crear registros en fechas futuras."}, status=400)
@@ -881,10 +885,15 @@ class EmployeeHoursCycleCreateView(APIView):
             adjustment_reason=reason,
         )
         shift_seconds = duration_seconds(clock_in_at, clock_out_at)
+        breaks_payload = []
         if break_start_at and break_end_at:
-            AttendanceBreak.objects.create(cycle=cycle, sequence=1, start_at=break_start_at, end_at=break_end_at)
+            created_break = AttendanceBreak.objects.create(cycle=cycle, sequence=1, start_at=break_start_at, end_at=break_end_at)
+            breaks_payload.append({"start_at": created_break.start_at, "end_at": created_break.end_at, "seconds": duration_seconds(created_break.start_at, created_break.end_at)})
+            logger.info("MANUAL_TIME_CARD_BREAK_CREATED", extra={"cycle_id": cycle.id, "break_id": created_break.id, "break_seconds": breaks_payload[0]["seconds"]})
         AttendanceCycleAdjustment.objects.create(cycle=cycle, employee=employee, changed_by=request.user, new_clock_in_at=clock_in_at, new_clock_out_at=clock_out_at, new_break_seconds_override=break_seconds, old_computed_break_seconds=0, new_break_seconds=break_seconds, reason=reason)
-        return Response({"ok": True, "cycle": {"id": cycle.id, "date": cycle_date, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "shift_seconds": shift_seconds, "break_seconds": break_seconds, "net_seconds": max(0, shift_seconds-break_seconds), "adjusted": True, "created_manually": True}})
+        net_seconds = max(0, shift_seconds-break_seconds)
+        logger.info("MANUAL_TIME_CARD_CREATE_RESULT", extra={"cycle_id": cycle.id, "shift_seconds": shift_seconds, "break_seconds": break_seconds, "net_seconds": net_seconds})
+        return Response({"ok": True, "cycle": {"id": cycle.id, "employee_id": employee.id, "date": cycle_date, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "shift_seconds": shift_seconds, "break_seconds": break_seconds, "net_seconds": net_seconds, "breaks_count": len(breaks_payload), "breaks": breaks_payload, "adjusted": True, "created_manually": True}})
 
 
 class EmployeeHoursCycleUpdateView(APIView):
