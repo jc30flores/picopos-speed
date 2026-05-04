@@ -26,6 +26,7 @@ export const AttendancePanel = () => {
   const [history, setHistory] = useState<AttendanceHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<"clockIn" | "break" | "clockOut" | null>(null);
+  const showPersonalTimeCard = false;
 
   const actions = useMemo(() => ({
     clockIn: async () => {
@@ -78,7 +79,7 @@ export const AttendancePanel = () => {
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Marcaje del día</p>
           <p className="text-xl font-semibold leading-tight">Bienvenido, {attendance?.employee?.name ?? "—"}</p>
         </div>
-        <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button>
+        {showPersonalTimeCard ? <Button variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setRecordsOpen(true); void loadHistory(); }}>Ver registros</Button> : null}
       </div>
       <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:text-sm">
         <div className="rounded-md border bg-background/50 px-2 py-1.5"><p className="text-muted-foreground">Entrada</p><p className="font-semibold">{fmtHM(attendance?.clockIn ?? null)}</p></div>
