@@ -1,5 +1,6 @@
 from datetime import datetime
 from django.contrib.auth import get_user_model
+from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -51,3 +52,22 @@ class EmployeeHoursCardTests(TestCase):
         self.client.force_authenticate(cashier)
         resp = self.client.post('/api/reports/employee-hours/cycles/', {'employee_id': self.employee.id, 'date': '2026-05-05', 'clock_in_time': '08:00', 'shift_seconds': 3600, 'break_seconds': 60}, format='json')
         self.assertEqual(resp.status_code, 403)
+
+
+    @patch("apps.reports.views.timezone.localdate")
+    def test_days_do_not_include_future(self, mock_localdate):
+        mock_localdate.return_value = datetime(2026,5,4).date()
+        resp = self.client.get(f'/api/reports/employee-hours/{self.employee.id}/?date_from=2026-05-01&date_to=2026-05-31')
+        self.assertEqual([d['date'] for d in resp.data['days']], ['2026-05-01','2026-05-02','2026-05-03','2026-05-04'])
+
+    @patch("apps.reports.views.timezone.localdate")
+    def test_block_future_manual_cycle(self, mock_localdate):
+        mock_localdate.return_value = datetime(2026,5,4).date()
+        resp = self.client.post('/api/reports/employee-hours/cycles/', {'employee_id': self.employee.id, 'date': '2026-05-20', 'clock_in_time': '08:00', 'shift_seconds': 3600, 'break_seconds': 60}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_block_manual_when_open_cycle_exists(self):
+        rec = AttendanceRecord.objects.create(employee=self.employee, date=datetime(2026,5,3).date())
+        AttendanceCycle.objects.create(attendance_record=rec, sequence=1, clock_in_at=timezone.make_aware(datetime(2026,5,3,23,50)))
+        resp = self.client.post('/api/reports/employee-hours/cycles/', {'employee_id': self.employee.id, 'date': '2026-05-04', 'clock_in_time': '08:00', 'shift_seconds': 3600, 'break_seconds': 60}, format='json')
+        self.assertEqual(resp.status_code, 400)

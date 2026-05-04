@@ -731,8 +731,16 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
         if not employee:
             return Response({"detail": "Empleado no encontrado."}, status=404)
         tz = timezone.get_current_timezone()
+        today_local = timezone.localdate()
+        effective_end = min(end_date, today_local)
+        if start_date > effective_end:
+            return Response({
+                "employee": {"id": employee.id, "name": employee.full_name, "role": employee.get_role_display()},
+                "totals": {"shift_minutes": 0, "break_minutes": 0, "net_minutes": 0},
+                "days": [],
+            })
         start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
-        end_dt = timezone.make_aware(datetime.combine(end_date, time.max), tz)
+        end_dt = timezone.make_aware(datetime.combine(effective_end, time.max), tz)
         cycles = AttendanceCycle.objects.select_related("attendance_record").prefetch_related("breaks").filter(
             attendance_record__employee=employee,
             clock_in_at__gte=start_dt,
@@ -740,7 +748,7 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
         ).order_by("clock_in_at", "id")
         day_map = {}
         current = start_date
-        while current <= end_date:
+        while current <= effective_end:
             day_map[current.isoformat()] = {"date": current.isoformat(), "daily_totals": {"shift_minutes": 0, "break_minutes": 0, "net_minutes": 0}, "cycles": []}
             current += timedelta(days=1)
         total_shift = total_break = total_net = 0
@@ -770,6 +778,7 @@ class EmployeeHoursDetailView(generics.GenericAPIView):
                 "break_seconds_override": cycle.break_seconds_override,
                 "net_minutes": net,
                 "status": _cycle_status(cycle),
+                "clock_out_next_day": bool(cycle.clock_out_at and timezone.localtime(cycle.clock_out_at, tz).date() > local_date),
             })
         days = list(day_map.values())
 
@@ -836,6 +845,10 @@ class EmployeeHoursCycleCreateView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
         reason = str(request.data.get("reason") or "Registro manual")
+        if cycle_date > timezone.localdate():
+            return Response({"detail": "No se pueden crear registros en fechas futuras."}, status=400)
+        if AttendanceCycle.objects.filter(attendance_record__employee=employee, clock_out_at__isnull=True).exists():
+            return Response({"detail": "Existe un turno abierto anterior. Cierra o edita ese turno antes de crear otro."}, status=400)
         record, _ = AttendanceRecord.objects.get_or_create(employee=employee, date=cycle_date)
         seq = (record.cycles.order_by("-sequence").values_list("sequence", flat=True).first() or 0) + 1
         cycle = AttendanceCycle.objects.create(

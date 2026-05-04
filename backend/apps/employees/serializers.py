@@ -361,7 +361,8 @@ def _break_minutes_for_cycle(cycle: AttendanceCycle) -> tuple[float, int, list[d
 
 
 def build_attendance_state(record: AttendanceRecord | None, employee: Employee) -> dict:
-    record_date = timezone.localdate()
+    today_local = timezone.localdate()
+    record_date = today_local
     cycles_qs: list[AttendanceCycle] = []
     if record is not None:
         record_date = record.date
@@ -370,7 +371,13 @@ def build_attendance_state(record: AttendanceRecord | None, employee: Employee) 
     if record is not None and not cycles_qs and (record.clock_in or record.check_in):
         cycles_qs = [AttendanceCycle(attendance_record=record, sequence=1, clock_in_at=record.clock_in or record.check_in, break_start_at=record.break_start, break_end_at=record.break_end, clock_out_at=record.clock_out or record.check_out)]
 
-    active_cycle = next((cycle for cycle in reversed(cycles_qs) if cycle.clock_out_at is None), None)
+    active_cycle = (
+        AttendanceCycle.objects.filter(attendance_record__employee=employee, clock_out_at__isnull=True)
+        .select_related("attendance_record")
+        .prefetch_related("breaks")
+        .order_by("-clock_in_at", "-id")
+        .first()
+    ) or next((cycle for cycle in reversed(cycles_qs) if cycle.clock_out_at is None), None)
     current_cycle = active_cycle or (cycles_qs[-1] if cycles_qs else None)
     has_active_session = active_cycle is not None
     break_minutes = 0
@@ -395,4 +402,20 @@ def build_attendance_state(record: AttendanceRecord | None, employee: Employee) 
         shift_minutes = max(0, int(((cycle.clock_out_at or timezone.now()) - cycle.clock_in_at).total_seconds() // 60)) if cycle.clock_in_at else 0
         cycle_rows.append({"sequence": cycle.sequence, "clock_in_at": cycle.clock_in_at, "clock_out_at": cycle.clock_out_at, "break_minutes": br_minutes, "break_seconds": br_seconds, "net_minutes": max(0, shift_minutes-br_minutes), "breaks_count": len(br_rows), "breaks": br_rows, "current_break_started_at": br_rows[-1]["start_at"] if opened and br_rows else None})
 
-    return {"employee": {"id": employee.id, "name": employee.full_name, "role": employee.role}, "date": record_date, "clock_in": current_cycle.clock_in_at if current_cycle else None, "break_start": current_break_started_at, "break_end": None if current_break_started_at else (record.break_end if record else None), "clock_out": current_cycle.clock_out_at if current_cycle else None, "has_active_session": has_active_session, "latest_event": "CLOCK_IN" if state in {"WORKING", "ON_BREAK"} else "CLOCK_OUT", "last_clock_in": current_cycle.clock_in_at if current_cycle else None, "last_clock_out": current_cycle.clock_out_at if current_cycle else None, "total_entries_today": len(cycles_qs), "total_exits_today": len([c for c in cycles_qs if c.clock_out_at is not None]), "can_clock_in": state=="OFF_SHIFT", "can_break_start": state=="WORKING", "can_break_end": state=="ON_BREAK", "can_clock_out": state=="WORKING", "state": state, "access_allowed": state=="WORKING", "active_cycle": {**(next((r for r in cycle_rows if r["clock_out_at"] is None), None) or {}), "break_seconds": break_seconds, "break_minutes": break_minutes}, "cycles_today": cycle_rows}
+    started_prev = bool(current_cycle and timezone.localtime(current_cycle.clock_in_at).date() < today_local)
+    active_cycle_payload = next((r for r in cycle_rows if r["clock_out_at"] is None), None) or {}
+    if active_cycle and not active_cycle_payload:
+        br_minutes, br_seconds, br_rows, opened = _break_minutes_for_cycle(active_cycle)
+        active_cycle_payload = {
+            "id": active_cycle.id,
+            "sequence": active_cycle.sequence,
+            "clock_in_at": active_cycle.clock_in_at,
+            "clock_out_at": active_cycle.clock_out_at,
+            "break_minutes": br_minutes,
+            "break_seconds": br_seconds,
+            "breaks_count": len(br_rows),
+            "breaks": br_rows,
+            "current_break_started_at": br_rows[-1]["start_at"] if opened and br_rows else None,
+        }
+    active_cycle_payload = {**active_cycle_payload, "break_seconds": break_seconds, "break_minutes": break_minutes, "started_on_previous_day": started_prev}
+    return {"employee": {"id": employee.id, "name": employee.full_name, "role": employee.role}, "date": record_date, "clock_in": current_cycle.clock_in_at if current_cycle else None, "break_start": current_break_started_at, "break_end": None if current_break_started_at else (record.break_end if record else None), "clock_out": current_cycle.clock_out_at if current_cycle else None, "has_active_session": has_active_session, "latest_event": "CLOCK_IN" if state in {"WORKING", "ON_BREAK"} else "CLOCK_OUT", "last_clock_in": current_cycle.clock_in_at if current_cycle else None, "last_clock_out": current_cycle.clock_out_at if current_cycle else None, "total_entries_today": len(cycles_qs), "total_exits_today": len([c for c in cycles_qs if c.clock_out_at is not None]), "can_clock_in": state=="OFF_SHIFT", "can_break_start": state=="WORKING", "can_break_end": state=="ON_BREAK", "can_clock_out": state=="WORKING", "state": state, "access_allowed": state=="WORKING", "active_cycle": active_cycle_payload, "cycles_today": cycle_rows}

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -133,3 +134,29 @@ class AttendanceMarkingTests(TestCase):
         self.assertEqual(payload_unsaved["total_entries_today"], 0)
         self.assertEqual(payload_unsaved["total_exits_today"], 0)
         self.assertIsNone(payload_unsaved["clock_in"])
+
+
+    def test_open_cycle_previous_day_blocks_new_clock_in_and_allows_close(self):
+        from django.utils import timezone
+        today = timezone.localdate()
+        prev = today - timedelta(days=1)
+        prev_record = AttendanceRecord.objects.create(employee=self.employee, date=prev)
+        from apps.employees.models import AttendanceCycle
+        AttendanceCycle.objects.create(attendance_record=prev_record, sequence=1, clock_in_at=timezone.make_aware(datetime(prev.year, prev.month, prev.day, 23, 50)))
+
+        today_payload = self.client.get('/api/employees/attendance/today/').json()['attendance']
+        self.assertEqual(today_payload['state'], 'WORKING')
+        self.assertFalse(today_payload['can_clock_in'])
+        self.assertTrue(today_payload['active_cycle'].get('started_on_previous_day'))
+
+        clock_in = self.client.post('/api/employees/attendance/clock-in/')
+        self.assertEqual(clock_in.status_code, 400)
+
+        break_start = self.client.post('/api/employees/attendance/break-start/')
+        self.assertEqual(break_start.status_code, 200)
+        break_end = self.client.post('/api/employees/attendance/break-end/')
+        self.assertEqual(break_end.status_code, 200)
+
+        clock_out = self.client.post('/api/employees/attendance/clock-out/')
+        self.assertEqual(clock_out.status_code, 200)
+        self.assertEqual(clock_out.json()['state'], 'OFF_SHIFT')

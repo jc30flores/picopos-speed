@@ -3079,6 +3079,7 @@ export const getEmployeeHoursDetail = async (employeeId: number, filters: { date
         breakMinutes: Number(cycle.break_minutes ?? 0),
         breakSeconds: Number(cycle.break_seconds ?? Math.round(Number(cycle.break_minutes ?? 0) * 60)),
         netMinutes: Number(cycle.net_minutes ?? 0),
+        clockOutNextDay: Boolean(cycle.clock_out_next_day),
         status: String(cycle.status ?? "incompleto"),
       })),
     })),
@@ -3614,6 +3615,7 @@ export type AttendanceState = {
     current_break_started_at?: string | null;
     breaks_count?: number;
     clock_out_at: string | null;
+    started_on_previous_day?: boolean;
   } | null;
   cyclesToday: Array<{
     sequence?: number;
@@ -3661,6 +3663,7 @@ const mapAttendanceState = (data: {
     current_break_started_at?: string | null;
     breaks_count?: number;
     clock_out_at: string | null;
+    started_on_previous_day?: boolean;
   } | null;
   cycles_today?: Array<{
     sequence?: number;
