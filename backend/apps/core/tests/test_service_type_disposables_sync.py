@@ -69,3 +69,31 @@ class ServiceTypeDisposablesSyncTests(TestCase):
         self.assertIn(self.service_type.key, self.product_one.disposable_apply_to)
         self.assertIn(self.service_type.key, self.product_two.disposable_apply_to)
 
+
+    def test_color_hex_accepts_valid_null_and_repeated_colors(self):
+        other = ServiceType.objects.create(key="TAKEOUT", label="Takeout", color_hex="#16A34A")
+        response = self.client.patch(
+            f"/api/core/order-types/{self.service_type.id}/",
+            {"color_hex": "#16a34a"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["color_hex"], "#16A34A")
+        other.refresh_from_db()
+        self.assertEqual(other.color_hex, "#16A34A")
+
+        response = self.client.patch(
+            f"/api/core/order-types/{self.service_type.id}/",
+            {"color_hex": None},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(response.data["color_hex"])
+
+    def test_color_hex_rejects_invalid_format(self):
+        response = self.client.patch(
+            f"/api/core/order-types/{self.service_type.id}/",
+            {"color_hex": "green"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)

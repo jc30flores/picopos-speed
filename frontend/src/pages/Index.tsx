@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
+import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { calculatePosPricing } from "@/lib/posPricing";
@@ -190,6 +191,14 @@ const shouldOpenCashDrawer = (method: PaymentMethod, methodCode?: string): boole
   return normalizedCode === "cash" || normalizedCode === "efectivo";
 };
 
+const isCashPaymentMethod = (method?: { code?: string | null; name?: string | null; isCash?: boolean } | null): boolean => {
+  if (!method) return false;
+  if (method.isCash === true) return true;
+  const normalizedCode = String(method.code || "").trim().toLowerCase();
+  if (["cash", "efectivo"].includes(normalizedCode)) return true;
+  return String(method.name || "").trim().toLowerCase() === "efectivo";
+};
+
 const shouldShowChange = (summary: SaleCompletionSummary | null): boolean => {
   if (!summary) return false;
   if (!shouldOpenCashDrawer(summary.paymentMethod, summary.paymentMethodCode)) return false;
@@ -213,6 +222,72 @@ const buildSaleCompletionSummary = (params: {
   };
 };
 
+type CashPaymentPanelProps = {
+  totalCents: number;
+  paymentAmount: string;
+  tipAmount: string;
+  activeTenderField: "payment" | "tip" | null;
+  changeCents: number;
+  isExactPayment: boolean;
+  onPaymentAmountChange: (value: string) => void;
+  onTipAmountChange: (value: string) => void;
+  onFocusTenderField: (field: "payment" | "tip") => void;
+  onApplyDenomination: (amountCents: number) => void;
+  onClear: () => void;
+  onBackspace: () => void;
+  onExact: () => void;
+};
+
+const CashPaymentPanel = ({
+  totalCents,
+  paymentAmount,
+  tipAmount,
+  activeTenderField,
+  changeCents,
+  isExactPayment,
+  onPaymentAmountChange,
+  onTipAmountChange,
+  onFocusTenderField,
+  onApplyDenomination,
+  onClear,
+  onBackspace,
+  onExact,
+}: CashPaymentPanelProps) => (
+  <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <h3 className="font-semibold">Pago en efectivo</h3>
+        <p className="text-xs text-muted-foreground">Monto recibido, propina y cambio.</p>
+      </div>
+      <Badge variant="outline">Total {formatMoney(totalCents / 100)}</Badge>
+    </div>
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-2">
+        <Label>Monto recibido</Label>
+        <Input value={paymentAmount} onFocus={() => onFocusTenderField("payment")} onClick={() => onFocusTenderField("payment")} onChange={(e) => onPaymentAmountChange(e.target.value)} inputMode="decimal" />
+      </div>
+      <div className="space-y-2">
+        <Label>Propina</Label>
+        <Input value={tipAmount} onFocus={() => onFocusTenderField("tip")} onClick={() => onFocusTenderField("tip")} onChange={(e) => onTipAmountChange(e.target.value)} inputMode="decimal" />
+      </div>
+    </div>
+    <div className={cn("rounded-lg border bg-background/80 p-3 text-center font-semibold", isExactPayment ? "text-lg" : "text-2xl sm:text-3xl")}> 
+      {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+      {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+      {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+    </div>
+    <div className="grid grid-cols-4 gap-2">
+      {DENOMINATION_CENTS.map((value) => (
+        <Button key={value} type="button" className="h-12 text-sm" variant="outline" onClick={() => onApplyDenomination(value)}>
+          {formatMoney(value / 100)}
+        </Button>
+      ))}
+      <Button type="button" className="h-12 text-sm" variant="outline" onClick={onClear}>Borrar</Button>
+      <Button type="button" className="h-12 text-sm" variant="outline" onClick={onBackspace}>←</Button>
+      <Button type="button" className="col-span-2 h-12 text-sm" variant="outline" onClick={onExact}>Exacto</Button>
+    </div>
+  </div>
+);
 
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
@@ -1437,6 +1512,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       .filter((item): item is { code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal"; label: string; method: PaymentMethod } => Boolean(item));
   }, [paymentMethods]);
 
+  const selectedPaymentMethodOption = useMemo(
+    () => paymentMethods.find((method) => String(method.code || "").toLowerCase() === String(selectedPaymentMethodCode || "").toLowerCase()),
+    [paymentMethods, selectedPaymentMethodCode],
+  );
+  const selectedPaymentIsCash = isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode);
+
   useEffect(() => {
     if (isPaymentOpen) {
       if (splitEnabled) {
@@ -1460,7 +1541,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setSelectedPaymentMethodCode("pedidos_ya");
       }
       setCardType(null);
-      if (isPaymentMethodOpen) {
+      if (isPaymentOpen) {
         setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
       }
       return;
@@ -1470,7 +1551,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setSelectedPaymentMethodCode("cash");
       setCardType(null);
     }
-  }, [expectedPaymentCents, isPaymentMethodOpen, selectedPaymentMethodCode, serviceType]);
+  }, [expectedPaymentCents, isPaymentOpen, selectedPaymentMethodCode, serviceType]);
 
   useEffect(() => {
     if (!isPaymentOpen || !checkoutDraft) return;
@@ -1949,34 +2030,37 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const applyTenderDenomination = (amountCents: number) => {
-    if (!activeTenderField) return;
-    const current = activeTenderField === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
+    const field = activeTenderField ?? "payment";
+    const current = field === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
     const next = shouldResetTenderOnFirstTap ? amountCents : current + amountCents;
     const value = centsToInput(next);
-    if (activeTenderField === "payment") setPaymentAmount(value);
-    if (activeTenderField === "tip") setTipAmount(value);
+    if (field === "payment") setPaymentAmount(value);
+    if (field === "tip") setTipAmount(value);
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(false);
   };
 
   const clearTenderField = () => {
-    if (!activeTenderField) return;
-    if (activeTenderField === "payment") setPaymentAmount("");
-    if (activeTenderField === "tip") setTipAmount("");
+    const field = activeTenderField ?? "payment";
+    if (field === "payment") setPaymentAmount("");
+    if (field === "tip") setTipAmount("");
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(true);
   };
 
   const backspaceTenderField = () => {
-    if (!activeTenderField) return;
-    const currentRaw = activeTenderField === "payment" ? paymentAmount : tipAmount;
+    const field = activeTenderField ?? "payment";
+    const currentRaw = field === "payment" ? paymentAmount : tipAmount;
     const nextRaw = currentRaw.slice(0, -1);
-    if (activeTenderField === "payment") setPaymentAmount(nextRaw);
-    if (activeTenderField === "tip") setTipAmount(nextRaw);
+    if (field === "payment") setPaymentAmount(nextRaw);
+    if (field === "tip") setTipAmount(nextRaw);
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(false);
   };
 
   const setExactTenderAmount = () => {
-    if (activeTenderField !== "payment") return;
     setPaymentAmount(centsToInput(totalDueCents));
+    setActiveTenderField("payment");
     setShouldResetTenderOnFirstTap(false);
   };
 
@@ -2184,7 +2268,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
     const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
 
-    if (!amountReceived || amountReceived <= 0) {
+    if (selectedPaymentIsCash && (!amountReceived || amountReceived <= 0)) {
       toast.error("Ingresa un monto válido");
       return;
     }
@@ -2196,7 +2280,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
-    if (amountReceived < totalDue) {
+    if (selectedPaymentIsCash && amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
     }
@@ -2238,7 +2322,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         cardType: paymentMethod === "card" ? "credit" : undefined,
         amount: amountForApi,
         amountApplied: amountForApi,
-        cashReceived: amountReceived,
+        cashReceived: selectedPaymentIsCash ? amountReceived : amountForApi,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
@@ -2265,7 +2349,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setSaleCompletionSummary(
           buildSaleCompletionSummary({
             totalToPay: finalTotalToPay,
-            amountReceived,
+            amountReceived: selectedPaymentIsCash ? amountReceived : finalTotalToPay,
             paymentMethod,
             paymentMethodCode: selectedPaymentMethodCode,
           })
@@ -2735,28 +2819,56 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
             </div>
 
-            <div className="flex-none border-b px-4 py-3">
-              <div className="flex flex-wrap gap-2">
+            <div className="flex-none space-y-3 border-b px-4 py-3">
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Tipo de Pedido</div>
                 {serviceTypes.length > 0 ? (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={cycleServiceType}
-                    className="relative min-h-16 w-full bg-primary px-4 text-primary-foreground hover:bg-primary/90"
-                  >
-                    <span className="flex w-full flex-col items-center justify-center leading-tight">
-                      <span className="text-[10px] font-medium uppercase tracking-[1px] text-primary-foreground/60">TIPO DE PEDIDO</span>
-                      <span className="mt-1 text-[18px] font-bold text-primary-foreground">
-                        {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}
-                      </span>
-                    </span>
-                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary-foreground/80" />
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    {serviceTypes.map((type) => {
+                      const selected = type.key === serviceType;
+                      const hasColor = isValidHexColor(type.colorHex);
+                      const style = hasColor ? { backgroundColor: type.colorHex ?? undefined, color: getReadableTextColor(type.colorHex), borderColor: type.colorHex ?? undefined } : undefined;
+                      return (
+                        <Button
+                          key={type.key}
+                          type="button"
+                          variant={selected ? "default" : "outline"}
+                          className={cn("min-h-14 whitespace-normal rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
+                          style={style}
+                          onClick={() => setServiceType(type.key)}
+                        >
+                          {type.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 ) : (
-                  <span className="text-sm text-muted-foreground">
-                    Configura tipos de pedido en Configuración.
-                  </span>
+                  <span className="text-sm text-muted-foreground">Configura tipos de pedido en Configuración.</span>
                 )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Método de Pago</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {paymentMethodButtons.map((option) => {
+                    const selected = option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card");
+                    return (
+                      <Button
+                        key={option.code}
+                        type="button"
+                        variant={selected ? "default" : "outline"}
+                        className={cn("min-h-12 rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/40")}
+                        onClick={() => {
+                          setPaymentMethod(option.method);
+                          setSelectedPaymentMethodCode(option.code);
+                          setCardType(option.code === "card" ? "credit" : null);
+                        }}
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -3463,6 +3575,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
                   ) : null}
+
+                  {selectedPaymentIsCash ? (
+                    <CashPaymentPanel
+                      totalCents={expectedPaymentCents}
+                      paymentAmount={paymentAmount}
+                      tipAmount={tipAmount}
+                      activeTenderField={activeTenderField}
+                      changeCents={changeCents}
+                      isExactPayment={isExactPayment}
+                      onPaymentAmountChange={setPaymentAmount}
+                      onTipAmountChange={setTipAmount}
+                      onFocusTenderField={focusTenderField}
+                      onApplyDenomination={applyTenderDenomination}
+                      onClear={clearTenderField}
+                      onBackspace={backspaceTenderField}
+                      onExact={setExactTenderAmount}
+                    />
+                  ) : null}
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
@@ -3493,8 +3623,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   </div>
                   <div className="flex gap-2">
                     <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="h-14 flex-1 text-base" onClick={() => { setIsPaymentOpen(false); setIsPaymentMethodOpen(true); }} disabled={splitEnabled && !splitValidation.isValid}>
-                      Continuar al pago
+                    <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                      {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
                 </div>
