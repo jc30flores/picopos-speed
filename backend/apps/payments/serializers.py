@@ -1,18 +1,111 @@
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import logging
+import re
+from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from rest_framework import serializers
 from apps.orders.models import Order
 from apps.payments.models import Payment, Refund, PaymentMethod
+from apps.core.models import ServiceType
 from apps.payments.normalization import normalize_payment_method_code, resolve_payment_method
 
 logger = logging.getLogger(__name__)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
+    linked_order_type_id = serializers.PrimaryKeyRelatedField(
+        source="auto_select_order_type",
+        queryset=ServiceType.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    linked_order_type_name = serializers.CharField(source="auto_select_order_type.label", read_only=True)
+
     class Meta:
         model = PaymentMethod
-        fields = ["id", "code", "name", "is_cash", "sort_order", "is_active"]
+        fields = [
+            "id",
+            "code",
+            "name",
+            "is_cash",
+            "sort_order",
+            "is_active",
+            "color_hex",
+            "is_default",
+            "linked_order_type_id",
+            "linked_order_type_name",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at", "linked_order_type_name"]
+
+    def validate_color_hex(self, value: str | None) -> str:
+        cleaned = (value or "").strip().upper()
+        if not cleaned:
+            return ""
+        if not re.fullmatch(r"#[0-9A-F]{6}", cleaned):
+            raise serializers.ValidationError("Color HEX inválido. Usa formato #RRGGBB.")
+        return cleaned
+
+    def validate_code(self, value: str) -> str:
+        cleaned = re.sub(r"[^A-Z0-9_]+", "_", (value or "").upper()).strip("_").lower()
+        if not cleaned:
+            raise serializers.ValidationError("Código requerido.")
+        qs = PaymentMethod.objects.filter(code__iexact=cleaned)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Ya existe un método con este código.")
+        return cleaned
+
+    def validate_name(self, value: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise serializers.ValidationError("Nombre requerido.")
+        qs = PaymentMethod.objects.filter(name__iexact=cleaned, is_active=True)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        incoming_active = self.initial_data.get("is_active", getattr(self.instance, "is_active", True))
+        if incoming_active in {True, "true", "True", "1", 1} and qs.exists():
+            raise serializers.ValidationError("Ya existe un método activo con este nombre.")
+        return cleaned
+
+    def validate(self, attrs):
+        is_default = bool(attrs.get("is_default", getattr(self.instance, "is_default", False)))
+        is_active = bool(attrs.get("is_active", getattr(self.instance, "is_active", True)))
+        name = (attrs.get("name", getattr(self.instance, "name", "")) or "").strip()
+        if is_default and not is_active:
+            if attrs.get("is_default") is True:
+                raise serializers.ValidationError({"is_default": "El método default debe estar activo."})
+            attrs["is_default"] = False
+            is_default = False
+        if is_active and name:
+            qs = PaymentMethod.objects.filter(name__iexact=name, is_active=True)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({"name": "Ya existe un método activo con este nombre."})
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self._ensure_default_consistency(instance)
+        return instance
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        updated = super().update(instance, validated_data)
+        self._ensure_default_consistency(updated)
+        return updated
+
+    def _ensure_default_consistency(self, instance: PaymentMethod) -> None:
+        if instance.is_default and instance.is_active:
+            PaymentMethod.objects.exclude(pk=instance.pk).filter(is_default=True).update(is_default=False)
+        if not PaymentMethod.objects.filter(is_active=True, is_default=True).exists():
+            fallback = PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name").first()
+            if fallback:
+                PaymentMethod.objects.filter(pk=fallback.pk).update(is_default=True)
 
 
 class PaymentSerializer(serializers.ModelSerializer):

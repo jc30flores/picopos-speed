@@ -5,6 +5,7 @@ import { EmployeesTab } from "@/components/settings/EmployeesTab";
 import { SchedulesTab } from "@/components/settings/SchedulesTab";
 import { FeatureFlagsTab } from "@/components/settings/FeatureFlagsTab";
 import { OrderTypesTab } from "@/components/settings/OrderTypesTab";
+import { PaymentMethodsTab } from "@/components/settings/PaymentMethodsTab";
 import { PageLayout } from "@/components/layout/PageLayout";
 
 const Settings = () => {
@@ -21,6 +22,7 @@ const Settings = () => {
           { label: "Horarios", value: "schedules" },
           { label: "Funciones", value: "features" },
           { label: "Tipos de Pedido", value: "order-types" },
+          { label: "Métodos de Pago", value: "payment-methods" },
         ]}
         activeValue={activeTab}
         onChange={setActiveTab}
@@ -41,6 +43,10 @@ const Settings = () => {
 
         <TabsContent value="order-types" className="mt-0">
           <OrderTypesTab />
+        </TabsContent>
+
+        <TabsContent value="payment-methods" className="mt-0">
+          <PaymentMethodsTab />
         </TabsContent>
       </Tabs>
     </PageLayout>

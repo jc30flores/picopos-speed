@@ -1,6 +1,8 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
+from django.db.models import Q
 from apps.orders.models import Order
+from apps.core.models import ServiceType
 from apps.cashier.models import CashSession
 
 
@@ -10,9 +12,33 @@ class PaymentMethod(models.Model):
     is_cash = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    color_hex = models.CharField(max_length=7, blank=True, default="")
+    is_default = models.BooleanField(default=False)
+    auto_select_order_type = models.ForeignKey(
+        ServiceType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="auto_payment_methods",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["sort_order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_default"],
+                condition=Q(is_default=True, is_active=True),
+                name="unique_active_default_payment_method",
+            ),
+        ]
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        if self.is_default and self.is_active:
+            PaymentMethod.objects.exclude(pk=self.pk).filter(is_default=True).update(is_default=False)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.name

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -165,20 +165,6 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
   };
 };
 
-const normalizePedidosYaText = (value: unknown) =>
-  String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-
-const isPedidosYaLike = (value: unknown) => normalizePedidosYaText(value) === "pedidosya";
-
-const isPedidosYaServiceType = (orderType?: Partial<ServiceType> & { code?: string; name?: string } | null) =>
-  Boolean(orderType) && (isPedidosYaLike(orderType?.code) || isPedidosYaLike(orderType?.key) || isPedidosYaLike(orderType?.name) || isPedidosYaLike(orderType?.label));
-
-const isPedidosYaPaymentMethod = (method?: Partial<PaymentMethodOption> & { label?: string } | null) =>
-  Boolean(method) && (isPedidosYaLike(method?.code) || isPedidosYaLike(method?.name) || isPedidosYaLike(method?.label));
-
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
@@ -213,6 +199,29 @@ const isCashPaymentMethod = (method?: { code?: string | null; name?: string | nu
   const normalizedCode = String(method.code || "").trim().toLowerCase();
   if (["cash", "efectivo"].includes(normalizedCode)) return true;
   return String(method.name || "").trim().toLowerCase() === "efectivo";
+};
+
+const getPaymentMethodKind = (method: PaymentMethodOption): PaymentMethod => {
+  if (isCashPaymentMethod(method)) return "cash";
+  const normalized = String(method.code || "").trim().toLowerCase();
+  if (normalized.includes("card") || normalized.includes("tarjeta")) return "card";
+  return "transfer";
+};
+
+type PaymentButtonOption = {
+  code: string;
+  label: string;
+  method: PaymentMethod;
+  option: PaymentMethodOption;
+};
+
+const getPaymentButtonStyle = (option: PaymentButtonOption | null | undefined, selected = false): CSSProperties | undefined => {
+  const color = option?.option.colorHex;
+  if (!color || !isValidHexColor(color)) return undefined;
+  if (selected) {
+    return { backgroundColor: color, borderColor: color, color: getReadableTextColor(color) };
+  }
+  return { borderColor: color, color };
 };
 
 const shouldShowChange = (summary: SaleCompletionSummary | null): boolean => {
@@ -1522,26 +1531,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
-  const paymentMethodButtons = useMemo(() => {
-    const desiredMethods = [
-      { key: "cash", method: "cash" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "cash" },
-      { key: "card", method: "card" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "card" },
-      { key: "transfer", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "transfer" },
-      { key: "pedidos_ya", method: "transfer" as PaymentMethod, matches: isPedidosYaPaymentMethod },
-      { key: "paypal", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "paypal" },
-    ];
-    return desiredMethods
-      .map((desired) => {
-        const method = paymentMethods.find(desired.matches);
-        if (!method) return null;
-        return {
-          code: method.code,
-          label: method.name || (desired.key === "card" ? "Tarjeta" : method.code),
-          method: desired.method,
-          option: method,
-        };
-      })
-      .filter((item): item is { code: string; label: string; method: PaymentMethod; option: PaymentMethodOption } => Boolean(item));
+  const paymentMethodButtons = useMemo<PaymentButtonOption[]>(() => {
+    return paymentMethods
+      .filter((method) => method.isActive !== false)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name))
+      .map((method) => ({
+        code: method.code,
+        label: method.name || method.code,
+        method: getPaymentMethodKind(method),
+        option: method,
+      }));
   }, [paymentMethods]);
 
   const selectedPaymentMethodOption = useMemo(
@@ -1554,11 +1553,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [serviceTypes, serviceType],
   );
 
-  const selectPaymentMethodOption = useCallback((option: { code: string; method: PaymentMethod; option: PaymentMethodOption }, autoSelectedFromOrderType = false) => {
+  const selectPaymentMethodOption = useCallback((option: PaymentButtonOption, autoSelectedFromOrderType = false) => {
     setPaymentMethod(option.method);
     setSelectedPaymentMethodCode(option.code);
     setPaymentMethodAutoSelectedFromOrderType(autoSelectedFromOrderType);
-    setCardType(normalizePedidosYaText(option.code) === "card" ? "credit" : null);
+    setCardType(option.method === "card" ? "credit" : null);
     const cashSelected = isCashPaymentMethod(option.option) || shouldOpenCashDrawer(option.method, option.code);
     setShowCashPanel(cashSelected);
     if (cashSelected) {
@@ -1572,40 +1571,36 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setShouldResetTenderOnFirstTap(true);
   }, [expectedPaymentCents]);
 
-  const autoSelectPedidosYaPaymentMethod = useCallback(() => {
-    const pedidosYaMethod = paymentMethodButtons.find((option) => isPedidosYaPaymentMethod(option.option));
-    if (!pedidosYaMethod) return false;
-    selectPaymentMethodOption(pedidosYaMethod, true);
+  const resolveConfiguredPaymentMethod = useCallback((type: ServiceType | null | undefined) => {
+    const linked = type
+      ? paymentMethodButtons.find((option) => option.option.linkedOrderTypeId === type.id)
+      : null;
+    if (linked) return linked;
+    return paymentMethodButtons.find((option) => option.option.isDefault) ?? paymentMethodButtons[0] ?? null;
+  }, [paymentMethodButtons]);
+
+  const applyConfiguredPaymentMethod = useCallback((autoSelectedFromOrderType = false) => {
+    const option = resolveConfiguredPaymentMethod(selectedServiceType);
+    if (!option) return false;
+    selectPaymentMethodOption(option, autoSelectedFromOrderType || option.option.linkedOrderTypeId === selectedServiceType?.id);
     return true;
-  }, [paymentMethodButtons, selectPaymentMethodOption]);
+  }, [resolveConfiguredPaymentMethod, selectPaymentMethodOption, selectedServiceType]);
 
   useEffect(() => {
     if (!serviceType || paymentMethods.length === 0) return;
-    const currentServiceType = serviceTypes.find((type) => type.key === serviceType) ?? null;
-    const currentIsPedidosYa = isPedidosYaServiceType(currentServiceType);
     const serviceTypeChanged = previousServiceTypeRef.current !== serviceType;
-
-    if (currentIsPedidosYa && (serviceTypeChanged || (!selectedPaymentMethodCode && !paymentMethodAutoSelectedFromOrderType))) {
-      autoSelectPedidosYaPaymentMethod();
+    if (serviceTypeChanged) {
+      applyConfiguredPaymentMethod(true);
+    } else if (!selectedPaymentMethodCode) {
+      applyConfiguredPaymentMethod(false);
     }
-
-    if (!currentIsPedidosYa && paymentMethodAutoSelectedFromOrderType) {
-      setSelectedPaymentMethodCode("");
-      setPaymentMethodAutoSelectedFromOrderType(false);
-      setPaymentMethod("cash");
-      setCardType(null);
-      setShowCashPanel(false);
-      setTipAmount("0");
-      setActiveTenderField(null);
-    }
-
     previousServiceTypeRef.current = serviceType;
-  }, [autoSelectPedidosYaPaymentMethod, paymentMethodAutoSelectedFromOrderType, paymentMethods.length, selectedPaymentMethodCode, serviceType, serviceTypes]);
+  }, [applyConfiguredPaymentMethod, paymentMethods.length, selectedPaymentMethodCode, serviceType]);
 
   useEffect(() => {
-    if (!isPaymentOpen || selectedPaymentMethodCode || !isPedidosYaServiceType(selectedServiceType)) return;
-    autoSelectPedidosYaPaymentMethod();
-  }, [autoSelectPedidosYaPaymentMethod, isPaymentOpen, selectedPaymentMethodCode, selectedServiceType]);
+    if (!isPaymentOpen || selectedPaymentMethodCode) return;
+    applyConfiguredPaymentMethod(false);
+  }, [applyConfiguredPaymentMethod, isPaymentOpen, selectedPaymentMethodCode]);
 
   useEffect(() => {
     if (!isPaymentOpen) {
@@ -2237,29 +2232,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     window.location.reload();
   }, []);
-
-  const normalizeOrderTypeKey = (value: string | null | undefined) =>
-    String(value || "")
-      .trim()
-      .toUpperCase()
-      .replace(/\s+/g, "_");
-
-  const ORDER_TYPE_PEDIDOS_YA = "PEDIDOS_YA";
-
-  const isPedidosYaOrderType = (value: string | null | undefined) => {
-    const normalized = normalizeOrderTypeKey(value);
-    return normalized === ORDER_TYPE_PEDIDOS_YA || normalized === "PEDIDOSYA" || normalized === "DELIVERY";
-  };
-
-  const normalizePaymentMethodForOrderType = (orderTypeCode: string | null | undefined, currentMethodCode: string) => {
-    if (isPedidosYaOrderType(orderTypeCode)) {
-      return "pedidos_ya";
-    }
-    if (String(currentMethodCode || "").toLowerCase() === "pedidos_ya") {
-      return "cash";
-    }
-    return currentMethodCode;
-  };
 
   const scheduleHardReload = (reason: string) => {
     if (hardReloadTriggeredRef.current) return;
@@ -3800,6 +3772,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             type="button"
                             variant={selected ? "default" : "outline"}
                             className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
+                            style={getPaymentButtonStyle(option, selected)}
                             onClick={() => selectPaymentMethodOption(option, false)}
                           >
                             {option.label}
@@ -3851,45 +3824,50 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button
                   key={option.code}
                   type="button"
-                  variant={(normalizePedidosYaText(option.code) === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                  variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
                   className="h-14 text-base"
+                  style={getPaymentButtonStyle(option, selectedPaymentMethodCode === option.code)}
                   onClick={() => selectPaymentMethodOption(option, false)}
                 >
                   {option.label}
                 </Button>
               ))}
             </div>
-            <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Monto recibido</Label>
-                <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
-              </div>
-              <div className="space-y-2">
-                <Label>Propina</Label>
-                <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
-              </div>
-            </div>
-            <div
-              className={cn(
-                "rounded-lg border p-3 text-center font-semibold",
-                isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
-              )}
-            >
-              {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-              {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-              {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-            </div>
-            {activeTenderField ? (
-              <div ref={keypadRef} className="grid grid-cols-4 gap-2">
-                {DENOMINATION_CENTS.map((value) => (
-                  <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                    {formatMoney(value / 100)}
-                  </Button>
-                ))}
-                <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
-                <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
-              </div>
+            {selectedPaymentIsCash ? (
+              <>
+                <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Monto recibido</Label>
+                    <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Propina</Label>
+                    <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+                  </div>
+                </div>
+                <div
+                  className={cn(
+                    "rounded-lg border p-3 text-center font-semibold",
+                    isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
+                  )}
+                >
+                  {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+                  {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+                  {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+                </div>
+                {activeTenderField ? (
+                  <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                    {DENOMINATION_CENTS.map((value) => (
+                      <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                        {formatMoney(value / 100)}
+                      </Button>
+                    ))}
+                    <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                    <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
+                    <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
+                  </div>
+                ) : null}
+              </>
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>

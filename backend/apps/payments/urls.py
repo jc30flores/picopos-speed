@@ -8,4 +8,5 @@ urlpatterns = [
     path("<int:pk>/record-refund/", views.PaymentRecordRefundView.as_view(), name="payment-record-refund"),
     path("<int:pk>/print-ticket/", views.PaymentPrintTicketView.as_view(), name="payment-print-ticket"),
     path("methods/", views.PaymentMethodListView.as_view(), name="payment-methods"),
+    path("methods/<int:pk>/", views.PaymentMethodDetailView.as_view(), name="payment-method-detail"),
 ]

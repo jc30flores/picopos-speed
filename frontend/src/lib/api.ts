@@ -403,6 +403,10 @@ export type PaymentMethodOption = {
   isCash: boolean;
   sortOrder: number;
   isActive: boolean;
+  colorHex?: string | null;
+  isDefault?: boolean;
+  linkedOrderTypeId?: number | null;
+  linkedOrderTypeName?: string | null;
 };
 
 export type CashSessionSnapshot = {
@@ -4005,17 +4009,60 @@ export const getPrintingStatus = async (): Promise<{ available: boolean; queue: 
 
 
 
-export const getPaymentMethods = async (): Promise<PaymentMethodOption[]> => {
-  const response = await request('/payments/methods/');
+const mapPaymentMethodOption = (m: any): PaymentMethodOption => ({
+  id: m.id,
+  code: m.code,
+  name: m.name,
+  isCash: Boolean(m.is_cash),
+  sortOrder: Number(m.sort_order ?? 0),
+  isActive: Boolean(m.is_active ?? true),
+  colorHex: m.color_hex || null,
+  isDefault: Boolean(m.is_default),
+  linkedOrderTypeId: m.linked_order_type_id ?? null,
+  linkedOrderTypeName: m.linked_order_type_name ?? null,
+});
+
+export const getPaymentMethods = async (options?: { includeInactive?: boolean }): Promise<PaymentMethodOption[]> => {
+  const query = options?.includeInactive ? '?include_inactive=1' : '';
+  const response = await request(`/payments/methods/${query}`);
   const data = await handleJson<Array<any>>(response);
-  return data.map((m) => ({
-    id: m.id,
-    code: m.code,
-    name: m.name,
-    isCash: Boolean(m.is_cash),
-    sortOrder: Number(m.sort_order ?? 0),
-    isActive: Boolean(m.is_active ?? true),
-  }));
+  return data.map(mapPaymentMethodOption);
+};
+
+export const createPaymentMethod = async (payload: Partial<PaymentMethodOption> & { code: string; name: string }): Promise<PaymentMethodOption> => {
+  const response = await request('/payments/methods/', {
+    method: 'POST',
+    body: JSON.stringify({
+      code: payload.code,
+      name: payload.name,
+      is_cash: Boolean(payload.isCash),
+      sort_order: Number(payload.sortOrder ?? 0),
+      is_active: payload.isActive !== false,
+      color_hex: payload.colorHex || '',
+      is_default: Boolean(payload.isDefault),
+      linked_order_type_id: payload.linkedOrderTypeId ?? null,
+    }),
+  });
+  return mapPaymentMethodOption(await handleJson<any>(response));
+};
+
+export const updatePaymentMethod = async (id: number, payload: Partial<PaymentMethodOption>): Promise<PaymentMethodOption> => {
+  const body: Record<string, unknown> = {};
+  if (payload.code !== undefined) body.code = payload.code;
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.isCash !== undefined) body.is_cash = payload.isCash;
+  if (payload.sortOrder !== undefined) body.sort_order = payload.sortOrder;
+  if (payload.isActive !== undefined) body.is_active = payload.isActive;
+  if (payload.colorHex !== undefined) body.color_hex = payload.colorHex || '';
+  if (payload.isDefault !== undefined) body.is_default = payload.isDefault;
+  if (payload.linkedOrderTypeId !== undefined) body.linked_order_type_id = payload.linkedOrderTypeId ?? null;
+  const response = await request(`/payments/methods/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
+  return mapPaymentMethodOption(await handleJson<any>(response));
+};
+
+export const deletePaymentMethod = async (id: number): Promise<void> => {
+  const response = await request(`/payments/methods/${id}/`, { method: 'DELETE' });
+  if (!response.ok) await handleJson(response);
 };
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
   const response = await request(`/payments/?order_id=${orderId}`);
