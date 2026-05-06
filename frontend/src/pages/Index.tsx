@@ -80,6 +80,7 @@ import {
   Product,
   PaymentMethod,
   PaymentMethodOption,
+  ServiceType,
   CashSessionSnapshot,
   CashTransaction,
   Order,
@@ -163,6 +164,20 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     modifiers,
   };
 };
+
+const normalizePedidosYaText = (value: unknown) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
+const isPedidosYaLike = (value: unknown) => normalizePedidosYaText(value) === "pedidosya";
+
+const isPedidosYaServiceType = (orderType?: Partial<ServiceType> & { code?: string; name?: string } | null) =>
+  Boolean(orderType) && (isPedidosYaLike(orderType?.code) || isPedidosYaLike(orderType?.key) || isPedidosYaLike(orderType?.name) || isPedidosYaLike(orderType?.label));
+
+const isPedidosYaPaymentMethod = (method?: Partial<PaymentMethodOption> & { label?: string } | null) =>
+  Boolean(method) && (isPedidosYaLike(method?.code) || isPedidosYaLike(method?.name) || isPedidosYaLike(method?.label));
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -356,6 +371,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("");
+  const [paymentMethodAutoSelectedFromOrderType, setPaymentMethodAutoSelectedFromOrderType] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
@@ -394,12 +410,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
   const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
+  const checkoutModalScrollRef = useRef<HTMLDivElement | null>(null);
   const cashPanelRef = useRef<HTMLDivElement | null>(null);
   const cashAmountInputRef = useRef<HTMLInputElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
   const cartEndRef = useRef<HTMLDivElement | null>(null);
   const previousCartLengthRef = useRef(0);
+  const previousServiceTypeRef = useRef<string>("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -1170,6 +1188,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setTipAmount("0");
     setPaymentReference("");
     setSelectedPaymentMethodCode("");
+    setPaymentMethodAutoSelectedFromOrderType(false);
     setPaymentMethod("cash");
     setCardType(null);
     setShowCashPanel(false);
@@ -1504,19 +1523,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
   const paymentMethodButtons = useMemo(() => {
-    const byCode = new Map(paymentMethods.map((method) => [String(method.code || "").toLowerCase(), method]));
-    const desiredCodes = ["cash", "card", "transfer", "pedidos_ya", "paypal"] as const;
-    return desiredCodes
-      .map((code) => {
-        const method = byCode.get(code);
+    const desiredMethods = [
+      { key: "cash", method: "cash" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "cash" },
+      { key: "card", method: "card" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "card" },
+      { key: "transfer", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "transfer" },
+      { key: "pedidos_ya", method: "transfer" as PaymentMethod, matches: isPedidosYaPaymentMethod },
+      { key: "paypal", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "paypal" },
+    ];
+    return desiredMethods
+      .map((desired) => {
+        const method = paymentMethods.find(desired.matches);
         if (!method) return null;
         return {
-          code,
-          label: method.name || (code === "card" ? "Tarjeta" : code),
-          method: code === "cash" ? ("cash" as PaymentMethod) : code === "card" ? ("card" as PaymentMethod) : ("transfer" as PaymentMethod),
+          code: method.code,
+          label: method.name || (desired.key === "card" ? "Tarjeta" : method.code),
+          method: desired.method,
+          option: method,
         };
       })
-      .filter((item): item is { code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal"; label: string; method: PaymentMethod } => Boolean(item));
+      .filter((item): item is { code: string; label: string; method: PaymentMethod; option: PaymentMethodOption } => Boolean(item));
   }, [paymentMethods]);
 
   const selectedPaymentMethodOption = useMemo(
@@ -1528,6 +1553,59 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
     [serviceTypes, serviceType],
   );
+
+  const selectPaymentMethodOption = useCallback((option: { code: string; method: PaymentMethod; option: PaymentMethodOption }, autoSelectedFromOrderType = false) => {
+    setPaymentMethod(option.method);
+    setSelectedPaymentMethodCode(option.code);
+    setPaymentMethodAutoSelectedFromOrderType(autoSelectedFromOrderType);
+    setCardType(normalizePedidosYaText(option.code) === "card" ? "credit" : null);
+    const cashSelected = isCashPaymentMethod(option.option) || shouldOpenCashDrawer(option.method, option.code);
+    setShowCashPanel(cashSelected);
+    if (cashSelected) {
+      setPaymentAmount(centsToInput(expectedPaymentCents));
+      setTipAmount("0");
+      setActiveTenderField("payment");
+    } else {
+      setTipAmount("0");
+      setActiveTenderField(null);
+    }
+    setShouldResetTenderOnFirstTap(true);
+  }, [expectedPaymentCents]);
+
+  const autoSelectPedidosYaPaymentMethod = useCallback(() => {
+    const pedidosYaMethod = paymentMethodButtons.find((option) => isPedidosYaPaymentMethod(option.option));
+    if (!pedidosYaMethod) return false;
+    selectPaymentMethodOption(pedidosYaMethod, true);
+    return true;
+  }, [paymentMethodButtons, selectPaymentMethodOption]);
+
+  useEffect(() => {
+    if (!serviceType || paymentMethods.length === 0) return;
+    const currentServiceType = serviceTypes.find((type) => type.key === serviceType) ?? null;
+    const currentIsPedidosYa = isPedidosYaServiceType(currentServiceType);
+    const serviceTypeChanged = previousServiceTypeRef.current !== serviceType;
+
+    if (currentIsPedidosYa && (serviceTypeChanged || (!selectedPaymentMethodCode && !paymentMethodAutoSelectedFromOrderType))) {
+      autoSelectPedidosYaPaymentMethod();
+    }
+
+    if (!currentIsPedidosYa && paymentMethodAutoSelectedFromOrderType) {
+      setSelectedPaymentMethodCode("");
+      setPaymentMethodAutoSelectedFromOrderType(false);
+      setPaymentMethod("cash");
+      setCardType(null);
+      setShowCashPanel(false);
+      setTipAmount("0");
+      setActiveTenderField(null);
+    }
+
+    previousServiceTypeRef.current = serviceType;
+  }, [autoSelectPedidosYaPaymentMethod, paymentMethodAutoSelectedFromOrderType, paymentMethods.length, selectedPaymentMethodCode, serviceType, serviceTypes]);
+
+  useEffect(() => {
+    if (!isPaymentOpen || selectedPaymentMethodCode || !isPedidosYaServiceType(selectedServiceType)) return;
+    autoSelectPedidosYaPaymentMethod();
+  }, [autoSelectPedidosYaPaymentMethod, isPaymentOpen, selectedPaymentMethodCode, selectedServiceType]);
 
   useEffect(() => {
     if (!isPaymentOpen) {
@@ -1553,10 +1631,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     if (!isPaymentOpen || !selectedPaymentIsCash || !showCashPanel) return;
-    window.setTimeout(() => {
-      cashPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      cashAmountInputRef.current?.focus();
-    }, 50);
+    let frame = 0;
+    let nestedFrame = 0;
+    frame = window.requestAnimationFrame(() => {
+      nestedFrame = window.requestAnimationFrame(() => {
+        const container = checkoutModalScrollRef.current;
+        if (container) {
+          container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        } else {
+          cashPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        }
+        cashAmountInputRef.current?.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(nestedFrame);
+    };
   }, [isPaymentOpen, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
@@ -2082,6 +2173,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsPaymentMethodOpen(false);
     setPaymentMethod("cash");
     setSelectedPaymentMethodCode("");
+    setPaymentMethodAutoSelectedFromOrderType(false);
     setCardType(null);
     setPaymentAmount("");
     setTipAmount("");
@@ -3529,7 +3621,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       {/* Payment Dialog */}
-      <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setShowCashPanel(false); setActiveTenderField(null); } }}>
+      <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setPaymentMethodAutoSelectedFromOrderType(false); setShowCashPanel(false); setActiveTenderField(null); } }}>
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
@@ -3538,7 +3630,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </DialogHeader>
             {checkoutDraft ? (
               <>
-                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
+                <div ref={checkoutModalScrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
                   <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
                     <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
@@ -3633,8 +3725,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-2 border-t bg-background px-4 py-3 sm:px-6">
-                  <div className="space-y-2 rounded-xl border bg-muted/20 p-2">
-                    <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Método de pago</div>
+                  <div className="space-y-2 rounded-xl border bg-muted/20 p-2" role="group" aria-label="Métodos de pago">
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                       {paymentMethodButtons.map((option) => {
                         const selected = selectedPaymentMethodCode === option.code;
@@ -3644,22 +3735,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             type="button"
                             variant={selected ? "default" : "outline"}
                             className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
-                            onClick={() => {
-                              setPaymentMethod(option.method);
-                              setSelectedPaymentMethodCode(option.code);
-                              setCardType(option.code === "card" ? "credit" : null);
-                              const cashSelected = option.method === "cash" || option.code === "cash" || option.code === "efectivo";
-                              setShowCashPanel(cashSelected);
-                              if (cashSelected) {
-                                setPaymentAmount(centsToInput(expectedPaymentCents));
-                                setTipAmount("0");
-                                setActiveTenderField("payment");
-                              } else {
-                                setTipAmount("0");
-                                setActiveTenderField(null);
-                              }
-                              setShouldResetTenderOnFirstTap(true);
-                            }}
+                            onClick={() => selectPaymentMethodOption(option, false)}
                           >
                             {option.label}
                           </Button>
@@ -3710,18 +3786,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button
                   key={option.code}
                   type="button"
-                  variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                  variant={(normalizePedidosYaText(option.code) === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
                   className="h-14 text-base"
-                  onClick={() => {
-                    setPaymentMethod(option.method);
-                    if (option.code === "card") {
-                      setSelectedPaymentMethodCode(option.code);
-                      setCardType("credit");
-                    } else {
-                      setSelectedPaymentMethodCode(option.code);
-                      setCardType(null);
-                    }
-                  }}
+                  onClick={() => selectPaymentMethodOption(option, false)}
                 >
                   {option.label}
                 </Button>
