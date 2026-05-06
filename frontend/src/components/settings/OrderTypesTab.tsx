@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { createOrderType, deleteOrderType, listOrderTypes, ServiceType, updateOrderType } from "@/lib/api";
+import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { toast } from "sonner";
 
 const normalizeKey = (value: string) =>
@@ -23,6 +24,7 @@ export const OrderTypesTab = () => {
   const [sortOrder, setSortOrder] = useState("0");
   const [isActive, setIsActive] = useState(true);
   const [disposablesEnabled, setDisposablesEnabled] = useState(false);
+  const [colorHex, setColorHex] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   const load = async () => {
@@ -50,6 +52,7 @@ export const OrderTypesTab = () => {
     setSortOrder("0");
     setIsActive(true);
     setDisposablesEnabled(false);
+    setColorHex("");
     setIsOpen(true);
   };
 
@@ -60,6 +63,7 @@ export const OrderTypesTab = () => {
     setSortOrder(String(item.sortOrder ?? 0));
     setIsActive(item.isActive !== false);
     setDisposablesEnabled(item.disposablesEnabled === true);
+    setColorHex(item.colorHex ?? "");
     setIsOpen(true);
   };
 
@@ -68,6 +72,10 @@ export const OrderTypesTab = () => {
     const key = normalizeKey(keyValue || name);
     if (!label || !key) {
       toast.error("Nombre y código son requeridos");
+      return;
+    }
+    if (colorHex && !isValidHexColor(colorHex)) {
+      toast.error("Usa un color HEX válido (#RRGGBB)");
       return;
     }
     setIsSaving(true);
@@ -79,6 +87,7 @@ export const OrderTypesTab = () => {
           sortOrder: Number(sortOrder || 0),
           isActive,
           disposablesEnabled,
+          colorHex: colorHex || null,
         });
       } else {
         await createOrderType({
@@ -87,6 +96,7 @@ export const OrderTypesTab = () => {
           sortOrder: Number(sortOrder || 0),
           isActive,
           disposablesEnabled,
+          colorHex: colorHex || null,
         });
       }
       setIsOpen(false);
@@ -99,6 +109,16 @@ export const OrderTypesTab = () => {
       setIsSaving(false);
     }
   };
+
+  const duplicateColorNames = useMemo(() => {
+    if (!colorHex || !isValidHexColor(colorHex)) return [] as string[];
+    const normalized = colorHex.toUpperCase();
+    return items
+      .filter((item) => item.id !== editing?.id && (item.colorHex || "").toUpperCase() === normalized)
+      .map((item) => item.label);
+  }, [colorHex, editing?.id, items]);
+
+  const colorPalette = ["#16A34A", "#2563EB", "#F97316", "#DC2626", "#7C3AED", "#0891B2", "#CA8A04", "#DB2777"];
 
   const onDelete = async (item: ServiceType) => {
     if (!window.confirm(`Este tipo se desasignará de órdenes existentes y luego se eliminará: ${item.label}`)) return;
@@ -126,7 +146,7 @@ export const OrderTypesTab = () => {
         {sorted.map((item) => (
           <div key={item.id} className="rounded-xl border p-3 flex items-center justify-between gap-3">
             <div>
-              <p className="font-semibold">{item.label}</p>
+              <div className="flex items-center gap-2"><span className="h-4 w-4 rounded-full border" style={item.colorHex ? { backgroundColor: item.colorHex } : undefined} /><p className="font-semibold">{item.label}</p></div>
               <p className="text-xs text-muted-foreground">{item.key} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Inactivo"} · Desechables: {item.disposablesEnabled ? "ON" : "OFF"}</p>
             </div>
             <div className="flex gap-2">
@@ -158,6 +178,22 @@ export const OrderTypesTab = () => {
             <div className="flex items-center justify-between">
               <Label>Activo</Label>
               <Switch checked={isActive} onCheckedChange={setIsActive} />
+            </div>
+            <div className="space-y-2 rounded-xl border p-3">
+              <Label>Color del tipo</Label>
+              <div className="flex items-center gap-2">
+                <Input type="color" value={isValidHexColor(colorHex) ? colorHex : "#16A34A"} onChange={(e) => setColorHex(e.target.value.toUpperCase())} className="h-11 w-16 p-1" />
+                <Input value={colorHex} onChange={(e) => setColorHex(e.target.value.toUpperCase())} placeholder="#16A34A" maxLength={7} />
+                <Button type="button" variant="outline" onClick={() => setColorHex("")}>Sin color</Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {colorPalette.map((color) => (
+                  <button key={color} type="button" className="h-8 w-8 rounded-full border shadow-sm" style={{ backgroundColor: color }} onClick={() => setColorHex(color)} aria-label={`Usar color ${color}`} />
+                ))}
+              </div>
+              {colorHex && !isValidHexColor(colorHex) ? <p className="text-xs text-destructive">Usa formato HEX #RRGGBB.</p> : null}
+              {duplicateColorNames.length > 0 ? <p className="text-xs text-amber-600">Color en uso: {duplicateColorNames.join(", ")}</p> : null}
+              {isValidHexColor(colorHex) ? <div className="rounded-xl px-4 py-3 text-center font-semibold" style={{ backgroundColor: colorHex, color: getReadableTextColor(colorHex) }}>Vista previa: {name || "Tipo de Pedido"}</div> : null}
             </div>
             <div className="flex items-center justify-between">
               <Label>Aplicar desechables</Label>

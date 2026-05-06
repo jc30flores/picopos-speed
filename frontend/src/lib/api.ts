@@ -186,6 +186,7 @@ export type ServiceType = {
   isActive?: boolean;
   sortOrder?: number;
   disposablesEnabled?: boolean;
+  colorHex?: string | null;
 };
 
 
@@ -1986,7 +1987,7 @@ export const getActiveDiscounts = async (params?: {
 
 export const getServiceTypes = async (): Promise<ServiceType[]> => {
   const response = await request("/core/service-types/");
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>>(response);
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean; color_hex?: string | null }>>(response);
   return data.map((item) => ({
     id: item.id,
     key: item.key,
@@ -1994,34 +1995,36 @@ export const getServiceTypes = async (): Promise<ServiceType[]> => {
     isActive: item.is_active,
     sortOrder: item.sort_order ?? 0,
     disposablesEnabled: item.disposables_enabled === true,
+    colorHex: item.color_hex ?? null,
   }));
 };
 
 export const listOrderTypes = async (): Promise<ServiceType[]> => {
   const response = await request('/core/order-types/');
-  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>>(response);
-  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0, disposablesEnabled: item.disposables_enabled === true }));
+  const data = await handleJson<Array<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean; color_hex?: string | null }>>(response);
+  return data.map((item) => ({ id: item.id, key: item.key, label: item.label, isActive: item.is_active, sortOrder: item.sort_order ?? 0, disposablesEnabled: item.disposables_enabled === true, colorHex: item.color_hex ?? null }));
 };
 
-export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled?: boolean }): Promise<ServiceType> => {
+export const createOrderType = async (payload: { key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled?: boolean; colorHex?: string | null }): Promise<ServiceType> => {
   const response = await request('/core/order-types/', {
     method: 'POST',
-    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder, disposables_enabled: payload.disposablesEnabled === true }),
+    body: JSON.stringify({ key: payload.key, label: payload.label, is_active: payload.isActive, sort_order: payload.sortOrder, disposables_enabled: payload.disposablesEnabled === true, color_hex: payload.colorHex || null }),
   });
-  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>(response);
-  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true };
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean; color_hex?: string | null }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true, colorHex: data.color_hex ?? null };
 };
 
-export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled: boolean }>): Promise<ServiceType> => {
+export const updateOrderType = async (id: number, payload: Partial<{ key: string; label: string; isActive: boolean; sortOrder: number; disposablesEnabled: boolean; colorHex: string | null }>): Promise<ServiceType> => {
   const body: Record<string, unknown> = {};
   if (payload.key !== undefined) body.key = payload.key;
   if (payload.label !== undefined) body.label = payload.label;
   if (payload.isActive !== undefined) body.is_active = payload.isActive;
   if (payload.sortOrder !== undefined) body.sort_order = payload.sortOrder;
   if (payload.disposablesEnabled !== undefined) body.disposables_enabled = payload.disposablesEnabled;
+  if (payload.colorHex !== undefined) body.color_hex = payload.colorHex || null;
   const response = await request(`/core/order-types/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
-  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean }>(response);
-  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true };
+  const data = await handleJson<{ id: number; key: string; label: string; is_active: boolean; sort_order?: number; disposables_enabled?: boolean; color_hex?: string | null }>(response);
+  return { id: data.id, key: data.key, label: data.label, isActive: data.is_active, sortOrder: data.sort_order ?? 0, disposablesEnabled: data.disposables_enabled === true, colorHex: data.color_hex ?? null };
 };
 
 export const deleteOrderType = async (id: number): Promise<void> => {
@@ -5070,11 +5073,11 @@ export const updateEmployeeHoursCycle = async (cycleId: number, payload: { date:
   return handleJson<any>(response);
 };
 
-export const createEmployeeHoursCycle = async (payload: { employeeId: number; date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; shiftSeconds: number; breakSeconds: number; reason: string; }) => {
+export const createEmployeeHoursCycle = async (payload: { employeeId: number; date: string; clockInTime: string; clockOutTime: string | null; clockOutNextDay: boolean; reason: string; shiftSeconds?: number; breakSeconds?: number; breakStartTime?: string | null; breakEndTime?: string | null; }) => {
   const response = await request(`/reports/employee-hours/cycles/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
+    body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, break_start_time: payload.breakStartTime, break_end_time: payload.breakEndTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
   });
   return handleJson<any>(response);
 };

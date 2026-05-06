@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
+import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { calculatePosPricing } from "@/lib/posPricing";
@@ -37,6 +38,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   createOrder,
   Customer,
@@ -78,6 +80,7 @@ import {
   Product,
   PaymentMethod,
   PaymentMethodOption,
+  ServiceType,
   CashSessionSnapshot,
   CashTransaction,
   Order,
@@ -162,6 +165,20 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
   };
 };
 
+const normalizePedidosYaText = (value: unknown) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
+const isPedidosYaLike = (value: unknown) => normalizePedidosYaText(value) === "pedidosya";
+
+const isPedidosYaServiceType = (orderType?: Partial<ServiceType> & { code?: string; name?: string } | null) =>
+  Boolean(orderType) && (isPedidosYaLike(orderType?.code) || isPedidosYaLike(orderType?.key) || isPedidosYaLike(orderType?.name) || isPedidosYaLike(orderType?.label));
+
+const isPedidosYaPaymentMethod = (method?: Partial<PaymentMethodOption> & { label?: string } | null) =>
+  Boolean(method) && (isPedidosYaLike(method?.code) || isPedidosYaLike(method?.name) || isPedidosYaLike(method?.label));
+
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
 const parseMoneyToCents = (value: string): number => Math.max(0, toCents(value));
@@ -190,6 +207,14 @@ const shouldOpenCashDrawer = (method: PaymentMethod, methodCode?: string): boole
   return normalizedCode === "cash" || normalizedCode === "efectivo";
 };
 
+const isCashPaymentMethod = (method?: { code?: string | null; name?: string | null; isCash?: boolean } | null): boolean => {
+  if (!method) return false;
+  if (method.isCash === true) return true;
+  const normalizedCode = String(method.code || "").trim().toLowerCase();
+  if (["cash", "efectivo"].includes(normalizedCode)) return true;
+  return String(method.name || "").trim().toLowerCase() === "efectivo";
+};
+
 const shouldShowChange = (summary: SaleCompletionSummary | null): boolean => {
   if (!summary) return false;
   if (!shouldOpenCashDrawer(summary.paymentMethod, summary.paymentMethodCode)) return false;
@@ -213,6 +238,76 @@ const buildSaleCompletionSummary = (params: {
   };
 };
 
+type CashPaymentPanelProps = {
+  totalCents: number;
+  paymentAmount: string;
+  tipAmount: string;
+  activeTenderField: "payment" | "tip" | null;
+  changeCents: number;
+  isExactPayment: boolean;
+  onPaymentAmountChange: (value: string) => void;
+  onTipAmountChange: (value: string) => void;
+  onFocusTenderField: (field: "payment" | "tip") => void;
+  onApplyDenomination: (amountCents: number) => void;
+  onClear: () => void;
+  onBackspace: () => void;
+  onExact: () => void;
+  panelRef?: RefObject<HTMLDivElement>;
+  paymentInputRef?: RefObject<HTMLInputElement>;
+};
+
+const CashPaymentPanel = ({
+  totalCents,
+  paymentAmount,
+  tipAmount,
+  activeTenderField,
+  changeCents,
+  isExactPayment,
+  onPaymentAmountChange,
+  onTipAmountChange,
+  onFocusTenderField,
+  onApplyDenomination,
+  onClear,
+  onBackspace,
+  onExact,
+  panelRef,
+  paymentInputRef,
+}: CashPaymentPanelProps) => (
+  <div ref={panelRef} className="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <h3 className="font-semibold">Pago en efectivo</h3>
+        <p className="text-xs text-muted-foreground">Monto recibido, propina y cambio.</p>
+      </div>
+      <Badge variant="outline">Total {formatMoney(totalCents / 100)}</Badge>
+    </div>
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-2">
+        <Label>Monto recibido</Label>
+        <Input ref={paymentInputRef} value={paymentAmount} onFocus={() => onFocusTenderField("payment")} onClick={() => onFocusTenderField("payment")} onChange={(e) => onPaymentAmountChange(e.target.value)} inputMode="decimal" />
+      </div>
+      <div className="space-y-2">
+        <Label>Propina</Label>
+        <Input value={tipAmount} onFocus={() => onFocusTenderField("tip")} onClick={() => onFocusTenderField("tip")} onChange={(e) => onTipAmountChange(e.target.value)} inputMode="decimal" />
+      </div>
+    </div>
+    <div className={cn("rounded-lg border bg-background/80 p-3 text-center font-semibold", isExactPayment ? "text-lg" : "text-2xl sm:text-3xl")}> 
+      {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+      {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+      {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+    </div>
+    <div className="grid grid-cols-4 gap-2">
+      {DENOMINATION_CENTS.map((value) => (
+        <Button key={value} type="button" className="h-11 text-sm" variant="outline" onClick={() => onApplyDenomination(value)}>
+          {formatMoney(value / 100)}
+        </Button>
+      ))}
+      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onClear}>Borrar</Button>
+      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onBackspace}>←</Button>
+      <Button type="button" className="col-span-2 h-12 text-sm" variant="outline" onClick={onExact}>Exacto</Button>
+    </div>
+  </div>
+);
 
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
@@ -268,12 +363,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
+  const [isOrderTypeSelectorOpen, setIsOrderTypeSelectorOpen] = useState(false);
+  const [showCashPanel, setShowCashPanel] = useState(false);
   const [isCustomerDteOpen, setIsCustomerDteOpen] = useState(false);
   const [isSplitConfigOpen, setIsSplitConfigOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
-  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("cash");
+  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("");
+  const [paymentMethodAutoSelectedFromOrderType, setPaymentMethodAutoSelectedFromOrderType] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
@@ -312,10 +410,14 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
   const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
+  const checkoutModalScrollRef = useRef<HTMLDivElement | null>(null);
+  const cashPanelRef = useRef<HTMLDivElement | null>(null);
+  const cashAmountInputRef = useRef<HTMLInputElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
   const cartEndRef = useRef<HTMLDivElement | null>(null);
   const previousCartLengthRef = useRef(0);
+  const previousServiceTypeRef = useRef<string>("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -1085,6 +1187,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setPaymentAmount(centsToInput(dueCents));
     setTipAmount("0");
     setPaymentReference("");
+    setSelectedPaymentMethodCode("");
+    setPaymentMethodAutoSelectedFromOrderType(false);
+    setPaymentMethod("cash");
+    setCardType(null);
+    setShowCashPanel(false);
+    setActiveTenderField(null);
     setSplitEnabled(false);
     const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
@@ -1361,13 +1469,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     getPaymentMethods().then((methods) => {
       setPaymentMethods(methods);
-      const first = methods.find((method) => String(method.code || "").toLowerCase() === "cash") || methods[0];
-      if (first) {
-        setSelectedPaymentMethodCode(first.code);
-        const code = (first.code || "").toLowerCase();
-        const fallback = first.isCash ? "cash" : code.startsWith("card") ? "card" : "transfer";
-        setPaymentMethod(fallback as PaymentMethod);
-      }
     }).catch(() => undefined);
   }, []);
 
@@ -1422,55 +1523,132 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   }, [dteDocumentType, customers, selectedCustomerId, defaultConsumerCustomer]);
 
   const paymentMethodButtons = useMemo(() => {
-    const byCode = new Map(paymentMethods.map((method) => [String(method.code || "").toLowerCase(), method]));
-    const desiredCodes = ["cash", "card", "transfer", "pedidos_ya", "paypal"] as const;
-    return desiredCodes
-      .map((code) => {
-        const method = byCode.get(code);
+    const desiredMethods = [
+      { key: "cash", method: "cash" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "cash" },
+      { key: "card", method: "card" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "card" },
+      { key: "transfer", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "transfer" },
+      { key: "pedidos_ya", method: "transfer" as PaymentMethod, matches: isPedidosYaPaymentMethod },
+      { key: "paypal", method: "transfer" as PaymentMethod, matches: (method: PaymentMethodOption) => normalizePedidosYaText(method.code) === "paypal" },
+    ];
+    return desiredMethods
+      .map((desired) => {
+        const method = paymentMethods.find(desired.matches);
         if (!method) return null;
         return {
-          code,
-          label: method.name || (code === "card" ? "Tarjeta" : code),
-          method: code === "cash" ? ("cash" as PaymentMethod) : code === "card" ? ("card" as PaymentMethod) : ("transfer" as PaymentMethod),
+          code: method.code,
+          label: method.name || (desired.key === "card" ? "Tarjeta" : method.code),
+          method: desired.method,
+          option: method,
         };
       })
-      .filter((item): item is { code: "cash" | "card" | "transfer" | "pedidos_ya" | "paypal"; label: string; method: PaymentMethod } => Boolean(item));
+      .filter((item): item is { code: string; label: string; method: PaymentMethod; option: PaymentMethodOption } => Boolean(item));
   }, [paymentMethods]);
 
+  const selectedPaymentMethodOption = useMemo(
+    () => paymentMethods.find((method) => String(method.code || "").toLowerCase() === String(selectedPaymentMethodCode || "").toLowerCase()),
+    [paymentMethods, selectedPaymentMethodCode],
+  );
+  const selectedPaymentIsCash = Boolean(selectedPaymentMethodOption) && (isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode));
+  const selectedServiceType = useMemo(
+    () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
+    [serviceTypes, serviceType],
+  );
+
+  const selectPaymentMethodOption = useCallback((option: { code: string; method: PaymentMethod; option: PaymentMethodOption }, autoSelectedFromOrderType = false) => {
+    setPaymentMethod(option.method);
+    setSelectedPaymentMethodCode(option.code);
+    setPaymentMethodAutoSelectedFromOrderType(autoSelectedFromOrderType);
+    setCardType(normalizePedidosYaText(option.code) === "card" ? "credit" : null);
+    const cashSelected = isCashPaymentMethod(option.option) || shouldOpenCashDrawer(option.method, option.code);
+    setShowCashPanel(cashSelected);
+    if (cashSelected) {
+      setPaymentAmount(centsToInput(expectedPaymentCents));
+      setTipAmount("0");
+      setActiveTenderField("payment");
+    } else {
+      setTipAmount("0");
+      setActiveTenderField(null);
+    }
+    setShouldResetTenderOnFirstTap(true);
+  }, [expectedPaymentCents]);
+
+  const autoSelectPedidosYaPaymentMethod = useCallback(() => {
+    const pedidosYaMethod = paymentMethodButtons.find((option) => isPedidosYaPaymentMethod(option.option));
+    if (!pedidosYaMethod) return false;
+    selectPaymentMethodOption(pedidosYaMethod, true);
+    return true;
+  }, [paymentMethodButtons, selectPaymentMethodOption]);
+
   useEffect(() => {
-    if (isPaymentOpen) {
+    if (!serviceType || paymentMethods.length === 0) return;
+    const currentServiceType = serviceTypes.find((type) => type.key === serviceType) ?? null;
+    const currentIsPedidosYa = isPedidosYaServiceType(currentServiceType);
+    const serviceTypeChanged = previousServiceTypeRef.current !== serviceType;
+
+    if (currentIsPedidosYa && (serviceTypeChanged || (!selectedPaymentMethodCode && !paymentMethodAutoSelectedFromOrderType))) {
+      autoSelectPedidosYaPaymentMethod();
+    }
+
+    if (!currentIsPedidosYa && paymentMethodAutoSelectedFromOrderType) {
+      setSelectedPaymentMethodCode("");
+      setPaymentMethodAutoSelectedFromOrderType(false);
+      setPaymentMethod("cash");
+      setCardType(null);
+      setShowCashPanel(false);
+      setTipAmount("0");
+      setActiveTenderField(null);
+    }
+
+    previousServiceTypeRef.current = serviceType;
+  }, [autoSelectPedidosYaPaymentMethod, paymentMethodAutoSelectedFromOrderType, paymentMethods.length, selectedPaymentMethodCode, serviceType, serviceTypes]);
+
+  useEffect(() => {
+    if (!isPaymentOpen || selectedPaymentMethodCode || !isPedidosYaServiceType(selectedServiceType)) return;
+    autoSelectPedidosYaPaymentMethod();
+  }, [autoSelectPedidosYaPaymentMethod, isPaymentOpen, selectedPaymentMethodCode, selectedServiceType]);
+
+  useEffect(() => {
+    if (!isPaymentOpen) {
+      setShowCashPanel(false);
+      return;
+    }
+    if (!selectedPaymentIsCash) {
+      setShowCashPanel(false);
+    }
+    if (!showCashPanel || !selectedPaymentIsCash) {
       if (splitEnabled) {
         const targetAmount = (activeSplitPart?.amountCents ?? checkoutTotalCents) / 100;
         setPaymentAmount(toNumber(targetAmount).toFixed(2));
       } else {
         setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
       }
+      if (selectedPaymentIsCash && !showCashPanel) {
+        setTipAmount("0");
+        setActiveTenderField(null);
+      }
     }
-  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
+  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
-    const normalizedMethod = normalizePaymentMethodForOrderType(serviceType, selectedPaymentMethodCode);
-    if (normalizedMethod === "pedidos_ya") {
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[pos-debug] auto_payment_method", { serviceType, method: "pedidos_ya" });
-      }
-      setPaymentMethod("transfer");
-      if (selectedPaymentMethodCode !== "pedidos_ya") {
-        setSelectedPaymentMethodCode("pedidos_ya");
-      }
-      setCardType(null);
-      if (isPaymentMethodOpen) {
-        setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
-      }
-      return;
-    }
-    if (normalizedMethod === "cash" && selectedPaymentMethodCode === "pedidos_ya") {
-      setPaymentMethod("cash");
-      setSelectedPaymentMethodCode("cash");
-      setCardType(null);
-    }
-  }, [expectedPaymentCents, isPaymentMethodOpen, selectedPaymentMethodCode, serviceType]);
+    if (!isPaymentOpen || !selectedPaymentIsCash || !showCashPanel) return;
+    let frame = 0;
+    let nestedFrame = 0;
+    frame = window.requestAnimationFrame(() => {
+      nestedFrame = window.requestAnimationFrame(() => {
+        const container = checkoutModalScrollRef.current;
+        if (container) {
+          container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        } else {
+          cashPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        }
+        cashAmountInputRef.current?.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(nestedFrame);
+    };
+  }, [isPaymentOpen, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
     if (!isPaymentOpen || !checkoutDraft) return;
@@ -1949,34 +2127,37 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const applyTenderDenomination = (amountCents: number) => {
-    if (!activeTenderField) return;
-    const current = activeTenderField === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
+    const field = activeTenderField ?? "payment";
+    const current = field === "payment" ? parseMoneyToCents(paymentAmount) : parseMoneyToCents(tipAmount);
     const next = shouldResetTenderOnFirstTap ? amountCents : current + amountCents;
     const value = centsToInput(next);
-    if (activeTenderField === "payment") setPaymentAmount(value);
-    if (activeTenderField === "tip") setTipAmount(value);
+    if (field === "payment") setPaymentAmount(value);
+    if (field === "tip") setTipAmount(value);
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(false);
   };
 
   const clearTenderField = () => {
-    if (!activeTenderField) return;
-    if (activeTenderField === "payment") setPaymentAmount("");
-    if (activeTenderField === "tip") setTipAmount("");
+    const field = activeTenderField ?? "payment";
+    if (field === "payment") setPaymentAmount("");
+    if (field === "tip") setTipAmount("");
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(true);
   };
 
   const backspaceTenderField = () => {
-    if (!activeTenderField) return;
-    const currentRaw = activeTenderField === "payment" ? paymentAmount : tipAmount;
+    const field = activeTenderField ?? "payment";
+    const currentRaw = field === "payment" ? paymentAmount : tipAmount;
     const nextRaw = currentRaw.slice(0, -1);
-    if (activeTenderField === "payment") setPaymentAmount(nextRaw);
-    if (activeTenderField === "tip") setTipAmount(nextRaw);
+    if (field === "payment") setPaymentAmount(nextRaw);
+    if (field === "tip") setTipAmount(nextRaw);
+    setActiveTenderField(field);
     setShouldResetTenderOnFirstTap(false);
   };
 
   const setExactTenderAmount = () => {
-    if (activeTenderField !== "payment") return;
     setPaymentAmount(centsToInput(totalDueCents));
+    setActiveTenderField("payment");
     setShouldResetTenderOnFirstTap(false);
   };
 
@@ -1991,11 +2172,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsPaymentOpen(false);
     setIsPaymentMethodOpen(false);
     setPaymentMethod("cash");
-    setSelectedPaymentMethodCode("cash");
+    setSelectedPaymentMethodCode("");
+    setPaymentMethodAutoSelectedFromOrderType(false);
     setCardType(null);
     setPaymentAmount("");
     setTipAmount("");
     setPaymentReference("");
+    setShowCashPanel(false);
     setActiveTenderField(null);
     setShouldResetTenderOnFirstTap(true);
     setActiveOrder(null);
@@ -2177,14 +2360,21 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No hay productos en el pedido");
       return;
     }
-    const amountReceived = toNumber(paymentAmount);
-    const tipValue = toNumber(tipAmount);
-    const totalDue = totalDueCents / 100;
+    if (!selectedPaymentMethodCode) {
+      toast.error("Selecciona un método de pago.");
+      return;
+    }
+    const rawAmountReceived = toNumber(paymentAmount);
+    const rawTipValue = toNumber(tipAmount);
+    const exactCashAmount = expectedPaymentCents / 100;
+    const amountReceived = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : rawAmountReceived;
+    const tipValue = selectedPaymentIsCash && !showCashPanel ? 0 : rawTipValue;
+    const totalDue = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : totalDueCents / 100;
     const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
     const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
     const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
 
-    if (!amountReceived || amountReceived <= 0) {
+    if (selectedPaymentIsCash && (!amountReceived || amountReceived <= 0)) {
       toast.error("Ingresa un monto válido");
       return;
     }
@@ -2196,7 +2386,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
-    if (amountReceived < totalDue) {
+    if (selectedPaymentIsCash && amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
     }
@@ -2238,7 +2428,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         cardType: paymentMethod === "card" ? "credit" : undefined,
         amount: amountForApi,
         amountApplied: amountForApi,
-        cashReceived: amountReceived,
+        cashReceived: selectedPaymentIsCash ? amountReceived : amountForApi,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
@@ -2265,7 +2455,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setSaleCompletionSummary(
           buildSaleCompletionSummary({
             totalToPay: finalTotalToPay,
-            amountReceived,
+            amountReceived: selectedPaymentIsCash ? amountReceived : finalTotalToPay,
             paymentMethod,
             paymentMethodCode: selectedPaymentMethodCode,
           })
@@ -2332,6 +2522,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     });
   }, [customersByDte, normalizedCustomerSearch]);
   const visibleCustomers = filteredCustomers.slice(0, 4);
+  const handleOpenCustomerDte = () => {
+    if (activeOrder?.whatsappNumClienteCountry === "ESA" || activeOrder?.whatsappNumClienteCountry === "USA") {
+      setWhatsappClientCountry(activeOrder.whatsappNumClienteCountry);
+    }
+    if (activeOrder?.whatsappNumCliente) {
+      const country = activeOrder.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
+      setWhatsappClientInput(formatWhatsAppClientPhone(country, activeOrder.whatsappNumCliente));
+    }
+    setWhatsappClientError("");
+    setIsCustomerDteOpen(true);
+  };
+
   const handleAcceptCustomerDte = async () => {
     if (!selectedCustomerId) {
       toast.error("Selecciona un cliente");
@@ -2736,27 +2938,64 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </div>
 
             <div className="flex-none border-b px-4 py-3">
-              <div className="flex flex-wrap gap-2">
-                {serviceTypes.length > 0 ? (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={cycleServiceType}
-                    className="relative min-h-16 w-full bg-primary px-4 text-primary-foreground hover:bg-primary/90"
-                  >
-                    <span className="flex w-full flex-col items-center justify-center leading-tight">
-                      <span className="text-[10px] font-medium uppercase tracking-[1px] text-primary-foreground/60">TIPO DE PEDIDO</span>
-                      <span className="mt-1 text-[18px] font-bold text-primary-foreground">
-                        {serviceTypes.find((type) => type.key === serviceType)?.label ?? serviceTypes[0]?.label}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Popover open={isOrderTypeSelectorOpen} onOpenChange={setIsOrderTypeSelectorOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant={selectedServiceType && isValidHexColor(selectedServiceType.colorHex) ? "outline" : "default"}
+                      aria-label="Seleccionar tipo de pedido"
+                      className="relative min-h-16 justify-center rounded-xl px-4 text-center"
+                      style={selectedServiceType && isValidHexColor(selectedServiceType.colorHex) ? { backgroundColor: selectedServiceType.colorHex ?? undefined, color: getReadableTextColor(selectedServiceType.colorHex), borderColor: selectedServiceType.colorHex ?? undefined } : undefined}
+                    >
+                      <span className="flex min-w-0 flex-col leading-tight">
+                        <span className="text-[10px] font-medium uppercase tracking-[1px] opacity-70">Tipo de Pedido</span>
+                        <span className="truncate text-base font-bold">{selectedServiceType?.label ?? "Sin tipo"}</span>
                       </span>
-                    </span>
-                    <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary-foreground/80" />
-                  </Button>
-                ) : (
-                  <span className="text-sm text-muted-foreground">
-                    Configura tipos de pedido en Configuración.
+                      <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-80" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="z-50 w-[min(24rem,calc(100vw-2rem))] p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[1px] text-muted-foreground">Elige Tipo de Pedido</div>
+                    <div className="grid grid-cols-2 gap-2" role="listbox" aria-label="Tipos de pedido activos">
+                      {serviceTypes.map((type) => {
+                        const selected = type.key === serviceType;
+                        const hasColor = isValidHexColor(type.colorHex);
+                        const style = hasColor ? { backgroundColor: type.colorHex ?? undefined, color: getReadableTextColor(type.colorHex), borderColor: type.colorHex ?? undefined } : undefined;
+                        return (
+                          <Button
+                            key={type.key}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            className={cn("min-h-14 whitespace-normal rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
+                            style={style}
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => {
+                              setServiceType(type.key);
+                              setIsOrderTypeSelectorOpen(false);
+                            }}
+                          >
+                            {type.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="Seleccionar cliente"
+                  className="relative min-h-16 justify-center rounded-xl px-4 text-center"
+                  onClick={handleOpenCustomerDte}
+                >
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <span className="text-[10px] font-medium uppercase tracking-[1px] text-muted-foreground">Cliente</span>
+                    <span className="truncate text-base font-bold">{selectedCustomer ? selectedCustomer.fullName : "Consumidor final"}</span>
                   </span>
-                )}
+                </Button>
               </div>
             </div>
 
@@ -3382,7 +3621,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       {/* Payment Dialog */}
-      <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
+      <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setPaymentMethodAutoSelectedFromOrderType(false); setShowCashPanel(false); setActiveTenderField(null); } }}>
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
@@ -3391,10 +3630,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </DialogHeader>
             {checkoutDraft ? (
               <>
-                <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                  <div className="rounded-xl border bg-muted/20 px-4 py-5 text-center shadow-sm">
+                <div ref={checkoutModalScrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
+                  <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
-                    <div className="mt-3 text-5xl font-extrabold leading-none text-secondary sm:text-6xl">{formatMoney(paymentTotal)}</div>
+                    <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -3405,7 +3644,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       </span>
                     </div>
                     <div className="rounded-md border">
-                      <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
+                      <div className="max-h-80 divide-y divide-border overflow-y-auto text-sm">
                         {(activeOrder?.items?.length ? activeOrder.items : checkoutDraft.items.map((item) => ({
                           id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
                           productName: item.name,
@@ -3463,38 +3702,62 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
                     </div>
                   ) : null}
+
+                  {selectedPaymentIsCash && showCashPanel ? (
+                    <CashPaymentPanel
+                      totalCents={expectedPaymentCents}
+                      paymentAmount={paymentAmount}
+                      tipAmount={tipAmount}
+                      activeTenderField={activeTenderField}
+                      changeCents={changeCents}
+                      isExactPayment={isExactPayment}
+                      onPaymentAmountChange={setPaymentAmount}
+                      onTipAmountChange={setTipAmount}
+                      onFocusTenderField={focusTenderField}
+                      onApplyDenomination={applyTenderDenomination}
+                      onClear={clearTenderField}
+                      onBackspace={backspaceTenderField}
+                      onExact={setExactTenderAmount}
+                      panelRef={cashPanelRef}
+                      paymentInputRef={cashAmountInputRef}
+                    />
+                  ) : null}
                 </div>
 
-                <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
+                <div className="sticky bottom-0 z-30 shrink-0 space-y-2 border-t bg-background px-4 py-3 sm:px-6">
+                  <div className="space-y-2 rounded-xl border bg-muted/20 p-2" role="group" aria-label="Métodos de pago">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {paymentMethodButtons.map((option) => {
+                        const selected = selectedPaymentMethodCode === option.code;
+                        return (
+                          <Button
+                            key={option.code}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
+                            onClick={() => selectPaymentMethodOption(option, false)}
+                          >
+                            {option.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    {!selectedPaymentMethodCode ? <p className="text-xs text-muted-foreground">Selecciona un método de pago para continuar.</p> : null}
+                  </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button
-                      className="h-14 min-w-0 text-base"
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        if (activeOrder?.whatsappNumClienteCountry === "ESA" || activeOrder?.whatsappNumClienteCountry === "USA") {
-                          setWhatsappClientCountry(activeOrder.whatsappNumClienteCountry);
-                        }
-                        if (activeOrder?.whatsappNumCliente) {
-                          const country = activeOrder.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
-                          setWhatsappClientInput(formatWhatsAppClientPhone(country, activeOrder.whatsappNumCliente));
-                        }
-                        setWhatsappClientError("");
-                        setIsCustomerDteOpen(true);
-                      }}
-                    >
+                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={handleOpenCustomerDte}>
                       <span className="min-w-0 truncate text-left">
                         Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
                       </span>
                     </Button>
-                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="h-14 flex-1 text-base" onClick={() => { setIsPaymentOpen(false); setIsPaymentMethodOpen(true); }} disabled={splitEnabled && !splitValidation.isValid}>
-                      Continuar al pago
+                    <Button variant="outline" className="h-12 flex-1 text-sm" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                      {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
                 </div>
@@ -3523,18 +3786,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button
                   key={option.code}
                   type="button"
-                  variant={(option.code === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
+                  variant={(normalizePedidosYaText(option.code) === "card" ? paymentMethod === "card" : selectedPaymentMethodCode === option.code) ? "default" : "outline"}
                   className="h-14 text-base"
-                  onClick={() => {
-                    setPaymentMethod(option.method);
-                    if (option.code === "card") {
-                      setSelectedPaymentMethodCode(option.code);
-                      setCardType("credit");
-                    } else {
-                      setSelectedPaymentMethodCode(option.code);
-                      setCardType(null);
-                    }
-                  }}
+                  onClick={() => selectPaymentMethodOption(option, false)}
                 >
                   {option.label}
                 </Button>

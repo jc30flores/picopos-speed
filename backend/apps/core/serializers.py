@@ -10,7 +10,16 @@ from apps.menu.models import Product
 class ServiceTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceType
-        fields = ["id", "key", "label", "is_active", "sort_order", "disposables_enabled"]
+        fields = ["id", "key", "label", "is_active", "sort_order", "disposables_enabled", "color_hex"]
+
+
+    def validate_color_hex(self, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        cleaned = str(value).strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", cleaned):
+            raise serializers.ValidationError("Color HEX inválido. Usa formato #RRGGBB.")
+        return cleaned.upper()
 
     def validate_key(self, value: str) -> str:
         normalized = re.sub(r"[^A-Z0-9_]+", "_", (value or "").upper()).strip("_")
