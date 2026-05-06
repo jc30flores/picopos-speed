@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -237,6 +237,8 @@ type CashPaymentPanelProps = {
   onClear: () => void;
   onBackspace: () => void;
   onExact: () => void;
+  panelRef?: RefObject<HTMLDivElement>;
+  paymentInputRef?: RefObject<HTMLInputElement>;
 };
 
 const CashPaymentPanel = ({
@@ -253,8 +255,10 @@ const CashPaymentPanel = ({
   onClear,
   onBackspace,
   onExact,
+  panelRef,
+  paymentInputRef,
 }: CashPaymentPanelProps) => (
-  <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+  <div ref={panelRef} className="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
     <div className="flex items-center justify-between gap-3">
       <div>
         <h3 className="font-semibold">Pago en efectivo</h3>
@@ -265,7 +269,7 @@ const CashPaymentPanel = ({
     <div className="grid grid-cols-2 gap-3">
       <div className="space-y-2">
         <Label>Monto recibido</Label>
-        <Input value={paymentAmount} onFocus={() => onFocusTenderField("payment")} onClick={() => onFocusTenderField("payment")} onChange={(e) => onPaymentAmountChange(e.target.value)} inputMode="decimal" />
+        <Input ref={paymentInputRef} value={paymentAmount} onFocus={() => onFocusTenderField("payment")} onClick={() => onFocusTenderField("payment")} onChange={(e) => onPaymentAmountChange(e.target.value)} inputMode="decimal" />
       </div>
       <div className="space-y-2">
         <Label>Propina</Label>
@@ -279,12 +283,12 @@ const CashPaymentPanel = ({
     </div>
     <div className="grid grid-cols-4 gap-2">
       {DENOMINATION_CENTS.map((value) => (
-        <Button key={value} type="button" className="h-12 text-sm" variant="outline" onClick={() => onApplyDenomination(value)}>
+        <Button key={value} type="button" className="h-11 text-sm" variant="outline" onClick={() => onApplyDenomination(value)}>
           {formatMoney(value / 100)}
         </Button>
       ))}
-      <Button type="button" className="h-12 text-sm" variant="outline" onClick={onClear}>Borrar</Button>
-      <Button type="button" className="h-12 text-sm" variant="outline" onClick={onBackspace}>←</Button>
+      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onClear}>Borrar</Button>
+      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onBackspace}>←</Button>
       <Button type="button" className="col-span-2 h-12 text-sm" variant="outline" onClick={onExact}>Exacto</Button>
     </div>
   </div>
@@ -345,14 +349,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
   const [isOrderTypeSelectorOpen, setIsOrderTypeSelectorOpen] = useState(false);
-  const [isPaymentSelectorOpen, setIsPaymentSelectorOpen] = useState(false);
   const [showCashPanel, setShowCashPanel] = useState(false);
   const [isCustomerDteOpen, setIsCustomerDteOpen] = useState(false);
   const [isSplitConfigOpen, setIsSplitConfigOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [cardType, setCardType] = useState<"debit" | "credit" | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
-  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("cash");
+  const [selectedPaymentMethodCode, setSelectedPaymentMethodCode] = useState<string>("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultConsumerCustomer, setDefaultConsumerCustomer] = useState<Customer | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
@@ -391,6 +394,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
   const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
+  const cashPanelRef = useRef<HTMLDivElement | null>(null);
+  const cashAmountInputRef = useRef<HTMLInputElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
   const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
   const cartEndRef = useRef<HTMLDivElement | null>(null);
@@ -1164,6 +1169,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setPaymentAmount(centsToInput(dueCents));
     setTipAmount("0");
     setPaymentReference("");
+    setSelectedPaymentMethodCode("");
+    setPaymentMethod("cash");
+    setCardType(null);
     setShowCashPanel(false);
     setActiveTenderField(null);
     setSplitEnabled(false);
@@ -1442,13 +1450,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     getPaymentMethods().then((methods) => {
       setPaymentMethods(methods);
-      const first = methods.find((method) => String(method.code || "").toLowerCase() === "cash") || methods[0];
-      if (first) {
-        setSelectedPaymentMethodCode(first.code);
-        const code = (first.code || "").toLowerCase();
-        const fallback = first.isCash ? "cash" : code.startsWith("card") ? "card" : "transfer";
-        setPaymentMethod(fallback as PaymentMethod);
-      }
     }).catch(() => undefined);
   }, []);
 
@@ -1522,14 +1523,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     () => paymentMethods.find((method) => String(method.code || "").toLowerCase() === String(selectedPaymentMethodCode || "").toLowerCase()),
     [paymentMethods, selectedPaymentMethodCode],
   );
-  const selectedPaymentIsCash = isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode);
+  const selectedPaymentIsCash = Boolean(selectedPaymentMethodOption) && (isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode));
   const selectedServiceType = useMemo(
     () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
     [serviceTypes, serviceType],
-  );
-  const selectedPaymentButton = useMemo(
-    () => paymentMethodButtons.find((option) => option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card")) ?? paymentMethodButtons[0] ?? null,
-    [paymentMethodButtons, paymentMethod, selectedPaymentMethodCode],
   );
 
   useEffect(() => {
@@ -1555,28 +1552,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
-    const normalizedMethod = normalizePaymentMethodForOrderType(serviceType, selectedPaymentMethodCode);
-    if (normalizedMethod === "pedidos_ya") {
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.info("[pos-debug] auto_payment_method", { serviceType, method: "pedidos_ya" });
-      }
-      setPaymentMethod("transfer");
-      if (selectedPaymentMethodCode !== "pedidos_ya") {
-        setSelectedPaymentMethodCode("pedidos_ya");
-      }
-      setCardType(null);
-      if (isPaymentOpen) {
-        setPaymentAmount(toNumber(expectedPaymentCents / 100).toFixed(2));
-      }
-      return;
-    }
-    if (normalizedMethod === "cash" && selectedPaymentMethodCode === "pedidos_ya") {
-      setPaymentMethod("cash");
-      setSelectedPaymentMethodCode("cash");
-      setCardType(null);
-    }
-  }, [expectedPaymentCents, isPaymentOpen, selectedPaymentMethodCode, serviceType]);
+    if (!isPaymentOpen || !selectedPaymentIsCash || !showCashPanel) return;
+    window.setTimeout(() => {
+      cashPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      cashAmountInputRef.current?.focus();
+    }, 50);
+  }, [isPaymentOpen, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
     if (!isPaymentOpen || !checkoutDraft) return;
@@ -2100,7 +2081,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setIsPaymentOpen(false);
     setIsPaymentMethodOpen(false);
     setPaymentMethod("cash");
-    setSelectedPaymentMethodCode("cash");
+    setSelectedPaymentMethodCode("");
     setCardType(null);
     setPaymentAmount("");
     setTipAmount("");
@@ -2287,6 +2268,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No hay productos en el pedido");
       return;
     }
+    if (!selectedPaymentMethodCode) {
+      toast.error("Selecciona un método de pago.");
+      return;
+    }
     const rawAmountReceived = toNumber(paymentAmount);
     const rawTipValue = toNumber(tipAmount);
     const exactCashAmount = expectedPaymentCents / 100;
@@ -2445,6 +2430,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     });
   }, [customersByDte, normalizedCustomerSearch]);
   const visibleCustomers = filteredCustomers.slice(0, 4);
+  const handleOpenCustomerDte = () => {
+    if (activeOrder?.whatsappNumClienteCountry === "ESA" || activeOrder?.whatsappNumClienteCountry === "USA") {
+      setWhatsappClientCountry(activeOrder.whatsappNumClienteCountry);
+    }
+    if (activeOrder?.whatsappNumCliente) {
+      const country = activeOrder.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
+      setWhatsappClientInput(formatWhatsAppClientPhone(country, activeOrder.whatsappNumCliente));
+    }
+    setWhatsappClientError("");
+    setIsCustomerDteOpen(true);
+  };
+
   const handleAcceptCustomerDte = async () => {
     if (!selectedCustomerId) {
       toast.error("Selecciona un cliente");
@@ -2895,46 +2892,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   </PopoverContent>
                 </Popover>
 
-                <Popover open={isPaymentSelectorOpen} onOpenChange={setIsPaymentSelectorOpen}>
-                  <PopoverTrigger asChild>
-                    <Button type="button" variant="outline" aria-label="Seleccionar método de pago" className="relative min-h-16 justify-center rounded-xl px-4 text-center">
-                      <span className="flex min-w-0 flex-col leading-tight">
-                        <span className="text-[10px] font-medium uppercase tracking-[1px] text-muted-foreground">Método de Pago</span>
-                        <span className="truncate text-base font-bold">{selectedPaymentButton?.label ?? "Método"}</span>
-                      </span>
-                      <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" className="z-50 w-[min(24rem,calc(100vw-2rem))] p-3">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[1px] text-muted-foreground">Elige Método de Pago</div>
-                    <div className="grid grid-cols-2 gap-2" role="listbox" aria-label="Métodos de pago activos">
-                      {paymentMethodButtons.map((option) => {
-                        const selected = option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card");
-                        return (
-                          <Button
-                            key={option.code}
-                            type="button"
-                            variant={selected ? "default" : "outline"}
-                            className={cn("min-h-14 rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/40")}
-                            role="option"
-                            aria-selected={selected}
-                            onClick={() => {
-                              setPaymentMethod(option.method);
-                              setSelectedPaymentMethodCode(option.code);
-                              setCardType(option.code === "card" ? "credit" : null);
-                              setIsPaymentSelectorOpen(false);
-                              if (option.method !== "cash" && option.code !== "cash" && option.code !== "efectivo") {
-                                setShowCashPanel(false);
-                              }
-                            }}
-                          >
-                            {option.label}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="Seleccionar cliente"
+                  className="relative min-h-16 justify-center rounded-xl px-4 text-center"
+                  onClick={handleOpenCustomerDte}
+                >
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <span className="text-[10px] font-medium uppercase tracking-[1px] text-muted-foreground">Cliente</span>
+                    <span className="truncate text-base font-bold">{selectedCustomer ? selectedCustomer.fullName : "Consumidor final"}</span>
+                  </span>
+                </Button>
               </div>
             </div>
 
@@ -3560,7 +3529,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       {/* Payment Dialog */}
-      <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
+      <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setShowCashPanel(false); setActiveTenderField(null); } }}>
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
@@ -3570,9 +3539,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             {checkoutDraft ? (
               <>
                 <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                  <div className="rounded-xl border bg-muted/20 px-4 py-5 text-center shadow-sm">
+                  <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
-                    <div className="mt-3 text-5xl font-extrabold leading-none text-secondary sm:text-6xl">{formatMoney(paymentTotal)}</div>
+                    <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -3583,7 +3552,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       </span>
                     </div>
                     <div className="rounded-md border">
-                      <div className="max-h-72 divide-y divide-border overflow-y-auto text-sm">
+                      <div className="max-h-80 divide-y divide-border overflow-y-auto text-sm">
                         {(activeOrder?.items?.length ? activeOrder.items : checkoutDraft.items.map((item) => ({
                           id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
                           productName: item.name,
@@ -3657,61 +3626,61 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       onClear={clearTenderField}
                       onBackspace={backspaceTenderField}
                       onExact={setExactTenderAmount}
+                      panelRef={cashPanelRef}
+                      paymentInputRef={cashAmountInputRef}
                     />
                   ) : null}
                 </div>
 
-                <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className={cn("grid grid-cols-1 gap-2", selectedPaymentIsCash ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
-                    <Button
-                      className="h-14 min-w-0 text-base"
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        if (activeOrder?.whatsappNumClienteCountry === "ESA" || activeOrder?.whatsappNumClienteCountry === "USA") {
-                          setWhatsappClientCountry(activeOrder.whatsappNumClienteCountry);
-                        }
-                        if (activeOrder?.whatsappNumCliente) {
-                          const country = activeOrder.whatsappNumClienteCountry === "USA" ? "USA" : "ESA";
-                          setWhatsappClientInput(formatWhatsAppClientPhone(country, activeOrder.whatsappNumCliente));
-                        }
-                        setWhatsappClientError("");
-                        setIsCustomerDteOpen(true);
-                      }}
-                    >
+                <div className="sticky bottom-0 z-30 shrink-0 space-y-2 border-t bg-background px-4 py-3 sm:px-6">
+                  <div className="space-y-2 rounded-xl border bg-muted/20 p-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Método de pago</div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {paymentMethodButtons.map((option) => {
+                        const selected = selectedPaymentMethodCode === option.code;
+                        return (
+                          <Button
+                            key={option.code}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
+                            onClick={() => {
+                              setPaymentMethod(option.method);
+                              setSelectedPaymentMethodCode(option.code);
+                              setCardType(option.code === "card" ? "credit" : null);
+                              const cashSelected = option.method === "cash" || option.code === "cash" || option.code === "efectivo";
+                              setShowCashPanel(cashSelected);
+                              if (cashSelected) {
+                                setPaymentAmount(centsToInput(expectedPaymentCents));
+                                setTipAmount("0");
+                                setActiveTenderField("payment");
+                              } else {
+                                setTipAmount("0");
+                                setActiveTenderField(null);
+                              }
+                              setShouldResetTenderOnFirstTap(true);
+                            }}
+                          >
+                            {option.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    {!selectedPaymentMethodCode ? <p className="text-xs text-muted-foreground">Selecciona un método de pago para continuar.</p> : null}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={handleOpenCustomerDte}>
                       <span className="min-w-0 truncate text-left">
                         Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
                       </span>
                     </Button>
-                    {selectedPaymentIsCash ? (
-                      <Button
-                        className="h-14 min-w-0 text-base"
-                        type="button"
-                        variant={showCashPanel ? "default" : "outline"}
-                        onClick={() => {
-                          const next = !showCashPanel;
-                          setShowCashPanel(next);
-                          if (next) {
-                            setPaymentAmount(centsToInput(expectedPaymentCents));
-                            setActiveTenderField("payment");
-                          } else {
-                            setPaymentAmount(centsToInput(expectedPaymentCents));
-                            setTipAmount("0");
-                            setActiveTenderField(null);
-                          }
-                          setShouldResetTenderOnFirstTap(true);
-                        }}
-                      >
-                        <span className="min-w-0 truncate">{showCashPanel ? (changeCents > 1 ? `Cambio: ${formatMoney(changeCents / 100)}` : "Editar efectivo") : "Efectivo exacto"}</span>
-                      </Button>
-                    ) : null}
-                    <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                    <Button variant="outline" className="h-12 flex-1 text-sm" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                       {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
