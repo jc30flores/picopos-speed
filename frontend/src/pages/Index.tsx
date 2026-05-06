@@ -391,6 +391,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [customerForm, setCustomerForm] = useState({
     fullName: "",
     clientType: "CF" as "CF" | "CCF" | "SX",
+    isIvaExempt: false,
     companyName: "",
     dui: "",
     nit: "",
@@ -671,7 +672,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (restoredServiceType) setServiceType(restoredServiceType);
       if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
       if (restoredCart.length > 0 && parsed.selectedDiscount) setSelectedDiscount(parsed.selectedDiscount);
-      if (parsed.dteDocumentType) setDteDocumentType(parsed.dteDocumentType);
+      if (parsed.dteDocumentType && parsed.dteDocumentType !== "SX") setDteDocumentType(parsed.dteDocumentType);
       if (typeof parsed.ivaExempt === "boolean") setIvaExempt(parsed.ivaExempt);
       if (parsed.whatsappNumClienteCountry === "ESA" || parsed.whatsappNumClienteCountry === "USA") {
         setWhatsappClientCountry(parsed.whatsappNumClienteCountry);
@@ -780,10 +781,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   }, [paymentMethod]);
   useEffect(() => {
-    if (dteDocumentType !== "CCF" && ivaExempt) {
-      setIvaExempt(false);
-    }
-  }, [dteDocumentType, ivaExempt]);
+    const selected = customers.find((customer) => String(customer.id) === selectedCustomerId);
+    setIvaExempt(Boolean(dteDocumentType === "CF" && selected?.clientType === "CF" && selected.isIvaExempt));
+  }, [customers, dteDocumentType, selectedCustomerId]);
 
   useEffect(() => {
     if (!activeTenderField) return;
@@ -1507,7 +1507,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   useEffect(() => {
     const selected = customers.find((c) => String(c.id) === selectedCustomerId);
     if (selected?.clientType) {
-      setDteDocumentType(selected.clientType);
+      setDteDocumentType(selected.clientType === "SX" ? "CF" : selected.clientType);
     }
   }, [selectedCustomerId, customers]);
 
@@ -2502,6 +2502,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   };
 
+  const isQuickCustomerSaveDisabled =
+    isSavingCustomer ||
+    !customerForm.fullName.trim() ||
+    !customerForm.departmentCode ||
+    !customerForm.municipalityCode ||
+    (customerForm.clientType === "CCF" &&
+      (!customerForm.companyName.trim() ||
+        customerForm.nit.replace(/\D/g, "").length !== 14 ||
+        !customerForm.nrc.trim() ||
+        customerForm.phone.replace(/\D/g, "").length !== 8 ||
+        !customerForm.email.includes("@") ||
+        !customerForm.direccion.trim() ||
+        (!customerForm.activityCode.trim() && !customerForm.activityDescription.trim())));
+
   const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
   const normalizedCustomerSearch = customerSearch.trim().toLowerCase();
   const customersByDte = customers.filter((customer) => customer.clientType === dteDocumentType);
@@ -2639,6 +2653,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         nrc: "",
         activityCode: "",
         activityDescription: "",
+        isIvaExempt: Boolean(prev.isIvaExempt),
         phone: base.phone || "0000-0000",
         email: base.email || DEFAULT_CUSTOMER_EMAIL,
         direccion: base.direccion || "SAN MIGUEL",
@@ -2653,6 +2668,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setCustomerForm((prev) => ({
       ...prev,
       clientType: targetType,
+      isIvaExempt: false,
       departmentCode: prev.departmentCode || deptCode,
       municipalityCode: prev.municipalityCode || muniRows[0]?.code || "",
     }));
@@ -2680,6 +2696,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         municipalityCode: customerForm.municipalityCode,
         activityCode: customerForm.activityCode.trim(),
         activityDescription: customerForm.activityDescription.trim(),
+        isIvaExempt: customerForm.clientType === "CF" && Boolean(customerForm.isIvaExempt),
       });
       await refreshCustomers();
       setSelectedCustomerId(String(created.id));
@@ -2701,6 +2718,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         municipalityCode: "",
         activityCode: "",
         activityDescription: "",
+        isIvaExempt: false,
       });
       toast.success("Cliente creado");
     } catch (error) {
@@ -2722,6 +2740,53 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setIsSavingCustomer(false);
     }
   };
+
+
+  const submitPricePin = useCallback(async (candidatePin = pinInput) => {
+    if (candidatePin.length !== 6) return;
+    try {
+      await validateOrderPricePin(candidatePin);
+      setValidatedPin(candidatePin);
+      const activeItem = cart.find((item) => item.id === priceEditorItemId);
+      setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
+      setIsPinModalOpen(false);
+      setIsPriceModalOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Código incorrecto");
+      setPinInput("");
+    }
+  }, [cart, pinInput, priceEditorItemId]);
+
+  const appendPricePinDigit = useCallback((digit: string) => {
+    setPinInput((previous) => {
+      const next = `${previous}${digit}`.replace(/\D/g, "").slice(0, 6);
+      if (next.length === 6) {
+        window.setTimeout(() => void submitPricePin(next), 0);
+      }
+      return next;
+    });
+  }, [submitPricePin]);
+
+  useEffect(() => {
+    if (!isPinModalOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (/^\d$/.test(event.key)) {
+        event.preventDefault();
+        appendPricePinDigit(event.key);
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        setPinInput((previous) => previous.slice(0, -1));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        void submitPricePin();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        setIsPinModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [appendPricePinDigit, isPinModalOpen, submitPricePin]);
 
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
@@ -3844,10 +3909,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           <div className="space-y-3">
             <div className="space-y-2">
               <Label>Tipo DTE</Label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
                 <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
-                <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "SX" ? "default" : "outline"} onClick={() => setDteDocumentType("SX")}>SX</Button>
               </div>
             </div>
             <div className="space-y-2">
@@ -3875,7 +3939,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     setCustomerServerErrors({});
                     setActivitySearch("");
                     setIsCustomerCreateOpen(true);
-                    void preloadCustomerFormFromDTE(dteDocumentType === "SX" ? "CF" : dteDocumentType);
+                    void preloadCustomerFormFromDTE(dteDocumentType);
                   }}
                 >
                   Administrar
@@ -3897,8 +3961,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               }}
               error={whatsappClientError}
             />
-            {dteDocumentType === "CCF" ? (
-              <div className="flex items-center justify-between rounded-md border p-2 text-sm"><span>Exento IVA</span><Checkbox checked={ivaExempt} onCheckedChange={(v) => setIvaExempt(v === true)} /></div>
+            {dteDocumentType === "CF" && selectedCustomer?.isIvaExempt ? (
+              <div className="rounded-md border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm">
+                <p className="font-medium">Cliente exento de IVA</p>
+                <p className="text-xs text-muted-foreground">El DTE se generará como venta exenta, sin IVA.</p>
+              </div>
             ) : null}
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
@@ -3975,15 +4042,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerCreateOpen} onOpenChange={(open) => !isSavingCustomer && setIsCustomerCreateOpen(open)}>
-        <DialogContent className="w-[96vw] max-w-3xl rounded-2xl p-0">
+        <DialogContent className="flex max-h-[90vh] w-[96vw] max-w-3xl flex-col overflow-hidden rounded-2xl border-emerald-600/60 p-0">
           <DialogHeader>
             <div className="border-b px-5 py-4">
               <DialogTitle>Nuevo cliente</DialogTitle>
               <DialogDescription>Completa los datos del cliente sin salir de la venta.</DialogDescription>
             </div>
           </DialogHeader>
-          <div className="max-h-[70vh] overflow-y-auto px-5 pb-4">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-24 pt-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
               <Label>Tipo DTE</Label>
               <div className="flex gap-2">
@@ -3991,6 +4058,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 <Button type="button" variant={customerForm.clientType === "CCF" ? "default" : "outline"} className="h-11 flex-1" onClick={() => void preloadCustomerFormFromDTE("CCF")}>CCF</Button>
               </div>
             </div>
+            {customerForm.clientType === "CF" ? (
+              <div className="rounded-xl border border-emerald-600/50 p-3 sm:col-span-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <Label>Exento de IVA</Label>
+                    <p className="text-xs text-muted-foreground">Si está activo, el DTE se generará sin IVA para este cliente.</p>
+                  </div>
+                  <Checkbox checked={Boolean(customerForm.isIvaExempt)} onCheckedChange={(value) => setCustomerForm((prev) => ({ ...prev, isIvaExempt: value === true }))} />
+                </div>
+              </div>
+            ) : null}
             <div className="space-y-1 sm:col-span-2">
               <Label>Nombre completo</Label>
               <Input
@@ -4121,12 +4199,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             )}
           </div>
           </div>
-          <div className="sticky bottom-0 border-t bg-background px-5 py-4">
+          <div className="sticky bottom-0 border-t bg-background/95 px-5 py-4 backdrop-blur">
           <div className="flex gap-2">
             <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setIsCustomerCreateOpen(false)} disabled={isSavingCustomer}>
               Cancelar
             </Button>
-            <Button type="button" className="h-12 flex-1" onClick={() => void handleCreateCustomerFromPOS()} disabled={isSavingCustomer}>
+            <Button type="button" className="h-12 flex-1" onClick={() => void handleCreateCustomerFromPOS()} disabled={isQuickCustomerSaveDisabled}>
               {isSavingCustomer ? "Guardando..." : "Guardar"}
             </Button>
           </div>
@@ -4443,7 +4521,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isPinModalOpen} onOpenChange={setIsPinModalOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" tabIndex={-1}>
           <DialogHeader>
             <DialogTitle>Código de acceso</DialogTitle>
             <DialogDescription>Ingresa el PIN de 6 dígitos para autorizar cambio de precio.</DialogDescription>
@@ -4452,43 +4530,15 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 6 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
             <div className="grid grid-cols-3 gap-2">
               {[1,2,3,4,5,6,7,8,9].map((n) => (
-                <Button key={n} variant="outline" className="h-12" onClick={async () => {
-                  const next = `${pinInput}${n}`.slice(0, 6);
-                  setPinInput(next);
-                  if (next.length === 6) {
-                    try {
-                      await validateOrderPricePin(next);
-                      setValidatedPin(next);
-                      const activeItem = cart.find((item) => item.id === priceEditorItemId);
-                      setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
-                      setIsPinModalOpen(false);
-                      setIsPriceModalOpen(true);
-                    } catch (error) {
-                      toast.error(error instanceof Error ? error.message : "Código incorrecto");
-                      setPinInput("");
-                    }
-                  }
-                }}>{n}</Button>
+                <Button key={n} variant="outline" className="h-12" onClick={() => appendPricePinDigit(String(n))}>{n}</Button>
               ))}
               <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
-              <Button variant="outline" className="h-12" onClick={async () => {
-                const next = `${pinInput}0`.slice(0, 6);
-                setPinInput(next);
-                if (next.length === 6) {
-                  try {
-                    await validateOrderPricePin(next);
-                    setValidatedPin(next);
-                    const activeItem = cart.find((item) => item.id === priceEditorItemId);
-                    setNewPriceInput((activeItem ? getItemBaseEffective(activeItem) : 0).toFixed(2));
-                    setIsPinModalOpen(false);
-                    setIsPriceModalOpen(true);
-                  } catch (error) {
-                    toast.error(error instanceof Error ? error.message : "Código incorrecto");
-                    setPinInput("");
-                  }
-                }
-              }}>0</Button>
+              <Button variant="outline" className="h-12" onClick={() => appendPricePinDigit("0")}>0</Button>
               <Button variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setIsPinModalOpen(false)}>Cancelar</Button>
+              <Button onClick={() => void submitPricePin()} disabled={pinInput.length !== 6}>Confirmar</Button>
             </div>
           </div>
         </DialogContent>

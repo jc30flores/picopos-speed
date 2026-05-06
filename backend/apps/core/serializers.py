@@ -98,7 +98,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             "id", "name", "tipo_documento", "num_documento", "nrc", "cod_actividad",
             "desc_actividad", "direccion_departamento", "direccion_municipio",
             "direccion_complemento", "telefono", "correo", "is_default_consumer_final",
-            "created_at", "updated_at",
+            "is_iva_exempt", "created_at", "updated_at",
         ]
 
 
@@ -125,6 +125,7 @@ class ClientSerializer(serializers.ModelSerializer):
             "activity_description",
             "is_deleted",
             "is_consumer_final",
+            "is_iva_exempt",
             "created_at",
             "updated_at",
         ]
@@ -179,6 +180,7 @@ class ClientSerializer(serializers.ModelSerializer):
             "telefono",
             "correo",
             "is_consumer_final",
+            "is_iva_exempt",
         ]
         data = {**{k: getattr(self.instance, k, None) for k in base_keys if self.instance}, **attrs}
         ctype = (data.get("client_type") or "CF").upper()
@@ -192,6 +194,9 @@ class ClientSerializer(serializers.ModelSerializer):
         dept_code = (data.get("department_code") or "").strip()
         muni_code = (data.get("municipality_code") or "").strip()
         dept_default, muni_default, dept_name_default = self._resolve_geo_defaults()
+
+        if ctype != "CF":
+            data["is_iva_exempt"] = False
 
         if ctype in {"CF", "SX"}:
             document_digits = self._digits(data.get("dui") or data.get("nit"))

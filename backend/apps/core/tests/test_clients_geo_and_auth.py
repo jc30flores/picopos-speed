@@ -125,6 +125,36 @@ class ClientSerializerRulesTests(TestCase):
         self.assertEqual(data["municipality_code"], "22")
         self.assertEqual(data["direccion"], "SAN MIGUEL")
 
+
+    def test_serializer_cf_iva_exempt_persists(self):
+        serializer = ClientSerializer(data={"full_name": "Cliente Exento", "client_type": "CF", "is_iva_exempt": True})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        customer = serializer.save()
+        self.assertTrue(customer.is_iva_exempt)
+        self.assertTrue(ClientSerializer(customer).data["is_iva_exempt"])
+
+    def test_serializer_ccf_normalizes_iva_exempt_false(self):
+        serializer = ClientSerializer(
+            data={
+                "full_name": "Empresa X",
+                "company_name": "Empresa X",
+                "client_type": "CCF",
+                "nit": "06142803911012",
+                "nrc": "123456",
+                "phone": "71234567",
+                "email": "empresa@example.com",
+                "direccion": "SAN MIGUEL",
+                "department_code": "12",
+                "municipality_code": "22",
+                "activity_code": "56101",
+                "activity_description": "Restaurantes",
+                "is_iva_exempt": True,
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        customer = serializer.save()
+        self.assertFalse(customer.is_iva_exempt)
+
     def test_serializer_ccf_required(self):
         serializer = ClientSerializer(data={"full_name": "Empresa X", "client_type": "CCF"})
         self.assertFalse(serializer.is_valid())

@@ -617,7 +617,7 @@ def normalize_dte_extension_for_hacienda(dte: dict, client=None, branch=None, us
 
 def _resolve_extension_payload(*, order, customer, emisor_payload: dict, receptor: dict) -> dict:
     raw_extension = {
-        "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if order.iva_exempt else ""),
+        "observaciones": "Venta consumidor final - Pico de Gallo" + (" - EXENTO IVA" if (getattr(order, "iva_exempt", False) or bool(getattr(customer, "is_iva_exempt", False))) else ""),
         "placaVehiculo": None,
         "docuRecibe": None,
         "nombEntrega": "",
@@ -936,6 +936,10 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
 
     now = timezone.localtime()
     customer = getattr(order, "customer", None)
+    effective_iva_exempt = bool(
+        getattr(order, "iva_exempt", False)
+        or (getattr(order, "dte_document_type", "CF") == "CF" and getattr(customer, "client_type", "CF") == "CF" and getattr(customer, "is_iva_exempt", False))
+    )
 
     cuerpo = []
     num_item = 1
@@ -1015,7 +1019,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             unit_price_gross=fee_unit,
             quantity=fee_qty,
             discount_gross=Decimal("0.00"),
-            taxable=not order.iva_exempt,
+            taxable=not effective_iva_exempt,
         )
         total_gravada += fee_calc["venta_gravada"]
         total_exenta += fee_calc["venta_exenta"]
@@ -1061,7 +1065,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
             unit_price_gross=money(gross / qty),
             quantity=qty,
             discount_gross=discount,
-            taxable=not order.iva_exempt,
+            taxable=not effective_iva_exempt,
         )
         total_gravada += line_calc["venta_gravada"]
         total_exenta += line_calc["venta_exenta"]
@@ -1290,7 +1294,7 @@ def build_payload_cf(order, control_number: str, generation_code: str, ambiente:
         "subTotalVentas": json_number(money(subtotal_ventas)), "descuNoSuj": json_number(money(global_desc_no_suj)), "descuExenta": json_number(money(global_desc_exenta)), "descuGravada": json_number(money(global_desc_gravada)),
         "porcentajeDescuento": json_number(Decimal("0.00")), "totalDescu": json_number(money(total_descuento + global_desc_total)), "tributos": None, "subTotal": json_number(money(subtotal_final)),
         "ivaRete1": json_number(Decimal("0.00")), "reteRenta": json_number(Decimal("0.00")), "montoTotalOperacion": json_number(money(monto_total_operacion)), "totalNoGravado": json_number(Decimal("0.00")),
-        "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not order.iva_exempt else Decimal("0.00"))),
+        "totalPagar": json_number(money(total_pagar)), "totalLetras": _number_to_words_es_usd(total_pagar), "totalIva": json_number(money(total_iva if not effective_iva_exempt else Decimal("0.00"))),
         "saldoFavor": json_number(Decimal("0.00")), "condicionOperacion": 1,
         "pagos": pagos,
         "numPagoElectronico": None,

@@ -381,6 +381,7 @@ export type Customer = {
   activityDescription?: string;
   isConsumerFinal: boolean;
   isDeleted: boolean;
+  isIvaExempt: boolean;
   // legacy
   name?: string;
   tipoDocumento?: string;
@@ -4947,6 +4948,7 @@ const mapCustomer = (c: any): Customer => ({
   activityDescription: c.activity_description ?? c.desc_actividad,
   isConsumerFinal: Boolean(c.is_consumer_final),
   isDeleted: Boolean(c.is_deleted),
+  isIvaExempt: Boolean(c.is_iva_exempt),
   name: c.name,
   tipoDocumento: c.tipo_documento,
   numDocumento: c.num_documento,
@@ -4991,6 +4993,7 @@ export const createCustomer = async (payload: Partial<Customer> & { fullName: st
       activity_code: payload.activityCode ?? '',
       activity_description: payload.activityDescription ?? '',
       is_consumer_final: Boolean(payload.isConsumerFinal),
+      is_iva_exempt: Boolean(payload.isIvaExempt),
     }),
   });
   return mapCustomer(await handleJson<any>(response));
@@ -5014,6 +5017,7 @@ export const updateCustomer = async (id: number, payload: Partial<Customer>): Pr
       ...(payload.activityCode !== undefined ? { activity_code: payload.activityCode } : {}),
       ...(payload.activityDescription !== undefined ? { activity_description: payload.activityDescription } : {}),
       ...(payload.isConsumerFinal !== undefined ? { is_consumer_final: payload.isConsumerFinal } : {}),
+      ...(payload.isIvaExempt !== undefined ? { is_iva_exempt: payload.isIvaExempt } : {}),
     }),
   });
   return mapCustomer(await handleJson<any>(response));
