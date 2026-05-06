@@ -38,6 +38,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   createOrder,
   Customer,
@@ -343,6 +344,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isPaymentMethodOpen, setIsPaymentMethodOpen] = useState(false);
+  const [isOrderTypeSelectorOpen, setIsOrderTypeSelectorOpen] = useState(false);
+  const [isPaymentSelectorOpen, setIsPaymentSelectorOpen] = useState(false);
+  const [showCashPanel, setShowCashPanel] = useState(false);
   const [isCustomerDteOpen, setIsCustomerDteOpen] = useState(false);
   const [isSplitConfigOpen, setIsSplitConfigOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -1160,6 +1164,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setPaymentAmount(centsToInput(dueCents));
     setTipAmount("0");
     setPaymentReference("");
+    setShowCashPanel(false);
+    setActiveTenderField(null);
     setSplitEnabled(false);
     const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
@@ -1517,17 +1523,36 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [paymentMethods, selectedPaymentMethodCode],
   );
   const selectedPaymentIsCash = isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode);
+  const selectedServiceType = useMemo(
+    () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
+    [serviceTypes, serviceType],
+  );
+  const selectedPaymentButton = useMemo(
+    () => paymentMethodButtons.find((option) => option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card")) ?? paymentMethodButtons[0] ?? null,
+    [paymentMethodButtons, paymentMethod, selectedPaymentMethodCode],
+  );
 
   useEffect(() => {
-    if (isPaymentOpen) {
+    if (!isPaymentOpen) {
+      setShowCashPanel(false);
+      return;
+    }
+    if (!selectedPaymentIsCash) {
+      setShowCashPanel(false);
+    }
+    if (!showCashPanel || !selectedPaymentIsCash) {
       if (splitEnabled) {
         const targetAmount = (activeSplitPart?.amountCents ?? checkoutTotalCents) / 100;
         setPaymentAmount(toNumber(targetAmount).toFixed(2));
       } else {
         setPaymentAmount(toNumber(checkoutTotal).toFixed(2));
       }
+      if (selectedPaymentIsCash && !showCashPanel) {
+        setTipAmount("0");
+        setActiveTenderField(null);
+      }
     }
-  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart]);
+  }, [checkoutTotal, checkoutTotalCents, isPaymentOpen, splitEnabled, activeSplitPart, selectedPaymentIsCash, showCashPanel]);
 
   useEffect(() => {
     const normalizedMethod = normalizePaymentMethodForOrderType(serviceType, selectedPaymentMethodCode);
@@ -2080,6 +2105,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setPaymentAmount("");
     setTipAmount("");
     setPaymentReference("");
+    setShowCashPanel(false);
     setActiveTenderField(null);
     setShouldResetTenderOnFirstTap(true);
     setActiveOrder(null);
@@ -2261,9 +2287,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No hay productos en el pedido");
       return;
     }
-    const amountReceived = toNumber(paymentAmount);
-    const tipValue = toNumber(tipAmount);
-    const totalDue = totalDueCents / 100;
+    const rawAmountReceived = toNumber(paymentAmount);
+    const rawTipValue = toNumber(tipAmount);
+    const exactCashAmount = expectedPaymentCents / 100;
+    const amountReceived = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : rawAmountReceived;
+    const tipValue = selectedPaymentIsCash && !showCashPanel ? 0 : rawTipValue;
+    const totalDue = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : totalDueCents / 100;
     const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
     const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
     const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
@@ -2819,56 +2848,93 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
             </div>
 
-            <div className="flex-none space-y-3 border-b px-4 py-3">
-              <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Tipo de Pedido</div>
-                {serviceTypes.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {serviceTypes.map((type) => {
-                      const selected = type.key === serviceType;
-                      const hasColor = isValidHexColor(type.colorHex);
-                      const style = hasColor ? { backgroundColor: type.colorHex ?? undefined, color: getReadableTextColor(type.colorHex), borderColor: type.colorHex ?? undefined } : undefined;
-                      return (
-                        <Button
-                          key={type.key}
-                          type="button"
-                          variant={selected ? "default" : "outline"}
-                          className={cn("min-h-14 whitespace-normal rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
-                          style={style}
-                          onClick={() => setServiceType(type.key)}
-                        >
-                          {type.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <span className="text-sm text-muted-foreground">Configura tipos de pedido en Configuración.</span>
-                )}
-              </div>
+            <div className="flex-none border-b px-4 py-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Popover open={isOrderTypeSelectorOpen} onOpenChange={setIsOrderTypeSelectorOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant={selectedServiceType && isValidHexColor(selectedServiceType.colorHex) ? "outline" : "default"}
+                      aria-label="Seleccionar tipo de pedido"
+                      className="relative min-h-16 justify-center rounded-xl px-4 text-center"
+                      style={selectedServiceType && isValidHexColor(selectedServiceType.colorHex) ? { backgroundColor: selectedServiceType.colorHex ?? undefined, color: getReadableTextColor(selectedServiceType.colorHex), borderColor: selectedServiceType.colorHex ?? undefined } : undefined}
+                    >
+                      <span className="flex min-w-0 flex-col leading-tight">
+                        <span className="text-[10px] font-medium uppercase tracking-[1px] opacity-70">Tipo de Pedido</span>
+                        <span className="truncate text-base font-bold">{selectedServiceType?.label ?? "Sin tipo"}</span>
+                      </span>
+                      <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-80" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="z-50 w-[min(24rem,calc(100vw-2rem))] p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[1px] text-muted-foreground">Elige Tipo de Pedido</div>
+                    <div className="grid grid-cols-2 gap-2" role="listbox" aria-label="Tipos de pedido activos">
+                      {serviceTypes.map((type) => {
+                        const selected = type.key === serviceType;
+                        const hasColor = isValidHexColor(type.colorHex);
+                        const style = hasColor ? { backgroundColor: type.colorHex ?? undefined, color: getReadableTextColor(type.colorHex), borderColor: type.colorHex ?? undefined } : undefined;
+                        return (
+                          <Button
+                            key={type.key}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            className={cn("min-h-14 whitespace-normal rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/60 ring-offset-2 ring-offset-background")}
+                            style={style}
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => {
+                              setServiceType(type.key);
+                              setIsOrderTypeSelectorOpen(false);
+                            }}
+                          >
+                            {type.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
 
-              <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[1px] text-muted-foreground">Método de Pago</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {paymentMethodButtons.map((option) => {
-                    const selected = option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card");
-                    return (
-                      <Button
-                        key={option.code}
-                        type="button"
-                        variant={selected ? "default" : "outline"}
-                        className={cn("min-h-12 rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/40")}
-                        onClick={() => {
-                          setPaymentMethod(option.method);
-                          setSelectedPaymentMethodCode(option.code);
-                          setCardType(option.code === "card" ? "credit" : null);
-                        }}
-                      >
-                        {option.label}
-                      </Button>
-                    );
-                  })}
-                </div>
+                <Popover open={isPaymentSelectorOpen} onOpenChange={setIsPaymentSelectorOpen}>
+                  <PopoverTrigger asChild>
+                    <Button type="button" variant="outline" aria-label="Seleccionar método de pago" className="relative min-h-16 justify-center rounded-xl px-4 text-center">
+                      <span className="flex min-w-0 flex-col leading-tight">
+                        <span className="text-[10px] font-medium uppercase tracking-[1px] text-muted-foreground">Método de Pago</span>
+                        <span className="truncate text-base font-bold">{selectedPaymentButton?.label ?? "Método"}</span>
+                      </span>
+                      <ChevronDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="z-50 w-[min(24rem,calc(100vw-2rem))] p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[1px] text-muted-foreground">Elige Método de Pago</div>
+                    <div className="grid grid-cols-2 gap-2" role="listbox" aria-label="Métodos de pago activos">
+                      {paymentMethodButtons.map((option) => {
+                        const selected = option.code === selectedPaymentMethodCode || (option.code === "card" && paymentMethod === "card");
+                        return (
+                          <Button
+                            key={option.code}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            className={cn("min-h-14 rounded-xl px-3 text-sm font-bold", selected && "ring-2 ring-primary/40")}
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => {
+                              setPaymentMethod(option.method);
+                              setSelectedPaymentMethodCode(option.code);
+                              setCardType(option.code === "card" ? "credit" : null);
+                              setIsPaymentSelectorOpen(false);
+                              if (option.method !== "cash" && option.code !== "cash" && option.code !== "efectivo") {
+                                setShowCashPanel(false);
+                              }
+                            }}
+                          >
+                            {option.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
 
@@ -3576,7 +3642,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </div>
                   ) : null}
 
-                  {selectedPaymentIsCash ? (
+                  {selectedPaymentIsCash && showCashPanel ? (
                     <CashPaymentPanel
                       totalCents={expectedPaymentCents}
                       paymentAmount={paymentAmount}
@@ -3596,7 +3662,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
 
                 <div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-4 py-4 sm:px-6">
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className={cn("grid grid-cols-1 gap-2", selectedPaymentIsCash ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
                     <Button
                       className="h-14 min-w-0 text-base"
                       type="button"
@@ -3617,13 +3683,35 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
                       </span>
                     </Button>
+                    {selectedPaymentIsCash ? (
+                      <Button
+                        className="h-14 min-w-0 text-base"
+                        type="button"
+                        variant={showCashPanel ? "default" : "outline"}
+                        onClick={() => {
+                          const next = !showCashPanel;
+                          setShowCashPanel(next);
+                          if (next) {
+                            setPaymentAmount(centsToInput(expectedPaymentCents));
+                            setActiveTenderField("payment");
+                          } else {
+                            setPaymentAmount(centsToInput(expectedPaymentCents));
+                            setTipAmount("0");
+                            setActiveTenderField(null);
+                          }
+                          setShouldResetTenderOnFirstTap(true);
+                        }}
+                      >
+                        <span className="min-w-0 truncate">{showCashPanel ? (changeCents > 1 ? `Cambio: ${formatMoney(changeCents / 100)}` : "Editar efectivo") : "Efectivo exacto"}</span>
+                      </Button>
+                    ) : null}
                     <Button className="h-14 min-w-0 text-base" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
                       Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
                     </Button>
                   </div>
                   <div className="flex gap-2">
                     <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
-                    <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                    <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                       {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
