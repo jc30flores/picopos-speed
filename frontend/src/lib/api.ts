@@ -405,6 +405,7 @@ export type PaymentMethodOption = {
   isActive: boolean;
   colorHex?: string | null;
   isDefault?: boolean;
+  fiscalPaymentType?: "CASH" | "CARD" | "TRANSFER";
   linkedOrderTypeId?: number | null;
   linkedOrderTypeName?: string | null;
 };
@@ -4018,6 +4019,7 @@ const mapPaymentMethodOption = (m: any): PaymentMethodOption => ({
   isActive: Boolean(m.is_active ?? true),
   colorHex: m.color_hex || null,
   isDefault: Boolean(m.is_default),
+  fiscalPaymentType: (m.fiscal_payment_type || (m.is_cash ? "CASH" : "TRANSFER")) as PaymentMethodOption["fiscalPaymentType"],
   linkedOrderTypeId: m.linked_order_type_id ?? null,
   linkedOrderTypeName: m.linked_order_type_name ?? null,
 });
@@ -4040,6 +4042,7 @@ export const createPaymentMethod = async (payload: Partial<PaymentMethodOption> 
       is_active: payload.isActive !== false,
       color_hex: payload.colorHex || '',
       is_default: Boolean(payload.isDefault),
+      fiscal_payment_type: payload.fiscalPaymentType || (payload.isCash ? "CASH" : "TRANSFER"),
       linked_order_type_id: payload.linkedOrderTypeId ?? null,
     }),
   });
@@ -4055,14 +4058,17 @@ export const updatePaymentMethod = async (id: number, payload: Partial<PaymentMe
   if (payload.isActive !== undefined) body.is_active = payload.isActive;
   if (payload.colorHex !== undefined) body.color_hex = payload.colorHex || '';
   if (payload.isDefault !== undefined) body.is_default = payload.isDefault;
+  if (payload.fiscalPaymentType !== undefined) body.fiscal_payment_type = payload.fiscalPaymentType;
   if (payload.linkedOrderTypeId !== undefined) body.linked_order_type_id = payload.linkedOrderTypeId ?? null;
   const response = await request(`/payments/methods/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
   return mapPaymentMethodOption(await handleJson<any>(response));
 };
 
-export const deletePaymentMethod = async (id: number): Promise<void> => {
+export const deletePaymentMethod = async (id: number): Promise<{ hidden: boolean; detail?: string }> => {
   const response = await request(`/payments/methods/${id}/`, { method: 'DELETE' });
-  if (!response.ok) await handleJson(response);
+  if (response.status === 204) return { hidden: false };
+  const data = await handleJson<any>(response);
+  return { hidden: Boolean(data?.hidden), detail: data?.detail };
 };
 export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> => {
   const response = await request(`/payments/?order_id=${orderId}`);

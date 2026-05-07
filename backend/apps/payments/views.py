@@ -49,7 +49,8 @@ def _is_cash_payment_method(payment_method: PaymentMethod | None) -> bool:
     if not payment_method:
         return False
     code = str(payment_method.code or "").strip().upper()
-    return bool(payment_method.is_cash or code in {"01", "CASH", "EFECTIVO"})
+    fiscal_type = str(getattr(payment_method, "fiscal_payment_type", "") or "").strip().upper()
+    return bool(fiscal_type == PaymentMethod.FISCAL_CASH or payment_method.is_cash or code in {"01", "CASH", "EFECTIVO"})
 
 
 def _refund_is_cash(*, method: str, payment_method: PaymentMethod | None, original_payment: Payment | None) -> bool:
@@ -156,19 +157,42 @@ class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        if instance.payments.exists() or instance.refunds.exists() or instance.payments_reporting_override.exists():
-            return Response(
-                {"detail": "No se puede eliminar un método con ventas o reembolsos asociados. Desactívalo para ocultarlo del POS."},
-                status=status.HTTP_409_CONFLICT,
-            )
+        has_history = (
+            instance.payments.exists()
+            or instance.refunds.exists()
+            or instance.payments_reporting_override.exists()
+            or instance.old_payment_method_changes.exists()
+            or instance.new_payment_method_changes.exists()
+        )
         was_default = bool(instance.is_default)
+        if has_history:
+            instance.is_active = False
+            instance.is_default = False
+            instance.auto_select_order_type = None
+            instance.save(update_fields=["is_active", "is_default", "auto_select_order_type", "updated_at"])
+            self._ensure_default_after_delete_or_hide()
+            serializer = self.get_serializer(instance)
+            return Response(
+                {
+                    "detail": "Método ocultado del POS. Las ventas históricas se conservaron.",
+                    "hidden": True,
+                    "method": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         self.perform_destroy(instance)
-        if was_default and not PaymentMethod.objects.filter(is_active=True, is_default=True).exists():
+        if was_default:
+            self._ensure_default_after_delete_or_hide()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _ensure_default_after_delete_or_hide(self) -> None:
+        PaymentMethod.objects.filter(is_active=False, is_default=True).update(is_default=False)
+        if not PaymentMethod.objects.filter(is_active=True, is_default=True).exists():
             fallback = PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name").first()
             if fallback:
                 fallback.is_default = True
                 fallback.save(update_fields=["is_default", "updated_at"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer

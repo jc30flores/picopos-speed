@@ -13,9 +13,19 @@ logger = logging.getLogger(__name__)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
+    color = serializers.CharField(source="color_hex", required=False, allow_blank=True)
+    order = serializers.IntegerField(source="sort_order", required=False)
+    active = serializers.BooleanField(source="is_active", required=False)
+    linked_order_type = serializers.PrimaryKeyRelatedField(
+        source="auto_select_order_type",
+        queryset=ServiceType.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
     linked_order_type_id = serializers.PrimaryKeyRelatedField(
         source="auto_select_order_type",
-        queryset=ServiceType.objects.all(),
+        queryset=ServiceType.objects.filter(is_active=True),
         required=False,
         allow_null=True,
     )
@@ -30,14 +40,22 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
             "is_cash",
             "sort_order",
             "is_active",
+            "active",
             "color_hex",
+            "color",
+            "order",
             "is_default",
+            "fiscal_payment_type",
             "linked_order_type_id",
+            "linked_order_type",
             "linked_order_type_name",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at", "linked_order_type_name"]
+
+    def validate_color(self, value: str | None) -> str:
+        return self.validate_color_hex(value)
 
     def validate_color_hex(self, value: str | None) -> str:
         cleaned = (value or "").strip().upper()
@@ -65,20 +83,41 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         qs = PaymentMethod.objects.filter(name__iexact=cleaned, is_active=True)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
-        incoming_active = self.initial_data.get("is_active", getattr(self.instance, "is_active", True))
-        if incoming_active in {True, "true", "True", "1", 1} and qs.exists():
+        incoming_active = self.initial_data.get("is_active", self.initial_data.get("active", getattr(self.instance, "is_active", True)))
+        if self._as_bool(incoming_active, True) and qs.exists():
             raise serializers.ValidationError("Ya existe un método activo con este nombre.")
         return cleaned
 
+    def validate_fiscal_payment_type(self, value: str) -> str:
+        cleaned = str(value or "").strip().upper()
+        allowed = {choice[0] for choice in PaymentMethod.FISCAL_PAYMENT_TYPE_CHOICES}
+        if cleaned not in allowed:
+            raise serializers.ValidationError("Categoría fiscal inválida. Usa CASH, CARD o TRANSFER.")
+        return cleaned
+
+    @staticmethod
+    def _as_bool(value, default=False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "si", "sí"}
+
     def validate(self, attrs):
-        is_default = bool(attrs.get("is_default", getattr(self.instance, "is_default", False)))
-        is_active = bool(attrs.get("is_active", getattr(self.instance, "is_active", True)))
+        is_default = self._as_bool(attrs.get("is_default", getattr(self.instance, "is_default", False)))
+        is_active = self._as_bool(attrs.get("is_active", getattr(self.instance, "is_active", True)))
+        fiscal_type = attrs.get("fiscal_payment_type", getattr(self.instance, "fiscal_payment_type", PaymentMethod.FISCAL_TRANSFER))
         name = (attrs.get("name", getattr(self.instance, "name", "")) or "").strip()
-        if is_default and not is_active:
-            if attrs.get("is_default") is True:
-                raise serializers.ValidationError({"is_default": "El método default debe estar activo."})
+        if fiscal_type == PaymentMethod.FISCAL_CASH:
+            attrs["is_cash"] = True
+        elif attrs.get("is_cash") is True and fiscal_type != PaymentMethod.FISCAL_CASH:
+            attrs["fiscal_payment_type"] = PaymentMethod.FISCAL_CASH
+        if not is_active:
             attrs["is_default"] = False
+            attrs["auto_select_order_type"] = None
             is_default = False
+        if is_default and not is_active:
+            raise serializers.ValidationError({"is_default": "El método default debe estar activo."})
         if is_active and name:
             qs = PaymentMethod.objects.filter(name__iexact=name, is_active=True)
             if self.instance:
@@ -102,6 +141,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
     def _ensure_default_consistency(self, instance: PaymentMethod) -> None:
         if instance.is_default and instance.is_active:
             PaymentMethod.objects.exclude(pk=instance.pk).filter(is_default=True).update(is_default=False)
+        PaymentMethod.objects.filter(is_active=False, is_default=True).update(is_default=False)
         if not PaymentMethod.objects.filter(is_active=True, is_default=True).exists():
             fallback = PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name").first()
             if fallback:
@@ -171,15 +211,18 @@ class PaymentSerializer(serializers.ModelSerializer):
             if resolved_card_method:
                 attrs["payment_method"] = resolved_card_method
 
-        if payment_method and not attrs.get("method"):
-            method_code = payment_method.code.lower()
-            if method_code == "cash":
+        payment_method = attrs.get("payment_method")
+        if payment_method:
+            fiscal_type = getattr(payment_method, "fiscal_payment_type", "")
+            if fiscal_type == PaymentMethod.FISCAL_CASH:
                 attrs["method"] = "cash"
-            elif method_code in {"card_debit", "card_credit", "card"}:
+            elif fiscal_type == PaymentMethod.FISCAL_CARD:
                 attrs["method"] = "card"
-            else:
+            elif fiscal_type == PaymentMethod.FISCAL_TRANSFER:
                 attrs["method"] = "transfer"
-            if method_code in {"card_debit", "card_credit", "card"} and not attrs.get("card_type"):
+            elif not attrs.get("method"):
+                attrs["method"] = "transfer"
+            if fiscal_type == PaymentMethod.FISCAL_CARD and not attrs.get("card_type"):
                 attrs["card_type"] = "credit"
 
         payment_method = attrs.get("payment_method")

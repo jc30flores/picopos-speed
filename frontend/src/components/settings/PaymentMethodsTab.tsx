@@ -22,12 +22,19 @@ import { toast } from "sonner";
 
 const COLOR_PALETTE = ["#16A34A", "#2563EB", "#F97316", "#DC2626", "#7C3AED", "#0891B2", "#CA8A04", "#DB2777", "#0F766E", "#334155"];
 
+const FISCAL_LABELS: Record<NonNullable<PaymentMethodOption["fiscalPaymentType"]>, string> = {
+  CASH: "Efectivo",
+  CARD: "Tarjeta",
+  TRANSFER: "Transferencia",
+};
+
 const emptyForm = {
   name: "",
   code: "",
   sortOrder: "0",
   isActive: true,
   isCash: false,
+  fiscalPaymentType: "TRANSFER" as NonNullable<PaymentMethodOption["fiscalPaymentType"]>,
   colorHex: "#16A34A",
   isDefault: false,
   linkedOrderTypeId: "__none",
@@ -47,10 +54,11 @@ export const PaymentMethodsTab = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [showInactive, setShowInactive] = useState(false);
 
   const load = async () => {
     try {
-      const [methods, types] = await Promise.all([getPaymentMethods({ includeInactive: true }), listOrderTypes()]);
+      const [methods, types] = await Promise.all([getPaymentMethods({ includeInactive: showInactive }), listOrderTypes()]);
       setItems(methods);
       setOrderTypes(types);
     } catch (error) {
@@ -61,11 +69,11 @@ export const PaymentMethodsTab = () => {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [showInactive]);
 
   const sorted = useMemo(
-    () => [...items].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)),
-    [items],
+    () => [...items].filter((item) => showInactive || item.isActive !== false).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)),
+    [items, showInactive],
   );
 
   const openCreate = () => {
@@ -82,6 +90,7 @@ export const PaymentMethodsTab = () => {
       sortOrder: String(item.sortOrder ?? 0),
       isActive: item.isActive !== false,
       isCash: item.isCash === true,
+      fiscalPaymentType: item.fiscalPaymentType || (item.isCash ? "CASH" : "TRANSFER"),
       colorHex: item.colorHex || "#16A34A",
       isDefault: item.isDefault === true,
       linkedOrderTypeId: item.linkedOrderTypeId ? String(item.linkedOrderTypeId) : "__none",
@@ -125,7 +134,8 @@ export const PaymentMethodsTab = () => {
         code,
         sortOrder: Number(form.sortOrder || 0),
         isActive: form.isActive,
-        isCash: form.isCash,
+        isCash: form.fiscalPaymentType === "CASH",
+        fiscalPaymentType: form.fiscalPaymentType,
         colorHex: colorHex || null,
         isDefault: form.isDefault,
         linkedOrderTypeId: form.linkedOrderTypeId === "__none" ? null : Number(form.linkedOrderTypeId),
@@ -149,9 +159,9 @@ export const PaymentMethodsTab = () => {
   const onDelete = async (item: PaymentMethodOption) => {
     if (!window.confirm(`¿Eliminar el método ${item.name}? Si tiene ventas asociadas, el sistema pedirá desactivarlo.`)) return;
     try {
-      await deletePaymentMethod(item.id);
+      const result = await deletePaymentMethod(item.id);
       await load();
-      toast.success("Método eliminado");
+      toast.success(result.hidden ? (result.detail || "Método ocultado del POS. Las ventas históricas se conservaron.") : "Método eliminado");
     } catch (error) {
       console.error("Failed to delete payment method", error);
       toast.error(error instanceof Error ? error.message : "No se pudo eliminar el método");
@@ -165,7 +175,13 @@ export const PaymentMethodsTab = () => {
           <h3 className="text-lg font-semibold">Métodos de Pago</h3>
           <p className="text-sm text-muted-foreground">Configura métodos, colores, default y vínculo automático con tipos de pedido.</p>
         </div>
-        <Button onClick={openCreate}>Nuevo método</Button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+            <Switch checked={showInactive} onCheckedChange={setShowInactive} />
+            <span>Mostrar inactivos/eliminados</span>
+          </div>
+          <Button onClick={openCreate}>Nuevo método</Button>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -178,10 +194,10 @@ export const PaymentMethodsTab = () => {
                   <span className="h-4 w-4 rounded-full border shadow-sm" style={color ? { backgroundColor: color } : undefined} />
                   <p className="font-semibold">{item.name}</p>
                   {item.isDefault ? <Badge>Default</Badge> : null}
-                  {item.isCash ? <Badge variant="secondary">Efectivo</Badge> : null}
+                  <Badge variant="secondary">{FISCAL_LABELS[item.fiscalPaymentType || "TRANSFER"]}</Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {item.code} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Inactivo"} · Vinculado: {item.linkedOrderTypeName || "Sin vínculo"}
+                  {item.code} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Oculto/Inactivo"} · Vinculado: {item.linkedOrderTypeName || "Sin vínculo"}
                 </p>
               </div>
               <div className="flex gap-2 sm:shrink-0">
@@ -217,8 +233,18 @@ export const PaymentMethodsTab = () => {
               <Switch checked={form.isActive} onCheckedChange={(checked) => setForm((prev) => ({ ...prev, isActive: checked, isDefault: checked ? prev.isDefault : false }))} />
             </div>
             <div className="flex items-center justify-between rounded-xl border p-3">
-              <Label>Es efectivo</Label>
-              <Switch checked={form.isCash} onCheckedChange={(checked) => setForm((prev) => ({ ...prev, isCash: checked }))} />
+              <div>
+                <Label>Categoría fiscal</Label>
+                <p className="text-xs text-muted-foreground">Define el código DTE: efectivo, tarjeta o transferencia.</p>
+              </div>
+              <Select value={form.fiscalPaymentType} onValueChange={(value) => setForm((prev) => ({ ...prev, fiscalPaymentType: value as NonNullable<PaymentMethodOption["fiscalPaymentType"]>, isCash: value === "CASH" }))}>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="CASH">Efectivo</SelectItem>
+                  <SelectItem value="CARD">Tarjeta</SelectItem>
+                  <SelectItem value="TRANSFER">Transferencia</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex items-center justify-between rounded-xl border p-3">
               <div>

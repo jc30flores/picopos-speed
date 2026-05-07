@@ -193,8 +193,9 @@ const shouldOpenCashDrawer = (method: PaymentMethod, methodCode?: string): boole
   return normalizedCode === "cash" || normalizedCode === "efectivo";
 };
 
-const isCashPaymentMethod = (method?: { code?: string | null; name?: string | null; isCash?: boolean } | null): boolean => {
+const isCashPaymentMethod = (method?: (PaymentMethodOption & { isCash?: boolean }) | { code?: string | null; name?: string | null; isCash?: boolean; fiscalPaymentType?: string } | null): boolean => {
   if (!method) return false;
+  if (method.fiscalPaymentType === "CASH") return true;
   if (method.isCash === true) return true;
   const normalizedCode = String(method.code || "").trim().toLowerCase();
   if (["cash", "efectivo"].includes(normalizedCode)) return true;
@@ -202,7 +203,9 @@ const isCashPaymentMethod = (method?: { code?: string | null; name?: string | nu
 };
 
 const getPaymentMethodKind = (method: PaymentMethodOption): PaymentMethod => {
-  if (isCashPaymentMethod(method)) return "cash";
+  if (method.fiscalPaymentType === "CASH" || isCashPaymentMethod(method)) return "cash";
+  if (method.fiscalPaymentType === "CARD") return "card";
+  if (method.fiscalPaymentType === "TRANSFER") return "transfer";
   const normalized = String(method.code || "").trim().toLowerCase();
   if (normalized.includes("card") || normalized.includes("tarjeta")) return "card";
   return "transfer";

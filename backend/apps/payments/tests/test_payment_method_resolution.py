@@ -63,14 +63,17 @@ class PaymentMethodResolutionTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data.get("method"), "card")
 
-    def test_payment_methods_endpoint_collapses_legacy_card_codes_into_single_card_entry(self):
-        PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True, is_active=True)
-        PaymentMethod.objects.create(code="card_credit", name="Tarjeta Crédito", is_cash=False, is_active=True)
-        PaymentMethod.objects.create(code="card_debit", name="Tarjeta Débito", is_cash=False, is_active=True)
-        PaymentMethod.objects.create(code="transfer", name="Transferencia", is_cash=False, is_active=True)
+    def test_payment_methods_endpoint_returns_only_active_configured_methods(self):
+        active_cash = PaymentMethod.objects.create(code="cash", name="Efectivo", is_cash=True, is_active=True, fiscal_payment_type="CASH")
+        active_card = PaymentMethod.objects.create(code="card_credit", name="Tarjeta Crédito", is_cash=False, is_active=True, fiscal_payment_type="CARD")
+        inactive_card = PaymentMethod.objects.create(code="card_debit", name="Tarjeta Débito", is_cash=False, is_active=False, fiscal_payment_type="CARD")
+        PaymentMethod.objects.create(code="transfer", name="Transferencia", is_cash=False, is_active=True, fiscal_payment_type="TRANSFER")
 
         response = self.client.get("/api/payments/methods/")
 
         self.assertEqual(response.status_code, 200, response.data)
-        card_entries = [row for row in response.data if str(row.get("code")).lower() == "card"]
-        self.assertEqual(len(card_entries), 1, response.data)
+        ids = {row["id"] for row in response.data}
+        self.assertIn(active_cash.id, ids)
+        self.assertIn(active_card.id, ids)
+        self.assertNotIn(inactive_card.id, ids)
+        self.assertTrue(all(row.get("is_active") for row in response.data))
