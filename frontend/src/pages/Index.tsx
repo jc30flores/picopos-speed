@@ -1478,11 +1478,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     };
   }, [cashCloseFlowState]);
 
-  useEffect(() => {
+  const refreshPaymentMethods = useCallback(() => {
     getPaymentMethods().then((methods) => {
-      setPaymentMethods(methods);
+      setPaymentMethods(methods.filter((method) => method.isActive !== false));
     }).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    refreshPaymentMethods();
+    window.addEventListener("payment-methods:changed", refreshPaymentMethods);
+    return () => window.removeEventListener("payment-methods:changed", refreshPaymentMethods);
+  }, [refreshPaymentMethods]);
 
   const refreshCustomers = async (search = "") => {
     const next = await listCustomers(search);

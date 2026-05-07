@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class PaymentMethodSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(validators=[])
     color = serializers.CharField(source="color_hex", required=False, allow_blank=True)
     order = serializers.IntegerField(source="sort_order", required=False)
     active = serializers.BooleanField(source="is_active", required=False)
@@ -128,15 +129,27 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        self._clear_other_defaults_before_save(validated_data)
         instance = super().create(validated_data)
         self._ensure_default_consistency(instance)
         return instance
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        self._clear_other_defaults_before_save(validated_data, instance=instance)
         updated = super().update(instance, validated_data)
         self._ensure_default_consistency(updated)
         return updated
+
+    def _clear_other_defaults_before_save(self, validated_data, *, instance: PaymentMethod | None = None) -> None:
+        next_default = self._as_bool(validated_data.get("is_default", getattr(instance, "is_default", False)))
+        next_active = self._as_bool(validated_data.get("is_active", getattr(instance, "is_active", True)))
+        if not (next_default and next_active):
+            return
+        queryset = PaymentMethod.objects.filter(is_active=True, is_default=True)
+        if instance is not None and instance.pk:
+            queryset = queryset.exclude(pk=instance.pk)
+        queryset.update(is_default=False)
 
     def _ensure_default_consistency(self, instance: PaymentMethod) -> None:
         if instance.is_default and instance.is_active:

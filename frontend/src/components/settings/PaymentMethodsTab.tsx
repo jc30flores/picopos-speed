@@ -54,11 +54,10 @@ export const PaymentMethodsTab = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const [showInactive, setShowInactive] = useState(false);
 
   const load = async () => {
     try {
-      const [methods, types] = await Promise.all([getPaymentMethods({ includeInactive: showInactive }), listOrderTypes()]);
+      const [methods, types] = await Promise.all([getPaymentMethods(), listOrderTypes()]);
       setItems(methods);
       setOrderTypes(types);
     } catch (error) {
@@ -69,11 +68,11 @@ export const PaymentMethodsTab = () => {
 
   useEffect(() => {
     void load();
-  }, [showInactive]);
+  }, []);
 
   const sorted = useMemo(
-    () => [...items].filter((item) => showInactive || item.isActive !== false).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)),
-    [items, showInactive],
+    () => [...items].filter((item) => item.isActive !== false).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)),
+    [items],
   );
 
   const openCreate = () => {
@@ -129,9 +128,8 @@ export const PaymentMethodsTab = () => {
 
     setIsSaving(true);
     try {
-      const payload = {
+      const payload: Partial<PaymentMethodOption> & { name: string; code?: string } = {
         name,
-        code,
         sortOrder: Number(form.sortOrder || 0),
         isActive: form.isActive,
         isCash: form.fiscalPaymentType === "CASH",
@@ -140,6 +138,9 @@ export const PaymentMethodsTab = () => {
         isDefault: form.isDefault,
         linkedOrderTypeId: form.linkedOrderTypeId === "__none" ? null : Number(form.linkedOrderTypeId),
       };
+      if (!editing || normalizeCode(editing.code) !== code) {
+        payload.code = code;
+      }
       if (editing) {
         await updatePaymentMethod(editing.id, payload);
       } else {
@@ -147,6 +148,7 @@ export const PaymentMethodsTab = () => {
       }
       setIsOpen(false);
       await load();
+      window.dispatchEvent(new CustomEvent("payment-methods:changed"));
       toast.success("Método guardado");
     } catch (error) {
       console.error("Failed to save payment method", error);
@@ -161,6 +163,7 @@ export const PaymentMethodsTab = () => {
     try {
       const result = await deletePaymentMethod(item.id);
       await load();
+      window.dispatchEvent(new CustomEvent("payment-methods:changed"));
       toast.success(result.hidden ? (result.detail || "Método ocultado del POS. Las ventas históricas se conservaron.") : "Método eliminado");
     } catch (error) {
       console.error("Failed to delete payment method", error);
@@ -175,13 +178,7 @@ export const PaymentMethodsTab = () => {
           <h3 className="text-lg font-semibold">Métodos de Pago</h3>
           <p className="text-sm text-muted-foreground">Configura métodos, colores, default y vínculo automático con tipos de pedido.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-            <Switch checked={showInactive} onCheckedChange={setShowInactive} />
-            <span>Mostrar inactivos/eliminados</span>
-          </div>
-          <Button onClick={openCreate}>Nuevo método</Button>
-        </div>
+        <Button onClick={openCreate}>Nuevo método</Button>
       </div>
 
       <div className="space-y-2">

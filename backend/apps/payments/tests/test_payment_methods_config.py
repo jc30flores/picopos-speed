@@ -56,6 +56,37 @@ class PaymentMethodsConfigTests(TestCase):
         self.assertEqual(response.data["color_hex"], "#2563EB")
         self.assertEqual(response.data["fiscal_payment_type"], "TRANSFER")
 
+    def test_patch_existing_method_with_same_code_and_new_color_does_not_conflict(self):
+        method = PaymentMethod.objects.create(code="transfer", name="Transferencia", fiscal_payment_type="TRANSFER", color_hex="#7C3AED")
+
+        response = self.client.patch(
+            f"/api/payments/methods/{method.id}/",
+            {"code": "transfer", "name": "Transferencia", "color_hex": "#0891B2"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        method.refresh_from_db()
+        self.assertEqual(method.code, "transfer")
+        self.assertEqual(method.color_hex, "#0891B2")
+
+    def test_changing_default_replaces_existing_default_without_error(self):
+        cash = PaymentMethod.objects.create(code="cash", name="Efectivo", fiscal_payment_type="CASH", is_cash=True, is_default=True, sort_order=1)
+        card = PaymentMethod.objects.create(code="card", name="Tarjeta", fiscal_payment_type="CARD", is_default=False, sort_order=2)
+
+        response = self.client.patch(
+            f"/api/payments/methods/{card.id}/",
+            {"is_default": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        cash.refresh_from_db()
+        card.refresh_from_db()
+        self.assertFalse(cash.is_default)
+        self.assertTrue(card.is_default)
+        self.assertEqual(PaymentMethod.objects.filter(is_active=True, is_default=True).count(), 1)
+
     def test_delete_without_history_removes_method(self):
         method = PaymentMethod.objects.create(code="apple_pay", name="Apple Pay", fiscal_payment_type="TRANSFER")
         response = self.client.delete(f"/api/payments/methods/{method.id}/")
