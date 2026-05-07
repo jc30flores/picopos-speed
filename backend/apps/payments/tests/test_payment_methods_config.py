@@ -87,6 +87,40 @@ class PaymentMethodsConfigTests(TestCase):
         self.assertTrue(card.is_default)
         self.assertEqual(PaymentMethod.objects.filter(is_active=True, is_default=True).count(), 1)
 
+    def test_saving_current_default_again_does_not_conflict(self):
+        cash = PaymentMethod.objects.create(code="cash", name="Efectivo", fiscal_payment_type="CASH", is_cash=True, is_default=True, sort_order=1)
+        PaymentMethod.objects.create(code="transfer", name="Transferencia", fiscal_payment_type="TRANSFER", is_default=False, sort_order=2)
+
+        response = self.client.patch(
+            f"/api/payments/methods/{cash.id}/",
+            {"is_default": True, "color_hex": "#16A34A"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        cash.refresh_from_db()
+        self.assertTrue(cash.is_default)
+        self.assertEqual(PaymentMethod.objects.filter(is_active=True, is_default=True).count(), 1)
+
+    def test_default_can_be_switched_back_and_forth_without_conflict(self):
+        cash = PaymentMethod.objects.create(code="cash", name="Efectivo", fiscal_payment_type="CASH", is_cash=True, is_default=True, sort_order=1)
+        transfer = PaymentMethod.objects.create(code="transfer", name="Transferencia", fiscal_payment_type="TRANSFER", is_default=False, sort_order=2)
+
+        to_transfer = self.client.patch(f"/api/payments/methods/{transfer.id}/", {"is_default": True}, format="json")
+        self.assertEqual(to_transfer.status_code, 200, to_transfer.data)
+        cash.refresh_from_db()
+        transfer.refresh_from_db()
+        self.assertFalse(cash.is_default)
+        self.assertTrue(transfer.is_default)
+
+        to_cash = self.client.patch(f"/api/payments/methods/{cash.id}/", {"is_default": True}, format="json")
+        self.assertEqual(to_cash.status_code, 200, to_cash.data)
+        cash.refresh_from_db()
+        transfer.refresh_from_db()
+        self.assertTrue(cash.is_default)
+        self.assertFalse(transfer.is_default)
+        self.assertEqual(PaymentMethod.objects.filter(is_active=True, is_default=True).count(), 1)
+
     def test_delete_without_history_removes_method(self):
         method = PaymentMethod.objects.create(code="apple_pay", name="Apple Pay", fiscal_payment_type="TRANSFER")
         response = self.client.delete(f"/api/payments/methods/{method.id}/")

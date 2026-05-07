@@ -54,6 +54,11 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at", "linked_order_type_name"]
+        # The database still enforces one active default, but DRF's generated
+        # UniqueConstraint validator runs before update()/create() can clear the
+        # previous default. Keep uniqueness handling in the transactional save
+        # path so switching defaults is a replacement, not a validation error.
+        validators = []
 
     def validate_color(self, value: str | None) -> str:
         return self.validate_color_hex(value)
