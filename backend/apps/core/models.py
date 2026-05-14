@@ -129,6 +129,7 @@ class Customer(models.Model):
     activity_description = models.CharField(max_length=200, blank=True, default="")
     is_deleted = models.BooleanField(default=False)
     is_consumer_final = models.BooleanField(default=False)
+    is_iva_exempt = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -153,6 +154,8 @@ class Customer(models.Model):
         self.cod_actividad = self.activity_code or self.cod_actividad
         self.desc_actividad = self.activity_description or self.desc_actividad
         self.telefono = self.telefono or "00000000"
+        if self.client_type != "CF":
+            self.is_iva_exempt = False
         super().save(*args, **kwargs)
         if self.is_default_consumer_final:
             Customer.objects.exclude(pk=self.pk).filter(is_default_consumer_final=True).update(is_default_consumer_final=False)

@@ -74,8 +74,15 @@ def resolve_payment_method(value: str | None, *, active_only: bool = True) -> Pa
 
 def payment_code_from_payment(payment: Payment) -> str:
     effective_method = payment.reporting_payment_method if payment.reporting_payment_method_id else payment.payment_method
+    fiscal_type = str(getattr(effective_method, "fiscal_payment_type", "") or "").strip().upper()
     code = normalize_payment_method_code(effective_method.code if effective_method else "")
     method = str(payment.method or "").strip().lower()
+    if fiscal_type == "CASH":
+        return "cash"
+    if fiscal_type == "CARD":
+        return code if code in {"pedidos_ya"} else "card"
+    if fiscal_type == "TRANSFER":
+        return code if code in {"paypal"} else "transfer"
     if code:
         if code in {"card_credit", "card_debit"}:
             return "card"

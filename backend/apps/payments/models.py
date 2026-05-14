@@ -1,18 +1,65 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
+from django.db.models import Q
 from apps.orders.models import Order
+from apps.core.models import ServiceType
 from apps.cashier.models import CashSession
 
 
 class PaymentMethod(models.Model):
+    FISCAL_CASH = "CASH"
+    FISCAL_CARD = "CARD"
+    FISCAL_TRANSFER = "TRANSFER"
+    FISCAL_PAYMENT_TYPE_CHOICES = [
+        (FISCAL_CASH, "Efectivo"),
+        (FISCAL_CARD, "Tarjeta"),
+        (FISCAL_TRANSFER, "Transferencia"),
+    ]
+
     code = models.CharField(max_length=40, unique=True)
     name = models.CharField(max_length=80)
     is_cash = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    color_hex = models.CharField(max_length=7, blank=True, default="")
+    fiscal_payment_type = models.CharField(
+        max_length=12,
+        choices=FISCAL_PAYMENT_TYPE_CHOICES,
+        default=FISCAL_TRANSFER,
+    )
+    is_default = models.BooleanField(default=False)
+    auto_select_order_type = models.ForeignKey(
+        ServiceType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="auto_payment_methods",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["sort_order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_default"],
+                condition=Q(is_default=True, is_active=True),
+                name="unique_active_default_payment_method",
+            ),
+        ]
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        if self.fiscal_payment_type == self.FISCAL_CASH:
+            self.is_cash = True
+        elif self.is_cash:
+            self.fiscal_payment_type = self.FISCAL_CASH
+        if not self.is_active:
+            self.is_default = False
+            self.auto_select_order_type = None
+        if self.is_default and self.is_active:
+            PaymentMethod.objects.exclude(pk=self.pk).filter(is_default=True).update(is_default=False)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.name

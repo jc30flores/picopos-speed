@@ -24,7 +24,6 @@ from apps.payments.serializers import (
     PaymentMethodSerializer,
     InternalPaymentMethodChangeSerializer,
 )
-from apps.payments.normalization import normalize_payment_method_code
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import (
@@ -50,7 +49,8 @@ def _is_cash_payment_method(payment_method: PaymentMethod | None) -> bool:
     if not payment_method:
         return False
     code = str(payment_method.code or "").strip().upper()
-    return bool(payment_method.is_cash or code in {"01", "CASH", "EFECTIVO"})
+    fiscal_type = str(getattr(payment_method, "fiscal_payment_type", "") or "").strip().upper()
+    return bool(fiscal_type == PaymentMethod.FISCAL_CASH or payment_method.is_cash or code in {"01", "CASH", "EFECTIVO"})
 
 
 def _refund_is_cash(*, method: str, payment_method: PaymentMethod | None, original_payment: Payment | None) -> bool:
@@ -133,27 +133,66 @@ def _create_transaction_for_payment(payment: Payment, user) -> tuple[CashTransac
 
 
 
-class PaymentMethodListView(generics.ListAPIView):
+class PaymentMethodListView(generics.ListCreateAPIView):
     serializer_class = PaymentMethodSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get_permissions(self):
+        if self.request.method in {"GET", "HEAD", "OPTIONS"}:
+            return [IsCashierOrManagerOrAdmin()]
+        return [IsAdminOrManager()]
 
     def get_queryset(self):
-        return PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name")
+        queryset = PaymentMethod.objects.select_related("auto_select_order_type").order_by("sort_order", "name")
+        include_inactive = str(self.request.query_params.get("include_inactive", "")).lower() in {"1", "true", "yes"}
+        if not include_inactive:
+            queryset = queryset.filter(is_active=True)
+        return queryset
 
-    def list(self, request, *args, **kwargs):
-        queryset = list(self.get_queryset())
-        serialized = self.get_serializer(queryset, many=True).data
-        collapsed: list[dict] = []
-        card_entry: dict | None = None
-        for row in serialized:
-            normalized_code = normalize_payment_method_code(str(row.get("code") or "").strip().lower())
-            if normalized_code == "card":
-                if card_entry is None:
-                    card_entry = {**row, "code": "card", "name": "Tarjeta"}
-                    collapsed.append(card_entry)
-                continue
-            collapsed.append(row)
-        return Response(collapsed)
+
+class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = PaymentMethodSerializer
+    permission_classes = [IsAdminOrManager]
+    queryset = PaymentMethod.objects.select_related("auto_select_order_type").all()
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        has_history = (
+            instance.payments.exists()
+            or instance.refunds.exists()
+            or instance.payments_reporting_override.exists()
+            or instance.old_payment_method_changes.exists()
+            or instance.new_payment_method_changes.exists()
+        )
+        was_default = bool(instance.is_default)
+        if has_history:
+            instance.is_active = False
+            instance.is_default = False
+            instance.auto_select_order_type = None
+            instance.save(update_fields=["is_active", "is_default", "auto_select_order_type", "updated_at"])
+            self._ensure_default_after_delete_or_hide()
+            serializer = self.get_serializer(instance)
+            return Response(
+                {
+                    "detail": "Método ocultado del POS. Las ventas históricas se conservaron.",
+                    "hidden": True,
+                    "method": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        self.perform_destroy(instance)
+        if was_default:
+            self._ensure_default_after_delete_or_hide()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _ensure_default_after_delete_or_hide(self) -> None:
+        PaymentMethod.objects.filter(is_active=False, is_default=True).update(is_default=False)
+        if not PaymentMethod.objects.filter(is_active=True, is_default=True).exists():
+            fallback = PaymentMethod.objects.filter(is_active=True).order_by("sort_order", "name").first()
+            if fallback:
+                fallback.is_default = True
+                fallback.save(update_fields=["is_default", "updated_at"])
 
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer

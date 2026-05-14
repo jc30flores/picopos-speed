@@ -400,6 +400,7 @@ class OrderCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser CCF para emitir CCF."})
         if dte_document_type == "SX" and customer.client_type != "SX":
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser SX para emitir SX."})
+        iva_exempt = dte_document_type == "CF" and customer.client_type == "CF" and bool(getattr(customer, "is_iva_exempt", False))
 
         service_type = None
         if service_type_id is not None:
@@ -702,6 +703,7 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser CCF para emitir CCF."})
         if dte_document_type == "SX" and customer.client_type != "SX":
             raise serializers.ValidationError({"dte_document_type": "Cliente debe ser SX para emitir SX."})
+        attrs["iva_exempt"] = dte_document_type == "CF" and customer.client_type == "CF" and bool(getattr(customer, "is_iva_exempt", False))
         return attrs
 
     def update(self, instance: Order, validated_data):

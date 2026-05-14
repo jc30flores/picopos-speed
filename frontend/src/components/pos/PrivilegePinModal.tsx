@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { verifyPrivilegedPin } from "@/lib/api";
@@ -17,6 +17,8 @@ export const PrivilegePinModal = ({
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const submitRef = useRef<() => void>(() => undefined);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   const press = (digit: string) => setPin((prev) => sanitizePin(prev + digit));
 
@@ -40,9 +42,37 @@ export const PrivilegePinModal = ({
     }
   };
 
+  submitRef.current = submit;
+
+  useEffect(() => {
+    if (!open) {
+      setPin("");
+      setError("");
+      return;
+    }
+    contentRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (/^\d$/.test(event.key)) {
+        event.preventDefault();
+        setPin((prev) => sanitizePin(prev + event.key));
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        setPin((prev) => prev.slice(0, -1));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        void submitRef.current();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, open]);
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent ref={contentRef} tabIndex={-1} className="max-w-sm">
         <DialogHeader>
           <DialogTitle>Acceso con código</DialogTitle>
         </DialogHeader>

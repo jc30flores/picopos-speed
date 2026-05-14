@@ -322,7 +322,6 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
                 <SelectItem value="all">Todos</SelectItem>
                 <SelectItem value="CF">CF</SelectItem>
                 <SelectItem value="CCF">CCF</SelectItem>
-                <SelectItem value="SX">SX</SelectItem>
               </SelectContent>
             </Select>
             <Input className="lg:col-span-1" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />

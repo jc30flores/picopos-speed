@@ -570,6 +570,57 @@ class DTECoreTests(TestCase):
         self.assertEqual(len(disposable_lines), 1)
         self.assertEqual(round(float(disposable_lines[0]["ventaGravada"]), 2), 0.26)
 
+
+    def test_build_payload_cf_iva_exempt_customer_classifies_items_and_fees_as_exempt(self):
+        customer = Customer.objects.create(
+            name="CLIENTE EXENTO",
+            full_name="CLIENTE EXENTO",
+            client_type="CF",
+            dui="00000000-0",
+            telefono="0000-0000",
+            is_iva_exempt=True,
+        )
+        self.order.customer = customer
+        self.order.customer_name = customer.full_name
+        self.order.iva_exempt = False
+        self.order.total = Decimal("5.26")
+        self.order.disposable_total = Decimal("0.26")
+        self.order.save(update_fields=["customer", "customer_name", "iva_exempt", "total", "disposable_total"])
+        category = Category.objects.create(name="EXENTO")
+        product = Product.objects.create(name="Base exenta", description="", price=Decimal("5.00"), category=category, available=True)
+        item = OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name_snapshot="Base exenta",
+            price_snapshot=Decimal("5.00"),
+            quantity=1,
+            snapshot_sku_or_code="EXENTO-1",
+            is_custom=False,
+        )
+        OrderFee.objects.create(
+            order=self.order,
+            order_item=item,
+            fee_type="disposable",
+            fee_name="Desechables",
+            unit_amount=Decimal("0.26"),
+            quantity=1,
+            total_amount=Decimal("0.26"),
+        )
+
+        payload = build_payload_cf(self.order, "DTE-01-S001P001-000000000000206", "L" * 36, "00")
+        cuerpo = payload["dte"]["cuerpoDocumento"]
+        resumen = payload["dte"]["resumen"]
+
+        self.assertTrue(cuerpo)
+        for line in cuerpo:
+            self.assertEqual(round(float(line["ventaGravada"]), 2), 0.00)
+            self.assertEqual(round(float(line["ivaItem"]), 2), 0.00)
+            self.assertGreater(round(float(line["ventaExenta"]), 2), 0.00)
+        self.assertEqual(round(float(resumen["totalGravada"]), 2), 0.00)
+        self.assertEqual(round(float(resumen["totalIva"]), 2), 0.00)
+        self.assertEqual(round(float(resumen["totalExenta"]), 2), 5.26)
+        self.assertEqual(round(float(resumen["totalPagar"]), 2), 5.26)
+
     def test_build_payload_reconciles_cent_differences_against_order_total(self):
         category = Category.objects.create(name="RECONCILIACION")
         product = Product.objects.create(name="Base", description="", price=Decimal("13.78"), category=category, available=True)

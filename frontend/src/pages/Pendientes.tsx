@@ -79,6 +79,23 @@ const PendientesPage = () => {
     }
   };
 
+  const authorizePendingRemoval = async () => {
+    if (!pendingPinOrderId) return;
+    try {
+      if (canAutoUnmark) {
+        await handleRemovePending({ id: pendingPinOrderId } as Order);
+      } else {
+        await verifyPrivilegedPin(pin);
+        await handleRemovePending({ id: pendingPinOrderId } as Order, pin);
+      }
+      setPendingPinOrderId(null);
+      setPin("");
+      setRemovalReason("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "PIN inválido.");
+    }
+  };
+
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-auto bg-background">
       <div className="h-full px-2 pb-4 pt-4 lg:px-4">
@@ -202,7 +219,7 @@ const PendientesPage = () => {
       </div>
 
       <Dialog open={Boolean(pendingPinOrderId)} onOpenChange={(open) => { if (!open) { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); } }}>
-        <DialogContent>
+        <DialogContent onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void authorizePendingRemoval(); } if (event.key === "Escape") { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); } }}>
           <DialogHeader>
             <DialogTitle>Autorización requerida</DialogTitle>
             <DialogDescription>{canAutoUnmark ? "Ingresa el motivo para remover la orden de Open Orders." : "Ingresa PIN de gerente/admin para remover de Open Orders."}</DialogDescription>
@@ -212,22 +229,7 @@ const PendientesPage = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => { setPendingPinOrderId(null); setPin(""); setRemovalReason(""); }}>Cancelar</Button>
             <Button
-              onClick={async () => {
-                if (!pendingPinOrderId) return;
-                try {
-                  if (canAutoUnmark) {
-                    await handleRemovePending({ id: pendingPinOrderId } as Order);
-                  } else {
-                    await verifyPrivilegedPin(pin);
-                    await handleRemovePending({ id: pendingPinOrderId } as Order, pin);
-                  }
-                  setPendingPinOrderId(null);
-                  setPin("");
-                  setRemovalReason("");
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "PIN inválido.");
-                }
-              }}
+              onClick={() => void authorizePendingRemoval()}
             >
               Autorizar
             </Button>

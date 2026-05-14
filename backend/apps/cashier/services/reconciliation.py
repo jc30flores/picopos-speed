@@ -46,7 +46,14 @@ def _payment_method_label_map() -> dict[str, str]:
 
 def _refund_method_code(refund: Refund) -> str:
     if refund.payment_method_id:
+        fiscal_type = str(getattr(refund.payment_method, "fiscal_payment_type", "") or "").strip().upper()
         normalized = normalize_payment_method_code(refund.payment_method.code)
+        if fiscal_type == "CASH":
+            return "cash"
+        if fiscal_type == "CARD":
+            return normalized if normalized in {"pedidos_ya"} else "card"
+        if fiscal_type == "TRANSFER":
+            return normalized if normalized in {"paypal"} else "transfer"
         if normalized:
             return normalized
     return normalize_payment_method_code(refund.method or "") or "transfer"

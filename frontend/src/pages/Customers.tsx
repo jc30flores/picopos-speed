@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { PageLayout } from "@/components/layout/PageLayout";
 
 type ClientType = "CF" | "CCF" | "SX";
+const VISIBLE_CLIENT_TYPES: ClientType[] = ["CF", "CCF"];
 type FormState = Partial<Customer> & { fullName: string; clientType: ClientType };
 const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
 
@@ -41,6 +42,7 @@ const emptyForm: FormState = {
   municipalityCode: "",
   activityCode: "",
   activityDescription: "",
+  isIvaExempt: false,
 };
 
 const normalizeText = (value?: string | null, { uppercase = false } = {}) => {
@@ -168,6 +170,7 @@ export default function CustomersPage() {
       activityCode: c.activityCode || "",
       activityDescription: c.activityDescription || "",
       isConsumerFinal: c.isConsumerFinal,
+      isIvaExempt: c.isIvaExempt,
     });
   };
 
@@ -257,6 +260,7 @@ export default function CustomersPage() {
     activityCode: source.activityCode ?? "",
     activityDescription: source.activityDescription ?? "",
     isConsumerFinal: Boolean(source.isConsumerFinal),
+    isIvaExempt: source.clientType === "CF" && Boolean(source.isIvaExempt),
   });
 
   const onSave = async () => {
@@ -362,7 +366,7 @@ export default function CustomersPage() {
                   ) : rows.map((c) => (
                     <TableRow key={c.id} className={selectedId === c.id ? "bg-muted/50" : ""} onClick={() => onSelect(c)}>
                       <TableCell className="font-medium">{c.fullName}</TableCell>
-                      <TableCell>{c.clientType}</TableCell>
+                      <TableCell><div className="flex flex-wrap gap-1"><span>{c.clientType}</span>{c.clientType === "CF" && c.isIvaExempt ? <Badge variant="secondary">Exento IVA</Badge> : null}</div></TableCell>
                       <TableCell>{principalDoc(c)}</TableCell>
                       <TableCell>{c.phone || "—"}</TableCell>
                       <TableCell className="text-right">
@@ -398,13 +402,13 @@ export default function CustomersPage() {
             </div>
 
             <div className="mb-3 flex gap-2">
-              {(["CF", "CCF", "SX"] as ClientType[]).map((type) => (
+              {VISIBLE_CLIENT_TYPES.map((type) => (
                 <Button
                   key={type}
                   type="button"
                   variant={form.clientType === type ? "default" : "outline"}
                   className="flex-1"
-                  onClick={() => setForm((f) => ({ ...f, clientType: type }))}
+                  onClick={() => setForm((f) => ({ ...f, clientType: type, isIvaExempt: type === "CF" ? Boolean(f.isIvaExempt) : false }))}
                   disabled={!canWrite}
                 >
                   {type}
@@ -458,6 +462,21 @@ export default function CustomersPage() {
               </TabsContent>
 
               <TabsContent value="fiscal" className="space-y-3">
+                {form.clientType === "CF" ? (
+                  <div className="rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <Label>Exento de IVA</Label>
+                        <p className="text-xs text-muted-foreground">El DTE de este cliente se generará como venta exenta, sin IVA.</p>
+                      </div>
+                      <Switch
+                        checked={Boolean(form.isIvaExempt)}
+                        onCheckedChange={(checked) => setForm((f) => ({ ...f, isIvaExempt: checked }))}
+                        disabled={!canWrite}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <div>
                   <Label>NRC {isCcf(form.clientType) ? "*" : "(opcional)"}</Label>
                   <Input disabled={!canWrite} value={form.nrc || ""} onChange={(e) => setForm((f) => ({ ...f, nrc: e.target.value }))} />
