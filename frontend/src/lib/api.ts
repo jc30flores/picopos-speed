@@ -4824,6 +4824,41 @@ export const dteIssuedDetail = async (id: number): Promise<DTERecord> => {
   return handleJson<DTERecord>(res);
 };
 
+export const downloadDteExportZip = async (payload: { year: number; month: number; type: "json" | "f07" | "pdf" }): Promise<string> => {
+  const response = await request("/reports/dte/export/", {
+    method: "POST",
+    headers: { Accept: "application/zip,application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const errorPayload = await response.json().catch(() => ({}));
+      const detail = String(errorPayload?.detail || errorPayload?.error || "").trim();
+      throw new Error(detail || `No se pudo exportar DTE (${response.status})`);
+    }
+    const raw = await response.text().catch(() => "");
+    throw new Error(raw || `No se pudo exportar DTE (${response.status})`);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/zip")) {
+    throw new Error("Respuesta inválida al exportar DTE.");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = filenameMatch?.[1] || `dte_${payload.type}_${payload.year}_${String(payload.month).padStart(2, "0")}.zip`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return filename;
+};
+
 export const dteResend = async (
   id: number
 ): Promise<{ success: boolean; pending?: boolean; status?: string; message: string; record: DTERecord }> => {
