@@ -2,6 +2,7 @@ from django.urls import path
 from apps.reports import views
 
 urlpatterns = [
+    path("dte/export/", views.DTEExportView.as_view(), name="reports-dte-export"),
     path("sales/", views.SalesReportListView.as_view(), name="reports-sales"),
     path("sales-timeseries/", views.SalesTimeseriesView.as_view(), name="reports-sales-timeseries"),
     path("sales-breakdown/", views.SalesBreakdownView.as_view(), name="reports-sales-breakdown"),

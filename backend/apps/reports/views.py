@@ -9,6 +9,8 @@ from django.utils.dateparse import parse_date
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+
+from apps.reports.dte_export import EXPORT_TYPES, build_dte_export_zip, zip_response
 from rest_framework.views import APIView
 
 from apps.core.models import ServiceType
@@ -24,6 +26,29 @@ from apps.reports.serializers import SalesReportSerializer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class DTEExportView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        try:
+            year = int(request.data.get("year"))
+            month = int(request.data.get("month"))
+        except (TypeError, ValueError):
+            return Response({"detail": "year y month son obligatorios y numéricos."}, status=status.HTTP_400_BAD_REQUEST)
+        export_type = str(request.data.get("type") or "").lower()
+        if month < 1 or month > 12:
+            return Response({"detail": "month debe estar entre 1 y 12."}, status=status.HTTP_400_BAD_REQUEST)
+        if export_type not in EXPORT_TYPES:
+            return Response({"detail": "type debe ser json, f07 o pdf."}, status=status.HTTP_400_BAD_REQUEST)
+        if export_type == "pdf":
+            return Response({"detail": "PDF export not implemented yet"}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        try:
+            zip_bytes, filename, _stats = build_dte_export_zip(year, month, export_type, user=request.user)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return zip_response(zip_bytes, filename)
 
 MONEY_Q = Decimal("0.01")
 

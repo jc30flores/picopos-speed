@@ -13,6 +13,7 @@ import {
   dteIssuedDetail,
   dteIssuedList,
   dteResend,
+  downloadDteExportZip,
   type DTERecord,
 } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -22,6 +23,7 @@ import { PageLayout } from "@/components/layout/PageLayout";
 import { useAuth } from "@/context/useAuth";
 import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
 import { formatPhoneDisplay, normalizeWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
+import { DTE_EXPORT_MONTHS, getExportZipName, getPreviousMonthPeriod, type DteExportType } from "@/lib/dteExport";
 
 type ActionType = "view" | "email" | "whatsapp" | "resend" | "credit_note" | "invalidate";
 
@@ -51,6 +53,12 @@ const typeToChip = (dteType: string) => {
 };
 
 const formatMoney = (amount: number) => `$${Number(amount || 0).toFixed(2)}`;
+
+const dteExportHelp: Record<DteExportType, string> = {
+  json: "Descarga los JSON por código de generación, incluyendo respuesta de Hacienda/API.",
+  f07: "Descarga los CSV oficiales F07 del período, sin encabezados, sin BOM y separados por punto y coma.",
+  pdf: "Próximamente.",
+};
 
 const truncate = (value?: string, size = 14) => {
   if (!value) return "-";
@@ -89,6 +97,13 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
   const [whatsCountry, setWhatsCountry] = useState<WhatsAppCountry>("ESA");
   const [whatsInput, setWhatsInput] = useState("");
   const [whatsError, setWhatsError] = useState("");
+
+  const defaultExportPeriod = useMemo(() => getPreviousMonthPeriod(), []);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMonth, setExportMonth] = useState(defaultExportPeriod.month);
+  const [exportYear, setExportYear] = useState(defaultExportPeriod.year);
+  const [exportType, setExportType] = useState<DteExportType>("json");
+  const [exportLoading, setExportLoading] = useState(false);
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -255,6 +270,22 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
     }
   };
 
+  const submitDteExport = async () => {
+    if (exportType === "pdf") {
+      toast({ title: "Exportar DTE", description: "PDF estará disponible próximamente." });
+      return;
+    }
+    setExportLoading(true);
+    try {
+      const filename = await downloadDteExportZip({ year: exportYear, month: exportMonth, type: exportType });
+      toast({ title: "Exportación lista", description: `Se descargó ${filename}.` });
+    } catch (err) {
+      toast({ title: "No se pudo exportar DTE", description: String(err), variant: "destructive" });
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   const submitWhatsAppDelivery = async () => {
     if (!whatsTarget) return;
     let manualNormalized = "";
@@ -345,9 +376,12 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
               </Button>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3 text-sm text-muted-foreground">
-            <span># docs: <strong className="text-foreground">{count}</strong></span>
-            <span>Total según filtros: <strong className="text-foreground">{formatMoney(totalAmountSum)}</strong></span>
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <Button variant="secondary" onClick={() => setExportOpen(true)}>Exportar</Button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <span># docs: <strong className="text-foreground">{count}</strong></span>
+              <span>Total según filtros: <strong className="text-foreground">{formatMoney(totalAmountSum)}</strong></span>
+            </div>
           </div>
         </div>
 
@@ -413,6 +447,57 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
         </div>
 
         {error && <div className="rounded border border-red-600/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>}
+
+      <Dialog open={exportOpen} onOpenChange={(open) => !exportLoading && setExportOpen(open)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Exportar DTE del período</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Se descargarán únicamente DTE aceptados/recibidos e invalidados válidos. Rechazados y pendientes no se incluyen.
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-sm font-medium">Mes</span>
+                <Select value={String(exportMonth)} onValueChange={(value) => setExportMonth(Number(value))}>
+                  <SelectTrigger><SelectValue placeholder="Mes" /></SelectTrigger>
+                  <SelectContent>
+                    {DTE_EXPORT_MONTHS.map((month) => (
+                      <SelectItem key={month.value} value={String(month.value)}>{month.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-sm font-medium">Año</span>
+                <Input type="number" min={2020} max={2100} value={exportYear} onChange={(e) => setExportYear(Number(e.target.value))} />
+              </label>
+            </div>
+            <label className="block space-y-1">
+              <span className="text-sm font-medium">Tipo de descarga</span>
+              <Select value={exportType} onValueChange={(value) => setExportType(value as DteExportType)}>
+                <SelectTrigger><SelectValue placeholder="Tipo" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="json">JSON</SelectItem>
+                  <SelectItem value="f07">F07</SelectItem>
+                  <SelectItem value="pdf" disabled>PDF · Próximamente</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+              <p>{dteExportHelp[exportType]}</p>
+              <p className="mt-1">Archivo: <strong className="text-foreground">{getExportZipName(exportMonth, exportYear, exportType)}</strong></p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setExportOpen(false)} disabled={exportLoading}>Cancelar</Button>
+              <Button onClick={() => void submitDteExport()} disabled={exportLoading || exportType === "pdf"}>
+                {exportLoading ? "Descargando…" : "Descargar"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={invalidateDialogOpen}
