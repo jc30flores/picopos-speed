@@ -71,6 +71,11 @@ export const FeatureFlagsTab = () => {
       <Card><CardHeader><CardTitle>Pantalla Cocina</CardTitle><CardDescription>Mostrar u ocultar Cocina para todos los usuarios.</CardDescription></CardHeader><CardContent className="flex justify-end"><Switch checked={settings.kitchenDisplayEnabled} onCheckedChange={(checked) => void persist({ kitchenDisplayEnabled: checked })} /></CardContent></Card>
 
       <Card>
+        <CardHeader><CardTitle>Inventario avanzado</CardTitle><CardDescription>Activa proveedores, costos y órdenes de compra dentro del inventario.</CardDescription></CardHeader>
+        <CardContent className="flex justify-end"><Switch checked={settings.inventoryAdvancedEnabled} onCheckedChange={(checked) => void persist({ inventoryAdvancedEnabled: checked })} /></CardContent>
+      </Card>
+
+      <Card>
         <CardHeader>
           <CardTitle>Política de stock insuficiente</CardTitle>
           <CardDescription>Define cómo debe comportarse el POS cuando una venta necesita más inventario del disponible.</CardDescription>

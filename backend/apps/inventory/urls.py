@@ -3,6 +3,14 @@ from django.urls import path
 from apps.inventory import views
 
 urlpatterns = [
+    path("suppliers/", views.InventorySupplierListCreateView.as_view(), name="inventory-supplier-list"),
+    path("suppliers/<int:pk>/", views.InventorySupplierDetailView.as_view(), name="inventory-supplier-detail"),
+    path("purchase-orders/", views.PurchaseOrderListCreateView.as_view(), name="purchase-order-list"),
+    path("purchase-orders/<int:pk>/", views.PurchaseOrderDetailView.as_view(), name="purchase-order-detail"),
+    path("purchase-orders/<int:pk>/approve/", views.PurchaseOrderApproveView.as_view(), name="purchase-order-approve"),
+    path("purchase-orders/<int:pk>/cancel/", views.PurchaseOrderCancelView.as_view(), name="purchase-order-cancel"),
+    path("purchase-orders/<int:pk>/receive/", views.PurchaseOrderReceiveView.as_view(), name="purchase-order-receive"),
+    path("purchase-orders/<int:pk>/pdf/", views.PurchaseOrderPDFView.as_view(), name="purchase-order-pdf"),
     path("items/", views.InventoryItemListCreateView.as_view(), name="inventory-items"),
     path("items/<int:pk>/", views.InventoryItemDetailView.as_view(), name="inventory-item-detail"),
     path("items/<int:pk>/add-stock/", views.InventoryItemAddStockView.as_view(), name="inventory-item-add-stock"),

@@ -9,6 +9,11 @@ from apps.inventory.models import (
     InventoryCountSession,
     InventoryItem,
     InventoryMovement,
+    InventorySupplier,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseReceipt,
+    PurchaseReceiptLine,
     ProductInventoryOverride,
 )
 
@@ -36,7 +41,35 @@ INVENTORY_UNITS = {
 }
 
 
+class InventorySupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InventorySupplier
+        fields = [
+            "id", "name", "code", "contact_name", "phone", "email", "address",
+            "tax_id", "notes", "is_active", "created_by", "created_at", "updated_at",
+        ]
+        read_only_fields = ["created_by", "created_at", "updated_at"]
+
+    def validate_name(self, value: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise serializers.ValidationError("El nombre del proveedor es obligatorio.")
+        return cleaned
+
+    def validate_code(self, value: str) -> str:
+        code = (value or "").strip()
+        if code:
+            qs = InventorySupplier.objects.filter(code__iexact=code, is_active=True)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError("Ya existe un proveedor activo con este código.")
+        return code
+
+
 class InventoryItemSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+
     def validate_unit(self, value: str) -> str:
         normalized = (value or "").strip().lower()
         if normalized not in INVENTORY_UNITS:
@@ -53,11 +86,27 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             "current_stock",
             "min_stock",
             "max_stock",
+            "supplier",
+            "supplier_name",
+            "unit_cost",
+            "supplier_code",
+            "purchase_unit",
+            "purchase_to_inventory_factor",
             "notes",
             "is_active",
             "created_at",
             "updated_at",
         ]
+
+    def validate_unit_cost(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("El costo debe ser mayor o igual a 0.")
+        return value
+
+    def validate_purchase_to_inventory_factor(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("El factor de conversión debe ser mayor a 0.")
+        return value
 
 
 class InventoryMovementSerializer(serializers.ModelSerializer):
@@ -280,3 +329,114 @@ class InventoryCountLinesBulkUpdateSerializer(serializers.Serializer):
 
 class InventoryCountCancelSerializer(serializers.Serializer):
     cancel_reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+
+class PurchaseOrderLineSerializer(serializers.ModelSerializer):
+    inventory_item_name = serializers.CharField(source="inventory_item.name", read_only=True)
+    inventory_item_sku = serializers.CharField(source="inventory_item.sku", read_only=True)
+    inventory_item_unit = serializers.CharField(source="inventory_item.unit", read_only=True)
+    pending_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseOrderLine
+        fields = [
+            "id", "purchase_order", "inventory_item", "inventory_item_name", "inventory_item_sku",
+            "inventory_item_unit", "description", "quantity_ordered", "quantity_received",
+            "pending_quantity", "purchase_unit", "purchase_to_inventory_factor",
+            "inventory_quantity_ordered", "unit_cost", "subtotal", "notes", "created_at", "updated_at",
+        ]
+        read_only_fields = ["purchase_order", "quantity_received", "inventory_quantity_ordered", "subtotal", "created_at", "updated_at"]
+
+    def get_pending_quantity(self, obj):
+        return obj.pending_quantity
+
+    def validate(self, attrs):
+        quantity = attrs.get("quantity_ordered", getattr(self.instance, "quantity_ordered", None))
+        factor = attrs.get("purchase_to_inventory_factor", getattr(self.instance, "purchase_to_inventory_factor", None))
+        cost = attrs.get("unit_cost", getattr(self.instance, "unit_cost", None))
+        if quantity is not None and quantity <= 0:
+            raise serializers.ValidationError({"quantity_ordered": "La cantidad debe ser mayor a 0."})
+        if factor is not None and factor <= 0:
+            raise serializers.ValidationError({"purchase_to_inventory_factor": "El factor debe ser mayor a 0."})
+        if cost is not None and cost < 0:
+            raise serializers.ValidationError({"unit_cost": "El costo no puede ser negativo."})
+        return attrs
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    payment_category_label = serializers.CharField(source="get_payment_category_display", read_only=True)
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    approved_by_username = serializers.CharField(source="approved_by.username", read_only=True)
+    lines = PurchaseOrderLineSerializer(many=True, required=False)
+    received_percent = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseOrder
+        fields = [
+            "id", "code", "supplier", "supplier_name", "status", "status_label",
+            "payment_category", "payment_category_label", "expected_date", "notes",
+            "proof_reference", "proof_url", "subtotal", "total", "created_by",
+            "created_by_username", "created_at", "updated_at", "approved_by_username",
+            "approved_at", "cancelled_at", "cancel_reason", "lines", "received_percent",
+        ]
+        read_only_fields = ["code", "status", "subtotal", "total", "created_by", "created_at", "updated_at", "approved_at", "cancelled_at", "cancel_reason"]
+
+    def get_received_percent(self, obj):
+        ordered = sum((line.quantity_ordered for line in obj.lines.all()), start=Decimal("0"))
+        if ordered <= 0:
+            return 0
+        received = sum((line.quantity_received for line in obj.lines.all()), start=Decimal("0"))
+        return round(float((received / ordered) * 100), 2)
+
+    def validate(self, attrs):
+        if not attrs.get("supplier") and not getattr(self.instance, "supplier_id", None):
+            raise serializers.ValidationError({"supplier": "Selecciona un proveedor."})
+        return attrs
+
+
+class PurchaseReceiptLineSerializer(serializers.ModelSerializer):
+    inventory_item_name = serializers.CharField(source="inventory_item.name", read_only=True)
+
+    class Meta:
+        model = PurchaseReceiptLine
+        fields = [
+            "id", "receipt", "purchase_order_line", "inventory_item", "inventory_item_name",
+            "quantity_received_purchase_unit", "purchase_to_inventory_factor",
+            "quantity_added_inventory_unit", "unit_cost", "movement", "notes",
+        ]
+
+
+class PurchaseReceiptSerializer(serializers.ModelSerializer):
+    received_by_username = serializers.CharField(source="received_by.username", read_only=True)
+    lines = PurchaseReceiptLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PurchaseReceipt
+        fields = ["id", "code", "purchase_order", "received_by", "received_by_username", "received_at", "notes", "created_at", "lines"]
+
+
+class PurchaseOrderReceiveSerializer(serializers.Serializer):
+    lines = serializers.ListField(child=serializers.DictField(), allow_empty=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    update_unit_cost = serializers.BooleanField(required=False, default=True)
+
+    def validate_lines(self, value):
+        normalized = []
+        for raw in value:
+            line_id = raw.get("line_id") or raw.get("line")
+            quantity = raw.get("quantity_received")
+            try:
+                line_id = int(line_id)
+                quantity = Decimal(str(quantity))
+            except Exception as exc:
+                raise serializers.ValidationError("Formato de recepción inválido.") from exc
+            if quantity <= 0:
+                raise serializers.ValidationError("La cantidad recibida debe ser mayor a 0.")
+            normalized.append({"line_id": line_id, "quantity_received": quantity, "notes": (raw.get("notes") or "").strip()})
+        return normalized
+
+
+class PurchaseOrderCancelSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=255)

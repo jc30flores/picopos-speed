@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
-from rest_framework import generics, status
+from rest_framework import generics, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -184,7 +184,7 @@ class InventoryMovementListView(generics.ListAPIView):
         movement_type = self.request.query_params.get("movement_type") or self.request.query_params.get("adjustment_type")
         if movement_type:
             aliases = {
-                "entry": [InventoryMovement.TYPE_INVENTORY_ENTRY, InventoryMovement.TYPE_STOCK_ADD],
+                "entry": [InventoryMovement.TYPE_INVENTORY_ENTRY, InventoryMovement.TYPE_STOCK_ADD, InventoryMovement.TYPE_PURCHASE_RECEIPT],
                 "loss": [InventoryMovement.TYPE_INVENTORY_LOSS],
                 "damaged": [InventoryMovement.TYPE_INVENTORY_DAMAGED],
                 "correction": [InventoryMovement.TYPE_INVENTORY_CORRECTION, InventoryMovement.TYPE_STOCK_ADJUST],
@@ -739,3 +739,263 @@ class ProductEffectiveInventoryLinksView(APIView):
 
         CatalogProductInventoryLink.objects.bulk_create(direct_to_create)
         return self.get(request, product_id)
+
+from apps.core.feature_flags import is_feature_enabled
+from apps.inventory.models import InventorySupplier, PurchaseOrder, PurchaseOrderLine, PurchaseReceipt, PurchaseReceiptLine
+from apps.inventory.serializers import (
+    InventorySupplierSerializer,
+    PurchaseOrderCancelSerializer,
+    PurchaseOrderReceiveSerializer,
+    PurchaseOrderSerializer,
+)
+
+
+def _advanced_inventory_enabled() -> bool:
+    return is_feature_enabled("FF_INVENTORY", default=False)
+
+
+class AdvancedInventoryRequiredMixin:
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not _advanced_inventory_enabled():
+            self.permission_denied(request, message="Inventario avanzado no está activo.")
+
+
+def _sync_purchase_order_lines(order: PurchaseOrder, lines_data: list[dict]):
+    order.lines.all().delete()
+    for raw in lines_data:
+        item = InventoryItem.objects.get(pk=raw["inventory_item"].id if isinstance(raw.get("inventory_item"), InventoryItem) else raw.get("inventory_item"))
+        PurchaseOrderLine.objects.create(
+            purchase_order=order,
+            inventory_item=item,
+            description=(raw.get("description") or item.name)[:200],
+            quantity_ordered=raw.get("quantity_ordered"),
+            purchase_unit=raw.get("purchase_unit") or item.purchase_unit or item.unit,
+            purchase_to_inventory_factor=raw.get("purchase_to_inventory_factor") or item.purchase_to_inventory_factor or Decimal("1"),
+            unit_cost=raw.get("unit_cost") if raw.get("unit_cost") is not None else (item.unit_cost or Decimal("0")),
+            notes=raw.get("notes") or "",
+        )
+    order.refresh_totals()
+
+
+class InventorySupplierListCreateView(AdvancedInventoryRequiredMixin, generics.ListCreateAPIView):
+    serializer_class = InventorySupplierSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def get_queryset(self):
+        queryset = InventorySupplier.objects.all().order_by("name", "id")
+        query = (self.request.query_params.get("q") or "").strip()
+        if query:
+            queryset = queryset.filter(Q(name__icontains=query) | Q(code__icontains=query) | Q(phone__icontains=query) | Q(email__icontains=query))
+        is_active = self.request.query_params.get("is_active")
+        if is_active in {"true", "false"}:
+            queryset = queryset.filter(is_active=(is_active == "true"))
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class InventorySupplierDetailView(AdvancedInventoryRequiredMixin, generics.RetrieveUpdateDestroyAPIView):
+    queryset = InventorySupplier.objects.all()
+    serializer_class = InventorySupplierSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def destroy(self, request, *args, **kwargs):
+        supplier = self.get_object()
+        if supplier.purchase_orders.exists() or supplier.inventory_items.exists():
+            supplier.is_active = False
+            supplier.save(update_fields=["is_active", "updated_at"])
+            return Response({"detail": "No puedes eliminar este proveedor porque tiene registros relacionados. Puedes desactivarlo."}, status=status.HTTP_200_OK)
+        supplier.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PurchaseOrderListCreateView(AdvancedInventoryRequiredMixin, generics.ListCreateAPIView):
+    serializer_class = PurchaseOrderSerializer
+    permission_classes = [IsAdminOrManager]
+
+    def get_queryset(self):
+        queryset = PurchaseOrder.objects.select_related("supplier", "created_by", "approved_by").prefetch_related("lines__inventory_item").all()
+        query = (self.request.query_params.get("q") or "").strip()
+        if query:
+            queryset = queryset.filter(Q(code__icontains=query) | Q(supplier__name__icontains=query))
+        supplier = self.request.query_params.get("supplier")
+        if supplier:
+            queryset = queryset.filter(supplier_id=supplier)
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        date_from = self.request.query_params.get("date_from")
+        date_to = self.request.query_params.get("date_to")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        lines_data = serializer.validated_data.pop("lines", [])
+        order = serializer.save(created_by=request.user)
+        _sync_purchase_order_lines(order, lines_data)
+        return Response(self.get_serializer(order).data, status=status.HTTP_201_CREATED)
+
+
+class PurchaseOrderDetailView(AdvancedInventoryRequiredMixin, generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = PurchaseOrderSerializer
+    permission_classes = [IsAdminOrManager]
+    queryset = PurchaseOrder.objects.select_related("supplier", "created_by", "approved_by").prefetch_related("lines__inventory_item")
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        order = self.get_object()
+        if order.status != PurchaseOrder.STATUS_DRAFT:
+            return Response({"detail": "Solo puedes editar órdenes en borrador."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(order, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        lines_data = serializer.validated_data.pop("lines", None)
+        order = serializer.save()
+        if lines_data is not None:
+            _sync_purchase_order_lines(order, lines_data)
+        return Response(self.get_serializer(order).data)
+
+    def destroy(self, request, *args, **kwargs):
+        order = self.get_object()
+        if order.status != PurchaseOrder.STATUS_DRAFT:
+            return Response({"detail": "Solo puedes eliminar órdenes en borrador."}, status=status.HTTP_400_BAD_REQUEST)
+        order.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PurchaseOrderApproveView(AdvancedInventoryRequiredMixin, APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        order = PurchaseOrder.objects.select_for_update().prefetch_related("lines").filter(pk=pk).first()
+        if not order:
+            return Response({"detail": "Orden de compra no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != PurchaseOrder.STATUS_DRAFT:
+            return Response({"detail": "Solo puedes aprobar órdenes en borrador."}, status=status.HTTP_400_BAD_REQUEST)
+        if not order.lines.exists():
+            return Response({"detail": "No puedes aprobar una orden sin líneas."}, status=status.HTTP_400_BAD_REQUEST)
+        order.status = PurchaseOrder.STATUS_APPROVED
+        order.approved_by = request.user
+        order.approved_at = timezone.now()
+        order.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+        return Response(PurchaseOrderSerializer(order).data)
+
+
+class PurchaseOrderCancelView(AdvancedInventoryRequiredMixin, APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        order = PurchaseOrder.objects.select_for_update().prefetch_related("lines").filter(pk=pk).first()
+        if not order:
+            return Response({"detail": "Orden de compra no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status in {PurchaseOrder.STATUS_RECEIVED, PurchaseOrder.STATUS_CANCELLED}:
+            return Response({"detail": "No puedes cancelar esta orden."}, status=status.HTTP_400_BAD_REQUEST)
+        if order.lines.filter(quantity_received__gt=0).exists():
+            return Response({"detail": "No puedes cancelar una orden con productos ya recibidos desde este flujo."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = PurchaseOrderCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order.status = PurchaseOrder.STATUS_CANCELLED
+        order.cancelled_by = request.user
+        order.cancelled_at = timezone.now()
+        order.cancel_reason = serializer.validated_data.get("reason") or "Cancelación manual"
+        order.save(update_fields=["status", "cancelled_by", "cancelled_at", "cancel_reason", "updated_at"])
+        return Response(PurchaseOrderSerializer(order).data)
+
+
+class PurchaseOrderReceiveView(AdvancedInventoryRequiredMixin, APIView):
+    permission_classes = [IsAdminOrManager]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        order = PurchaseOrder.objects.select_for_update().prefetch_related("lines__inventory_item").filter(pk=pk).first()
+        if not order:
+            return Response({"detail": "Orden de compra no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status not in {PurchaseOrder.STATUS_APPROVED, PurchaseOrder.STATUS_PARTIALLY_RECEIVED}:
+            return Response({"detail": "Solo puedes recibir órdenes aprobadas o parcialmente recibidas."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = PurchaseOrderReceiveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        lines_payload = serializer.validated_data["lines"]
+        update_unit_cost = serializer.validated_data["update_unit_cost"]
+        line_map = {line.id: line for line in order.lines.all()}
+        receipt = PurchaseReceipt.objects.create(purchase_order=order, received_by=request.user, notes=serializer.validated_data.get("notes") or "")
+        received_any = False
+        for raw in lines_payload:
+            line = line_map.get(raw["line_id"])
+            if not line:
+                raise serializers.ValidationError({"lines": "Línea de orden inválida."})
+            qty_purchase = raw["quantity_received"]
+            if qty_purchase > line.pending_quantity:
+                raise serializers.ValidationError({"lines": f"No puedes recibir más de lo pendiente para {line.inventory_item.name}."})
+            item = InventoryItem.objects.select_for_update().get(pk=line.inventory_item_id)
+            qty_inventory = qty_purchase * line.purchase_to_inventory_factor
+            before = Decimal(item.current_stock)
+            after = before + qty_inventory
+            item.current_stock = after
+            update_fields = ["current_stock", "updated_at"]
+            if update_unit_cost:
+                item.unit_cost = line.unit_cost
+                update_fields.append("unit_cost")
+            item.save(update_fields=update_fields)
+            movement = InventoryMovement.objects.create(
+                inventory_item=item,
+                movement_type=InventoryMovement.TYPE_PURCHASE_RECEIPT,
+                quantity_change=qty_inventory,
+                quantity_before=before,
+                quantity_after=after,
+                reference_type="purchase_receipt",
+                reference_id=str(receipt.id),
+                reason=f"Entrada por orden de compra #{order.code}",
+                created_by=request.user,
+            )
+            line.quantity_received = line.quantity_received + qty_purchase
+            line.save(update_fields=["quantity_received", "updated_at"])
+            PurchaseReceiptLine.objects.create(
+                receipt=receipt,
+                purchase_order_line=line,
+                inventory_item=item,
+                quantity_received_purchase_unit=qty_purchase,
+                purchase_to_inventory_factor=line.purchase_to_inventory_factor,
+                quantity_added_inventory_unit=qty_inventory,
+                unit_cost=line.unit_cost,
+                movement=movement,
+                notes=raw.get("notes") or "",
+            )
+            received_any = True
+        if not received_any:
+            raise serializers.ValidationError({"lines": "Debes recibir al menos una línea."})
+        all_received = all(line.pending_quantity <= 0 for line in order.lines.all())
+        order.status = PurchaseOrder.STATUS_RECEIVED if all_received else PurchaseOrder.STATUS_PARTIALLY_RECEIVED
+        order.save(update_fields=["status", "updated_at"])
+        return Response({"message": "Productos recibidos correctamente.", "order": PurchaseOrderSerializer(order).data, "receipt": receipt.code})
+
+
+class PurchaseOrderPDFView(AdvancedInventoryRequiredMixin, APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def get(self, request, pk: int):
+        order = PurchaseOrder.objects.select_related("supplier").prefetch_related("lines__inventory_item").filter(pk=pk).first()
+        if not order:
+            return Response({"detail": "Orden de compra no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status == PurchaseOrder.STATUS_DRAFT:
+            return Response({"detail": "No puedes generar PDF de una orden en borrador."}, status=status.HTTP_400_BAD_REQUEST)
+        rows = "".join(
+            f"<tr><td>{line.inventory_item.name}</td><td>{line.quantity_ordered}</td><td>{line.quantity_received}</td><td>{line.purchase_unit or line.inventory_item.unit}</td><td>{line.unit_cost}</td><td>{line.subtotal}</td></tr>"
+            for line in order.lines.all()
+        )
+        html = f"""
+        <html><head><title>{order.code}</title><style>body{{font-family:sans-serif;padding:24px}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #999;padding:6px;font-size:12px}}th{{background:#166534;color:white}}</style></head>
+        <body><h1>Orden de compra {order.code}</h1><p><strong>Proveedor:</strong> {order.supplier.name}</p><p><strong>Estado:</strong> {order.get_status_display()}</p><p><strong>Total:</strong> {order.total}</p><p><strong>Notas:</strong> {order.notes or '—'}</p><table><thead><tr><th>Artículo</th><th>Ordenado</th><th>Recibido</th><th>Unidad compra</th><th>Costo</th><th>Subtotal</th></tr></thead><tbody>{rows}</tbody></table></body></html>
+        """
+        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        response["Content-Disposition"] = f'inline; filename="orden-compra-{order.code}.html"'
+        return response

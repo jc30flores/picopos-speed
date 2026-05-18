@@ -3,6 +3,28 @@ from django.db import models
 from django.core.validators import MinValueValidator
 
 
+class InventorySupplier(models.Model):
+    name = models.CharField(max_length=160)
+    code = models.CharField(max_length=80, blank=True, default="")
+    contact_name = models.CharField(max_length=160, blank=True, default="")
+    phone = models.CharField(max_length=40, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    tax_id = models.CharField(max_length=80, blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_suppliers_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        indexes = [models.Index(fields=["name"]), models.Index(fields=["code"]), models.Index(fields=["is_active"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class InventoryItem(models.Model):
     name = models.CharField(max_length=160)
     sku = models.CharField(max_length=80, blank=True, default="")
@@ -10,6 +32,11 @@ class InventoryItem(models.Model):
     current_stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     min_stock = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     max_stock = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    supplier = models.ForeignKey(InventorySupplier, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_items")
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True, validators=[MinValueValidator(0)])
+    supplier_code = models.CharField(max_length=80, blank=True, default="")
+    purchase_unit = models.CharField(max_length=40, blank=True, default="")
+    purchase_to_inventory_factor = models.DecimalField(max_digits=12, decimal_places=4, default=1, validators=[MinValueValidator(0.0001)])
     notes = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -71,6 +98,7 @@ class InventoryMovement(models.Model):
     TYPE_INVENTORY_DAMAGED = "inventory_damaged"
     TYPE_INVENTORY_CORRECTION = "inventory_correction"
     TYPE_INVENTORY_COUNT_ADJUSTMENT = "inventory_count_adjustment"
+    TYPE_PURCHASE_RECEIPT = "purchase_receipt"
     TYPE_CHOICES = [
         (TYPE_INITIAL_STOCK, "Stock inicial"),
         (TYPE_STOCK_ADD, "Entrada"),
@@ -82,6 +110,7 @@ class InventoryMovement(models.Model):
         (TYPE_INVENTORY_DAMAGED, "Producto dañado"),
         (TYPE_INVENTORY_CORRECTION, "Corrección de stock"),
         (TYPE_INVENTORY_COUNT_ADJUSTMENT, "Ajuste por conteo"),
+        (TYPE_PURCHASE_RECEIPT, "Entrada por orden de compra"),
     ]
 
     inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="movements")
@@ -102,6 +131,134 @@ class InventoryMovement(models.Model):
             models.Index(fields=["reference_type", "reference_id"]),
             models.Index(fields=["inventory_item", "created_at"]),
         ]
+
+
+class PurchaseOrder(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_APPROVED = "approved"
+    STATUS_PARTIALLY_RECEIVED = "partially_received"
+    STATUS_RECEIVED = "received"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Borrador"),
+        (STATUS_APPROVED, "Aprobada"),
+        (STATUS_PARTIALLY_RECEIVED, "Recibida parcialmente"),
+        (STATUS_RECEIVED, "Recibida completa"),
+        (STATUS_CANCELLED, "Cancelada"),
+    ]
+    PAYMENT_CASH = "cash"
+    PAYMENT_TRANSFER = "transfer"
+    PAYMENT_CARD = "card"
+    PAYMENT_CREDIT = "credit"
+    PAYMENT_OTHER = "other"
+    PAYMENT_CHOICES = [
+        (PAYMENT_CASH, "Efectivo"),
+        (PAYMENT_TRANSFER, "Transferencia"),
+        (PAYMENT_CARD, "Tarjeta"),
+        (PAYMENT_CREDIT, "Crédito"),
+        (PAYMENT_OTHER, "Otro"),
+    ]
+
+    code = models.CharField(max_length=32, unique=True, blank=True, default="")
+    supplier = models.ForeignKey(InventorySupplier, on_delete=models.PROTECT, related_name="purchase_orders")
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    payment_category = models.CharField(max_length=16, choices=PAYMENT_CHOICES, default=PAYMENT_CASH)
+    expected_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
+    proof_reference = models.CharField(max_length=160, blank=True, default="")
+    proof_url = models.URLField(blank=True, default="")
+    subtotal = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    total = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchase_orders_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchase_orders_approved")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchase_orders_cancelled")
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["status", "created_at"]), models.Index(fields=["supplier", "status"]), models.Index(fields=["code"])]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.code:
+            self.code = f"OC-{self.id:06d}"
+            super().save(update_fields=["code"])
+
+    def refresh_totals(self, *, save=True):
+        subtotal = sum((line.subtotal for line in self.lines.all()), start=0)
+        self.subtotal = subtotal
+        self.total = subtotal
+        if save:
+            self.save(update_fields=["subtotal", "total", "updated_at"])
+
+    def __str__(self) -> str:
+        return self.code or f"Orden de compra #{self.id}"
+
+
+class PurchaseOrderLine(models.Model):
+    purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name="lines")
+    inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="purchase_order_lines")
+    description = models.CharField(max_length=200, blank=True, default="")
+    quantity_ordered = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0.001)])
+    quantity_received = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    purchase_unit = models.CharField(max_length=40, blank=True, default="")
+    purchase_to_inventory_factor = models.DecimalField(max_digits=12, decimal_places=4, default=1, validators=[MinValueValidator(0.0001)])
+    inventory_quantity_ordered = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=4, default=0, validators=[MinValueValidator(0)])
+    subtotal = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    notes = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [models.Index(fields=["purchase_order", "inventory_item"])]
+
+    @property
+    def pending_quantity(self):
+        return self.quantity_ordered - self.quantity_received
+
+    def save(self, *args, **kwargs):
+        self.inventory_quantity_ordered = self.quantity_ordered * self.purchase_to_inventory_factor
+        self.subtotal = self.quantity_ordered * self.unit_cost
+        super().save(*args, **kwargs)
+
+
+class PurchaseReceipt(models.Model):
+    purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.PROTECT, related_name="receipts")
+    code = models.CharField(max_length=32, unique=True, blank=True, default="")
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchase_receipts")
+    received_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-received_at", "-id"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.code:
+            self.code = f"REC-{self.id:06d}"
+            super().save(update_fields=["code"])
+
+
+class PurchaseReceiptLine(models.Model):
+    receipt = models.ForeignKey(PurchaseReceipt, on_delete=models.CASCADE, related_name="lines")
+    purchase_order_line = models.ForeignKey(PurchaseOrderLine, on_delete=models.PROTECT, related_name="receipt_lines")
+    inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="purchase_receipt_lines")
+    quantity_received_purchase_unit = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0.001)])
+    purchase_to_inventory_factor = models.DecimalField(max_digits=12, decimal_places=4, validators=[MinValueValidator(0.0001)])
+    quantity_added_inventory_unit = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    movement = models.ForeignKey(InventoryMovement, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchase_receipt_lines")
+    notes = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["id"]
 
 
 class InventoryCountSession(models.Model):

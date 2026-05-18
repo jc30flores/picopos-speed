@@ -35,6 +35,11 @@ FEATURE_FLAG_DEFAULTS = {
         "description": "Controlar visibilidad de totales esperados en cierre de caja.",
         "default": True,
     },
+    "FF_INVENTORY": {
+        "label": "Inventario avanzado",
+        "description": "Activa proveedores, costos y órdenes de compra dentro del inventario.",
+        "default": False,
+    },
     "FF_INVENTORY_STOCK_POLICY": {
         "label": "Política de stock insuficiente",
         "description": "Define cómo debe comportarse el POS cuando una venta necesita más inventario del disponible.",
@@ -85,6 +90,7 @@ def get_feature_settings_payload() -> dict:
         "cash_close_expected_totals_allowed_roles": list(metadata.get("allowed_roles") or []),
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
         "inventory_stock_policy": stock_policy,
+        "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
     }
 
 
@@ -173,6 +179,7 @@ class FeatureSettingsView(APIView):
             "customer_display_enabled": "FF_CUSTOMER_DISPLAY_ENABLED",
             "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
+            "inventory_advanced_enabled": "FF_INVENTORY",
         }
         for field, key in mapping.items():
             if field in request.data:

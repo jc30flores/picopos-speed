@@ -88,6 +88,19 @@ export type ProductInventoryTrackingCreatePayload = {
   maxStock?: number | null;
 };
 
+export type InventorySupplier = {
+  id: number;
+  name: string;
+  code?: string;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  taxId?: string;
+  notes?: string;
+  isActive: boolean;
+};
+
 export type InventoryItem = {
   id: number;
   name: string;
@@ -96,8 +109,54 @@ export type InventoryItem = {
   currentStock: number;
   minStock?: number | null;
   maxStock?: number | null;
+  supplier?: number | null;
+  supplierName?: string | null;
+  unitCost?: number | null;
+  supplierCode?: string;
+  purchaseUnit?: string;
+  purchaseToInventoryFactor?: number;
   notes?: string;
   isActive: boolean;
+};
+
+export type PurchaseOrderLine = {
+  id?: number;
+  inventoryItem: number;
+  inventoryItemName?: string;
+  inventoryItemSku?: string;
+  inventoryItemUnit?: string;
+  description?: string;
+  quantityOrdered: number;
+  quantityReceived?: number;
+  pendingQuantity?: number;
+  purchaseUnit?: string;
+  purchaseToInventoryFactor: number;
+  inventoryQuantityOrdered?: number;
+  unitCost: number;
+  subtotal?: number;
+  notes?: string;
+};
+
+export type PurchaseOrder = {
+  id: number;
+  code: string;
+  supplier: number;
+  supplierName: string;
+  status: string;
+  statusLabel: string;
+  paymentCategory: string;
+  expectedDate?: string | null;
+  notes?: string;
+  proofReference?: string;
+  proofUrl?: string;
+  subtotal: number;
+  total: number;
+  createdByUsername?: string;
+  createdAt: string;
+  approvedAt?: string | null;
+  cancelReason?: string;
+  receivedPercent?: number;
+  lines: PurchaseOrderLine[];
 };
 
 export type InventoryMovement = {
@@ -266,6 +325,7 @@ type FeatureFlagsNormalized = {
   kitchenDisplayEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
   inventoryStockPolicy: InventoryStockPolicy;
+  inventoryAdvancedEnabled: boolean;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -275,6 +335,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     kitchenDisplayEnabled: true,
     cashCloseExpectedTotalsControlEnabled: true,
     inventoryStockPolicy: "allow",
+    inventoryAdvancedEnabled: false,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -290,6 +351,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
       inventoryStockPolicy: defaults.inventoryStockPolicy,
+      inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
     };
   }
   return {
@@ -298,6 +360,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
+    inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -411,6 +474,7 @@ export type FeatureSettings = {
   cashCloseExpectedTotalsAllowedRoles: string[];
   cashCloseExpectedTotalsVisibleFields: string[];
   inventoryStockPolicy: InventoryStockPolicy;
+  inventoryAdvancedEnabled: boolean;
 };
 
 export type FeatureSettingsOptions = {
@@ -1110,6 +1174,7 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
+    inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
   };
 };
 
@@ -1124,6 +1189,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
       inventory_stock_policy: payload.inventoryStockPolicy,
+      inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1136,6 +1202,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
+    inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
   };
 };
 
@@ -1595,26 +1662,88 @@ export const changeProductPrice = async (productId: number, payload: { code: str
   };
 };
 
+
+const mapInventorySupplier = (row: any): InventorySupplier => ({
+  id: Number(row.id),
+  name: row.name ?? "",
+  code: row.code ?? "",
+  contactName: row.contact_name ?? "",
+  phone: row.phone ?? "",
+  email: row.email ?? "",
+  address: row.address ?? "",
+  taxId: row.tax_id ?? "",
+  notes: row.notes ?? "",
+  isActive: Boolean(row.is_active),
+});
+
+const mapInventoryItem = (row: any): InventoryItem => ({
+  id: row.id,
+  name: row.name,
+  sku: row.sku ?? "",
+  unit: row.unit,
+  currentStock: Number(row.current_stock ?? 0),
+  minStock: row.min_stock != null ? Number(row.min_stock) : null,
+  maxStock: row.max_stock != null ? Number(row.max_stock) : null,
+  supplier: row.supplier ?? null,
+  supplierName: row.supplier_name ?? null,
+  unitCost: row.unit_cost != null ? Number(row.unit_cost) : null,
+  supplierCode: row.supplier_code ?? "",
+  purchaseUnit: row.purchase_unit ?? "",
+  purchaseToInventoryFactor: Number(row.purchase_to_inventory_factor ?? 1),
+  notes: row.notes ?? "",
+  isActive: Boolean(row.is_active),
+});
+
+const mapPurchaseOrderLine = (row: any): PurchaseOrderLine => ({
+  id: row.id,
+  inventoryItem: row.inventory_item,
+  inventoryItemName: row.inventory_item_name ?? "",
+  inventoryItemSku: row.inventory_item_sku ?? "",
+  inventoryItemUnit: row.inventory_item_unit ?? "",
+  description: row.description ?? "",
+  quantityOrdered: Number(row.quantity_ordered ?? 0),
+  quantityReceived: Number(row.quantity_received ?? 0),
+  pendingQuantity: Number(row.pending_quantity ?? 0),
+  purchaseUnit: row.purchase_unit ?? "",
+  purchaseToInventoryFactor: Number(row.purchase_to_inventory_factor ?? 1),
+  inventoryQuantityOrdered: Number(row.inventory_quantity_ordered ?? 0),
+  unitCost: Number(row.unit_cost ?? 0),
+  subtotal: Number(row.subtotal ?? 0),
+  notes: row.notes ?? "",
+});
+
+const mapPurchaseOrder = (row: any): PurchaseOrder => ({
+  id: Number(row.id),
+  code: row.code ?? "",
+  supplier: Number(row.supplier),
+  supplierName: row.supplier_name ?? "",
+  status: row.status ?? "draft",
+  statusLabel: row.status_label ?? row.status ?? "Borrador",
+  paymentCategory: row.payment_category ?? "cash",
+  expectedDate: row.expected_date ?? null,
+  notes: row.notes ?? "",
+  proofReference: row.proof_reference ?? "",
+  proofUrl: row.proof_url ?? "",
+  subtotal: Number(row.subtotal ?? 0),
+  total: Number(row.total ?? 0),
+  createdByUsername: row.created_by_username ?? "",
+  createdAt: row.created_at,
+  approvedAt: row.approved_at ?? null,
+  cancelReason: row.cancel_reason ?? "",
+  receivedPercent: Number(row.received_percent ?? 0),
+  lines: (row.lines ?? []).map(mapPurchaseOrderLine),
+});
+
 export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> => {
   const params = new URLSearchParams();
   if (q?.trim()) params.set("q", q.trim());
   const response = await request(`/inventory/items/${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await handleJson<Array<any>>(response);
-  return data.map((row) => ({
-    id: row.id,
-    name: row.name,
-    sku: row.sku ?? "",
-    unit: row.unit,
-    currentStock: Number(row.current_stock ?? 0),
-    minStock: row.min_stock != null ? Number(row.min_stock) : null,
-    maxStock: row.max_stock != null ? Number(row.max_stock) : null,
-    notes: row.notes ?? "",
-    isActive: Boolean(row.is_active),
-  }));
+  return data.map(mapInventoryItem);
 };
 
 export const createInventoryItem = async (payload: {
-  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; maxStock?: number | null; supplier?: number | null; unitCost?: number | null; supplierCode?: string; purchaseUnit?: string; purchaseToInventoryFactor?: number; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request("/inventory/items/", {
     method: "POST",
@@ -1626,16 +1755,21 @@ export const createInventoryItem = async (payload: {
       initial_stock: payload.initialStock ?? 0,
       min_stock: payload.minStock,
       max_stock: payload.maxStock,
+      supplier: payload.supplier,
+      unit_cost: payload.unitCost,
+      supplier_code: payload.supplierCode ?? "",
+      purchase_unit: payload.purchaseUnit ?? "",
+      purchase_to_inventory_factor: payload.purchaseToInventoryFactor ?? 1,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const updateInventoryItem = async (id: number, payload: {
-  name: string; sku?: string; unit: string; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; minStock?: number | null; maxStock?: number | null; supplier?: number | null; unitCost?: number | null; supplierCode?: string; purchaseUnit?: string; purchaseToInventoryFactor?: number; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request(`/inventory/items/${id}/`, {
     method: "PATCH",
@@ -1646,12 +1780,17 @@ export const updateInventoryItem = async (id: number, payload: {
       unit: payload.unit,
       min_stock: payload.minStock,
       max_stock: payload.maxStock,
+      supplier: payload.supplier,
+      unit_cost: payload.unitCost,
+      supplier_code: payload.supplierCode ?? "",
+      purchase_unit: payload.purchaseUnit ?? "",
+      purchase_to_inventory_factor: payload.purchaseToInventoryFactor ?? 1,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
@@ -1661,7 +1800,7 @@ export const addInventoryStock = async (id: number, quantity: number, reason?: s
     body: JSON.stringify({ quantity, reason: reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
@@ -1671,7 +1810,7 @@ export const adjustInventoryStock = async (id: number, payload: { setStock?: num
     body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const createInventoryAdjustment = async (payload: {
@@ -5684,4 +5823,100 @@ export const createEmployeeHoursCycle = async (payload: { employeeId: number; da
     body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, break_start_time: payload.breakStartTime, break_end_time: payload.breakEndTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
   });
   return handleJson<any>(response);
+};
+
+export const getInventorySuppliers = async (q?: string, isActive?: boolean): Promise<InventorySupplier[]> => {
+  const params = new URLSearchParams();
+  if (q?.trim()) params.set("q", q.trim());
+  if (isActive !== undefined) params.set("is_active", String(isActive));
+  const response = await request(`/inventory/suppliers/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapInventorySupplier);
+};
+
+export const saveInventorySupplier = async (payload: Partial<InventorySupplier> & { id?: number; name: string }): Promise<InventorySupplier> => {
+  const response = await request(`/inventory/suppliers/${payload.id ? `${payload.id}/` : ""}`, {
+    method: payload.id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      code: payload.code ?? "",
+      contact_name: payload.contactName ?? "",
+      phone: payload.phone ?? "",
+      email: payload.email ?? "",
+      address: payload.address ?? "",
+      tax_id: payload.taxId ?? "",
+      notes: payload.notes ?? "",
+      is_active: payload.isActive ?? true,
+    }),
+  });
+  return mapInventorySupplier(await handleJson<any>(response));
+};
+
+export const deleteInventorySupplier = async (id: number): Promise<void> => {
+  const response = await request(`/inventory/suppliers/${id}/`, { method: "DELETE" });
+  if (response.status !== 204) await handleJson<any>(response);
+};
+
+export const getPurchaseOrders = async (filters?: { q?: string; supplier?: string; status?: string; dateFrom?: string; dateTo?: string }): Promise<PurchaseOrder[]> => {
+  const params = new URLSearchParams();
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.supplier) params.set("supplier", filters.supplier);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  const response = await request(`/inventory/purchase-orders/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapPurchaseOrder);
+};
+
+export const savePurchaseOrder = async (payload: {
+  id?: number;
+  supplier: number;
+  paymentCategory: string;
+  expectedDate?: string | null;
+  notes?: string;
+  proofReference?: string;
+  proofUrl?: string;
+  lines: Array<{ inventoryItem: number; description?: string; quantityOrdered: number; purchaseUnit?: string; purchaseToInventoryFactor: number; unitCost: number; notes?: string }>;
+}): Promise<PurchaseOrder> => {
+  const response = await request(`/inventory/purchase-orders/${payload.id ? `${payload.id}/` : ""}`, {
+    method: payload.id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      supplier: payload.supplier,
+      payment_category: payload.paymentCategory,
+      expected_date: payload.expectedDate || null,
+      notes: payload.notes ?? "",
+      proof_reference: payload.proofReference ?? "",
+      proof_url: payload.proofUrl ?? "",
+      lines: payload.lines.map((line) => ({
+        inventory_item: line.inventoryItem,
+        description: line.description ?? "",
+        quantity_ordered: line.quantityOrdered,
+        purchase_unit: line.purchaseUnit ?? "",
+        purchase_to_inventory_factor: line.purchaseToInventoryFactor,
+        unit_cost: line.unitCost,
+        notes: line.notes ?? "",
+      })),
+    }),
+  });
+  return mapPurchaseOrder(await handleJson<any>(response));
+};
+
+export const approvePurchaseOrder = async (id: number): Promise<PurchaseOrder> => mapPurchaseOrder(await handleJson<any>(await request(`/inventory/purchase-orders/${id}/approve/`, { method: "POST" })));
+export const cancelPurchaseOrder = async (id: number, reason?: string): Promise<PurchaseOrder> => mapPurchaseOrder(await handleJson<any>(await request(`/inventory/purchase-orders/${id}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason ?? "" }) })));
+export const deletePurchaseOrder = async (id: number): Promise<void> => { const response = await request(`/inventory/purchase-orders/${id}/`, { method: "DELETE" }); if (response.status !== 204) await handleJson<any>(response); };
+export const receivePurchaseOrder = async (id: number, payload: { notes?: string; updateUnitCost?: boolean; lines: Array<{ lineId: number; quantityReceived: number; notes?: string }> }): Promise<PurchaseOrder> => {
+  const response = await request(`/inventory/purchase-orders/${id}/receive/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      notes: payload.notes ?? "",
+      update_unit_cost: payload.updateUnitCost ?? true,
+      lines: payload.lines.map((line) => ({ line_id: line.lineId, quantity_received: line.quantityReceived, notes: line.notes ?? "" })),
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return mapPurchaseOrder(data.order);
 };
