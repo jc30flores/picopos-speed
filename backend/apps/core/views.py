@@ -35,6 +35,17 @@ FEATURE_FLAG_DEFAULTS = {
         "description": "Controlar visibilidad de totales esperados en cierre de caja.",
         "default": True,
     },
+    "FF_INVENTORY": {
+        "label": "Inventario avanzado",
+        "description": "Activa proveedores, costos y órdenes de compra dentro del inventario.",
+        "default": False,
+    },
+    "FF_INVENTORY_STOCK_POLICY": {
+        "label": "Política de stock insuficiente",
+        "description": "Define cómo debe comportarse el POS cuando una venta necesita más inventario del disponible.",
+        "default": True,
+        "metadata": {"policy": "allow"},
+    },
 }
 
 CASH_EXPECTED_FIELDS = [
@@ -56,6 +67,7 @@ def _ensure_feature_settings_flags():
                 "label": config["label"],
                 "description": config["description"],
                 "is_enabled": bool(config["default"]),
+                "metadata": dict(config.get("metadata") or {}),
             },
         )
 
@@ -64,7 +76,12 @@ def get_feature_settings_payload() -> dict:
     _ensure_feature_settings_flags()
     flags = {item.key: item for item in FeatureFlag.objects.filter(key__in=FEATURE_FLAG_DEFAULTS.keys())}
     totals_flag = flags["FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED"]
+    stock_policy_flag = flags["FF_INVENTORY_STOCK_POLICY"]
     metadata = totals_flag.metadata or {}
+    stock_policy_metadata = stock_policy_flag.metadata or {}
+    stock_policy = str(stock_policy_metadata.get("policy") or "allow").lower()
+    if stock_policy not in {"allow", "warn", "block"}:
+        stock_policy = "allow"
     return {
         "kiosk_enabled": bool(flags["FF_KIOSK_ENABLED"].is_enabled),
         "customer_display_enabled": bool(flags["FF_CUSTOMER_DISPLAY_ENABLED"].is_enabled),
@@ -72,6 +89,8 @@ def get_feature_settings_payload() -> dict:
         "cash_close_expected_totals_control_enabled": bool(totals_flag.is_enabled),
         "cash_close_expected_totals_allowed_roles": list(metadata.get("allowed_roles") or []),
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
+        "inventory_stock_policy": stock_policy,
+        "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
     }
 
 
@@ -160,6 +179,7 @@ class FeatureSettingsView(APIView):
             "customer_display_enabled": "FF_CUSTOMER_DISPLAY_ENABLED",
             "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
+            "inventory_advanced_enabled": "FF_INVENTORY",
         }
         for field, key in mapping.items():
             if field in request.data:
@@ -173,6 +193,16 @@ class FeatureSettingsView(APIView):
             metadata["visible_fields"] = [str(value) for value in (request.data.get("cash_close_expected_totals_visible_fields") or [])]
         totals_flag.metadata = metadata
         totals_flag.save(update_fields=["metadata"])
+
+        if "inventory_stock_policy" in request.data:
+            policy = str(request.data.get("inventory_stock_policy") or "allow").strip().lower()
+            if policy not in {"allow", "warn", "block"}:
+                return Response({"inventory_stock_policy": "Política inválida."}, status=status.HTTP_400_BAD_REQUEST)
+            stock_flag = FeatureFlag.objects.get(key="FF_INVENTORY_STOCK_POLICY")
+            stock_metadata = dict(stock_flag.metadata or {})
+            stock_metadata["policy"] = policy
+            stock_flag.metadata = stock_metadata
+            stock_flag.save(update_fields=["metadata"])
         return Response(get_feature_settings_payload())
 
 

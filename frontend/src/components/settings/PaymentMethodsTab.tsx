@@ -38,6 +38,7 @@ const emptyForm = {
   colorHex: "#16A34A",
   isDefault: false,
   linkedOrderTypeId: "__none",
+  autoPrintTicket: false,
 };
 
 const normalizeCode = (value: string) =>
@@ -93,6 +94,7 @@ export const PaymentMethodsTab = () => {
       colorHex: item.colorHex || "#16A34A",
       isDefault: item.isDefault === true,
       linkedOrderTypeId: item.linkedOrderTypeId ? String(item.linkedOrderTypeId) : "__none",
+      autoPrintTicket: item.autoPrintTicket === true,
     });
     setIsOpen(true);
   };
@@ -137,6 +139,7 @@ export const PaymentMethodsTab = () => {
         colorHex: colorHex || null,
         isDefault: form.isDefault,
         linkedOrderTypeId: form.linkedOrderTypeId === "__none" ? null : Number(form.linkedOrderTypeId),
+        autoPrintTicket: form.autoPrintTicket,
       };
       if (!editing || normalizeCode(editing.code) !== code) {
         payload.code = code;
@@ -192,6 +195,7 @@ export const PaymentMethodsTab = () => {
                   <p className="font-semibold">{item.name}</p>
                   {item.isDefault ? <Badge>Default</Badge> : null}
                   <Badge variant="secondary">{FISCAL_LABELS[item.fiscalPaymentType || "TRANSFER"]}</Badge>
+                  {item.autoPrintTicket ? <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">Auto impresión</Badge> : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {item.code} · Orden: {item.sortOrder ?? 0} · {item.isActive ? "Activo" : "Oculto/Inactivo"} · Vinculado: {item.linkedOrderTypeName || "Sin vínculo"}
@@ -261,6 +265,13 @@ export const PaymentMethodsTab = () => {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border p-3 sm:col-span-2">
+              <div>
+                <Label>Imprimir ticket automáticamente después del pago</Label>
+                <p className="text-xs text-muted-foreground">Cuando esté activo, el POS imprimirá el ticket de compra al registrar un pago con este método.</p>
+              </div>
+              <Switch checked={form.autoPrintTicket} onCheckedChange={(checked) => setForm((prev) => ({ ...prev, autoPrintTicket: checked }))} />
             </div>
             <div className="space-y-3 rounded-xl border p-3 sm:col-span-2">
               <div className="flex items-center justify-between gap-3">

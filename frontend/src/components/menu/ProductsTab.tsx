@@ -12,8 +12,9 @@ import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
 import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
 import { ProductInventoryLinksDialog } from "./ProductInventoryLinksDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError, type ProductInventoryStockPolicy } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useReorderableList } from "@/hooks/useReorderableList";
 
@@ -61,6 +62,20 @@ const InlineStatusToggle = ({ product, onUpdated }: InlineStatusToggleProps) => 
   );
 };
 
+const categoryPolicyLabels: Record<ProductInventoryStockPolicy, string> = {
+  inherit: "Hereda global",
+  allow: "Permite sin stock",
+  warn: "Advierte stock",
+  block: "Bloquea sin stock",
+};
+
+const categoryPolicyDescriptions: Record<ProductInventoryStockPolicy, string> = {
+  inherit: "Heredar configuración global",
+  allow: "Permitir venta aunque no haya stock",
+  warn: "Advertir antes de vender",
+  block: "Bloquear venta si no hay stock",
+};
+
 export const ProductsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -81,8 +96,10 @@ export const ProductsTab = () => {
   const [menuLoadError, setMenuLoadError] = useState<string | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryInventoryStockPolicy, setNewCategoryInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [editingCategoryInventoryStockPolicy, setEditingCategoryInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
   const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
   const [removeEditingCategoryImage, setRemoveEditingCategoryImage] = useState(false);
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
@@ -225,8 +242,9 @@ export const ProductsTab = () => {
     const normalized = newCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await createCategory({ name: normalized });
+      await createCategory({ name: normalized, inventoryStockPolicy: newCategoryInventoryStockPolicy });
       setNewCategoryName("");
+      setNewCategoryInventoryStockPolicy("inherit");
       await loadMenuData();
       toast.success("Categoría creada");
     } catch (error) {
@@ -243,9 +261,11 @@ export const ProductsTab = () => {
         name: normalized,
         image: editingCategoryImage,
         removeImage: removeEditingCategoryImage,
+        inventoryStockPolicy: editingCategoryInventoryStockPolicy,
       });
       setEditingCategoryId(null);
       setEditingCategoryName("");
+      setEditingCategoryInventoryStockPolicy("inherit");
       setEditingCategoryImage(null);
       setRemoveEditingCategoryImage(false);
       await loadMenuData();
@@ -585,8 +605,17 @@ export const ProductsTab = () => {
             <DialogDescription>Crear, editar y eliminar categorías desde un solo lugar.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="flex gap-2">
+            <div className="grid gap-2 md:grid-cols-[1fr_260px_auto]">
               <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
+              <Select value={newCategoryInventoryStockPolicy} onValueChange={(value) => setNewCategoryInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">Heredar configuración global</SelectItem>
+                  <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
+                  <SelectItem value="warn">Advertir antes de vender</SelectItem>
+                  <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
+                </SelectContent>
+              </Select>
               <Button onClick={handleCreateCategory}>Crear</Button>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
@@ -610,6 +639,18 @@ export const ProductsTab = () => {
                   {editingCategoryId === category.id ? (
                     <div className="flex w-full flex-col gap-2">
                       <Input value={editingCategoryName} onChange={(e) => setEditingCategoryName(e.target.value)} />
+                      <div className="space-y-1">
+                        <Select value={editingCategoryInventoryStockPolicy} onValueChange={(value) => setEditingCategoryInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="inherit">Heredar configuración global</SelectItem>
+                            <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
+                            <SelectItem value="warn">Advertir antes de vender</SelectItem>
+                            <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">Esta política se aplicará a los productos de esta categoría que tengan la política del producto en ‘Heredar’.</p>
+                      </div>
                       <ImageUploadField
                         id={`edit-category-image-${category.id}`}
                         label="Imagen"
@@ -641,8 +682,11 @@ export const ProductsTab = () => {
                       >
                         <GripVertical className="h-4 w-4" />
                       </button>
-                      <div className="flex-1 font-medium">{category.name}</div>
-                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
+                      <div className="flex-1 space-y-1">
+                        <div className="font-medium">{category.name}</div>
+                        <Badge variant="outline" className="text-[10px]" title={categoryPolicyDescriptions[category.inventoryStockPolicy ?? "inherit"]}>{categoryPolicyLabels[category.inventoryStockPolicy ?? "inherit"]}</Badge>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryInventoryStockPolicy(category.inventoryStockPolicy ?? "inherit"); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
                         Editar
                       </Button>
                       <Button

@@ -26,12 +26,24 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 
 class Category(models.Model):
+    INVENTORY_STOCK_POLICY_INHERIT = "inherit"
+    INVENTORY_STOCK_POLICY_ALLOW = "allow"
+    INVENTORY_STOCK_POLICY_WARN = "warn"
+    INVENTORY_STOCK_POLICY_BLOCK = "block"
+    INVENTORY_STOCK_POLICY_CHOICES = [
+        (INVENTORY_STOCK_POLICY_INHERIT, "Heredar configuración global"),
+        (INVENTORY_STOCK_POLICY_ALLOW, "Permitir venta aunque no haya stock"),
+        (INVENTORY_STOCK_POLICY_WARN, "Advertir antes de vender"),
+        (INVENTORY_STOCK_POLICY_BLOCK, "Bloquear venta si no hay stock"),
+    ]
+
     name = models.CharField(max_length=120, unique=True)
     image = models.FileField(upload_to="categories/", blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0, db_index=True)
+    inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
 
     class Meta:
         ordering = ["position", "id"]
@@ -108,6 +120,17 @@ class ProductModifierGroup(models.Model):
 
 
 class Product(models.Model):
+    INVENTORY_STOCK_POLICY_INHERIT = "inherit"
+    INVENTORY_STOCK_POLICY_ALLOW = "allow"
+    INVENTORY_STOCK_POLICY_WARN = "warn"
+    INVENTORY_STOCK_POLICY_BLOCK = "block"
+    INVENTORY_STOCK_POLICY_CHOICES = [
+        (INVENTORY_STOCK_POLICY_INHERIT, "Heredar configuración general"),
+        (INVENTORY_STOCK_POLICY_ALLOW, "Permitir venta aunque no haya stock"),
+        (INVENTORY_STOCK_POLICY_WARN, "Advertir antes de vender"),
+        (INVENTORY_STOCK_POLICY_BLOCK, "Bloquear venta si no hay stock"),
+    ]
+
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -120,6 +143,18 @@ class Product(models.Model):
     disposable_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
+    inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
+    inventory_components_enabled = models.BooleanField(default=True)
+    track_inventory = models.BooleanField(default=False)
+    tracked_inventory_item = models.ForeignKey(
+        "inventory.InventoryItem",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tracked_products",
+    )
+    tracked_inventory_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1)
+    auto_created_inventory_item = models.BooleanField(default=False)
     modifier_groups = models.ManyToManyField(
         ModifierGroup,
         blank=True,

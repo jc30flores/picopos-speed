@@ -40,6 +40,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  ApiRequestError,
+  checkCartInventoryAvailability,
+  checkOrderInventoryAvailability,
   createOrder,
   Customer,
   createPayment,
@@ -74,12 +77,16 @@ import {
   printPaymentTicket,
   getPrintingStatus,
   getFeatureFlags,
+  getFeatureSettings,
   Category,
   Discount,
   ModifierGroup,
   Product,
   PaymentMethod,
   PaymentMethodOption,
+  CartAvailabilityItem,
+  InventoryAvailabilityCheck,
+  InventoryStockPolicy,
   ServiceType,
   CashSessionSnapshot,
   CashTransaction,
@@ -433,6 +440,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const previousServiceTypeRef = useRef<string>("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
+  const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
+  const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
   const [pendingReferenceDraft, setPendingReferenceDraft] = useState("");
@@ -459,6 +469,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   });
   const [cashCloseFlowState, setCashCloseFlowState] = useState<CashCloseFlowState>("idle");
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
+  const [lastPaymentAutoPrint, setLastPaymentAutoPrint] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -816,6 +827,36 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     return matchesCategory && matchesSearch && product.available;
   });
 
+  const cartAvailabilityItems = useMemo(() => {
+    const grouped = new Map<number, number>();
+    cart.forEach((item) => {
+      if (item.productId) grouped.set(item.productId, (grouped.get(item.productId) ?? 0) + item.quantity);
+    });
+    return Array.from(grouped.entries()).map(([productId, quantity]) => ({ productId, quantity }));
+  }, [cart]);
+
+  const productAvailability = (productId: number | null | undefined) => (productId ? cartAvailability[productId] : undefined);
+  const canAddProductByStock = (productId: number | null | undefined) => {
+    const row = productAvailability(productId);
+    return !row || row.resolvedPolicy !== "block" || row.canAddOne;
+  };
+  const warnIfStockLimited = (productId: number | null | undefined) => {
+    const row = productAvailability(productId);
+    if (!row) return;
+    if (row.resolvedPolicy === "block" && !row.canAddOne) toast.error(row.policySource === "category" ? "Bloqueado por política de categoría." : "No hay stock disponible para agregar más unidades de este producto.");
+    else if (row.resolvedPolicy === "warn" && row.status === "warning") toast.warning("Este producto no tiene stock suficiente.");
+  };
+
+  useEffect(() => {
+    const candidateProductIds = filteredProducts.map((product) => product.id);
+    const timeout = window.setTimeout(() => {
+      void checkCartInventoryAvailability({ cartItems: cartAvailabilityItems, candidateProductIds })
+        .then((result) => setCartAvailability(Object.fromEntries(result.items.map((item) => [item.productId, item]))))
+        .catch((error) => console.error("Failed to check cart inventory", error));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [cartAvailabilityItems, products, selectedCategory, searchQuery]);
+
   const getPosModifierGroups = (product: Product | null) => {
     const visibleGroupIds = product?.modifierGroupsPos ?? product?.modifierGroups ?? [];
     if (!visibleGroupIds.length) return [] as ModifierGroup[];
@@ -832,6 +873,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       return;
     }
+    if (!canAddProductByStock(product.id)) {
+      warnIfStockLimited(product.id);
+      return;
+    }
+    warnIfStockLimited(product.id);
     const visibleGroups = getPosModifierGroups(product);
     if (!visibleGroups.length) {
       addToCart(product, []);
@@ -922,6 +968,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       return;
     }
+    if (!canAddProductByStock(product.id)) {
+      warnIfStockLimited(product.id);
+      return;
+    }
+    warnIfStockLimited(product.id);
     const pricing = resolveEffectiveUnitPrice(product, serviceType, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     const effectiveBasePrice = pricing.effectivePrice;
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
@@ -960,6 +1011,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const updateQuantity = (itemId: string, delta: number) => {
     if (requiresCashOpen) return;
+    const target = cart.find((item) => item.id === itemId);
+    if (delta > 0 && target && !canAddProductByStock(target.productId)) {
+      warnIfStockLimited(target.productId);
+      return;
+    }
     setCart(
       cart
         .map((item) =>
@@ -1357,7 +1413,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   const pendingSelectionValidation = getPendingSelectionValidation();
   const selectedExtrasCount = pendingSelectionValidation.selectedMods.length;
-  const canAddPendingProduct = Object.keys(pendingSelectionValidation.errors).length === 0;
+  const canAddPendingProduct = Object.keys(pendingSelectionValidation.errors).length === 0 && (!pendingProduct || canAddProductByStock(pendingProduct.id));
 
   const handleAddPendingProduct = () => {
     if (!pendingProduct) return;
@@ -1460,6 +1516,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
+    getFeatureSettings().then((settings) => setInventoryStockPolicy(settings.inventoryStockPolicy)).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -1557,6 +1614,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [paymentMethods, selectedPaymentMethodCode],
   );
   const selectedPaymentIsCash = Boolean(selectedPaymentMethodOption) && (isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode));
+  const selectedPaymentAutoPrint = Boolean(selectedPaymentMethodOption?.autoPrintTicket);
   const selectedServiceType = useMemo(
     () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
     [serviceTypes, serviceType],
@@ -2101,6 +2159,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("No se encontró el producto");
       return;
     }
+    if (!canAddProductByStock(product.id)) {
+      warnIfStockLimited(product.id);
+      return;
+    }
+    warnIfStockLimited(product.id);
     const visibleGroups = getPosModifierGroups(product);
     if (!visibleGroups.length) {
       toast.error("Este producto no tiene modificadores disponibles");
@@ -2275,7 +2338,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
-      if (lastPaymentId && postSalePrintChoice) {
+      const shouldPrintTicket = Boolean(lastPaymentId) && (postSalePrintChoice || lastPaymentAutoPrint);
+      if (shouldPrintTicket && lastPaymentId) {
+        try {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (printResult.pdfBlob) {
         setFallbackPdfModal({
@@ -2314,6 +2379,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         if (printResult.drawerError) {
           toast.warning(printResult.drawerError);
         }
+        } catch (printError) {
+          console.error("Auto ticket print failed", printError);
+          toast.warning("El pago se registró, pero no se pudo imprimir el ticket automáticamente.");
+        }
       }
       setIsKitchenPromptOpen(false);
       console.info("[pos-finalize] confirm", {
@@ -2332,6 +2401,41 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       scheduleReload();
     } finally {
       setIsSubmittingKitchenChoice(false);
+    }
+  };
+
+
+  const showStockWarningModal = (check: InventoryAvailabilityCheck, mode: "warn" | "block"): Promise<boolean> => {
+    if (mode === "block") {
+      setStockWarning({ check, mode });
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => setStockWarning({ check, mode, resolve }));
+  };
+
+  const closeStockWarning = (confirmed: boolean) => {
+    stockWarning?.resolve?.(confirmed);
+    setStockWarning(null);
+  };
+
+  const validateInventoryBeforeFinalPayment = async (orderId: number | string): Promise<boolean | null> => {
+    try {
+      const check = await checkOrderInventoryAvailability(orderId);
+      if (!check.hasInsufficientStock) return false;
+      if (check.policy === "block") {
+        await showStockWarningModal(check, "block");
+        return null;
+      }
+      if (check.policy === "warn") {
+        const confirmed = await showStockWarningModal(check, "warn");
+        return confirmed ? true : null;
+      }
+      toast.warning("Hay artículos con stock insuficiente, pero la política actual permite continuar.");
+      return false;
+    } catch (error) {
+      console.error("Inventory availability check failed", error);
+      toast.warning("No se pudo verificar inventario. Revisa la conexión o intenta de nuevo.");
+      return inventoryStockPolicy === "block" ? null : false;
     }
   };
 
@@ -2403,6 +2507,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ? latestRemaining
             : Math.min(paymentAmountForApi, latestRemaining);
 
+      const inventoryWarningConfirmed = amountForApi >= latestRemaining - 0.01 ? await validateInventoryBeforeFinalPayment(Number(orderId)) : false;
+      if (inventoryWarningConfirmed === null) return;
+
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
@@ -2414,8 +2521,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
+        inventoryWarningConfirmed,
       });
       setLastPaymentId(paymentResult.id);
+      setLastPaymentAutoPrint(selectedPaymentAutoPrint);
       if (shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode)) {
         await triggerDrawerOpen({ showSuccessToast: false });
       }
@@ -2470,6 +2579,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           setKitchenPromptOrderId(orderId);
           setPostSaleKitchenChoice(hasKitchenItems);
           setPostSalePrintChoice(true);
+          setLastPaymentAutoPrint(selectedPaymentAutoPrint);
           setIsKitchenPromptOpen(true);
         }
       } else {
@@ -2477,7 +2587,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
     } catch (error) {
       console.error("Failed to create payment", error);
-      toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
+      if (error instanceof ApiRequestError && error.code === "INVENTORY_STOCK_INSUFFICIENT") {
+        const availability = (error.payload as any)?.availability;
+        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item: any) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0"), policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global", policySourceLabel: String(product.policy_source_label || "Configuración global"), policyLabel: String(product.policy_label || "Permitir venta") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
+        else toast.error(error.message);
+      } else {
+        toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
+      }
     } finally {
       setIsProcessingPayment(false);
     }
@@ -2866,13 +2982,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       new Date(),
                       Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
                     );
+                    const availability = productAvailability(product.id);
+                    const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
+                    const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
+                    const stockTitle = blocked ? (availability?.policySource === "category" ? "Bloqueado por política de categoría" : "No hay stock disponible para agregar más unidades") : product.name;
                     return (
                     <Card
                       key={product.id}
-                    className="cursor-pointer p-4 hover-lift"
-                    onClick={() => handleProductClick(product)}
+                    className={cn("p-4 hover-lift", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
+                    onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
+                    title={stockTitle}
+                    aria-disabled={blocked}
                   >
-                    <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
+                    <div className="mb-1 flex items-start justify-between gap-2"><h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>{badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}</div>
                     {productPricing.display.showOfferBadge && (
                       <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
                         {productPricing.appliedRule?.name?.trim() || "OFERTA"}
@@ -3089,7 +3211,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                               <Minus className="h-4 w-4" />
                             </Button>
                             <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
-                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none">
+                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none" disabled={!canAddProductByStock(item.productId)} title={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"} aria-label={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"}>
                               <Plus className="h-4 w-4" />
                             </Button>
                           </div>
@@ -3667,6 +3789,37 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       {/* Payment Dialog */}
+
+      <Dialog open={Boolean(stockWarning)} onOpenChange={(open) => { if (!open) closeStockWarning(false); }}>
+        <DialogContent className="max-w-3xl border-red-500/30 bg-background">
+          <DialogHeader><DialogTitle>Stock insuficiente</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">Algunos artículos no tienen suficiente stock para completar esta venta.</p>
+            <div className="max-h-80 overflow-auto rounded-xl border">
+              <table className="w-full min-w-[680px] text-sm">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2 text-left">Artículo</th><th className="px-3 py-2 text-right">Disponible</th><th className="px-3 py-2 text-right">Requerido</th><th className="px-3 py-2 text-right">Faltante</th><th className="px-3 py-2 text-left">Unidad</th><th className="px-3 py-2 text-left">Usado en</th></tr></thead>
+                <tbody>
+                  {stockWarning?.check.items.map((item) => (
+                    <tr key={item.inventoryItemId} className="border-t">
+                      <td className="px-3 py-2 font-medium">{item.name}</td>
+                      <td className="px-3 py-2 text-right">{item.available}</td>
+                      <td className="px-3 py-2 text-right">{item.required}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-red-400">{item.missing}</td>
+                      <td className="px-3 py-2">{item.unit}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.affectedProducts.map((product) => `${product.productName} x${product.quantity}${product.policySourceLabel ? ` · ${product.policySourceLabel}` : ""}`).join(", ") || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => closeStockWarning(false)}>{stockWarning?.mode === "block" ? "Entendido" : "Cancelar"}</Button>
+              {stockWarning?.mode === "warn" ? <Button onClick={() => closeStockWarning(true)}>Continuar de todos modos</Button> : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setPaymentMethodAutoSelectedFromOrderType(false); setShowCashPanel(false); setActiveTenderField(null); } }}>
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
@@ -4464,7 +4617,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           </div>
 
           <div className="pt-2">
-            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct}>
+            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
               {editingModifiersItemId
                 ? selectedExtrasCount > 0
                   ? `Actualizar (${selectedExtrasCount} extras)`

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,14 +11,20 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
 import {
   Category,
+  InventoryItem,
   InventoryProductLink,
   Product,
+  ProductInventoryStockPolicy,
+  ProductInventoryTrackingCreatePayload,
   ProductSpecialPriceRule,
+  InventoryStockPolicy,
   createCategory,
   createProduct,
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
+  getFeatureSettings,
+  getInventoryItems,
   getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
   saveProductEffectiveInventoryLinks,
@@ -81,9 +88,20 @@ export const ProductFormDialog = ({
   const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
   const [requiresKitchen, setRequiresKitchen] = useState(false);
-  const [disposableFee, setDisposableFee] = useState("0");
+  const [disposableFee, setDisposableFee] = useState("");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
+  const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [inventoryComponentsEnabled, setInventoryComponentsEnabled] = useState(true);
+  const [trackInventory, setTrackInventory] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<"link" | "create">("link");
+  const [trackedInventoryItemId, setTrackedInventoryItemId] = useState<number | null>(null);
+  const [trackedInventoryQuantity, setTrackedInventoryQuantity] = useState("");
+  const [newInventoryItem, setNewInventoryItem] = useState<ProductInventoryTrackingCreatePayload>({ name: "", sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [inventoryItemQuery, setInventoryItemQuery] = useState("");
+  const [inventoryItemOpen, setInventoryItemOpen] = useState(false);
+  const [globalInventoryStockPolicy, setGlobalInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
   const { activeServiceTypes: serviceTypes } = useServiceTypes();
@@ -91,6 +109,32 @@ export const ProductFormDialog = ({
   const [ruleOpen, setRuleOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRule());
+
+  const policyLabel = (policy: ProductInventoryStockPolicy | InventoryStockPolicy) => ({
+    inherit: "Heredar",
+    allow: "Permitir venta aunque no haya stock",
+    warn: "Advertir antes de vender",
+    block: "Bloquear venta si no hay stock",
+  }[policy]);
+
+  const selectedCategory = useMemo(() => categoryOptions.find((category) => category.id === selectedCategoryId) ?? categories.find((category) => category.id === selectedCategoryId) ?? null, [categories, categoryOptions, selectedCategoryId]);
+  const effectiveInventoryPolicy = useMemo(() => {
+    if (inventoryStockPolicy !== "inherit") {
+      return { policy: inventoryStockPolicy, source: "Producto" };
+    }
+    if (selectedCategory?.inventoryStockPolicy && selectedCategory.inventoryStockPolicy !== "inherit") {
+      return { policy: selectedCategory.inventoryStockPolicy, source: `Categoría ${selectedCategory.name}` };
+    }
+    return { policy: globalInventoryStockPolicy, source: "Configuración global" };
+  }, [globalInventoryStockPolicy, inventoryStockPolicy, selectedCategory]);
+
+  const selectedTrackedInventoryItem = useMemo(() => inventoryItems.find((item) => item.id === trackedInventoryItemId) ?? null, [inventoryItems, trackedInventoryItemId]);
+  const selectedTrackedInventoryLabel = selectedTrackedInventoryItem
+    ? `${selectedTrackedInventoryItem.name} · Stock ${selectedTrackedInventoryItem.currentStock} ${selectedTrackedInventoryItem.unit}`
+    : editingProduct?.trackedInventoryItem === trackedInventoryItemId && editingProduct.trackedInventoryItemName
+      ? `${editingProduct.trackedInventoryItemName} · Stock ${editingProduct.trackedInventoryItemCurrentStock ?? 0} ${editingProduct.trackedInventoryItemUnit ?? ""}`
+      : "Artículo de inventario vinculado";
+  const duplicateInventoryItemWarning = trackInventory && trackedInventoryItemId && inventoryLinks.some((row) => row.inventoryItemId === trackedInventoryItemId);
 
   useEffect(() => {
     if (editingProduct) {
@@ -103,9 +147,16 @@ export const ProductFormDialog = ({
       setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
       setRequiresKitchen(editingProduct.requiresKitchen);
-      setDisposableFee(String(editingProduct.disposableFee ?? 0));
+      setDisposableFee(Number(editingProduct.disposableFee ?? 0) === 0 ? "" : String(editingProduct.disposableFee ?? 0));
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
       setInventoryLinks(editingProduct.inventoryLinks ?? []);
+      setInventoryStockPolicy(editingProduct.inventoryStockPolicy ?? "inherit");
+      setInventoryComponentsEnabled(editingProduct.inventoryComponentsEnabled ?? true);
+      setTrackInventory(Boolean(editingProduct.trackInventory));
+      setTrackingMode(editingProduct.trackedInventoryItem ? "link" : "create");
+      setTrackedInventoryItemId(editingProduct.trackedInventoryItem ?? null);
+      setTrackedInventoryQuantity(Number(editingProduct.trackedInventoryQuantity ?? 1) === 1 ? "" : String(editingProduct.trackedInventoryQuantity ?? 1));
+      setNewInventoryItem({ name: editingProduct.name, sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
     } else {
       setName("");
       setDescription("");
@@ -116,12 +167,26 @@ export const ProductFormDialog = ({
       setExistingImageUrl(null);
       setAvailable(true);
       setRequiresKitchen(false);
-      setDisposableFee("0");
+      setDisposableFee("");
       setDisposableApplyTo([]);
       setInventoryLinks([]);
+      setInventoryStockPolicy("inherit");
+      setInventoryComponentsEnabled(true);
+      setTrackInventory(false);
+      setTrackingMode("create");
+      setTrackedInventoryItemId(null);
+      setTrackedInventoryQuantity("");
+      setNewInventoryItem({ name: "", sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
     }
   }, [editingProduct, open]);
 
+
+  useEffect(() => {
+    if (!open) return;
+    getFeatureSettings()
+      .then((settings) => setGlobalInventoryStockPolicy(settings.inventoryStockPolicy))
+      .catch(() => setGlobalInventoryStockPolicy("allow"));
+  }, [open]);
 
   useEffect(() => {
     if (!open || !editingProduct) {
@@ -169,6 +234,14 @@ export const ProductFormDialog = ({
     }
   }, [categories, categoryQuery]);
 
+  useEffect(() => {
+    if (!open || !trackInventory || trackingMode !== "link") return;
+    const timeout = window.setTimeout(() => {
+      getInventoryItems(inventoryItemQuery).then(setInventoryItems).catch(() => setInventoryItems([]));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [inventoryItemQuery, open, trackInventory, trackingMode]);
+
   const selectedCategoryName = useMemo(() => {
     if (selectedCategoryId) {
       return (
@@ -197,6 +270,39 @@ export const ProductFormDialog = ({
     if (!isValid()) return;
     const parsedPrice = price === "" ? NaN : Number(price);
     if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) return;
+    const quantityToDiscount = trackedInventoryQuantity.trim() === "" ? 1 : Number(trackedInventoryQuantity);
+    if (trackInventory && (!Number.isFinite(quantityToDiscount) || quantityToDiscount <= 0)) {
+      toast.error("La cantidad a descontar debe ser mayor a 0.");
+      return;
+    }
+    if (trackInventory && trackingMode === "link" && !trackedInventoryItemId) {
+      toast.error("Selecciona un artículo de inventario para seguir stock.");
+      return;
+    }
+    if (trackInventory && trackingMode === "create") {
+      const currentStock = Number(newInventoryItem.currentStock ?? 0);
+      const minStock = newInventoryItem.minStock == null ? null : Number(newInventoryItem.minStock);
+      const maxStock = newInventoryItem.maxStock == null ? null : Number(newInventoryItem.maxStock);
+      if (!newInventoryItem.name.trim() || !newInventoryItem.unit.trim()) {
+        toast.error("Completa nombre y unidad del artículo de inventario.");
+        return;
+      }
+      if (currentStock < 0 || (minStock != null && minStock < 0) || (maxStock != null && maxStock < 0)) {
+        toast.error("Los stocks deben ser mayores o iguales a 0.");
+        return;
+      }
+      if (minStock != null && maxStock != null && maxStock < minStock) {
+        toast.error("El stock máximo debe ser mayor o igual al mínimo.");
+        return;
+      }
+    }
+    const trackingPayload = {
+      inventoryComponentsEnabled,
+      trackInventory,
+      trackedInventoryItem: trackInventory && trackingMode === "link" ? trackedInventoryItemId : null,
+      trackedInventoryQuantity: quantityToDiscount || 1,
+      newInventoryItem: trackInventory && trackingMode === "create" ? { ...newInventoryItem, name: newInventoryItem.name || name, unit: newInventoryItem.unit || "Unidad" } : null,
+    };
 
     if (editingProduct) {
       await updateProduct(editingProduct.id, {
@@ -209,6 +315,8 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
+        inventoryStockPolicy,
+        ...trackingPayload,
       });
     } else {
       await createProduct({
@@ -221,6 +329,8 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
+        inventoryStockPolicy,
+        ...trackingPayload,
         inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
     }
@@ -233,6 +343,12 @@ export const ProductFormDialog = ({
     }
     onOpenChange(false);
   };
+
+  useEffect(() => {
+    if (!editingProduct && name && !newInventoryItem.name) {
+      setNewInventoryItem((prev) => ({ ...prev, name }));
+    }
+  }, [editingProduct, name, newInventoryItem.name]);
 
   const handleSelectCategory = (categoryItem: Category) => {
     setSelectedCategoryId(categoryItem.id);
@@ -386,7 +502,7 @@ export const ProductFormDialog = ({
 
               <div>
                 <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
-                <Input id="disposable-fee" type="number" min="0" step="0.01" value={disposableFee} onChange={(e) => setDisposableFee(e.target.value)} className="mt-1" />
+                <Input id="disposable-fee" type="number" min="0" step="0.01" placeholder="0" value={disposableFee} onChange={(e) => setDisposableFee(e.target.value)} className="mt-1" />
               </div>
 
               <div className="space-y-2 pt-1">
@@ -431,26 +547,134 @@ export const ProductFormDialog = ({
                 <Label htmlFor="available" className="cursor-pointer">Disponible</Label>
               </div>
 
-              <div className="md:col-span-2 space-y-2 rounded-xl border p-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-semibold">Inventario vinculado</p>
-                    <p className="text-xs text-muted-foreground">Configura qué insumos se descuentan por cada venta.</p>
-                  </div>
-                  <Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>Gestionar vínculos</Button>
+              <div className="md:col-span-2 space-y-3 rounded-xl border p-3">
+                <div>
+                  <p className="font-semibold">Inventario</p>
+                  <p className="text-xs text-muted-foreground">Configura componentes, stock propio y política de venta.</p>
                 </div>
-                {inventoryLinks.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Sin vínculos configurados.</p>
-                ) : (
-                  <div className="space-y-1 text-sm">
-                    {inventoryLinks.map((row) => (
-                      <div key={row.inventoryItemId} className="flex justify-between rounded-md bg-muted/40 px-2 py-1">
-                        <span>{row.inventoryItemName}</span>
-                        <span>{row.quantityRequired} {row.inventoryItemUnit}</span>
-                      </div>
-                    ))}
+
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Label className="font-semibold">Artículo compuesto</Label>
+                      <p className="text-xs text-muted-foreground">Descuenta componentes o insumos del inventario al vender este producto.</p>
+                    </div>
+                    <Checkbox checked={inventoryComponentsEnabled} onCheckedChange={(checked) => setInventoryComponentsEnabled(Boolean(checked))} aria-label="Artículo compuesto" />
                   </div>
-                )}
+                  {inventoryComponentsEnabled ? (
+                    <>
+                      {inventoryLinks.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No hay componentes configurados.</p>
+                      ) : (
+                        <div className="space-y-1 text-sm">
+                          {inventoryLinks.map((row) => (
+                            <div key={row.inventoryItemId} className="flex justify-between rounded-md bg-background/60 px-2 py-1">
+                              <span>{row.inventoryItemName}</span>
+                              <span>{row.quantityRequired} {row.inventoryItemUnit}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">Componentes del artículo</p><Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>{inventoryLinks.length ? "Gestionar componentes" : "Agregar componentes"}</Button></div>
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-amber-600">Los componentes guardados no se eliminarán, pero no se descontarán mientras esta opción esté apagada.</p>
+                      <Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>Ver componentes guardados</Button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Label className="font-semibold">Seguir inventario</Label>
+                      <p className="text-xs text-muted-foreground">Conecta este producto a un artículo de inventario propio para descontar stock por cada venta.</p>
+                    </div>
+                    <Checkbox checked={trackInventory} onCheckedChange={(checked) => setTrackInventory(Boolean(checked))} aria-label="Seguir inventario" />
+                  </div>
+                  {!trackInventory ? (
+                    <p className="text-sm text-muted-foreground">Este producto no tiene stock propio.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <Select value={trackingMode} onValueChange={(value) => setTrackingMode(value as "link" | "create")}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="create">Crear artículo de inventario</SelectItem>
+                          <SelectItem value="link">Vincular artículo existente</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {trackingMode === "create" ? (
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <Input placeholder="Nombre del artículo de inventario" value={newInventoryItem.name} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, name: event.target.value }))} />
+                          <Input placeholder="SKU/código" value={newInventoryItem.sku ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, sku: event.target.value }))} />
+                          <Input placeholder="Unidad" value={newInventoryItem.unit} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, unit: event.target.value }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.currentStock ? String(newInventoryItem.currentStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, currentStock: event.target.value === "" ? undefined : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.minStock ? String(newInventoryItem.minStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, minStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.maxStock ? String(newInventoryItem.maxStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, maxStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Popover open={inventoryItemOpen} onOpenChange={setInventoryItemOpen}>
+                            <PopoverTrigger asChild>
+                              <Button type="button" variant="outline" className="h-11 w-full justify-start text-left font-normal">
+                                {selectedTrackedInventoryLabel}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                              <Command shouldFilter={false}>
+                                <CommandInput placeholder="Artículo de inventario vinculado" value={inventoryItemQuery} onValueChange={setInventoryItemQuery} />
+                                <CommandList>
+                                  <CommandGroup>
+                                    {inventoryItems.map((item) => (
+                                      <CommandItem
+                                        key={item.id}
+                                        value={`${item.name} ${item.sku ?? ""}`}
+                                        onSelect={() => {
+                                          setTrackedInventoryItemId(item.id);
+                                          setInventoryItemOpen(false);
+                                          setInventoryItemQuery("");
+                                        }}
+                                      >
+                                        {item.name} · Stock {item.currentStock} {item.unit}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                          {selectedTrackedInventoryItem ? (
+                            <p className="text-xs text-muted-foreground">Actual: {selectedTrackedInventoryItem.currentStock} · Mín: {selectedTrackedInventoryItem.minStock ?? "—"} · Máx: {selectedTrackedInventoryItem.maxStock ?? "—"}</p>
+                          ) : null}
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        <Label>Cantidad a descontar por venta</Label>
+                        <Input type="number" min="0.001" step="0.001" placeholder="1" value={trackedInventoryQuantity} onChange={(event) => setTrackedInventoryQuantity(event.target.value)} />
+                      </div>
+                      {duplicateInventoryItemWarning ? <p className="text-sm text-amber-600">Este artículo también está en componentes. Revisa que no se descuente doble.</p> : null}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                  <Label>Política de venta por inventario</Label>
+                  <Select value={inventoryStockPolicy} onValueChange={(value) => setInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">Heredar de categoría/global</SelectItem>
+                      <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
+                      <SelectItem value="warn">Advertir antes de vender</SelectItem>
+                      <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">La política define qué ocurre cuando este producto no tiene inventario suficiente, ya sea por componentes o por stock propio.</p>
+                  <div className="rounded-md border bg-background/50 p-2 text-xs text-muted-foreground">
+                    <p><span className="font-medium text-foreground">Política efectiva actual:</span> {policyLabel(effectiveInventoryPolicy.policy)}</p>
+                    <p><span className="font-medium text-foreground">Origen:</span> {effectiveInventoryPolicy.source}</p>
+                  </div>
+                </div>
               </div>
 
               <div className="md:col-span-2 space-y-3 rounded-xl border p-3">

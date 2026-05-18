@@ -5,6 +5,7 @@ const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() =
 export type Category = {
   id: number;
   name: string;
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
   image?: string | null;
   imagePath?: string | null;
   imageUrl?: string | null;
@@ -36,6 +37,8 @@ export type ModifierGroup = {
   modifiers: Modifier[];
 };
 
+export type ProductInventoryStockPolicy = "inherit" | "allow" | "warn" | "block";
+
 export type Product = {
   id: number;
   name: string;
@@ -64,6 +67,38 @@ export type Product = {
   modifierGroupsPos?: number[];
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
   inventoryLinks?: InventoryProductLink[];
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryItemName?: string | null;
+  trackedInventoryItemUnit?: string | null;
+  trackedInventoryItemCurrentStock?: number | null;
+  trackedInventoryQuantity?: number;
+  autoCreatedInventoryItem?: boolean;
+  trackedInventoryWarning?: string;
+};
+
+export type ProductInventoryTrackingCreatePayload = {
+  name: string;
+  sku?: string;
+  unit: string;
+  currentStock?: number;
+  minStock?: number | null;
+  maxStock?: number | null;
+};
+
+export type InventorySupplier = {
+  id: number;
+  name: string;
+  code?: string;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  taxId?: string;
+  notes?: string;
+  isActive: boolean;
 };
 
 export type InventoryItem = {
@@ -73,14 +108,63 @@ export type InventoryItem = {
   unit: string;
   currentStock: number;
   minStock?: number | null;
+  maxStock?: number | null;
+  supplier?: number | null;
+  supplierName?: string | null;
+  unitCost?: number | null;
+  supplierCode?: string;
+  purchaseUnit?: string;
+  purchaseToInventoryFactor?: number;
   notes?: string;
   isActive: boolean;
+};
+
+export type PurchaseOrderLine = {
+  id?: number;
+  inventoryItem: number;
+  inventoryItemName?: string;
+  inventoryItemSku?: string;
+  inventoryItemUnit?: string;
+  description?: string;
+  quantityOrdered: number;
+  quantityReceived?: number;
+  pendingQuantity?: number;
+  purchaseUnit?: string;
+  purchaseToInventoryFactor: number;
+  inventoryQuantityOrdered?: number;
+  unitCost: number;
+  subtotal?: number;
+  notes?: string;
+};
+
+export type PurchaseOrder = {
+  id: number;
+  code: string;
+  supplier: number;
+  supplierName: string;
+  status: string;
+  statusLabel: string;
+  paymentCategory: string;
+  expectedDate?: string | null;
+  notes?: string;
+  proofReference?: string;
+  proofUrl?: string;
+  subtotal: number;
+  total: number;
+  createdByUsername?: string;
+  createdAt: string;
+  approvedAt?: string | null;
+  cancelReason?: string;
+  receivedPercent?: number;
+  lines: PurchaseOrderLine[];
 };
 
 export type InventoryMovement = {
   id: number;
   inventoryItem: number;
   inventoryItemName: string;
+  inventoryItemSku?: string;
+  inventoryItemUnit?: string;
   movementType: string;
   quantityChange: number;
   quantityBefore: number;
@@ -92,13 +176,55 @@ export type InventoryMovement = {
   createdAt: string;
 };
 
+
+export type InventoryCountLine = {
+  id: number;
+  session: number;
+  inventoryItem: number;
+  inventoryItemName: string;
+  inventoryItemSku: string;
+  inventoryItemUnit: string;
+  systemStock: number;
+  countedStock: number | null;
+  difference: number;
+  note: string;
+  stockBeforeApply: number | null;
+  stockAfterApply: number | null;
+  movement: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InventoryCountSession = {
+  id: number;
+  code: string;
+  countType: "complete" | "manual" | "category" | string;
+  countTypeDisplay: string;
+  status: "draft" | "in_progress" | "finalized" | "applied" | "cancelled" | string;
+  statusDisplay: string;
+  notes: string;
+  createdByUsername?: string;
+  createdAt: string;
+  updatedAt: string;
+  finalizedAt?: string | null;
+  appliedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string;
+  totalItems: number;
+  countedItems: number;
+  totalDifferences: number;
+  totalPositiveDifferences: number;
+  totalNegativeDifferences: number;
+  lines?: InventoryCountLine[];
+};
+
 export type InventoryProductLink = {
   id?: number;
   inventoryItemId: number;
   inventoryItemName: string;
   inventoryItemUnit: string;
   quantityRequired: number;
-  origin?: "inherited" | "override" | "direct";
+  origin?: "inherited" | "override" | "direct" | "disabled";
   categoryLinkId?: number;
 };
 
@@ -198,6 +324,8 @@ type FeatureFlagsNormalized = {
   customerDisplayEnabled: boolean;
   kitchenDisplayEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
+  inventoryStockPolicy: InventoryStockPolicy;
+  inventoryAdvancedEnabled: boolean;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -206,6 +334,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     customerDisplayEnabled: true,
     kitchenDisplayEnabled: true,
     cashCloseExpectedTotalsControlEnabled: true,
+    inventoryStockPolicy: "allow",
+    inventoryAdvancedEnabled: false,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -220,6 +350,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       customerDisplayEnabled: fromMap(byKey, ['FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
       kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+      inventoryStockPolicy: defaults.inventoryStockPolicy,
+      inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
     };
   }
   return {
@@ -227,6 +359,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     customerDisplayEnabled: fromMap(raw, ['customerDisplayEnabled', 'customer_display_enabled', 'FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
     kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+    inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
+    inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -251,6 +385,79 @@ export type TaxConfig = {
   taxIncluded: boolean;
 };
 
+export type InventoryStockPolicy = "allow" | "warn" | "block";
+
+const normalizeInventoryStockPolicy = (value: unknown): InventoryStockPolicy => {
+  const policy = String(value || "allow").toLowerCase();
+  return policy === "warn" || policy === "block" ? policy : "allow";
+};
+
+const normalizeProductInventoryStockPolicy = (value: unknown): ProductInventoryStockPolicy => {
+  const policy = String(value || "inherit").toLowerCase();
+  return policy === "allow" || policy === "warn" || policy === "block" ? policy : "inherit";
+};
+
+type CategoryApiPayload = {
+  id: number;
+  name: string;
+  image?: string | null;
+  image_url?: string | null;
+  image_path?: string | null;
+  is_active: boolean;
+  is_hidden?: boolean;
+  position?: number;
+  inventory_stock_policy?: ProductInventoryStockPolicy;
+};
+
+const normalizeCategory = (data: CategoryApiPayload): Category => ({
+  id: data.id,
+  name: data.name,
+  image: data.image ?? null,
+  imagePath: data.image_path ?? null,
+  imageUrl: normalizeImageUrl(data),
+  isActive: data.is_active,
+  isHidden: Boolean(data.is_hidden),
+  position: Number(data.position ?? 0),
+  inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+});
+
+const appendProductInventoryTrackingFormData = (formData: FormData, payload: {
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryQuantity?: number;
+  newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
+}) => {
+  formData.append("inventory_components_enabled", (payload.inventoryComponentsEnabled ?? true) ? "true" : "false");
+  formData.append("track_inventory", payload.trackInventory ? "true" : "false");
+  formData.append("tracked_inventory_quantity", String(payload.trackedInventoryQuantity ?? 1));
+  if (payload.trackedInventoryItem) {
+    formData.append("tracked_inventory_item", String(payload.trackedInventoryItem));
+  }
+  if (payload.newInventoryItem) {
+    formData.append("new_inventory_item", JSON.stringify({
+      name: payload.newInventoryItem.name,
+      sku: payload.newInventoryItem.sku ?? "",
+      unit: payload.newInventoryItem.unit,
+      current_stock: payload.newInventoryItem.currentStock ?? 0,
+      min_stock: payload.newInventoryItem.minStock ?? null,
+      max_stock: payload.newInventoryItem.maxStock ?? null,
+    }));
+  }
+};
+
+const mapProductInventoryFields = (data: any) => ({
+  inventoryComponentsEnabled: Boolean(data.inventory_components_enabled ?? true),
+  trackInventory: Boolean(data.track_inventory),
+  trackedInventoryItem: data.tracked_inventory_item != null ? Number(data.tracked_inventory_item) : null,
+  trackedInventoryItemName: data.tracked_inventory_item_name ?? null,
+  trackedInventoryItemUnit: data.tracked_inventory_item_unit ?? null,
+  trackedInventoryItemCurrentStock: data.tracked_inventory_item_current_stock != null ? Number(data.tracked_inventory_item_current_stock) : null,
+  trackedInventoryQuantity: Number(data.tracked_inventory_quantity ?? 1),
+  autoCreatedInventoryItem: Boolean(data.auto_created_inventory_item),
+  trackedInventoryWarning: String(data.tracked_inventory_warning ?? ""),
+});
+
 export type FeatureFlag = {
   id: number;
   key: string;
@@ -266,6 +473,8 @@ export type FeatureSettings = {
   cashCloseExpectedTotalsControlEnabled: boolean;
   cashCloseExpectedTotalsAllowedRoles: string[];
   cashCloseExpectedTotalsVisibleFields: string[];
+  inventoryStockPolicy: InventoryStockPolicy;
+  inventoryAdvancedEnabled: boolean;
 };
 
 export type FeatureSettingsOptions = {
@@ -408,6 +617,7 @@ export type PaymentMethodOption = {
   fiscalPaymentType?: "CASH" | "CARD" | "TRANSFER";
   linkedOrderTypeId?: number | null;
   linkedOrderTypeName?: string | null;
+  autoPrintTicket?: boolean;
 };
 
 export type CashSessionSnapshot = {
@@ -603,13 +813,16 @@ export type EmployeeHoursDetailResponse = {
     date: string;
     dailyTotals: { shiftMinutes: number; breakMinutes: number; netMinutes: number };
     cycles: Array<{
+      id: number;
       clockInAt: string | null;
       breakStartAt: string | null;
       breakEndAt: string | null;
       clockOutAt: string | null;
       shiftMinutes: number;
       breakMinutes: number;
+      breakSeconds: number;
       netMinutes: number;
+      clockOutNextDay: boolean;
       status: string;
     }>;
   }>;
@@ -663,13 +876,15 @@ export class ApiRequestError extends Error {
   code?: string;
   status?: number;
   isNetworkError: boolean;
+  payload?: unknown;
 
-  constructor(message: string, options?: { code?: string; status?: number; isNetworkError?: boolean }) {
+  constructor(message: string, options?: { code?: string; status?: number; isNetworkError?: boolean; payload?: unknown }) {
     super(message);
     this.name = "ApiRequestError";
     this.code = options?.code;
     this.status = options?.status;
     this.isNetworkError = Boolean(options?.isNetworkError);
+    this.payload = options?.payload;
   }
 }
 
@@ -780,12 +995,17 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       if (shouldRequireCashGate) {
         window.dispatchEvent(new CustomEvent("cash:required"));
       }
-      const message =
-        detailText ||
-        (errorPayload ? JSON.stringify(errorPayload) : "");
+      let fieldMessage = "";
+      if (!detailText && errorPayload && typeof errorPayload === "object") {
+        const firstValue = Object.values(errorPayload as Record<string, unknown>)[0];
+        if (Array.isArray(firstValue)) fieldMessage = String(firstValue[0] ?? "");
+        else if (typeof firstValue === "string") fieldMessage = firstValue;
+      }
+      const message = detailText || fieldMessage || (errorPayload ? JSON.stringify(errorPayload) : "");
       throw new ApiRequestError(message || `Error del servidor (${response.status}). Revisa el backend.`, {
         code: errorCode,
         status: response.status,
+        payload: errorPayload,
       });
     }
     await response.text().catch(() => "");
@@ -890,20 +1110,11 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<CategoryApiPayload[]>(response);
   // NOTE: backend ordering by `position` is the source of truth for categories.
   // Do not re-sort on the client; preserve API order exactly.
   return data
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      image: item.image ?? null,
-      imagePath: item.image_path ?? null,
-      imageUrl: normalizeImageUrl(item),
-      isActive: item.is_active,
-      isHidden: Boolean(item.is_hidden),
-      position: Number(item.position ?? 0),
-    }))
+    .map(normalizeCategory)
     .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
 
@@ -962,6 +1173,8 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+    inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
+    inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
   };
 };
 
@@ -975,6 +1188,8 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
       cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
+      inventory_stock_policy: payload.inventoryStockPolicy,
+      inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
     }),
   });
   const data = await handleJson<any>(response);
@@ -986,6 +1201,8 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+    inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
+    inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
   };
 };
 
@@ -1009,36 +1226,28 @@ export const getTransactionTicket = async (paymentId: number): Promise<Transacti
   };
 };
 
-export const createCategory = async (payload: string | { name: string; image?: File | null }): Promise<Category> => {
-  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null } : payload;
+export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy }): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, inventoryStockPolicy: "inherit" as ProductInventoryStockPolicy } : payload;
   const formData = new FormData();
   formData.append("name", normalizedPayload.name);
   if (normalizedPayload.image) {
     formData.append("image", normalizedPayload.image);
   }
+  formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy ?? "inherit");
 
   const response = await request("/menu/categories/", {
     method: "POST",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return {
-    id: data.id,
-    name: data.name,
-    image: data.image ?? null,
-    imagePath: data.image_path ?? null,
-    imageUrl: normalizeImageUrl(data),
-    isActive: data.is_active,
-    isHidden: Boolean(data.is_hidden),
-    position: Number(data.position ?? 0),
-  };
+  const data = await handleJson<CategoryApiPayload>(response);
+  return normalizeCategory(data);
 };
 
 export const updateCategory = async (
   categoryId: number,
-  payload: string | { name?: string; image?: File | null; removeImage?: boolean }
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy }
 ): Promise<Category> => {
-  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false } : payload;
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false, inventoryStockPolicy: undefined } : payload;
   const formData = new FormData();
   if (normalizedPayload.name !== undefined) {
     formData.append("name", normalizedPayload.name);
@@ -1049,22 +1258,16 @@ export const updateCategory = async (
   if (normalizedPayload.removeImage) {
     formData.append("remove_image", "1");
   }
+  if (normalizedPayload.inventoryStockPolicy !== undefined) {
+    formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy);
+  }
 
   const response = await request(`/menu/categories/${categoryId}/`, {
     method: "PATCH",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return {
-    id: data.id,
-    name: data.name,
-    image: data.image ?? null,
-    imagePath: data.image_path ?? null,
-    imageUrl: normalizeImageUrl(data),
-    isActive: data.is_active,
-    isHidden: Boolean(data.is_hidden),
-    position: Number(data.position ?? 0),
-  };
+  const data = await handleJson<CategoryApiPayload>(response);
+  return normalizeCategory(data);
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
@@ -1124,6 +1327,16 @@ export const getProducts = async (options?: {
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1155,6 +1368,8 @@ export const getProducts = async (options?: {
       disposableFee: Number(item.disposable_fee ?? 0),
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
+      inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
+    ...mapProductInventoryFields(item),
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
       modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
@@ -1184,6 +1399,12 @@ export const createProduct = async (payload: {
   disposableApplyTo?: string[];
   modifierGroupIds?: number[];
   inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryQuantity?: number;
+  newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
 }): Promise<Product> => {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -1192,6 +1413,8 @@ export const createProduct = async (payload: {
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1233,6 +1456,16 @@ export const createProduct = async (payload: {
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1260,6 +1493,8 @@ export const createProduct = async (payload: {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1291,6 +1526,12 @@ export const updateProduct = async (
     disposableApplyTo?: string[];
     modifierGroupIds?: number[];
     inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
+    inventoryStockPolicy?: ProductInventoryStockPolicy;
+    inventoryComponentsEnabled?: boolean;
+    trackInventory?: boolean;
+    trackedInventoryItem?: number | null;
+    trackedInventoryQuantity?: number;
+    newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
   }
 ): Promise<Product> => {
   const formData = new FormData();
@@ -1300,6 +1541,8 @@ export const updateProduct = async (
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1338,6 +1581,16 @@ export const updateProduct = async (
     image_url: string | null;
     available: boolean;
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1363,6 +1616,8 @@ export const updateProduct = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1407,25 +1662,88 @@ export const changeProductPrice = async (productId: number, payload: { code: str
   };
 };
 
+
+const mapInventorySupplier = (row: any): InventorySupplier => ({
+  id: Number(row.id),
+  name: row.name ?? "",
+  code: row.code ?? "",
+  contactName: row.contact_name ?? "",
+  phone: row.phone ?? "",
+  email: row.email ?? "",
+  address: row.address ?? "",
+  taxId: row.tax_id ?? "",
+  notes: row.notes ?? "",
+  isActive: Boolean(row.is_active),
+});
+
+const mapInventoryItem = (row: any): InventoryItem => ({
+  id: row.id,
+  name: row.name,
+  sku: row.sku ?? "",
+  unit: row.unit,
+  currentStock: Number(row.current_stock ?? 0),
+  minStock: row.min_stock != null ? Number(row.min_stock) : null,
+  maxStock: row.max_stock != null ? Number(row.max_stock) : null,
+  supplier: row.supplier ?? null,
+  supplierName: row.supplier_name ?? null,
+  unitCost: row.unit_cost != null ? Number(row.unit_cost) : null,
+  supplierCode: row.supplier_code ?? "",
+  purchaseUnit: row.purchase_unit ?? "",
+  purchaseToInventoryFactor: Number(row.purchase_to_inventory_factor ?? 1),
+  notes: row.notes ?? "",
+  isActive: Boolean(row.is_active),
+});
+
+const mapPurchaseOrderLine = (row: any): PurchaseOrderLine => ({
+  id: row.id,
+  inventoryItem: row.inventory_item,
+  inventoryItemName: row.inventory_item_name ?? "",
+  inventoryItemSku: row.inventory_item_sku ?? "",
+  inventoryItemUnit: row.inventory_item_unit ?? "",
+  description: row.description ?? "",
+  quantityOrdered: Number(row.quantity_ordered ?? 0),
+  quantityReceived: Number(row.quantity_received ?? 0),
+  pendingQuantity: Number(row.pending_quantity ?? 0),
+  purchaseUnit: row.purchase_unit ?? "",
+  purchaseToInventoryFactor: Number(row.purchase_to_inventory_factor ?? 1),
+  inventoryQuantityOrdered: Number(row.inventory_quantity_ordered ?? 0),
+  unitCost: Number(row.unit_cost ?? 0),
+  subtotal: Number(row.subtotal ?? 0),
+  notes: row.notes ?? "",
+});
+
+const mapPurchaseOrder = (row: any): PurchaseOrder => ({
+  id: Number(row.id),
+  code: row.code ?? "",
+  supplier: Number(row.supplier),
+  supplierName: row.supplier_name ?? "",
+  status: row.status ?? "draft",
+  statusLabel: row.status_label ?? row.status ?? "Borrador",
+  paymentCategory: row.payment_category ?? "cash",
+  expectedDate: row.expected_date ?? null,
+  notes: row.notes ?? "",
+  proofReference: row.proof_reference ?? "",
+  proofUrl: row.proof_url ?? "",
+  subtotal: Number(row.subtotal ?? 0),
+  total: Number(row.total ?? 0),
+  createdByUsername: row.created_by_username ?? "",
+  createdAt: row.created_at,
+  approvedAt: row.approved_at ?? null,
+  cancelReason: row.cancel_reason ?? "",
+  receivedPercent: Number(row.received_percent ?? 0),
+  lines: (row.lines ?? []).map(mapPurchaseOrderLine),
+});
+
 export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> => {
   const params = new URLSearchParams();
   if (q?.trim()) params.set("q", q.trim());
   const response = await request(`/inventory/items/${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await handleJson<Array<any>>(response);
-  return data.map((row) => ({
-    id: row.id,
-    name: row.name,
-    sku: row.sku ?? "",
-    unit: row.unit,
-    currentStock: Number(row.current_stock ?? 0),
-    minStock: row.min_stock != null ? Number(row.min_stock) : null,
-    notes: row.notes ?? "",
-    isActive: Boolean(row.is_active),
-  }));
+  return data.map(mapInventoryItem);
 };
 
 export const createInventoryItem = async (payload: {
-  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; maxStock?: number | null; supplier?: number | null; unitCost?: number | null; supplierCode?: string; purchaseUnit?: string; purchaseToInventoryFactor?: number; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request("/inventory/items/", {
     method: "POST",
@@ -1436,16 +1754,22 @@ export const createInventoryItem = async (payload: {
       unit: payload.unit,
       initial_stock: payload.initialStock ?? 0,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
+      supplier: payload.supplier,
+      unit_cost: payload.unitCost,
+      supplier_code: payload.supplierCode ?? "",
+      purchase_unit: payload.purchaseUnit ?? "",
+      purchase_to_inventory_factor: payload.purchaseToInventoryFactor ?? 1,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const updateInventoryItem = async (id: number, payload: {
-  name: string; sku?: string; unit: string; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; minStock?: number | null; maxStock?: number | null; supplier?: number | null; unitCost?: number | null; supplierCode?: string; purchaseUnit?: string; purchaseToInventoryFactor?: number; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request(`/inventory/items/${id}/`, {
     method: "PATCH",
@@ -1455,12 +1779,18 @@ export const updateInventoryItem = async (id: number, payload: {
       sku: payload.sku ?? "",
       unit: payload.unit,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
+      supplier: payload.supplier,
+      unit_cost: payload.unitCost,
+      supplier_code: payload.supplierCode ?? "",
+      purchase_unit: payload.purchaseUnit ?? "",
+      purchase_to_inventory_factor: payload.purchaseToInventoryFactor ?? 1,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
@@ -1470,7 +1800,7 @@ export const addInventoryStock = async (id: number, quantity: number, reason?: s
     body: JSON.stringify({ quantity, reason: reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
 export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
@@ -1480,18 +1810,55 @@ export const adjustInventoryStock = async (id: number, payload: { setStock?: num
     body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return mapInventoryItem(row);
 };
 
-export const getInventoryMovements = async (inventoryItemId?: number): Promise<InventoryMovement[]> => {
+export const createInventoryAdjustment = async (payload: {
+  inventoryItem: number;
+  adjustmentType: "entry" | "loss" | "damaged" | "correction";
+  quantity?: number;
+  setStock?: number;
+  reason?: string;
+}): Promise<{ message: string; item: InventoryItem; movement: InventoryMovement; stockBefore: number; stockAfter: number; adjustmentType: string }> => {
+  const response = await request("/inventory/adjustments/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inventory_item: payload.inventoryItem,
+      adjustment_type: payload.adjustmentType,
+      quantity: payload.quantity,
+      set_stock: payload.setStock,
+      reason: payload.reason ?? "",
+    }),
+  });
+  const row = await handleJson<any>(response);
+  const itemRow = row.item;
+  const movementRow = row.movement;
+  return {
+    message: row.message ?? "Ajuste registrado correctamente.",
+    item: { id: itemRow.id, name: itemRow.name, sku: itemRow.sku ?? "", unit: itemRow.unit, currentStock: Number(itemRow.current_stock ?? 0), minStock: itemRow.min_stock != null ? Number(itemRow.min_stock) : null, maxStock: itemRow.max_stock != null ? Number(itemRow.max_stock) : null, notes: itemRow.notes ?? "", isActive: Boolean(itemRow.is_active) },
+    movement: { id: movementRow.id, inventoryItem: movementRow.inventory_item, inventoryItemName: movementRow.inventory_item_name, movementType: movementRow.movement_type, quantityChange: Number(movementRow.quantity_change), quantityBefore: Number(movementRow.quantity_before), quantityAfter: Number(movementRow.quantity_after), reason: movementRow.reason ?? "", referenceType: movementRow.reference_type ?? "", referenceId: movementRow.reference_id ?? "", createdByUsername: movementRow.created_by_username ?? "", createdAt: movementRow.created_at },
+    stockBefore: Number(row.stock_before),
+    stockAfter: Number(row.stock_after),
+    adjustmentType: row.adjustment_type,
+  };
+};
+
+export const getInventoryMovements = async (inventoryItemId?: number, filters?: { movementType?: string; dateFrom?: string; dateTo?: string; user?: number }): Promise<InventoryMovement[]> => {
   const params = new URLSearchParams();
   if (inventoryItemId) params.set("inventory_item", String(inventoryItemId));
+  if (filters?.movementType) params.set("movement_type", filters.movementType);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.user) params.set("user", String(filters.user));
   const response = await request(`/inventory/movements/${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((row) => ({
     id: row.id,
     inventoryItem: row.inventory_item,
     inventoryItemName: row.inventory_item_name,
+    inventoryItemSku: row.inventory_item_sku ?? "",
+    inventoryItemUnit: row.inventory_item_unit ?? "",
     movementType: row.movement_type,
     quantityChange: Number(row.quantity_change),
     quantityBefore: Number(row.quantity_before),
@@ -1502,6 +1869,144 @@ export const getInventoryMovements = async (inventoryItemId?: number): Promise<I
     createdByUsername: row.created_by_username ?? "",
     createdAt: row.created_at,
   }));
+};
+
+
+const mapInventoryCountLine = (row: any): InventoryCountLine => ({
+  id: row.id,
+  session: row.session,
+  inventoryItem: row.inventory_item,
+  inventoryItemName: row.inventory_item_name,
+  inventoryItemSku: row.inventory_item_sku ?? "",
+  inventoryItemUnit: row.inventory_item_unit ?? "",
+  systemStock: Number(row.system_stock ?? 0),
+  countedStock: row.counted_stock == null ? null : Number(row.counted_stock),
+  difference: Number(row.difference ?? 0),
+  note: row.note ?? "",
+  stockBeforeApply: row.stock_before_apply == null ? null : Number(row.stock_before_apply),
+  stockAfterApply: row.stock_after_apply == null ? null : Number(row.stock_after_apply),
+  movement: row.movement ?? null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const mapInventoryCountSession = (row: any): InventoryCountSession => ({
+  id: row.id,
+  code: row.code || `CI-${row.id}`,
+  countType: row.count_type,
+  countTypeDisplay: row.count_type_display ?? row.count_type,
+  status: row.status,
+  statusDisplay: row.status_display ?? row.status,
+  notes: row.notes ?? "",
+  createdByUsername: row.created_by_username ?? "",
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  finalizedAt: row.finalized_at ?? null,
+  appliedAt: row.applied_at ?? null,
+  cancelledAt: row.cancelled_at ?? null,
+  cancelReason: row.cancel_reason ?? "",
+  totalItems: Number(row.total_items ?? 0),
+  countedItems: Number(row.counted_items ?? 0),
+  totalDifferences: Number(row.total_differences ?? 0),
+  totalPositiveDifferences: Number(row.total_positive_differences ?? 0),
+  totalNegativeDifferences: Number(row.total_negative_differences ?? 0),
+  lines: Array.isArray(row.lines) ? row.lines.map(mapInventoryCountLine) : undefined,
+});
+
+const normalizeInventoryCountId = (id: number | string): string => String(id).replace(/^:+/, "");
+
+export const getInventoryCounts = async (filters?: { status?: string; countType?: string; dateFrom?: string; dateTo?: string; user?: number; inventoryItem?: number; q?: string }): Promise<InventoryCountSession[]> => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.countType) params.set("count_type", filters.countType);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  if (filters?.q) params.set("q", filters.q);
+  const response = await request(`/inventory/counts/${params.toString() ? `?${params.toString()}` : ""}`);
+  return (await handleJson<any[]>(response)).map(mapInventoryCountSession);
+};
+
+export const createInventoryCount = async (payload: { countType: "complete" | "manual" | "category"; notes?: string; itemIds?: number[] }): Promise<InventoryCountSession> => {
+  const response = await request("/inventory/counts/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count_type: payload.countType, notes: payload.notes ?? "", item_ids: payload.itemIds ?? [] }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const getInventoryCount = async (id: number | string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/`);
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const updateInventoryCountLines = async (id: number | string, lines: Array<{ id: number; countedStock?: number | null; note?: string }>): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/lines/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: lines.map((line) => ({ id: line.id, counted_stock: line.countedStock, note: line.note ?? "" })) }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const finalizeInventoryCount = async (id: number | string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/finalize/`, { method: "POST" });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const applyInventoryCount = async (id: number | string): Promise<{ message: string; movementsCreated: number; session: InventoryCountSession }> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/apply/`, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return { message: data.message, movementsCreated: Number(data.movements_created ?? 0), session: mapInventoryCountSession(data.session) };
+};
+
+export const cancelInventoryCount = async (id: number | string, cancelReason?: string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cancel_reason: cancelReason ?? "" }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const deleteInventoryCount = async (id: number | string): Promise<void> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/`, { method: "DELETE" });
+  if (response.status === 204) return;
+  await handleJson(response);
+};
+
+export const getInventoryReportAdjustments = async (filters?: { dateFrom?: string; dateTo?: string; inventoryItem?: number; user?: number; movementType?: string }): Promise<InventoryMovement[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.movementType) params.set("movement_type", filters.movementType);
+  const response = await request(`/inventory/reports/adjustments/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map((row) => ({ id: row.id, inventoryItem: row.inventory_item, inventoryItemName: row.inventory_item_name, inventoryItemSku: row.inventory_item_sku ?? "", inventoryItemUnit: row.inventory_item_unit ?? "", movementType: row.movement_type, quantityChange: Number(row.quantity_change), quantityBefore: Number(row.quantity_before), quantityAfter: Number(row.quantity_after), reason: row.reason ?? "", referenceType: row.reference_type ?? "", referenceId: row.reference_id ?? "", createdByUsername: row.created_by_username ?? "", createdAt: row.created_at }));
+};
+
+export const getInventoryReportCounts = async (filters?: { dateFrom?: string; dateTo?: string; status?: string; countType?: string; user?: number; inventoryItem?: number }): Promise<InventoryCountSession[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.countType) params.set("count_type", filters.countType);
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  const response = await request(`/inventory/reports/counts/${params.toString() ? `?${params.toString()}` : ""}`);
+  return (await handleJson<any[]>(response)).map(mapInventoryCountSession);
+};
+
+export const downloadInventoryPdf = async (url: string, filename: string): Promise<void> => {
+  const response = await request(url);
+  if (!response.ok) throw new Error("No se pudo descargar el PDF");
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
 };
 
 export const getCatalogInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {
@@ -1626,6 +2131,16 @@ export const updateProductModifierGroups = async (
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1647,6 +2162,8 @@ export const updateProductModifierGroups = async (
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1691,6 +2208,16 @@ export const updateProductAvailability = async (
     available: boolean;
     is_archived?: boolean;
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
   }>(response);
   return {
@@ -1708,6 +2235,8 @@ export const updateProductAvailability = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -2685,6 +3214,8 @@ export const duplicateProduct = async (productId: number): Promise<Product> => {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups ?? [],
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
@@ -3888,6 +4419,121 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
   return map[dayOfWeek] ?? "";
 };
 
+
+export type CartAvailabilityItem = {
+  productId: number;
+  productName: string;
+  resolvedPolicy: InventoryStockPolicy;
+  policySource: "product" | "category" | "global";
+  policySourceLabel: string;
+  policyLabel: string;
+  isTracked: boolean;
+  hasComponents: boolean;
+  tracksOwnInventory: boolean;
+  duplicateTrackingComponent: boolean;
+  canAddOne: boolean;
+  maxAddableNow: number;
+  currentCartQuantity: number;
+  status: "ok" | "blocked" | "warning" | "allowed_without_stock";
+  message?: string;
+  missing: Array<{ inventoryItemId: number; name: string; available: string; reservedInCart: string; requiredForNext: string; missing: string; unit: string }>;
+};
+
+export type CartAvailability = {
+  items: CartAvailabilityItem[];
+  cartHasBlockedItems: boolean;
+  cartHasWarnings: boolean;
+};
+
+export const checkCartInventoryAvailability = async (payload: { cartItems: Array<{ productId: number; quantity: number }>; candidateProductIds?: number[] }): Promise<CartAvailability> => {
+  const response = await request("/inventory/cart-availability/", {
+    method: "POST",
+    body: JSON.stringify({
+      cart_items: payload.cartItems.map((item) => ({ product_id: item.productId, quantity: item.quantity })),
+      candidate_product_ids: payload.candidateProductIds ?? [],
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return {
+    cartHasBlockedItems: Boolean(data.cart_has_blocked_items),
+    cartHasWarnings: Boolean(data.cart_has_warnings),
+    items: Array.isArray(data.items) ? data.items.map((item: any) => ({
+      productId: Number(item.product_id),
+      productName: String(item.product_name ?? ""),
+      resolvedPolicy: normalizeInventoryStockPolicy(item.resolved_policy),
+      policySource: item.policy_source === "product" || item.policy_source === "category" ? item.policy_source : "global",
+      policySourceLabel: String(item.policy_source_label ?? "Configuración global"),
+      policyLabel: String(item.policy_label ?? "Permitir venta"),
+      isTracked: Boolean(item.is_tracked),
+      hasComponents: Boolean(item.has_components),
+      tracksOwnInventory: Boolean(item.tracks_own_inventory),
+      duplicateTrackingComponent: Boolean(item.duplicate_tracking_component),
+      canAddOne: Boolean(item.can_add_one),
+      maxAddableNow: Number(item.max_addable_now ?? 0),
+      currentCartQuantity: Number(item.current_cart_quantity ?? 0),
+      status: item.status ?? "ok",
+      message: item.message ?? "",
+      missing: Array.isArray(item.missing) ? item.missing.map((miss: any) => ({
+        inventoryItemId: Number(miss.inventory_item_id),
+        name: String(miss.name ?? ""),
+        available: String(miss.available ?? "0"),
+        reservedInCart: String(miss.reserved_in_cart ?? "0"),
+        requiredForNext: String(miss.required_for_next ?? "0"),
+        missing: String(miss.missing ?? "0"),
+        unit: String(miss.unit ?? ""),
+      })) : [],
+    })) : [],
+  };
+};
+
+export type InventoryAvailabilityItem = {
+  inventoryItemId: number;
+  name: string;
+  sku?: string;
+  unit: string;
+  available: string;
+  required: string;
+  missing: string;
+  affectedProducts: Array<{ productId: number; productName: string; quantity: string; policySource?: "product" | "category" | "global"; policySourceLabel?: string; policyLabel?: string }>;
+};
+
+export type InventoryAvailabilityCheck = {
+  ok: boolean;
+  policy: InventoryStockPolicy;
+  hasInsufficientStock: boolean;
+  items: InventoryAvailabilityItem[];
+  message?: string;
+};
+
+const mapInventoryAvailability = (data: any): InventoryAvailabilityCheck => ({
+  ok: Boolean(data.ok),
+  policy: normalizeInventoryStockPolicy(data.policy),
+  hasInsufficientStock: Boolean(data.has_insufficient_stock),
+  message: data.message,
+  items: Array.isArray(data.items) ? data.items.map((item: any) => ({
+    inventoryItemId: Number(item.inventory_item_id),
+    name: String(item.name ?? ""),
+    sku: item.sku ?? "",
+    unit: String(item.unit ?? ""),
+    available: String(item.available ?? "0"),
+    required: String(item.required ?? "0"),
+    missing: String(item.missing ?? "0"),
+    affectedProducts: Array.isArray(item.affected_products) ? item.affected_products.map((product: any) => ({
+      productId: Number(product.product_id),
+      productName: String(product.product_name ?? ""),
+      quantity: String(product.quantity ?? "0"),
+      policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global",
+      policySourceLabel: String(product.policy_source_label ?? "Configuración global"),
+      policyLabel: String(product.policy_label ?? "Permitir venta"),
+    })) : [],
+  })) : [],
+});
+
+export const checkOrderInventoryAvailability = async (orderId: number | string): Promise<InventoryAvailabilityCheck> => {
+  const response = await request(`/inventory/orders/${orderId}/availability-check/`, { method: "POST" });
+  return mapInventoryAvailability(await handleJson<any>(response));
+};
+
 export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
@@ -3899,6 +4545,7 @@ export const createPayment = async (payload: {
   tipAmount?: number;
   reference?: string;
   splitPart?: number;
+  inventoryWarningConfirmed?: boolean;
 }): Promise<Payment> => {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
@@ -3920,6 +4567,7 @@ export const createPayment = async (payload: {
       card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
       split_part: payload.splitPart ?? null,
+      inventory_warning_confirmed: Boolean(payload.inventoryWarningConfirmed),
     }),
   });
   const data = await handleJson<{
@@ -4022,6 +4670,7 @@ const mapPaymentMethodOption = (m: any): PaymentMethodOption => ({
   fiscalPaymentType: (m.fiscal_payment_type || (m.is_cash ? "CASH" : "TRANSFER")) as PaymentMethodOption["fiscalPaymentType"],
   linkedOrderTypeId: m.linked_order_type_id ?? null,
   linkedOrderTypeName: m.linked_order_type_name ?? null,
+  autoPrintTicket: Boolean(m.auto_print_ticket),
 });
 
 export const getPaymentMethods = async (options?: { includeInactive?: boolean }): Promise<PaymentMethodOption[]> => {
@@ -4044,6 +4693,7 @@ export const createPaymentMethod = async (payload: Partial<PaymentMethodOption> 
       is_default: Boolean(payload.isDefault),
       fiscal_payment_type: payload.fiscalPaymentType || (payload.isCash ? "CASH" : "TRANSFER"),
       linked_order_type_id: payload.linkedOrderTypeId ?? null,
+      auto_print_ticket: Boolean(payload.autoPrintTicket),
     }),
   });
   return mapPaymentMethodOption(await handleJson<any>(response));
@@ -4060,6 +4710,7 @@ export const updatePaymentMethod = async (id: number, payload: Partial<PaymentMe
   if (payload.isDefault !== undefined) body.is_default = payload.isDefault;
   if (payload.fiscalPaymentType !== undefined) body.fiscal_payment_type = payload.fiscalPaymentType;
   if (payload.linkedOrderTypeId !== undefined) body.linked_order_type_id = payload.linkedOrderTypeId ?? null;
+  if (payload.autoPrintTicket !== undefined) body.auto_print_ticket = payload.autoPrintTicket;
   const response = await request(`/payments/methods/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
   return mapPaymentMethodOption(await handleJson<any>(response));
 };
@@ -5172,4 +5823,100 @@ export const createEmployeeHoursCycle = async (payload: { employeeId: number; da
     body: JSON.stringify({ employee_id: payload.employeeId, date: payload.date, clock_in_time: payload.clockInTime, break_start_time: payload.breakStartTime, break_end_time: payload.breakEndTime, clock_out_time: payload.clockOutTime, clock_out_next_day: payload.clockOutNextDay, shift_seconds: payload.shiftSeconds, break_seconds: payload.breakSeconds, reason: payload.reason }),
   });
   return handleJson<any>(response);
+};
+
+export const getInventorySuppliers = async (q?: string, isActive?: boolean): Promise<InventorySupplier[]> => {
+  const params = new URLSearchParams();
+  if (q?.trim()) params.set("q", q.trim());
+  if (isActive !== undefined) params.set("is_active", String(isActive));
+  const response = await request(`/inventory/suppliers/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapInventorySupplier);
+};
+
+export const saveInventorySupplier = async (payload: Partial<InventorySupplier> & { id?: number; name: string }): Promise<InventorySupplier> => {
+  const response = await request(`/inventory/suppliers/${payload.id ? `${payload.id}/` : ""}`, {
+    method: payload.id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      code: payload.code ?? "",
+      contact_name: payload.contactName ?? "",
+      phone: payload.phone ?? "",
+      email: payload.email ?? "",
+      address: payload.address ?? "",
+      tax_id: payload.taxId ?? "",
+      notes: payload.notes ?? "",
+      is_active: payload.isActive ?? true,
+    }),
+  });
+  return mapInventorySupplier(await handleJson<any>(response));
+};
+
+export const deleteInventorySupplier = async (id: number): Promise<void> => {
+  const response = await request(`/inventory/suppliers/${id}/`, { method: "DELETE" });
+  if (response.status !== 204) await handleJson<any>(response);
+};
+
+export const getPurchaseOrders = async (filters?: { q?: string; supplier?: string; status?: string; dateFrom?: string; dateTo?: string }): Promise<PurchaseOrder[]> => {
+  const params = new URLSearchParams();
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.supplier) params.set("supplier", filters.supplier);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  const response = await request(`/inventory/purchase-orders/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map(mapPurchaseOrder);
+};
+
+export const savePurchaseOrder = async (payload: {
+  id?: number;
+  supplier: number;
+  paymentCategory: string;
+  expectedDate?: string | null;
+  notes?: string;
+  proofReference?: string;
+  proofUrl?: string;
+  lines: Array<{ inventoryItem: number; description?: string; quantityOrdered: number; purchaseUnit?: string; purchaseToInventoryFactor: number; unitCost: number; notes?: string }>;
+}): Promise<PurchaseOrder> => {
+  const response = await request(`/inventory/purchase-orders/${payload.id ? `${payload.id}/` : ""}`, {
+    method: payload.id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      supplier: payload.supplier,
+      payment_category: payload.paymentCategory,
+      expected_date: payload.expectedDate || null,
+      notes: payload.notes ?? "",
+      proof_reference: payload.proofReference ?? "",
+      proof_url: payload.proofUrl ?? "",
+      lines: payload.lines.map((line) => ({
+        inventory_item: line.inventoryItem,
+        description: line.description ?? "",
+        quantity_ordered: line.quantityOrdered,
+        purchase_unit: line.purchaseUnit ?? "",
+        purchase_to_inventory_factor: line.purchaseToInventoryFactor,
+        unit_cost: line.unitCost,
+        notes: line.notes ?? "",
+      })),
+    }),
+  });
+  return mapPurchaseOrder(await handleJson<any>(response));
+};
+
+export const approvePurchaseOrder = async (id: number): Promise<PurchaseOrder> => mapPurchaseOrder(await handleJson<any>(await request(`/inventory/purchase-orders/${id}/approve/`, { method: "POST" })));
+export const cancelPurchaseOrder = async (id: number, reason?: string): Promise<PurchaseOrder> => mapPurchaseOrder(await handleJson<any>(await request(`/inventory/purchase-orders/${id}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason ?? "" }) })));
+export const deletePurchaseOrder = async (id: number): Promise<void> => { const response = await request(`/inventory/purchase-orders/${id}/`, { method: "DELETE" }); if (response.status !== 204) await handleJson<any>(response); };
+export const receivePurchaseOrder = async (id: number, payload: { notes?: string; updateUnitCost?: boolean; lines: Array<{ lineId: number; quantityReceived: number; notes?: string }> }): Promise<PurchaseOrder> => {
+  const response = await request(`/inventory/purchase-orders/${id}/receive/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      notes: payload.notes ?? "",
+      update_unit_cost: payload.updateUnitCost ?? true,
+      lines: payload.lines.map((line) => ({ line_id: line.lineId, quantity_received: line.quantityReceived, notes: line.notes ?? "" })),
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return mapPurchaseOrder(data.order);
 };
