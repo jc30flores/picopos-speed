@@ -843,7 +843,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const warnIfStockLimited = (productId: number | null | undefined) => {
     const row = productAvailability(productId);
     if (!row) return;
-    if (row.resolvedPolicy === "block" && !row.canAddOne) toast.error("No hay stock disponible para agregar más unidades de este producto.");
+    if (row.resolvedPolicy === "block" && !row.canAddOne) toast.error(row.policySource === "category" ? "Bloqueado por política de categoría." : "No hay stock disponible para agregar más unidades de este producto.");
     else if (row.resolvedPolicy === "warn" && row.status === "warning") toast.warning("Este producto no tiene stock suficiente.");
   };
 
@@ -2589,7 +2589,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       console.error("Failed to create payment", error);
       if (error instanceof ApiRequestError && error.code === "INVENTORY_STOCK_INSUFFICIENT") {
         const availability = (error.payload as any)?.availability;
-        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item: any) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
+        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item: any) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0"), policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global", policySourceLabel: String(product.policy_source_label || "Configuración global"), policyLabel: String(product.policy_label || "Permitir venta") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
         else toast.error(error.message);
       } else {
         toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
@@ -2985,12 +2985,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     const availability = productAvailability(product.id);
                     const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
                     const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
+                    const stockTitle = blocked ? (availability?.policySource === "category" ? "Bloqueado por política de categoría" : "No hay stock disponible para agregar más unidades") : product.name;
                     return (
                     <Card
                       key={product.id}
                     className={cn("p-4 hover-lift", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
                     onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
-                    title={blocked ? "No hay stock disponible para agregar más unidades" : product.name}
+                    title={stockTitle}
                     aria-disabled={blocked}
                   >
                     <div className="mb-1 flex items-start justify-between gap-2"><h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>{badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}</div>
@@ -3805,7 +3806,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <td className="px-3 py-2 text-right">{item.required}</td>
                       <td className="px-3 py-2 text-right font-semibold text-red-400">{item.missing}</td>
                       <td className="px-3 py-2">{item.unit}</td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.affectedProducts.map((product) => `${product.productName} x${product.quantity}`).join(", ") || "—"}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.affectedProducts.map((product) => `${product.productName} x${product.quantity}${product.policySourceLabel ? ` · ${product.policySourceLabel}` : ""}`).join(", ") || "—"}</td>
                     </tr>
                   ))}
                 </tbody>

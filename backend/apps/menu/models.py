@@ -26,12 +26,24 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 
 class Category(models.Model):
+    INVENTORY_STOCK_POLICY_INHERIT = "inherit"
+    INVENTORY_STOCK_POLICY_ALLOW = "allow"
+    INVENTORY_STOCK_POLICY_WARN = "warn"
+    INVENTORY_STOCK_POLICY_BLOCK = "block"
+    INVENTORY_STOCK_POLICY_CHOICES = [
+        (INVENTORY_STOCK_POLICY_INHERIT, "Heredar configuración global"),
+        (INVENTORY_STOCK_POLICY_ALLOW, "Permitir venta aunque no haya stock"),
+        (INVENTORY_STOCK_POLICY_WARN, "Advertir antes de vender"),
+        (INVENTORY_STOCK_POLICY_BLOCK, "Bloquear venta si no hay stock"),
+    ]
+
     name = models.CharField(max_length=120, unique=True)
     image = models.FileField(upload_to="categories/", blank=True, null=True)
     image_path = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_hidden = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0, db_index=True)
+    inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
 
     class Meta:
         ordering = ["position", "id"]

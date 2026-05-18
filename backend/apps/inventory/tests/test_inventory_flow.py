@@ -15,7 +15,7 @@ from apps.inventory.models import (
     InventoryMovement,
     InventorySaleApplication,
 )
-from apps.inventory.services import apply_inventory_for_order, check_order_inventory_availability, reverse_inventory_for_order
+from apps.inventory.services import apply_inventory_for_order, check_cart_inventory_availability, check_order_inventory_availability, resolve_inventory_policy_for_product, reverse_inventory_for_order
 from apps.users.models import UserProfile
 
 
@@ -124,6 +124,103 @@ class InventoryFlowTests(TestCase):
         self.assertEqual(response.status_code, 201)
         item.refresh_from_db()
         self.assertEqual(item.current_stock, Decimal("-3.000"))
+
+
+    def test_product_inherit_category_inherit_global_block_resolves_block(self):
+        self._set_stock_policy("block")
+        self.category.inventory_stock_policy = "inherit"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+
+        self.assertEqual(resolve_inventory_policy_for_product(self.product), "block")
+
+    def test_product_inherit_category_allow_overrides_global_block(self):
+        self._set_stock_policy("block")
+        self.category.inventory_stock_policy = "allow"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+
+        self.assertEqual(resolve_inventory_policy_for_product(self.product), "allow")
+
+    def test_product_inherit_category_block_overrides_global_allow(self):
+        self._set_stock_policy("allow")
+        self.category.inventory_stock_policy = "block"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+
+        self.assertEqual(resolve_inventory_policy_for_product(self.product), "block")
+
+    def test_product_allow_overrides_category_and_global_block(self):
+        self._set_stock_policy("block")
+        self.category.inventory_stock_policy = "block"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "allow"
+        self.product.save(update_fields=["inventory_stock_policy"])
+
+        self.assertEqual(resolve_inventory_policy_for_product(self.product), "allow")
+
+    def test_product_block_overrides_category_and_global_allow(self):
+        self._set_stock_policy("allow")
+        self.category.inventory_stock_policy = "allow"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "block"
+        self.product.save(update_fields=["inventory_stock_policy"])
+
+        self.assertEqual(resolve_inventory_policy_for_product(self.product), "block")
+
+    def test_cart_availability_reports_category_policy_source(self):
+        self._set_stock_policy("allow")
+        self.category.inventory_stock_policy = "block"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+        item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("0"))
+        CatalogProductInventoryLink.objects.create(catalog_product=self.product, inventory_item=item, quantity_required=Decimal("1"))
+
+        result = check_cart_inventory_availability(cart_items=[], candidate_product_ids=[self.product.id])
+        row = result["items"][0]
+
+        self.assertEqual(row["resolved_policy"], "block")
+        self.assertEqual(row["policy_source"], "category")
+        self.assertEqual(row["policy_source_label"], "Categoría COMIDA")
+        self.assertFalse(row["can_add_one"])
+
+    def test_order_availability_respects_category_policy(self):
+        self._set_stock_policy("allow")
+        self.category.inventory_stock_policy = "block"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+        item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("1"))
+        CatalogProductInventoryLink.objects.create(catalog_product=self.product, inventory_item=item, quantity_required=Decimal("2"))
+        order = self._order(quantity=2, total="10")
+
+        result = check_order_inventory_availability(order)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["has_blocking_stock"])
+        self.assertEqual(result["items"][0]["action"], "block")
+        self.assertEqual(result["items"][0]["affected_products"][0]["policy_source"], "category")
+
+    def test_payment_validation_respects_category_policy(self):
+        self._set_stock_policy("allow")
+        self.category.inventory_stock_policy = "block"
+        self.category.save(update_fields=["inventory_stock_policy"])
+        self.product.inventory_stock_policy = "inherit"
+        self.product.save(update_fields=["inventory_stock_policy"])
+        item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("1"))
+        CatalogProductInventoryLink.objects.create(catalog_product=self.product, inventory_item=item, quantity_required=Decimal("2"))
+        order = Order.objects.create(order_number=5, branch=self.branch, service_type=self.service_type, total=Decimal("10"), amount_due_cents=1000)
+        OrderItem.objects.create(order=order, product=self.product, product_name_snapshot=self.product.name, price_snapshot=Decimal("5"), quantity=2)
+
+        response = self.client.post("/api/payments/", {"order": order.id, "method": "cash", "amount": "10.00", "cash_received": "10.00"}, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        item.refresh_from_db()
+        self.assertEqual(item.current_stock, Decimal("1"))
 
     def test_reverse_inventory_for_order_restores_once_and_creates_reversal(self):
         item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("20"))

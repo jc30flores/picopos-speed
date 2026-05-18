@@ -15,11 +15,13 @@ import {
   Product,
   ProductInventoryStockPolicy,
   ProductSpecialPriceRule,
+  InventoryStockPolicy,
   createCategory,
   createProduct,
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
+  getFeatureSettings,
   getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
   saveProductEffectiveInventoryLinks,
@@ -87,6 +89,7 @@ export const ProductFormDialog = ({
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [globalInventoryStockPolicy, setGlobalInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
   const { activeServiceTypes: serviceTypes } = useServiceTypes();
@@ -94,6 +97,24 @@ export const ProductFormDialog = ({
   const [ruleOpen, setRuleOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRule());
+
+  const policyLabel = (policy: ProductInventoryStockPolicy | InventoryStockPolicy) => ({
+    inherit: "Heredar",
+    allow: "Permitir venta aunque no haya stock",
+    warn: "Advertir antes de vender",
+    block: "Bloquear venta si no hay stock",
+  }[policy]);
+
+  const selectedCategory = useMemo(() => categoryOptions.find((category) => category.id === selectedCategoryId) ?? categories.find((category) => category.id === selectedCategoryId) ?? null, [categories, categoryOptions, selectedCategoryId]);
+  const effectiveInventoryPolicy = useMemo(() => {
+    if (inventoryStockPolicy !== "inherit") {
+      return { policy: inventoryStockPolicy, source: "Producto" };
+    }
+    if (selectedCategory?.inventoryStockPolicy && selectedCategory.inventoryStockPolicy !== "inherit") {
+      return { policy: selectedCategory.inventoryStockPolicy, source: `Categoría ${selectedCategory.name}` };
+    }
+    return { policy: globalInventoryStockPolicy, source: "Configuración global" };
+  }, [globalInventoryStockPolicy, inventoryStockPolicy, selectedCategory]);
 
   useEffect(() => {
     if (editingProduct) {
@@ -127,6 +148,13 @@ export const ProductFormDialog = ({
     }
   }, [editingProduct, open]);
 
+
+  useEffect(() => {
+    if (!open) return;
+    getFeatureSettings()
+      .then((settings) => setGlobalInventoryStockPolicy(settings.inventoryStockPolicy))
+      .catch(() => setGlobalInventoryStockPolicy("allow"));
+  }, [open]);
 
   useEffect(() => {
     if (!open || !editingProduct) {
@@ -464,13 +492,17 @@ export const ProductFormDialog = ({
                   <Select value={inventoryStockPolicy} onValueChange={(value) => setInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="inherit">Heredar configuración general</SelectItem>
+                      <SelectItem value="inherit">Heredar de categoría/global</SelectItem>
                       <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
                       <SelectItem value="warn">Advertir antes de vender</SelectItem>
                       <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">Define cómo se comporta este producto cuando no hay inventario suficiente. Si eliges heredar, usará la configuración global.</p>
+                  <p className="text-xs text-muted-foreground">Si el producto hereda, primero usará la política de su categoría. Si la categoría también hereda, usará la configuración global.</p>
+                  <div className="rounded-md border bg-background/50 p-2 text-xs text-muted-foreground">
+                    <p><span className="font-medium text-foreground">Política efectiva actual:</span> {policyLabel(effectiveInventoryPolicy.policy)}</p>
+                    <p><span className="font-medium text-foreground">Origen:</span> {effectiveInventoryPolicy.source}</p>
+                  </div>
                   <p className="text-xs text-muted-foreground">{inventoryLinks.length > 0 ? "Este producto tiene inventario vinculado." : "Este producto no tiene inventario vinculado. La política de stock no bloqueará ventas hasta que se vincule inventario."}</p>
                 </div>
               </div>

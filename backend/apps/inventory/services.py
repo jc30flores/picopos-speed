@@ -41,11 +41,51 @@ def get_inventory_stock_policy() -> str:
     return policy if policy in STOCK_POLICY_CHOICES else STOCK_POLICY_ALLOW
 
 
+def _normalize_product_stock_policy(value) -> str:
+    policy = str(value or STOCK_POLICY_INHERIT).strip().lower()
+    return policy if policy in PRODUCT_STOCK_POLICY_CHOICES else STOCK_POLICY_INHERIT
+
+
+def _policy_label(policy: str) -> str:
+    return {
+        STOCK_POLICY_ALLOW: "Permitir venta",
+        STOCK_POLICY_WARN: "Advertir antes de vender",
+        STOCK_POLICY_BLOCK: "Bloquear venta",
+    }.get(policy, "Permitir venta")
+
+
+def resolve_inventory_policy_details_for_product(product) -> dict:
+    product_policy = _normalize_product_stock_policy(getattr(product, "inventory_stock_policy", STOCK_POLICY_INHERIT))
+    if product_policy != STOCK_POLICY_INHERIT:
+        return {
+            "resolved_policy": product_policy,
+            "policy_source": "product",
+            "policy_source_label": "Producto",
+            "policy_label": _policy_label(product_policy),
+        }
+
+    category = getattr(product, "category", None)
+    category_policy = _normalize_product_stock_policy(getattr(category, "inventory_stock_policy", STOCK_POLICY_INHERIT)) if category else STOCK_POLICY_INHERIT
+    if category_policy != STOCK_POLICY_INHERIT:
+        category_name = getattr(category, "name", "") or ""
+        return {
+            "resolved_policy": category_policy,
+            "policy_source": "category",
+            "policy_source_label": f"Categoría {category_name}".strip(),
+            "policy_label": _policy_label(category_policy),
+        }
+
+    global_policy = get_inventory_stock_policy()
+    return {
+        "resolved_policy": global_policy,
+        "policy_source": "global",
+        "policy_source_label": "Configuración global",
+        "policy_label": _policy_label(global_policy),
+    }
+
+
 def resolve_inventory_policy_for_product(product) -> str:
-    raw_policy = str(getattr(product, "inventory_stock_policy", STOCK_POLICY_INHERIT) or STOCK_POLICY_INHERIT).strip().lower()
-    if raw_policy == STOCK_POLICY_INHERIT or raw_policy not in PRODUCT_STOCK_POLICY_CHOICES:
-        return get_inventory_stock_policy()
-    return raw_policy
+    return resolve_inventory_policy_details_for_product(product)["resolved_policy"]
 
 
 def resolve_effective_inventory_links_for_product(product) -> dict[int, Decimal]:
@@ -84,12 +124,13 @@ def _product_policy_action(policies: set[str]) -> str:
 def _order_inventory_requirements(order) -> tuple[dict[int, Decimal], dict[int, list[dict]]]:
     required: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
     affected: dict[int, list[dict]] = defaultdict(list)
-    for order_item in order.items.select_related("product").all():
+    for order_item in order.items.select_related("product", "product__category").all():
         if not order_item.product_id or not order_item.product:
             continue
         product = order_item.product
         quantity = Decimal(order_item.quantity)
-        resolved_policy = resolve_inventory_policy_for_product(product)
+        policy_details = resolve_inventory_policy_details_for_product(product)
+        resolved_policy = policy_details["resolved_policy"]
         for inventory_item_id, qty_required in resolve_effective_inventory_links_for_product(product).items():
             total = quantity * Decimal(qty_required)
             if total == 0:
@@ -102,6 +143,9 @@ def _order_inventory_requirements(order) -> tuple[dict[int, Decimal], dict[int, 
                     "quantity": str(quantity),
                     "required": str(total),
                     "resolved_policy": resolved_policy,
+                    "policy_source": policy_details["policy_source"],
+                    "policy_source_label": policy_details["policy_source_label"],
+                    "policy_label": policy_details["policy_label"],
                     "action": resolved_policy,
                 }
             )
@@ -216,7 +260,8 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
             continue
         links = links_by_product.get(product_id) or resolve_effective_inventory_links_for_product(product)
         current_qty = cart_by_product.get(product_id, Decimal("0"))
-        resolved_policy = resolve_inventory_policy_for_product(product)
+        policy_details = resolve_inventory_policy_details_for_product(product)
+        resolved_policy = policy_details["resolved_policy"]
         is_tracked = bool(links)
         max_addable: int | None = None
         missing = []
@@ -267,6 +312,9 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
                 "product_id": product.id,
                 "product_name": product.name,
                 "resolved_policy": resolved_policy,
+                "policy_source": policy_details["policy_source"],
+                "policy_source_label": policy_details["policy_source_label"],
+                "policy_label": policy_details["policy_label"],
                 "is_tracked": is_tracked,
                 "can_add_one": can_add_one,
                 "max_addable_now": max_addable,

@@ -29,7 +29,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ["id", "name", "image", "image_path", "image_url", "remove_image", "is_active", "is_hidden", "position"]
+        fields = ["id", "name", "image", "image_path", "image_url", "remove_image", "is_active", "is_hidden", "position", "inventory_stock_policy"]
 
     def get_image_url(self, obj: Category) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)

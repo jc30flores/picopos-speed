@@ -5,6 +5,7 @@ const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() =
 export type Category = {
   id: number;
   name: string;
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
   image?: string | null;
   imagePath?: string | null;
   imageUrl?: string | null;
@@ -309,6 +310,35 @@ const normalizeInventoryStockPolicy = (value: unknown): InventoryStockPolicy => 
   const policy = String(value || "allow").toLowerCase();
   return policy === "warn" || policy === "block" ? policy : "allow";
 };
+
+const normalizeProductInventoryStockPolicy = (value: unknown): ProductInventoryStockPolicy => {
+  const policy = String(value || "inherit").toLowerCase();
+  return policy === "allow" || policy === "warn" || policy === "block" ? policy : "inherit";
+};
+
+type CategoryApiPayload = {
+  id: number;
+  name: string;
+  image?: string | null;
+  image_url?: string | null;
+  image_path?: string | null;
+  is_active: boolean;
+  is_hidden?: boolean;
+  position?: number;
+  inventory_stock_policy?: ProductInventoryStockPolicy;
+};
+
+const normalizeCategory = (data: CategoryApiPayload): Category => ({
+  id: data.id,
+  name: data.name,
+  image: data.image ?? null,
+  imagePath: data.image_path ?? null,
+  imageUrl: normalizeImageUrl(data),
+  isActive: data.is_active,
+  isHidden: Boolean(data.is_hidden),
+  position: Number(data.position ?? 0),
+  inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+});
 
 export type FeatureFlag = {
   id: number;
@@ -958,20 +988,11 @@ let cachedTaxConfig: TaxConfig | null = null;
 export const getCategories = async (query?: string): Promise<Category[]> => {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
   const response = await request(`/menu/categories/${params}`);
-  const data = await handleJson<Array<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>>(response);
+  const data = await handleJson<CategoryApiPayload[]>(response);
   // NOTE: backend ordering by `position` is the source of truth for categories.
   // Do not re-sort on the client; preserve API order exactly.
   return data
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      image: item.image ?? null,
-      imagePath: item.image_path ?? null,
-      imageUrl: normalizeImageUrl(item),
-      isActive: item.is_active,
-      isHidden: Boolean(item.is_hidden),
-      position: Number(item.position ?? 0),
-    }))
+    .map(normalizeCategory)
     .filter((item) => !item.isHidden && !item.name.toUpperCase().includes("SIN CATEGORÍA"));
 };
 
@@ -1080,36 +1101,28 @@ export const getTransactionTicket = async (paymentId: number): Promise<Transacti
   };
 };
 
-export const createCategory = async (payload: string | { name: string; image?: File | null }): Promise<Category> => {
-  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null } : payload;
+export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy }): Promise<Category> => {
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, inventoryStockPolicy: "inherit" as ProductInventoryStockPolicy } : payload;
   const formData = new FormData();
   formData.append("name", normalizedPayload.name);
   if (normalizedPayload.image) {
     formData.append("image", normalizedPayload.image);
   }
+  formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy ?? "inherit");
 
   const response = await request("/menu/categories/", {
     method: "POST",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return {
-    id: data.id,
-    name: data.name,
-    image: data.image ?? null,
-    imagePath: data.image_path ?? null,
-    imageUrl: normalizeImageUrl(data),
-    isActive: data.is_active,
-    isHidden: Boolean(data.is_hidden),
-    position: Number(data.position ?? 0),
-  };
+  const data = await handleJson<CategoryApiPayload>(response);
+  return normalizeCategory(data);
 };
 
 export const updateCategory = async (
   categoryId: number,
-  payload: string | { name?: string; image?: File | null; removeImage?: boolean }
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy }
 ): Promise<Category> => {
-  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false } : payload;
+  const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false, inventoryStockPolicy: undefined } : payload;
   const formData = new FormData();
   if (normalizedPayload.name !== undefined) {
     formData.append("name", normalizedPayload.name);
@@ -1120,22 +1133,16 @@ export const updateCategory = async (
   if (normalizedPayload.removeImage) {
     formData.append("remove_image", "1");
   }
+  if (normalizedPayload.inventoryStockPolicy !== undefined) {
+    formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy);
+  }
 
   const response = await request(`/menu/categories/${categoryId}/`, {
     method: "PATCH",
     body: formData,
   });
-  const data = await handleJson<{ id: number; name: string; image?: string | null; image_url?: string | null; image_path?: string | null; is_active: boolean; is_hidden?: boolean; position?: number }>(response);
-  return {
-    id: data.id,
-    name: data.name,
-    image: data.image ?? null,
-    imagePath: data.image_path ?? null,
-    imageUrl: normalizeImageUrl(data),
-    isActive: data.is_active,
-    isHidden: Boolean(data.is_hidden),
-    position: Number(data.position ?? 0),
-  };
+  const data = await handleJson<CategoryApiPayload>(response);
+  return normalizeCategory(data);
 };
 
 export const deleteCategory = async (categoryId: number): Promise<void> => {
@@ -1227,7 +1234,7 @@ export const getProducts = async (options?: {
       disposableFee: Number(item.disposable_fee ?? 0),
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
-      inventoryStockPolicy: item.inventory_stock_policy ?? "inherit",
+      inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
       modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
@@ -1336,7 +1343,7 @@ export const createProduct = async (payload: {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
-    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1443,7 +1450,7 @@ export const updateProduct = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
-    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1907,7 +1914,7 @@ export const updateProductModifierGroups = async (
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
-    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1970,7 +1977,7 @@ export const updateProductAvailability = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
-    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -2948,7 +2955,7 @@ export const duplicateProduct = async (productId: number): Promise<Product> => {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
-    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
     modifierGroups: data.modifier_groups ?? [],
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
@@ -4157,6 +4164,9 @@ export type CartAvailabilityItem = {
   productId: number;
   productName: string;
   resolvedPolicy: InventoryStockPolicy;
+  policySource: "product" | "category" | "global";
+  policySourceLabel: string;
+  policyLabel: string;
   isTracked: boolean;
   canAddOne: boolean;
   maxAddableNow: number;
@@ -4188,6 +4198,9 @@ export const checkCartInventoryAvailability = async (payload: { cartItems: Array
       productId: Number(item.product_id),
       productName: String(item.product_name ?? ""),
       resolvedPolicy: normalizeInventoryStockPolicy(item.resolved_policy),
+      policySource: item.policy_source === "product" || item.policy_source === "category" ? item.policy_source : "global",
+      policySourceLabel: String(item.policy_source_label ?? "Configuración global"),
+      policyLabel: String(item.policy_label ?? "Permitir venta"),
       isTracked: Boolean(item.is_tracked),
       canAddOne: Boolean(item.can_add_one),
       maxAddableNow: Number(item.max_addable_now ?? 0),
@@ -4215,7 +4228,7 @@ export type InventoryAvailabilityItem = {
   available: string;
   required: string;
   missing: string;
-  affectedProducts: Array<{ productId: number; productName: string; quantity: string }>;
+  affectedProducts: Array<{ productId: number; productName: string; quantity: string; policySource?: "product" | "category" | "global"; policySourceLabel?: string; policyLabel?: string }>;
 };
 
 export type InventoryAvailabilityCheck = {
@@ -4239,7 +4252,14 @@ const mapInventoryAvailability = (data: any): InventoryAvailabilityCheck => ({
     available: String(item.available ?? "0"),
     required: String(item.required ?? "0"),
     missing: String(item.missing ?? "0"),
-    affectedProducts: Array.isArray(item.affected_products) ? item.affected_products.map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name ?? ""), quantity: String(product.quantity ?? "0") })) : [],
+    affectedProducts: Array.isArray(item.affected_products) ? item.affected_products.map((product: any) => ({
+      productId: Number(product.product_id),
+      productName: String(product.product_name ?? ""),
+      quantity: String(product.quantity ?? "0"),
+      policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global",
+      policySourceLabel: String(product.policy_source_label ?? "Configuración global"),
+      policyLabel: String(product.policy_label ?? "Permitir venta"),
+    })) : [],
   })) : [],
 });
 
