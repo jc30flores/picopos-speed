@@ -82,6 +82,8 @@ export type InventoryMovement = {
   id: number;
   inventoryItem: number;
   inventoryItemName: string;
+  inventoryItemSku?: string;
+  inventoryItemUnit?: string;
   movementType: string;
   quantityChange: number;
   quantityBefore: number;
@@ -1574,6 +1576,8 @@ export const getInventoryMovements = async (inventoryItemId?: number, filters?: 
     id: row.id,
     inventoryItem: row.inventory_item,
     inventoryItemName: row.inventory_item_name,
+    inventoryItemSku: row.inventory_item_sku ?? "",
+    inventoryItemUnit: row.inventory_item_unit ?? "",
     movementType: row.movement_type,
     quantityChange: Number(row.quantity_change),
     quantityBefore: Number(row.quantity_before),
@@ -1681,7 +1685,7 @@ export const getInventoryReportAdjustments = async (filters?: { dateFrom?: strin
   if (filters?.movementType) params.set("movement_type", filters.movementType);
   const response = await request(`/inventory/reports/adjustments/${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await handleJson<any[]>(response);
-  return data.map((row) => ({ id: row.id, inventoryItem: row.inventory_item, inventoryItemName: row.inventory_item_name, movementType: row.movement_type, quantityChange: Number(row.quantity_change), quantityBefore: Number(row.quantity_before), quantityAfter: Number(row.quantity_after), reason: row.reason ?? "", referenceType: row.reference_type ?? "", referenceId: row.reference_id ?? "", createdByUsername: row.created_by_username ?? "", createdAt: row.created_at }));
+  return data.map((row) => ({ id: row.id, inventoryItem: row.inventory_item, inventoryItemName: row.inventory_item_name, inventoryItemSku: row.inventory_item_sku ?? "", inventoryItemUnit: row.inventory_item_unit ?? "", movementType: row.movement_type, quantityChange: Number(row.quantity_change), quantityBefore: Number(row.quantity_before), quantityAfter: Number(row.quantity_after), reason: row.reason ?? "", referenceType: row.reference_type ?? "", referenceId: row.reference_id ?? "", createdByUsername: row.created_by_username ?? "", createdAt: row.created_at }));
 };
 
 export const getInventoryReportCounts = async (filters?: { dateFrom?: string; dateTo?: string; status?: string; countType?: string; user?: number; inventoryItem?: number }): Promise<InventoryCountSession[]> => {

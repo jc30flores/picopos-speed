@@ -416,6 +416,8 @@ class InventoryCountApplyView(APIView):
         if session.status != InventoryCountSession.STATUS_FINALIZED:
             return Response({"detail": "Solo puedes aplicar conteos finalizados y no aplicados."}, status=status.HTTP_400_BAD_REQUEST)
         lines = list(InventoryCountLine.objects.select_for_update().filter(session=session, counted_stock__isnull=False).select_related("inventory_item"))
+        if not lines:
+            return Response({"detail": "Debes contar al menos un artículo antes de aplicar diferencias."}, status=status.HTTP_400_BAD_REQUEST)
         item_ids = [line.inventory_item_id for line in lines if line.difference != 0]
         items = {item.id: item for item in InventoryItem.objects.select_for_update().filter(id__in=item_ids)}
         movement_count = 0
@@ -485,9 +487,9 @@ class InventoryAdjustmentsReportPdfView(APIView):
 
     def get(self, request):
         movements = _filter_inventory_movements(InventoryMovement.objects.select_related("inventory_item", "created_by"), request.query_params).order_by("-created_at", "-id")[:1000]
-        rows = [["Fecha", "Artículo", "Tipo", "Cambio", "Antes", "Después", "Usuario", "Motivo", "Referencia"]]
+        rows = [["Fecha", "Artículo", "Código", "Unidad", "Tipo", "Cambio", "Antes", "Después", "Usuario", "Motivo", "Referencia"]]
         for m in movements:
-            rows.append([timezone.localtime(m.created_at).strftime("%Y-%m-%d %H:%M"), m.inventory_item.name, m.get_movement_type_display(), str(m.quantity_change), str(m.quantity_before), str(m.quantity_after), getattr(m.created_by, "username", "") or "—", m.reason or "—", f"{m.reference_type}:{m.reference_id}" if m.reference_type or m.reference_id else "—"])
+            rows.append([timezone.localtime(m.created_at).strftime("%Y-%m-%d %H:%M"), m.inventory_item.name, m.inventory_item.sku or "—", m.inventory_item.unit, m.get_movement_type_display(), str(m.quantity_change), str(m.quantity_before), str(m.quantity_after), getattr(m.created_by, "username", "") or "—", m.reason or "—", f"{m.reference_type}:{m.reference_id}" if m.reference_type or m.reference_id else "—"])
         return _pdf_response(f"reporte-ajustes-inventario-{timezone.localdate().isoformat()}.pdf", "Reporte de Ajustes de Inventario", rows)
 
 
@@ -516,7 +518,7 @@ class InventoryCountReportPdfView(APIView):
         session = InventoryCountSession.objects.prefetch_related("lines__inventory_item").filter(pk=pk).first()
         if not session:
             return Response({"detail": "Conteo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
-        rows = [["Artículo", "Código", "Unidad", "Stock sistema", "Conteo físico", "Diferencia", "Stock antes", "Stock después", "Nota"]]
+        rows = [["Artículo", "Código", "Unidad", "Stock sistema", "Conteo físico", "Diferencia", "Stock antes", "Stock después", "Nota"], ["Sesión", session.code or str(session.id), session.get_count_type_display(), session.get_status_display(), timezone.localtime(session.created_at).strftime("%Y-%m-%d %H:%M"), f"Diferencias: {session.total_differences}", f"Contados: {session.counted_items}", f"Total: {session.total_items}", session.notes or "—"]]
         for line in session.lines.all():
             rows.append([line.inventory_item.name, line.inventory_item.sku or "—", line.inventory_item.unit, str(line.system_stock), str(line.counted_stock) if line.counted_stock is not None else "Pendiente", str(line.difference), str(line.stock_before_apply or "—"), str(line.stock_after_apply or "—"), line.note or "—"])
         return _pdf_response(f"conteo-inventario-{session.code or session.id}.pdf", f"Reporte de Conteo de Inventario {session.code or session.id}", rows)

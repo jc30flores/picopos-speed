@@ -62,6 +62,8 @@ class InventoryItemSerializer(serializers.ModelSerializer):
 
 class InventoryMovementSerializer(serializers.ModelSerializer):
     inventory_item_name = serializers.CharField(source="inventory_item.name", read_only=True)
+    inventory_item_sku = serializers.CharField(source="inventory_item.sku", read_only=True)
+    inventory_item_unit = serializers.CharField(source="inventory_item.unit", read_only=True)
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
 
     class Meta:
@@ -70,6 +72,8 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
             "id",
             "inventory_item",
             "inventory_item_name",
+            "inventory_item_sku",
+            "inventory_item_unit",
             "movement_type",
             "quantity_change",
             "quantity_before",
