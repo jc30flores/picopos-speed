@@ -11,9 +11,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
 import {
   Category,
+  InventoryItem,
   InventoryProductLink,
   Product,
   ProductInventoryStockPolicy,
+  ProductInventoryTrackingCreatePayload,
   ProductSpecialPriceRule,
   InventoryStockPolicy,
   createCategory,
@@ -22,6 +24,7 @@ import {
   deleteProductSpecialPrice,
   getCategories,
   getFeatureSettings,
+  getInventoryItems,
   getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
   saveProductEffectiveInventoryLinks,
@@ -89,6 +92,14 @@ export const ProductFormDialog = ({
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [inventoryComponentsEnabled, setInventoryComponentsEnabled] = useState(true);
+  const [trackInventory, setTrackInventory] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<"link" | "create">("link");
+  const [trackedInventoryItemId, setTrackedInventoryItemId] = useState<number | null>(null);
+  const [trackedInventoryQuantity, setTrackedInventoryQuantity] = useState("1");
+  const [newInventoryItem, setNewInventoryItem] = useState<ProductInventoryTrackingCreatePayload>({ name: "", sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [inventoryItemQuery, setInventoryItemQuery] = useState("");
   const [globalInventoryStockPolicy, setGlobalInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
@@ -116,6 +127,9 @@ export const ProductFormDialog = ({
     return { policy: globalInventoryStockPolicy, source: "Configuración global" };
   }, [globalInventoryStockPolicy, inventoryStockPolicy, selectedCategory]);
 
+  const selectedTrackedInventoryItem = useMemo(() => inventoryItems.find((item) => item.id === trackedInventoryItemId) ?? null, [inventoryItems, trackedInventoryItemId]);
+  const duplicateInventoryItemWarning = trackInventory && trackedInventoryItemId && inventoryLinks.some((row) => row.inventoryItemId === trackedInventoryItemId);
+
   useEffect(() => {
     if (editingProduct) {
       setName(editingProduct.name);
@@ -131,6 +145,12 @@ export const ProductFormDialog = ({
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
       setInventoryLinks(editingProduct.inventoryLinks ?? []);
       setInventoryStockPolicy(editingProduct.inventoryStockPolicy ?? "inherit");
+      setInventoryComponentsEnabled(editingProduct.inventoryComponentsEnabled ?? true);
+      setTrackInventory(Boolean(editingProduct.trackInventory));
+      setTrackingMode(editingProduct.trackedInventoryItem ? "link" : "create");
+      setTrackedInventoryItemId(editingProduct.trackedInventoryItem ?? null);
+      setTrackedInventoryQuantity(String(editingProduct.trackedInventoryQuantity ?? 1));
+      setNewInventoryItem({ name: editingProduct.name, sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
     } else {
       setName("");
       setDescription("");
@@ -145,6 +165,12 @@ export const ProductFormDialog = ({
       setDisposableApplyTo([]);
       setInventoryLinks([]);
       setInventoryStockPolicy("inherit");
+      setInventoryComponentsEnabled(true);
+      setTrackInventory(false);
+      setTrackingMode("create");
+      setTrackedInventoryItemId(null);
+      setTrackedInventoryQuantity("1");
+      setNewInventoryItem({ name: "", sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
     }
   }, [editingProduct, open]);
 
@@ -202,6 +228,14 @@ export const ProductFormDialog = ({
     }
   }, [categories, categoryQuery]);
 
+  useEffect(() => {
+    if (!open || !trackInventory || trackingMode !== "link") return;
+    const timeout = window.setTimeout(() => {
+      getInventoryItems(inventoryItemQuery).then(setInventoryItems).catch(() => setInventoryItems([]));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [inventoryItemQuery, open, trackInventory, trackingMode]);
+
   const selectedCategoryName = useMemo(() => {
     if (selectedCategoryId) {
       return (
@@ -230,6 +264,39 @@ export const ProductFormDialog = ({
     if (!isValid()) return;
     const parsedPrice = price === "" ? NaN : Number(price);
     if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) return;
+    const quantityToDiscount = Number(trackedInventoryQuantity);
+    if (trackInventory && (!Number.isFinite(quantityToDiscount) || quantityToDiscount <= 0)) {
+      toast.error("La cantidad a descontar debe ser mayor a 0.");
+      return;
+    }
+    if (trackInventory && trackingMode === "link" && !trackedInventoryItemId) {
+      toast.error("Selecciona un artículo de inventario para seguir stock.");
+      return;
+    }
+    if (trackInventory && trackingMode === "create") {
+      const currentStock = Number(newInventoryItem.currentStock ?? 0);
+      const minStock = newInventoryItem.minStock == null ? null : Number(newInventoryItem.minStock);
+      const maxStock = newInventoryItem.maxStock == null ? null : Number(newInventoryItem.maxStock);
+      if (!newInventoryItem.name.trim() || !newInventoryItem.unit.trim()) {
+        toast.error("Completa nombre y unidad del artículo de inventario.");
+        return;
+      }
+      if (currentStock < 0 || (minStock != null && minStock < 0) || (maxStock != null && maxStock < 0)) {
+        toast.error("Los stocks deben ser mayores o iguales a 0.");
+        return;
+      }
+      if (minStock != null && maxStock != null && maxStock < minStock) {
+        toast.error("El stock máximo debe ser mayor o igual al mínimo.");
+        return;
+      }
+    }
+    const trackingPayload = {
+      inventoryComponentsEnabled,
+      trackInventory,
+      trackedInventoryItem: trackInventory && trackingMode === "link" ? trackedInventoryItemId : null,
+      trackedInventoryQuantity: quantityToDiscount || 1,
+      newInventoryItem: trackInventory && trackingMode === "create" ? { ...newInventoryItem, name: newInventoryItem.name || name, unit: newInventoryItem.unit || "Unidad" } : null,
+    };
 
     if (editingProduct) {
       await updateProduct(editingProduct.id, {
@@ -243,6 +310,7 @@ export const ProductFormDialog = ({
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
         inventoryStockPolicy,
+        ...trackingPayload,
       });
     } else {
       await createProduct({
@@ -256,6 +324,7 @@ export const ProductFormDialog = ({
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
         inventoryStockPolicy,
+        ...trackingPayload,
         inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
     }
@@ -268,6 +337,12 @@ export const ProductFormDialog = ({
     }
     onOpenChange(false);
   };
+
+  useEffect(() => {
+    if (!editingProduct && name && !newInventoryItem.name) {
+      setNewInventoryItem((prev) => ({ ...prev, name }));
+    }
+  }, [editingProduct, name, newInventoryItem.name]);
 
   const handleSelectCategory = (categoryItem: Category) => {
     setSelectedCategoryId(categoryItem.id);
@@ -466,28 +541,98 @@ export const ProductFormDialog = ({
                 <Label htmlFor="available" className="cursor-pointer">Disponible</Label>
               </div>
 
-              <div className="md:col-span-2 space-y-2 rounded-xl border p-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-semibold">Inventario vinculado</p>
-                    <p className="text-xs text-muted-foreground">Configura qué insumos se descuentan por cada venta.</p>
-                  </div>
-                  <Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>Gestionar vínculos</Button>
+              <div className="md:col-span-2 space-y-3 rounded-xl border p-3">
+                <div>
+                  <p className="font-semibold">Inventario</p>
+                  <p className="text-xs text-muted-foreground">Configura componentes, stock propio y política de venta.</p>
                 </div>
-                {inventoryLinks.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Sin vínculos configurados.</p>
-                ) : (
-                  <div className="space-y-1 text-sm">
-                    {inventoryLinks.map((row) => (
-                      <div key={row.inventoryItemId} className="flex justify-between rounded-md bg-muted/40 px-2 py-1">
-                        <span>{row.inventoryItemName}</span>
-                        <span>{row.quantityRequired} {row.inventoryItemUnit}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
-                <div className="mt-3 space-y-2 rounded-lg border bg-muted/20 p-3">
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Label className="font-semibold">Artículo compuesto</Label>
+                      <p className="text-xs text-muted-foreground">Descuenta componentes o insumos del inventario al vender este producto.</p>
+                    </div>
+                    <Checkbox checked={inventoryComponentsEnabled} onCheckedChange={(checked) => setInventoryComponentsEnabled(Boolean(checked))} aria-label="Artículo compuesto" />
+                  </div>
+                  {inventoryComponentsEnabled ? (
+                    <>
+                      {inventoryLinks.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No hay componentes configurados.</p>
+                      ) : (
+                        <div className="space-y-1 text-sm">
+                          {inventoryLinks.map((row) => (
+                            <div key={row.inventoryItemId} className="flex justify-between rounded-md bg-background/60 px-2 py-1">
+                              <span>{row.inventoryItemName}</span>
+                              <span>{row.quantityRequired} {row.inventoryItemUnit}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">Componentes del artículo</p><Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>{inventoryLinks.length ? "Gestionar componentes" : "Agregar componentes"}</Button></div>
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-amber-600">Los componentes guardados no se eliminarán, pero no se descontarán mientras esta opción esté apagada.</p>
+                      <Button type="button" variant="outline" onClick={() => setInventoryModalOpen(true)}>Ver componentes guardados</Button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Label className="font-semibold">Seguir inventario</Label>
+                      <p className="text-xs text-muted-foreground">Conecta este producto a un artículo de inventario propio para descontar stock por cada venta.</p>
+                    </div>
+                    <Checkbox checked={trackInventory} onCheckedChange={(checked) => setTrackInventory(Boolean(checked))} aria-label="Seguir inventario" />
+                  </div>
+                  {!trackInventory ? (
+                    <p className="text-sm text-muted-foreground">Este producto no tiene stock propio.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <Select value={trackingMode} onValueChange={(value) => setTrackingMode(value as "link" | "create")}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="create">Crear artículo de inventario</SelectItem>
+                          <SelectItem value="link">Vincular artículo existente</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {trackingMode === "create" ? (
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <Input placeholder="Nombre del artículo de inventario" value={newInventoryItem.name} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, name: event.target.value }))} />
+                          <Input placeholder="SKU/código" value={newInventoryItem.sku ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, sku: event.target.value }))} />
+                          <Input placeholder="Unidad" value={newInventoryItem.unit} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, unit: event.target.value }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="Stock inicial" value={newInventoryItem.currentStock ?? 0} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, currentStock: Number(event.target.value || 0) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="Stock mínimo" value={newInventoryItem.minStock ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, minStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="Stock máximo" value={newInventoryItem.maxStock ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, maxStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input placeholder="Buscar artículo de inventario" value={inventoryItemQuery} onChange={(event) => setInventoryItemQuery(event.target.value)} />
+                          <Select value={trackedInventoryItemId ? String(trackedInventoryItemId) : ""} onValueChange={(value) => setTrackedInventoryItemId(Number(value))}>
+                            <SelectTrigger><SelectValue placeholder="Artículo de inventario vinculado" /></SelectTrigger>
+                            <SelectContent>
+                              {inventoryItems.map((item) => (
+                                <SelectItem key={item.id} value={String(item.id)}>{item.name} · Stock {item.currentStock} {item.unit}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {selectedTrackedInventoryItem ? (
+                            <p className="text-xs text-muted-foreground">Actual: {selectedTrackedInventoryItem.currentStock} · Mín: {selectedTrackedInventoryItem.minStock ?? "—"} · Máx: {selectedTrackedInventoryItem.maxStock ?? "—"}</p>
+                          ) : null}
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        <Label>Cantidad a descontar por venta</Label>
+                        <Input type="number" min="0.001" step="0.001" value={trackedInventoryQuantity} onChange={(event) => setTrackedInventoryQuantity(event.target.value)} />
+                      </div>
+                      {duplicateInventoryItemWarning ? <p className="text-sm text-amber-600">Este artículo también está en componentes. Revisa que no se descuente doble.</p> : null}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
                   <Label>Política de venta por inventario</Label>
                   <Select value={inventoryStockPolicy} onValueChange={(value) => setInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -498,12 +643,11 @@ export const ProductFormDialog = ({
                       <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">Si el producto hereda, primero usará la política de su categoría. Si la categoría también hereda, usará la configuración global.</p>
+                  <p className="text-xs text-muted-foreground">La política define qué ocurre cuando este producto no tiene inventario suficiente, ya sea por componentes o por stock propio.</p>
                   <div className="rounded-md border bg-background/50 p-2 text-xs text-muted-foreground">
                     <p><span className="font-medium text-foreground">Política efectiva actual:</span> {policyLabel(effectiveInventoryPolicy.policy)}</p>
                     <p><span className="font-medium text-foreground">Origen:</span> {effectiveInventoryPolicy.source}</p>
                   </div>
-                  <p className="text-xs text-muted-foreground">{inventoryLinks.length > 0 ? "Este producto tiene inventario vinculado." : "Este producto no tiene inventario vinculado. La política de stock no bloqueará ventas hasta que se vincule inventario."}</p>
                 </div>
               </div>
 

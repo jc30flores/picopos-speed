@@ -88,7 +88,10 @@ def resolve_inventory_policy_for_product(product) -> str:
     return resolve_inventory_policy_details_for_product(product)["resolved_policy"]
 
 
-def resolve_effective_inventory_links_for_product(product) -> dict[int, Decimal]:
+def resolve_effective_inventory_links_for_product(product, *, include_disabled_components: bool = False) -> dict[int, Decimal]:
+    if not include_disabled_components and not bool(getattr(product, "inventory_components_enabled", True)):
+        return {}
+
     effective: dict[int, Decimal] = {}
     category_links = CategoryInventoryLink.objects.filter(category_id=product.category_id).select_related("inventory_item")
     category_by_id = {}
@@ -113,6 +116,33 @@ def resolve_effective_inventory_links_for_product(product) -> dict[int, Decimal]
     return effective
 
 
+def get_inventory_requirements_for_product(product) -> dict:
+    component_links = resolve_effective_inventory_links_for_product(product)
+    requirements: dict[int, Decimal] = {item_id: Decimal(qty) for item_id, qty in component_links.items()}
+    component_item_ids = set(component_links.keys())
+    tracks_own_inventory = bool(getattr(product, "track_inventory", False) and getattr(product, "tracked_inventory_item_id", None))
+    duplicate_tracking_component = False
+
+    if tracks_own_inventory:
+        item_id = int(product.tracked_inventory_item_id)
+        tracked_qty = Decimal(getattr(product, "tracked_inventory_quantity", Decimal("1")) or Decimal("1"))
+        component_qty = requirements.get(item_id)
+        if component_qty is not None and component_qty == tracked_qty:
+            duplicate_tracking_component = True
+        else:
+            if component_qty is not None:
+                duplicate_tracking_component = True
+            requirements[item_id] = requirements.get(item_id, Decimal("0")) + tracked_qty
+
+    return {
+        "requirements": requirements,
+        "has_components": bool(component_links),
+        "tracks_own_inventory": tracks_own_inventory,
+        "duplicate_tracking_component": duplicate_tracking_component,
+        "component_item_ids": component_item_ids,
+    }
+
+
 def _product_policy_action(policies: set[str]) -> str:
     if STOCK_POLICY_BLOCK in policies:
         return STOCK_POLICY_BLOCK
@@ -124,14 +154,15 @@ def _product_policy_action(policies: set[str]) -> str:
 def _order_inventory_requirements(order) -> tuple[dict[int, Decimal], dict[int, list[dict]]]:
     required: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
     affected: dict[int, list[dict]] = defaultdict(list)
-    for order_item in order.items.select_related("product", "product__category").all():
+    for order_item in order.items.select_related("product", "product__category", "product__tracked_inventory_item").all():
         if not order_item.product_id or not order_item.product:
             continue
         product = order_item.product
         quantity = Decimal(order_item.quantity)
         policy_details = resolve_inventory_policy_details_for_product(product)
         resolved_policy = policy_details["resolved_policy"]
-        for inventory_item_id, qty_required in resolve_effective_inventory_links_for_product(product).items():
+        requirement_details = get_inventory_requirements_for_product(product)
+        for inventory_item_id, qty_required in requirement_details["requirements"].items():
             total = quantity * Decimal(qty_required)
             if total == 0:
                 continue
@@ -147,6 +178,9 @@ def _order_inventory_requirements(order) -> tuple[dict[int, Decimal], dict[int, 
                     "policy_source_label": policy_details["policy_source_label"],
                     "policy_label": policy_details["policy_label"],
                     "action": resolved_policy,
+                    "has_components": requirement_details["has_components"],
+                    "tracks_own_inventory": requirement_details["tracks_own_inventory"],
+                    "duplicate_tracking_component": requirement_details["duplicate_tracking_component"],
                 }
             )
     return required, affected
@@ -228,7 +262,7 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
     cart_by_product = _cart_rows(cart_items)
     candidate_ids = {int(pid) for pid in (candidate_product_ids or []) if str(pid).isdigit()}
     product_ids = set(cart_by_product.keys()) | candidate_ids
-    products = Product.objects.filter(id__in=product_ids).select_related("category")
+    products = Product.objects.filter(id__in=product_ids).select_related("category", "tracked_inventory_item")
     product_map = {product.id: product for product in products}
 
     links_by_product: dict[int, dict[int, Decimal]] = {}
@@ -238,17 +272,18 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
         product = product_map.get(product_id)
         if not product:
             continue
-        links = resolve_effective_inventory_links_for_product(product)
-        links_by_product[product_id] = links
+        requirement_details = get_inventory_requirements_for_product(product)
+        links = requirement_details["requirements"]
+        links_by_product[product_id] = requirement_details
         for item_id, qty_required in links.items():
             reserved_by_item[item_id] += quantity * Decimal(qty_required)
             inventory_item_ids.add(item_id)
     for product_id in candidate_ids:
         product = product_map.get(product_id)
         if product and product_id not in links_by_product:
-            links = resolve_effective_inventory_links_for_product(product)
-            links_by_product[product_id] = links
-            inventory_item_ids.update(links.keys())
+            requirement_details = get_inventory_requirements_for_product(product)
+            links_by_product[product_id] = requirement_details
+            inventory_item_ids.update(requirement_details["requirements"].keys())
 
     item_map = InventoryItem.objects.in_bulk(inventory_item_ids)
     rows = []
@@ -258,7 +293,8 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
         product = product_map.get(product_id)
         if not product:
             continue
-        links = links_by_product.get(product_id) or resolve_effective_inventory_links_for_product(product)
+        requirement_details = links_by_product.get(product_id) or get_inventory_requirements_for_product(product)
+        links = requirement_details["requirements"]
         current_qty = cart_by_product.get(product_id, Decimal("0"))
         policy_details = resolve_inventory_policy_details_for_product(product)
         resolved_policy = policy_details["resolved_policy"]
@@ -316,6 +352,9 @@ def check_cart_inventory_availability(*, cart_items: list[dict], candidate_produ
                 "policy_source_label": policy_details["policy_source_label"],
                 "policy_label": policy_details["policy_label"],
                 "is_tracked": is_tracked,
+                "has_components": requirement_details["has_components"],
+                "tracks_own_inventory": requirement_details["tracks_own_inventory"],
+                "duplicate_tracking_component": requirement_details["duplicate_tracking_component"],
                 "can_add_one": can_add_one,
                 "max_addable_now": max_addable,
                 "current_cart_quantity": str(current_qty),

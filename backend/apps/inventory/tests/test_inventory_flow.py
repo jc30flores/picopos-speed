@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -221,6 +222,193 @@ class InventoryFlowTests(TestCase):
         self.assertEqual(response.status_code, 400)
         item.refresh_from_db()
         self.assertEqual(item.current_stock, Decimal("1"))
+
+
+    def test_components_disabled_are_not_deducted_and_links_remain(self):
+        item = InventoryItem.objects.create(name="Tortilla", unit="unidad", current_stock=Decimal("10"))
+        CatalogProductInventoryLink.objects.create(catalog_product=self.product, inventory_item=item, quantity_required=Decimal("1"))
+        self.product.inventory_components_enabled = False
+        self.product.save(update_fields=["inventory_components_enabled"])
+        order = self._order(quantity=2, total="10")
+
+        apply_inventory_for_order(order, user=self.user)
+
+        item.refresh_from_db()
+        self.assertEqual(item.current_stock, Decimal("10"))
+        self.assertTrue(CatalogProductInventoryLink.objects.filter(catalog_product=self.product, inventory_item=item).exists())
+
+    def test_tracked_inventory_item_is_deducted(self):
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("5"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.inventory_components_enabled = False
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity", "inventory_components_enabled"])
+        order = self._order(quantity=2, total="10")
+
+        apply_inventory_for_order(order, user=self.user)
+
+        item.refresh_from_db()
+        self.assertEqual(item.current_stock, Decimal("3.000"))
+
+    def test_components_and_tracked_inventory_are_deducted_together(self):
+        tortilla = InventoryItem.objects.create(name="Tortilla", unit="unidad", current_stock=Decimal("10"))
+        bottle = InventoryItem.objects.create(name="Combo", unit="unidad", current_stock=Decimal("5"))
+        CatalogProductInventoryLink.objects.create(catalog_product=self.product, inventory_item=tortilla, quantity_required=Decimal("1"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = bottle
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity"])
+        order = self._order(quantity=2, total="10")
+
+        apply_inventory_for_order(order, user=self.user)
+
+        tortilla.refresh_from_db()
+        bottle.refresh_from_db()
+        self.assertEqual(tortilla.current_stock, Decimal("8.000"))
+        self.assertEqual(bottle.current_stock, Decimal("3.000"))
+
+    def test_tracked_inventory_blocks_with_block_policy(self):
+        self._set_stock_policy("block")
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("1"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity"])
+        order = self._order(quantity=2, total="10")
+
+        result = check_order_inventory_availability(order)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["has_blocking_stock"])
+        self.assertEqual(result["items"][0]["action"], "block")
+
+    def test_tracked_inventory_allows_with_allow_policy(self):
+        self._set_stock_policy("allow")
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("0"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity"])
+        order = self._order(quantity=2, total="10")
+
+        apply_inventory_for_order(order, user=self.user)
+
+        item.refresh_from_db()
+        self.assertEqual(item.current_stock, Decimal("-2.000"))
+
+    def test_cart_availability_includes_tracked_inventory_metadata(self):
+        self._set_stock_policy("block")
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("1"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.inventory_components_enabled = False
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity", "inventory_components_enabled"])
+
+        result = check_cart_inventory_availability(cart_items=[{"product_id": self.product.id, "quantity": 1}], candidate_product_ids=[self.product.id])
+        row = result["items"][0]
+
+        self.assertTrue(row["tracks_own_inventory"])
+        self.assertFalse(row["has_components"])
+        self.assertFalse(row["can_add_one"])
+
+    def test_product_tracking_validation_requires_item(self):
+        response = self.client.patch(
+            f"/api/menu/products/{self.product.id}/",
+            {
+                "name": self.product.name,
+                "description": self.product.description,
+                "price": "5.00",
+                "category_id": self.category.id,
+                "available": "true",
+                "requires_kitchen": "false",
+                "track_inventory": "true",
+                "tracked_inventory_quantity": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_product_tracking_validation_rejects_non_positive_quantity(self):
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("5"))
+        response = self.client.patch(
+            f"/api/menu/products/{self.product.id}/",
+            {
+                "name": self.product.name,
+                "description": self.product.description,
+                "price": "5.00",
+                "category_id": self.category.id,
+                "available": "true",
+                "requires_kitchen": "false",
+                "track_inventory": "true",
+                "tracked_inventory_item": item.id,
+                "tracked_inventory_quantity": "0",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_inventory_item_from_product_tracking_payload(self):
+        response = self.client.patch(
+            f"/api/menu/products/{self.product.id}/",
+            {
+                "name": self.product.name,
+                "description": self.product.description,
+                "price": "5.00",
+                "category_id": self.category.id,
+                "available": "true",
+                "requires_kitchen": "false",
+                "track_inventory": "true",
+                "tracked_inventory_quantity": "1",
+                "new_inventory_item": json.dumps({"name": "Coca Cola", "sku": "COCA-1", "unit": "Unidad", "current_stock": "5", "min_stock": "1", "max_stock": "20"}),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.product.refresh_from_db()
+        self.assertTrue(self.product.track_inventory)
+        self.assertIsNotNone(self.product.tracked_inventory_item_id)
+        self.assertEqual(self.product.tracked_inventory_item.current_stock, Decimal("5.000"))
+
+    def test_disabling_track_inventory_does_not_delete_inventory_item(self):
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("5"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item"])
+
+        response = self.client.patch(
+            f"/api/menu/products/{self.product.id}/",
+            {
+                "name": self.product.name,
+                "description": self.product.description,
+                "price": "5.00",
+                "category_id": self.category.id,
+                "available": "true",
+                "requires_kitchen": "false",
+                "track_inventory": "false",
+                "tracked_inventory_quantity": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.product.refresh_from_db()
+        self.assertFalse(self.product.track_inventory)
+        self.assertTrue(InventoryItem.objects.filter(id=item.id).exists())
+
+    def test_reversal_restores_tracked_inventory_movement(self):
+        item = InventoryItem.objects.create(name="Coca Cola", unit="unidad", current_stock=Decimal("5"))
+        self.product.track_inventory = True
+        self.product.tracked_inventory_item = item
+        self.product.tracked_inventory_quantity = Decimal("1")
+        self.product.save(update_fields=["track_inventory", "tracked_inventory_item", "tracked_inventory_quantity"])
+        order = self._order(quantity=2, total="10")
+        apply_inventory_for_order(order, user=self.user)
+
+        reverse_inventory_for_order(order, user=self.user, reason="Reversión")
+
+        item.refresh_from_db()
+        self.assertEqual(item.current_stock, Decimal("5.000"))
 
     def test_reverse_inventory_for_order_restores_once_and_creates_reversal(self):
         item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("20"))

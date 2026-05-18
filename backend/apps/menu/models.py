@@ -144,6 +144,17 @@ class Product(models.Model):
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
     inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
+    inventory_components_enabled = models.BooleanField(default=True)
+    track_inventory = models.BooleanField(default=False)
+    tracked_inventory_item = models.ForeignKey(
+        "inventory.InventoryItem",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tracked_products",
+    )
+    tracked_inventory_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1)
+    auto_created_inventory_item = models.BooleanField(default=False)
     modifier_groups = models.ManyToManyField(
         ModifierGroup,
         blank=True,

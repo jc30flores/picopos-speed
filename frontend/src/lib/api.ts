@@ -68,6 +68,24 @@ export type Product = {
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
   inventoryLinks?: InventoryProductLink[];
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryItemName?: string | null;
+  trackedInventoryItemUnit?: string | null;
+  trackedInventoryItemCurrentStock?: number | null;
+  trackedInventoryQuantity?: number;
+  autoCreatedInventoryItem?: boolean;
+  trackedInventoryWarning?: string;
+};
+
+export type ProductInventoryTrackingCreatePayload = {
+  name: string;
+  sku?: string;
+  unit: string;
+  currentStock?: number;
+  minStock?: number | null;
+  maxStock?: number | null;
 };
 
 export type InventoryItem = {
@@ -147,7 +165,7 @@ export type InventoryProductLink = {
   inventoryItemName: string;
   inventoryItemUnit: string;
   quantityRequired: number;
-  origin?: "inherited" | "override" | "direct";
+  origin?: "inherited" | "override" | "direct" | "disabled";
   categoryLinkId?: number;
 };
 
@@ -338,6 +356,43 @@ const normalizeCategory = (data: CategoryApiPayload): Category => ({
   isHidden: Boolean(data.is_hidden),
   position: Number(data.position ?? 0),
   inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+});
+
+const appendProductInventoryTrackingFormData = (formData: FormData, payload: {
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryQuantity?: number;
+  newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
+}) => {
+  formData.append("inventory_components_enabled", (payload.inventoryComponentsEnabled ?? true) ? "true" : "false");
+  formData.append("track_inventory", payload.trackInventory ? "true" : "false");
+  formData.append("tracked_inventory_quantity", String(payload.trackedInventoryQuantity ?? 1));
+  if (payload.trackedInventoryItem) {
+    formData.append("tracked_inventory_item", String(payload.trackedInventoryItem));
+  }
+  if (payload.newInventoryItem) {
+    formData.append("new_inventory_item", JSON.stringify({
+      name: payload.newInventoryItem.name,
+      sku: payload.newInventoryItem.sku ?? "",
+      unit: payload.newInventoryItem.unit,
+      current_stock: payload.newInventoryItem.currentStock ?? 0,
+      min_stock: payload.newInventoryItem.minStock ?? null,
+      max_stock: payload.newInventoryItem.maxStock ?? null,
+    }));
+  }
+};
+
+const mapProductInventoryFields = (data: any) => ({
+  inventoryComponentsEnabled: Boolean(data.inventory_components_enabled ?? true),
+  trackInventory: Boolean(data.track_inventory),
+  trackedInventoryItem: data.tracked_inventory_item != null ? Number(data.tracked_inventory_item) : null,
+  trackedInventoryItemName: data.tracked_inventory_item_name ?? null,
+  trackedInventoryItemUnit: data.tracked_inventory_item_unit ?? null,
+  trackedInventoryItemCurrentStock: data.tracked_inventory_item_current_stock != null ? Number(data.tracked_inventory_item_current_stock) : null,
+  trackedInventoryQuantity: Number(data.tracked_inventory_quantity ?? 1),
+  autoCreatedInventoryItem: Boolean(data.auto_created_inventory_item),
+  trackedInventoryWarning: String(data.tracked_inventory_warning ?? ""),
 });
 
 export type FeatureFlag = {
@@ -1203,6 +1258,15 @@ export const getProducts = async (options?: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1235,6 +1299,7 @@ export const getProducts = async (options?: {
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
+    ...mapProductInventoryFields(item),
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
       modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
@@ -1265,6 +1330,11 @@ export const createProduct = async (payload: {
   modifierGroupIds?: number[];
   inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  inventoryComponentsEnabled?: boolean;
+  trackInventory?: boolean;
+  trackedInventoryItem?: number | null;
+  trackedInventoryQuantity?: number;
+  newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
 }): Promise<Product> => {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -1274,6 +1344,7 @@ export const createProduct = async (payload: {
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1316,6 +1387,15 @@ export const createProduct = async (payload: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1344,6 +1424,7 @@ export const createProduct = async (payload: {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1376,6 +1457,11 @@ export const updateProduct = async (
     modifierGroupIds?: number[];
     inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
     inventoryStockPolicy?: ProductInventoryStockPolicy;
+    inventoryComponentsEnabled?: boolean;
+    trackInventory?: boolean;
+    trackedInventoryItem?: number | null;
+    trackedInventoryQuantity?: number;
+    newInventoryItem?: ProductInventoryTrackingCreatePayload | null;
   }
 ): Promise<Product> => {
   const formData = new FormData();
@@ -1386,6 +1472,7 @@ export const updateProduct = async (
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1425,6 +1512,15 @@ export const updateProduct = async (
     available: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1451,6 +1547,7 @@ export const updateProduct = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1893,6 +1990,15 @@ export const updateProductModifierGroups = async (
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1915,6 +2021,7 @@ export const updateProductModifierGroups = async (
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1960,6 +2067,15 @@ export const updateProductAvailability = async (
     is_archived?: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
     modifier_groups: number[];
   }>(response);
   return {
@@ -1978,6 +2094,7 @@ export const updateProductAvailability = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
   };
 };
@@ -2956,6 +3073,7 @@ export const duplicateProduct = async (productId: number): Promise<Product> => {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups ?? [],
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
@@ -4168,6 +4286,9 @@ export type CartAvailabilityItem = {
   policySourceLabel: string;
   policyLabel: string;
   isTracked: boolean;
+  hasComponents: boolean;
+  tracksOwnInventory: boolean;
+  duplicateTrackingComponent: boolean;
   canAddOne: boolean;
   maxAddableNow: number;
   currentCartQuantity: number;
@@ -4202,6 +4323,9 @@ export const checkCartInventoryAvailability = async (payload: { cartItems: Array
       policySourceLabel: String(item.policy_source_label ?? "Configuración global"),
       policyLabel: String(item.policy_label ?? "Permitir venta"),
       isTracked: Boolean(item.is_tracked),
+      hasComponents: Boolean(item.has_components),
+      tracksOwnInventory: Boolean(item.tracks_own_inventory),
+      duplicateTrackingComponent: Boolean(item.duplicate_tracking_component),
       canAddOne: Boolean(item.can_add_one),
       maxAddableNow: Number(item.max_addable_now ?? 0),
       currentCartQuantity: Number(item.current_cart_quantity ?? 0),

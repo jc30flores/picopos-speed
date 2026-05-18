@@ -36,7 +36,7 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
     const selectedMap: Record<number, boolean> = {};
     const draftMap: Record<number, string> = {};
     value.forEach((v) => {
-      selectedMap[v.inventoryItemId] = true;
+      selectedMap[v.inventoryItemId] = v.origin !== "disabled";
       draftMap[v.inventoryItemId] = String(v.quantityRequired);
     });
     setSelected(selectedMap);
@@ -102,8 +102,9 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader><DialogTitle>Vincular inventario</DialogTitle></DialogHeader>
-        <Input placeholder="Buscar insumo" value={query} onChange={(e) => setQuery(e.target.value)} className="h-11" />
+        <DialogHeader><DialogTitle>Componentes del artículo</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">Los componentes se descontarán solo si Artículo compuesto está activo.</p>
+        <Input placeholder="Buscar componente" value={query} onChange={(e) => setQuery(e.target.value)} className="h-11" />
         <div className="max-h-[380px] overflow-auto space-y-2">
           {items.map((item) => (
             <div key={item.id} className="flex items-center gap-3 rounded-lg border p-3">
@@ -116,7 +117,7 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
                 <p className="font-medium">{item.name}</p>
                 {value.find((row) => row.inventoryItemId === item.id)?.origin ? (
                   <Badge variant="outline" className="mr-1 mt-1 text-[10px] uppercase">
-                    {value.find((row) => row.inventoryItemId === item.id)?.origin}
+                    {value.find((row) => row.inventoryItemId === item.id)?.origin === "inherited" ? "Heredado de categoría" : value.find((row) => row.inventoryItemId === item.id)?.origin === "override" ? "Personalizado para este producto" : value.find((row) => row.inventoryItemId === item.id)?.origin === "disabled" ? "Desactivado para este producto" : "Componente"}
                   </Badge>
                 ) : null}
                 <p className="text-xs text-muted-foreground">{item.unit} · Stock: {item.currentStock}</p>
@@ -143,8 +144,8 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
           ))}
         </div>
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">{selectedCount} vinculaciones seleccionadas</p>
-          <Button className="h-11 px-6" onClick={handleSave}>Guardar vínculos</Button>
+          <p className="text-sm text-muted-foreground">{selectedCount} componentes seleccionados</p>
+          <Button className="h-11 px-6" onClick={handleSave}>Guardar componentes</Button>
         </div>
       </DialogContent>
     </Dialog>

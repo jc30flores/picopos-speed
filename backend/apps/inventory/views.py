@@ -646,7 +646,7 @@ class ProductEffectiveInventoryLinksView(APIView):
         if not product:
             return Response({"detail": "Producto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
-        effective = resolve_effective_inventory_links_for_product(product)
+        effective = resolve_effective_inventory_links_for_product(product, include_disabled_components=True)
         category_links = {
             row.inventory_item_id: row
             for row in CategoryInventoryLink.objects.filter(category_id=product.category_id).select_related("inventory_item")
@@ -661,7 +661,9 @@ class ProductEffectiveInventoryLinksView(APIView):
         }
 
         rows = []
+        seen_item_ids = set()
         for inventory_item_id, quantity in effective.items():
+            seen_item_ids.add(inventory_item_id)
             if inventory_item_id in direct_links:
                 direct = direct_links[inventory_item_id]
                 rows.append({
@@ -683,6 +685,17 @@ class ProductEffectiveInventoryLinksView(APIView):
                 "quantity_required": quantity,
                 "origin": "override" if override and not override.is_disabled and override.quantity_required is not None else "inherited",
                 "category_link_id": category_link.id,
+            })
+        for override in overrides.values():
+            if not override.is_disabled or override.category_link.inventory_item_id in seen_item_ids:
+                continue
+            rows.append({
+                "inventory_item": override.category_link.inventory_item_id,
+                "inventory_item_name": override.category_link.inventory_item.name,
+                "inventory_item_unit": override.category_link.inventory_item.unit,
+                "quantity_required": override.category_link.quantity_required,
+                "origin": "disabled",
+                "category_link_id": override.category_link_id,
             })
         return Response(rows)
 

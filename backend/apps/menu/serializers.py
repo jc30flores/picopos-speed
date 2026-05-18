@@ -18,7 +18,7 @@ from apps.menu.models import (
 from apps.menu.utils.images import delete_menu_image_by_image_field, save_menu_image
 from apps.menu.utils.media import safe_media_url
 from apps.menu.utils.pricing import resolve_effective_price
-from apps.inventory.models import CatalogProductInventoryLink
+from apps.inventory.models import CatalogProductInventoryLink, CategoryInventoryLink, InventoryItem, InventoryMovement
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -297,6 +297,10 @@ class ProductSerializer(serializers.ModelSerializer):
     is_special_price_active_now = serializers.SerializerMethodField()
     applied_special_price_rule_id = serializers.SerializerMethodField()
     applied_special_price_rule_name = serializers.SerializerMethodField()
+    tracked_inventory_item_name = serializers.CharField(source="tracked_inventory_item.name", read_only=True)
+    tracked_inventory_item_unit = serializers.CharField(source="tracked_inventory_item.unit", read_only=True)
+    tracked_inventory_item_current_stock = serializers.DecimalField(source="tracked_inventory_item.current_stock", max_digits=12, decimal_places=3, read_only=True)
+    tracked_inventory_warning = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -324,6 +328,15 @@ class ProductSerializer(serializers.ModelSerializer):
             "disposable_apply_to",
             "requires_kitchen",
             "inventory_stock_policy",
+            "inventory_components_enabled",
+            "track_inventory",
+            "tracked_inventory_item",
+            "tracked_inventory_item_name",
+            "tracked_inventory_item_unit",
+            "tracked_inventory_item_current_stock",
+            "tracked_inventory_quantity",
+            "auto_created_inventory_item",
+            "tracked_inventory_warning",
             "modifier_groups",
             "modifier_groups_pos",
             "modifier_group_links",
@@ -483,6 +496,124 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_is_special_price_active_now(self, obj: Product):
         return self._resolve_effective_result(obj).applied_rule is not None
 
+    def get_tracked_inventory_warning(self, obj: Product):
+        if not obj.track_inventory or not obj.tracked_inventory_item_id:
+            return ""
+        if CatalogProductInventoryLink.objects.filter(catalog_product=obj, inventory_item_id=obj.tracked_inventory_item_id).exists():
+            return "Este artículo también está en componentes. Revisa que no se descuente doble."
+        if obj.category_id and obj.inventory_components_enabled:
+            category_item_ids = CategoryInventoryLink.objects.filter(category_id=obj.category_id).values_list("inventory_item_id", flat=True)
+            if obj.tracked_inventory_item_id in set(category_item_ids):
+                return "Este artículo también está en componentes. Revisa que no se descuente doble."
+        return ""
+
+    def _parse_new_inventory_item_payload(self) -> dict | None:
+        request = self.context.get("request")
+        if not request:
+            return None
+        raw = request.data.get("new_inventory_item")
+        if raw in (None, ""):
+            return None
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            raise serializers.ValidationError({"new_inventory_item": "Formato de artículo de inventario inválido."})
+        if not isinstance(payload, dict):
+            raise serializers.ValidationError({"new_inventory_item": "Formato de artículo de inventario inválido."})
+        return payload
+
+    def _decimal_from_payload(self, payload: dict, key: str, default=None):
+        value = payload.get(key, default)
+        if value in (None, ""):
+            return default
+        try:
+            return Decimal(str(value))
+        except Exception:
+            raise serializers.ValidationError({"new_inventory_item": f"{key} inválido."})
+
+    def _create_inventory_item_from_payload(self, payload: dict) -> tuple[InventoryItem, bool]:
+        name = str(payload.get("name") or "").strip()
+        unit = str(payload.get("unit") or "").strip()
+        sku = str(payload.get("sku") or "").strip()
+        if not name:
+            raise serializers.ValidationError({"new_inventory_item": "El nombre del artículo de inventario es obligatorio."})
+        if not unit:
+            raise serializers.ValidationError({"new_inventory_item": "La unidad del artículo de inventario es obligatoria."})
+        initial_stock = self._decimal_from_payload(payload, "current_stock", Decimal("0")) or Decimal("0")
+        min_stock = self._decimal_from_payload(payload, "min_stock", None)
+        max_stock = self._decimal_from_payload(payload, "max_stock", None)
+        if initial_stock < 0:
+            raise serializers.ValidationError({"new_inventory_item": "El stock inicial debe ser mayor o igual a 0."})
+        if min_stock is not None and min_stock < 0:
+            raise serializers.ValidationError({"new_inventory_item": "El stock mínimo debe ser mayor o igual a 0."})
+        if max_stock is not None and max_stock < 0:
+            raise serializers.ValidationError({"new_inventory_item": "El stock máximo debe ser mayor o igual a 0."})
+        if min_stock is not None and max_stock is not None and max_stock < min_stock:
+            raise serializers.ValidationError({"new_inventory_item": "El stock máximo debe ser mayor o igual al stock mínimo."})
+
+        existing = None
+        if sku:
+            existing = InventoryItem.objects.filter(sku__iexact=sku).first()
+        if existing is None:
+            existing = InventoryItem.objects.filter(name__iexact=name, unit__iexact=unit).first()
+        if existing:
+            return existing, False
+
+        item = InventoryItem.objects.create(
+            name=name,
+            sku=sku,
+            unit=unit,
+            current_stock=initial_stock,
+            min_stock=min_stock,
+            max_stock=max_stock,
+            notes=str(payload.get("notes") or ""),
+            is_active=True,
+        )
+        if initial_stock != 0:
+            request = self.context.get("request")
+            InventoryMovement.objects.create(
+                inventory_item=item,
+                movement_type=InventoryMovement.TYPE_INITIAL_STOCK,
+                quantity_change=initial_stock,
+                quantity_before=Decimal("0"),
+                quantity_after=initial_stock,
+                reason="Stock inicial creado desde producto",
+                created_by=getattr(request, "user", None) if request else None,
+            )
+        return item, True
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        track_inventory = attrs.get("track_inventory", getattr(self.instance, "track_inventory", False))
+        tracked_item = attrs.get("tracked_inventory_item", getattr(self.instance, "tracked_inventory_item", None))
+        quantity = attrs.get("tracked_inventory_quantity", getattr(self.instance, "tracked_inventory_quantity", Decimal("1")))
+        if quantity is not None and Decimal(str(quantity)) <= 0:
+            raise serializers.ValidationError({"tracked_inventory_quantity": "La cantidad a descontar debe ser mayor a 0."})
+        new_item_payload = self._parse_new_inventory_item_payload()
+        if track_inventory and tracked_item is None and not new_item_payload:
+            raise serializers.ValidationError({"tracked_inventory_item": "Selecciona o crea un artículo de inventario para seguir stock."})
+        if request and request.data.get("track_inventory") in {False, "false", "False", "0", 0}:
+            attrs["track_inventory"] = False
+        return attrs
+
+    def _apply_inventory_tracking_payload(self, instance: Product):
+        request = self.context.get("request")
+        if not request:
+            return instance
+        if request.data.get("track_inventory") in {False, "false", "False", "0", 0}:
+            instance.track_inventory = False
+            instance.save(update_fields=["track_inventory", "updated_at"] if hasattr(instance, "updated_at") else ["track_inventory"])
+            return instance
+        new_item_payload = self._parse_new_inventory_item_payload()
+        if new_item_payload:
+            item, created = self._create_inventory_item_from_payload(new_item_payload)
+            instance.tracked_inventory_item = item
+            instance.track_inventory = True
+            instance.auto_created_inventory_item = created
+            instance.save(update_fields=["tracked_inventory_item", "track_inventory", "auto_created_inventory_item"])
+        return instance
+
     def update(self, instance, validated_data):
         disposable_apply_to = validated_data.get("disposable_apply_to")
         if isinstance(disposable_apply_to, str):
@@ -495,6 +626,7 @@ class ProductSerializer(serializers.ModelSerializer):
         validated_data.pop("image", None)
         old_image = instance.image
         instance = super().update(instance, validated_data)
+        instance = self._apply_inventory_tracking_payload(instance)
         if modifier_groups is not None:
             self._sync_product_modifier_groups(instance, modifier_groups)
             instance.modifier_group_order = [group.id for group in modifier_groups]
@@ -523,6 +655,7 @@ class ProductSerializer(serializers.ModelSerializer):
         image_file = self.context.get("request").FILES.get("image") if self.context.get("request") else None
         validated_data.pop("image", None)
         product = super().create(validated_data)
+        product = self._apply_inventory_tracking_payload(product)
         if modifier_groups is not None:
             self._sync_product_modifier_groups(product, modifier_groups)
             product.modifier_group_order = [group.id for group in modifier_groups]
