@@ -42,6 +42,21 @@ const formatQuantity = (value: number | null | undefined): string => {
   return value.toLocaleString("es-SV", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 };
 
+type QuickFilter = "all" | "low_stock" | "active" | "inactive";
+
+const parseOptionalNumber = (value: string): number | null => {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isLowStock = (item: InventoryItem): boolean => {
+  if (item.minStock == null) return false;
+  const currentStock = Number(item.currentStock);
+  const minStock = Number(item.minStock);
+  return Number.isFinite(currentStock) && Number.isFinite(minStock) && currentStock < minStock;
+};
+
 export default function InventoryPage() {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -56,6 +71,8 @@ export default function InventoryPage() {
   const [unit, setUnit] = useState("unidad");
   const [stock, setStock] = useState("0");
   const [minStock, setMinStock] = useState("");
+  const [maxStock, setMaxStock] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [notes, setNotes] = useState("");
   const [active, setActive] = useState(true);
   const [reason, setReason] = useState("");
@@ -69,7 +86,7 @@ export default function InventoryPage() {
 
   useEffect(() => { load().catch(() => toast.error("No se pudo cargar inventario")); }, []);
 
-  const resetForm = () => { setName(""); setSku(""); setUnit("unidad"); setStock(""); setMinStock(""); setNotes(""); setActive(true); setEditing(null); };
+  const resetForm = () => { setName(""); setSku(""); setUnit("unidad"); setStock(""); setMinStock(""); setMaxStock(""); setNotes(""); setActive(true); setEditing(null); };
 
   useEffect(() => {
     if (!openForm) return;
@@ -77,7 +94,17 @@ export default function InventoryPage() {
     return () => window.clearTimeout(t);
   }, [openForm]);
 
-  const filtered = useMemo(() => items.filter((i) => i.name.toLowerCase().includes(query.toLowerCase()) || i.sku.toLowerCase().includes(query.toLowerCase())), [items, query]);
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return items.filter((item) => {
+      const matchesSearch = !normalizedQuery || item.name.toLowerCase().includes(normalizedQuery) || item.sku.toLowerCase().includes(normalizedQuery);
+      if (!matchesSearch) return false;
+      if (quickFilter === "low_stock") return isLowStock(item);
+      if (quickFilter === "active") return item.isActive;
+      if (quickFilter === "inactive") return !item.isActive;
+      return true;
+    });
+  }, [items, query, quickFilter]);
 
   return (
     <PageLayout title="Inventario" subtitle="Control simple, rápido y totalmente integrado." actions={<ClockSV timeClassName="text-2xl sm:text-3xl" className="min-w-[220px]" />}>
@@ -87,11 +114,24 @@ export default function InventoryPage() {
           <Button className="h-12 px-6 sm:min-w-[190px]" onClick={() => { resetForm(); setOpenForm(true); }}>Nuevo producto</Button>
         </div>
 
+        <div className="mx-auto flex w-full max-w-5xl flex-wrap gap-2">
+          {([
+            ["all", "Todos"],
+            ["low_stock", "Stock bajo"],
+            ["active", "Activos"],
+            ["inactive", "Inactivos"],
+          ] as Array<[QuickFilter, string]>).map(([value, label]) => (
+            <Button key={value} type="button" size="sm" variant={quickFilter === value ? "default" : "outline"} onClick={() => setQuickFilter(value)}>
+              {label}
+            </Button>
+          ))}
+        </div>
+
         <div className="rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Producto</TableHead><TableHead>Código</TableHead><TableHead>Unidad</TableHead><TableHead>Stock</TableHead><TableHead>Mínimo</TableHead><TableHead>Estado</TableHead><TableHead>Acciones</TableHead>
+                <TableHead>Producto</TableHead><TableHead>Código</TableHead><TableHead>Unidad</TableHead><TableHead>Stock</TableHead><TableHead>Mínimo</TableHead><TableHead>Máximo</TableHead><TableHead>Estado</TableHead><TableHead>Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -100,11 +140,17 @@ export default function InventoryPage() {
                   <TableCell className="font-semibold">{item.name}</TableCell>
                   <TableCell>{item.sku || "—"}</TableCell>
                   <TableCell>{UNIT_LABEL_BY_VALUE[item.unit] ?? item.unit}</TableCell>
-                  <TableCell>{formatQuantity(item.currentStock)}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <span className={isLowStock(item) ? "font-semibold text-red-600" : undefined}>{formatQuantity(item.currentStock)}</span>
+                      {isLowStock(item) ? <Badge variant="destructive" className="w-fit">Stock bajo</Badge> : null}
+                    </div>
+                  </TableCell>
                   <TableCell>{formatQuantity(item.minStock)}</TableCell>
+                  <TableCell>{formatQuantity(item.maxStock)}</TableCell>
                   <TableCell><Badge variant={item.isActive ? "default" : "outline"}>{item.isActive ? "Activo" : "Inactivo"}</Badge></TableCell>
                   <TableCell className="space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => { setEditing(item); setName(item.name); setSku(item.sku); setUnit(item.unit); setMinStock(item.minStock == null ? "" : String(item.minStock)); setNotes(item.notes ?? ""); setActive(item.isActive); setOpenForm(true); }}>Editar</Button>
+                    <Button size="sm" variant="outline" onClick={() => { setEditing(item); setName(item.name); setSku(item.sku); setUnit(item.unit); setMinStock(item.minStock == null ? "" : String(item.minStock)); setMaxStock(item.maxStock == null ? "" : String(item.maxStock)); setNotes(item.notes ?? ""); setActive(item.isActive); setOpenForm(true); }}>Editar</Button>
                     <Button size="sm" variant="outline" onClick={() => { setStock(""); setReason(""); setOpenAddStock(item); }}>Agregar stock</Button>
                     <Button size="sm" variant="outline" onClick={() => { setStock(""); setReason(""); setOpenAdjust(item); }}>Corregir stock</Button>
                   </TableCell>
@@ -138,16 +184,17 @@ export default function InventoryPage() {
               <SelectTrigger className="h-11"><SelectValue placeholder="Unidad" /></SelectTrigger>
               <SelectContent>{UNITS.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}</SelectContent>
             </Select>
-            {!editing ? <><Label>Stock inicial</Label><Input value={stock} onChange={(e) => setStock(e.target.value)} className="h-11" /></> : null}
-            <Label>Stock mínimo</Label><Input value={minStock} onChange={(e) => setMinStock(e.target.value)} className="h-11" />
+            {!editing ? <><Label>Stock inicial</Label><Input type="number" step="0.001" value={stock} onChange={(e) => setStock(e.target.value)} className="h-11" /></> : null}
+            <Label>Stock mínimo</Label><Input type="number" step="0.001" value={minStock} onChange={(e) => setMinStock(e.target.value)} className="h-11" />
+            <Label>Stock máximo</Label><Input type="number" step="0.001" value={maxStock} onChange={(e) => setMaxStock(e.target.value)} className="h-11" />
             <Label>Notas</Label><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
             <Label className="flex items-center gap-2"><input type="checkbox" checked={active} onChange={(e)=>setActive(e.target.checked)} /> Activo</Label>
             <Button className="h-11" onClick={async () => {
               try {
                 if (editing) {
-                  await updateInventoryItem(editing.id, { name, sku, unit, minStock: minStock ? Number(minStock) : null, notes, isActive: active });
+                  await updateInventoryItem(editing.id, { name, sku, unit, minStock: parseOptionalNumber(minStock), maxStock: parseOptionalNumber(maxStock), notes, isActive: active });
                 } else {
-                  await createInventoryItem({ name, sku, unit, initialStock: Number(stock || 0), minStock: minStock ? Number(minStock) : null, notes, isActive: active });
+                  await createInventoryItem({ name, sku, unit, initialStock: parseOptionalNumber(stock) ?? 0, minStock: parseOptionalNumber(minStock), maxStock: parseOptionalNumber(maxStock), notes, isActive: active });
                 }
                 await load(query); setOpenForm(false); toast.success("Inventario guardado");
               } catch { toast.error("No se pudo guardar"); }

@@ -50,6 +50,7 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             "unit",
             "current_stock",
             "min_stock",
+            "max_stock",
             "notes",
             "is_active",
             "created_at",
