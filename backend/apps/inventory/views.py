@@ -354,6 +354,24 @@ class InventoryCountDetailView(APIView):
         session.save(update_fields=["notes", "updated_at"])
         return Response(InventoryCountSessionDetailSerializer(session).data)
 
+    @transaction.atomic
+    def delete(self, request, pk: int):
+        session = InventoryCountSession.objects.select_for_update().filter(pk=pk).first()
+        if not session:
+            return Response({"detail": "Conteo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        if session.status == InventoryCountSession.STATUS_APPLIED:
+            return Response({"detail": "No puedes eliminar un conteo aplicado porque ya afectó el inventario."}, status=status.HTTP_400_BAD_REQUEST)
+        if session.status == InventoryCountSession.STATUS_FINALIZED:
+            return Response({"detail": "No puedes eliminar un conteo finalizado. Cancélalo primero si aún no fue aplicado."}, status=status.HTTP_400_BAD_REQUEST)
+        has_movements = (
+            session.lines.filter(movement__isnull=False).exists()
+            or InventoryMovement.objects.filter(reference_type="inventory_count", reference_id=str(session.id)).exists()
+        )
+        if has_movements:
+            return Response({"detail": "No puedes eliminar este conteo porque ya generó movimientos de inventario."}, status=status.HTTP_400_BAD_REQUEST)
+        session.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class InventoryCountLinesUpdateView(APIView):
     permission_classes = [IsAdminOrManager]

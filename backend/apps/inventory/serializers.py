@@ -248,17 +248,19 @@ class InventoryCountSessionDetailSerializer(InventoryCountSessionListSerializer)
 
 
 class InventoryCountCreateSerializer(serializers.Serializer):
-    count_type = serializers.ChoiceField(choices=["complete", "manual", "category"])
+    count_type = serializers.ChoiceField(choices=["complete", "manual", "category", "supplier", "provider"])
     notes = serializers.CharField(required=False, allow_blank=True)
-    item_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=False)
+    item_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=True)
     category_id = serializers.IntegerField(required=False)
 
     def validate(self, attrs):
         count_type = attrs.get("count_type")
         if count_type == "manual" and not attrs.get("item_ids"):
-            raise serializers.ValidationError({"item_ids": "Selecciona al menos un artículo para el conteo manual."})
+            raise serializers.ValidationError({"item_ids": "Selecciona al menos un artículo para crear un conteo manual."})
         if count_type == "category":
             raise serializers.ValidationError({"count_type": "El conteo por categoría aún no está disponible."})
+        if count_type in {"supplier", "provider"}:
+            raise serializers.ValidationError({"count_type": "El conteo por proveedor está disponible en Inventario Avanzado."})
         return attrs
 
 

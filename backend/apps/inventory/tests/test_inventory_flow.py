@@ -7,7 +7,14 @@ from rest_framework.test import APIClient
 from apps.core.models import Branch, ServiceType
 from apps.menu.models import Category, Product
 from apps.orders.models import Order, OrderItem
-from apps.inventory.models import CatalogProductInventoryLink, InventoryItem, InventorySaleApplication
+from apps.inventory.models import (
+    CatalogProductInventoryLink,
+    InventoryCountLine,
+    InventoryCountSession,
+    InventoryItem,
+    InventoryMovement,
+    InventorySaleApplication,
+)
 from apps.inventory.services import apply_inventory_for_order
 from apps.users.models import UserProfile
 
@@ -54,3 +61,26 @@ class InventoryFlowTests(TestCase):
         self.assertFalse(applied_second)
         self.assertEqual(item.current_stock, Decimal("16"))
         self.assertTrue(InventorySaleApplication.objects.filter(order=order).exists())
+
+    def test_delete_draft_inventory_count_removes_session(self):
+        item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("20"))
+        create_res = self.client.post("/api/inventory/counts/", {"count_type": "manual", "item_ids": [item.id]}, format="json")
+        self.assertEqual(create_res.status_code, 201)
+        session_id = create_res.data["id"]
+
+        delete_res = self.client.delete(f"/api/inventory/counts/{session_id}/")
+
+        self.assertEqual(delete_res.status_code, 204)
+        self.assertFalse(InventoryCountSession.objects.filter(id=session_id).exists())
+        self.assertFalse(InventoryCountLine.objects.filter(session_id=session_id).exists())
+
+    def test_delete_applied_inventory_count_is_blocked(self):
+        item = InventoryItem.objects.create(name="Pan", unit="unidad", current_stock=Decimal("20"))
+        session = InventoryCountSession.objects.create(count_type=InventoryCountSession.TYPE_MANUAL, status=InventoryCountSession.STATUS_APPLIED, created_by=self.user)
+        InventoryCountLine.objects.create(session=session, inventory_item=item, system_stock=Decimal("20"), counted_stock=Decimal("18"))
+        InventoryMovement.objects.create(inventory_item=item, movement_type=InventoryMovement.TYPE_INVENTORY_COUNT_ADJUSTMENT, quantity_change=Decimal("-2"), quantity_before=Decimal("20"), quantity_after=Decimal("18"), reference_type="inventory_count", reference_id=str(session.id), created_by=self.user)
+
+        delete_res = self.client.delete(f"/api/inventory/counts/{session.id}/")
+
+        self.assertEqual(delete_res.status_code, 400)
+        self.assertTrue(InventoryCountSession.objects.filter(id=session.id).exists())

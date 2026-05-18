@@ -826,9 +826,13 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       if (shouldRequireCashGate) {
         window.dispatchEvent(new CustomEvent("cash:required"));
       }
-      const message =
-        detailText ||
-        (errorPayload ? JSON.stringify(errorPayload) : "");
+      let fieldMessage = "";
+      if (!detailText && errorPayload && typeof errorPayload === "object") {
+        const firstValue = Object.values(errorPayload as Record<string, unknown>)[0];
+        if (Array.isArray(firstValue)) fieldMessage = String(firstValue[0] ?? "");
+        else if (typeof firstValue === "string") fieldMessage = firstValue;
+      }
+      const message = detailText || fieldMessage || (errorPayload ? JSON.stringify(errorPayload) : "");
       throw new ApiRequestError(message || `Error del servidor (${response.status}). Revisa el backend.`, {
         code: errorCode,
         status: response.status,
@@ -1632,6 +1636,8 @@ const mapInventoryCountSession = (row: any): InventoryCountSession => ({
   lines: Array.isArray(row.lines) ? row.lines.map(mapInventoryCountLine) : undefined,
 });
 
+const normalizeInventoryCountId = (id: number | string): string => String(id).replace(/^:+/, "");
+
 export const getInventoryCounts = async (filters?: { status?: string; countType?: string; dateFrom?: string; dateTo?: string; user?: number; inventoryItem?: number; q?: string }): Promise<InventoryCountSession[]> => {
   const params = new URLSearchParams();
   if (filters?.status) params.set("status", filters.status);
@@ -1650,30 +1656,42 @@ export const createInventoryCount = async (payload: { countType: "complete" | "m
   return mapInventoryCountSession(await handleJson<any>(response));
 };
 
-export const getInventoryCount = async (id: number): Promise<InventoryCountSession> => {
-  const response = await request(`/inventory/counts/${id}/`);
+export const getInventoryCount = async (id: number | string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/`);
   return mapInventoryCountSession(await handleJson<any>(response));
 };
 
-export const updateInventoryCountLines = async (id: number, lines: Array<{ id: number; countedStock?: number | null; note?: string }>): Promise<InventoryCountSession> => {
-  const response = await request(`/inventory/counts/${id}/lines/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: lines.map((line) => ({ id: line.id, counted_stock: line.countedStock, note: line.note ?? "" })) }) });
+export const updateInventoryCountLines = async (id: number | string, lines: Array<{ id: number; countedStock?: number | null; note?: string }>): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/lines/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: lines.map((line) => ({ id: line.id, counted_stock: line.countedStock, note: line.note ?? "" })) }) });
   return mapInventoryCountSession(await handleJson<any>(response));
 };
 
-export const finalizeInventoryCount = async (id: number): Promise<InventoryCountSession> => {
-  const response = await request(`/inventory/counts/${id}/finalize/`, { method: "POST" });
+export const finalizeInventoryCount = async (id: number | string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/finalize/`, { method: "POST" });
   return mapInventoryCountSession(await handleJson<any>(response));
 };
 
-export const applyInventoryCount = async (id: number): Promise<{ message: string; movementsCreated: number; session: InventoryCountSession }> => {
-  const response = await request(`/inventory/counts/${id}/apply/`, { method: "POST" });
+export const applyInventoryCount = async (id: number | string): Promise<{ message: string; movementsCreated: number; session: InventoryCountSession }> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/apply/`, { method: "POST" });
   const data = await handleJson<any>(response);
   return { message: data.message, movementsCreated: Number(data.movements_created ?? 0), session: mapInventoryCountSession(data.session) };
 };
 
-export const cancelInventoryCount = async (id: number, cancelReason?: string): Promise<InventoryCountSession> => {
-  const response = await request(`/inventory/counts/${id}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cancel_reason: cancelReason ?? "" }) });
+export const cancelInventoryCount = async (id: number | string, cancelReason?: string): Promise<InventoryCountSession> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cancel_reason: cancelReason ?? "" }) });
   return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const deleteInventoryCount = async (id: number | string): Promise<void> => {
+  const countId = normalizeInventoryCountId(id);
+  const response = await request(`/inventory/counts/${countId}/`, { method: "DELETE" });
+  if (response.status === 204) return;
+  await handleJson(response);
 };
 
 export const getInventoryReportAdjustments = async (filters?: { dateFrom?: string; dateTo?: string; inventoryItem?: number; user?: number; movementType?: string }): Promise<InventoryMovement[]> => {
