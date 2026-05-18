@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getFeatureSettings, getFeatureSettingsOptions, updateFeatureSettings, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 
 const defaultState: FeatureSettings = {
@@ -13,6 +14,7 @@ const defaultState: FeatureSettings = {
   cashCloseExpectedTotalsControlEnabled: true,
   cashCloseExpectedTotalsAllowedRoles: [],
   cashCloseExpectedTotalsVisibleFields: [],
+  inventoryStockPolicy: "allow",
 };
 
 export const FeatureFlagsTab = () => {
@@ -67,6 +69,24 @@ export const FeatureFlagsTab = () => {
       <Card><CardHeader><CardTitle>KIOSK</CardTitle><CardDescription>Mostrar u ocultar el módulo KIOSK para todos los usuarios.</CardDescription></CardHeader><CardContent className="flex justify-end"><Switch checked={settings.kioskEnabled} onCheckedChange={(checked) => void persist({ kioskEnabled: checked })} /></CardContent></Card>
       <Card><CardHeader><CardTitle>Pantalla Cliente</CardTitle><CardDescription>Mostrar u ocultar la pantalla cliente para todos los usuarios.</CardDescription></CardHeader><CardContent className="flex justify-end"><Switch checked={settings.customerDisplayEnabled} onCheckedChange={(checked) => void persist({ customerDisplayEnabled: checked })} /></CardContent></Card>
       <Card><CardHeader><CardTitle>Pantalla Cocina</CardTitle><CardDescription>Mostrar u ocultar Cocina para todos los usuarios.</CardDescription></CardHeader><CardContent className="flex justify-end"><Switch checked={settings.kitchenDisplayEnabled} onCheckedChange={(checked) => void persist({ kitchenDisplayEnabled: checked })} /></CardContent></Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Política de stock insuficiente</CardTitle>
+          <CardDescription>Define cómo debe comportarse el POS cuando una venta necesita más inventario del disponible.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Select value={settings.inventoryStockPolicy} onValueChange={(value) => void persist({ inventoryStockPolicy: value as FeatureSettings["inventoryStockPolicy"] })}>
+            <SelectTrigger className="max-w-sm"><SelectValue placeholder="Política de stock" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="allow">Permitir venta</SelectItem>
+              <SelectItem value="warn">Advertir antes de vender</SelectItem>
+              <SelectItem value="block">Bloquear venta</SelectItem>
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader><CardTitle>Totales esperados en cierre de caja</CardTitle><CardDescription>Controlar visibilidad de totales esperados.</CardDescription></CardHeader>
         <CardContent className="flex items-center justify-between">

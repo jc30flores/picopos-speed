@@ -177,6 +177,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
     card_type = serializers.CharField(required=False, allow_blank=True)
     split_part = serializers.IntegerField(required=False, allow_null=True)
+    inventory_warning_confirmed = serializers.BooleanField(required=False, default=False, write_only=True)
 
     class Meta:
         model = Payment
@@ -198,6 +199,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "change_cents",
             "tip_cents",
             "split_part",
+            "inventory_warning_confirmed",
             "card_type",
             "reference",
             "received_by",
@@ -207,6 +209,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         order = attrs.get("order")
+        attrs["inventory_warning_confirmed"] = bool(attrs.get("inventory_warning_confirmed", False))
         raw_amount_applied = attrs.pop("amount_applied", None)
         raw_amount = raw_amount_applied if raw_amount_applied is not None else attrs.get("amount")
         amount = self._normalize_money(raw_amount, field="amount")

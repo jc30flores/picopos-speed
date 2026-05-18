@@ -9,7 +9,8 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import IsAdminOrManager
+from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin
+from apps.orders.models import Order
 from apps.inventory.models import (
     CatalogProductInventoryLink,
     CategoryInventoryLink,
@@ -36,9 +37,31 @@ from apps.inventory.serializers import (
     InventoryCountUpdateSerializer,
     ProductEffectiveInventoryLinkWriteSerializer,
 )
-from apps.inventory.services import resolve_effective_inventory_links_for_product
+from apps.inventory.services import check_order_inventory_availability, resolve_effective_inventory_links_for_product, reverse_inventory_for_order
 
 logger = logging.getLogger(__name__)
+
+
+class OrderInventoryAvailabilityCheckView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request, order_id: int):
+        order = Order.objects.prefetch_related("items__product").filter(pk=order_id).first()
+        if not order:
+            return Response({"detail": "Orden no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(check_order_inventory_availability(order))
+
+
+class OrderInventoryReverseView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    def post(self, request, order_id: int):
+        order = Order.objects.filter(pk=order_id).first()
+        if not order:
+            return Response({"detail": "Orden no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        reason = (request.data.get("reason") or f"Reversión manual de venta #{order.order_number}").strip()
+        result = reverse_inventory_for_order(order, user=request.user, reason=reason)
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class InventoryItemListCreateView(generics.ListCreateAPIView):

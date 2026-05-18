@@ -205,7 +205,10 @@ class InventoryCountLine(models.Model):
 class InventorySaleApplication(models.Model):
     order = models.OneToOneField("orders.Order", on_delete=models.CASCADE, related_name="inventory_application")
     applied_at = models.DateTimeField(auto_now_add=True)
-    applied_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    applied_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_sale_applications")
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_sale_reversals")
+    reversal_reason = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ["-applied_at"]

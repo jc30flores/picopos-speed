@@ -243,6 +243,7 @@ type FeatureFlagsNormalized = {
   customerDisplayEnabled: boolean;
   kitchenDisplayEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
+  inventoryStockPolicy: InventoryStockPolicy;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -251,6 +252,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     customerDisplayEnabled: true,
     kitchenDisplayEnabled: true,
     cashCloseExpectedTotalsControlEnabled: true,
+    inventoryStockPolicy: "allow",
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -265,6 +267,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       customerDisplayEnabled: fromMap(byKey, ['FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
       kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+      inventoryStockPolicy: defaults.inventoryStockPolicy,
     };
   }
   return {
@@ -272,6 +275,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     customerDisplayEnabled: fromMap(raw, ['customerDisplayEnabled', 'customer_display_enabled', 'FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
     kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
+    inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -296,6 +300,13 @@ export type TaxConfig = {
   taxIncluded: boolean;
 };
 
+export type InventoryStockPolicy = "allow" | "warn" | "block";
+
+const normalizeInventoryStockPolicy = (value: unknown): InventoryStockPolicy => {
+  const policy = String(value || "allow").toLowerCase();
+  return policy === "warn" || policy === "block" ? policy : "allow";
+};
+
 export type FeatureFlag = {
   id: number;
   key: string;
@@ -311,6 +322,7 @@ export type FeatureSettings = {
   cashCloseExpectedTotalsControlEnabled: boolean;
   cashCloseExpectedTotalsAllowedRoles: string[];
   cashCloseExpectedTotalsVisibleFields: string[];
+  inventoryStockPolicy: InventoryStockPolicy;
 };
 
 export type FeatureSettingsOptions = {
@@ -709,13 +721,15 @@ export class ApiRequestError extends Error {
   code?: string;
   status?: number;
   isNetworkError: boolean;
+  payload?: unknown;
 
-  constructor(message: string, options?: { code?: string; status?: number; isNetworkError?: boolean }) {
+  constructor(message: string, options?: { code?: string; status?: number; isNetworkError?: boolean; payload?: unknown }) {
     super(message);
     this.name = "ApiRequestError";
     this.code = options?.code;
     this.status = options?.status;
     this.isNetworkError = Boolean(options?.isNetworkError);
+    this.payload = options?.payload;
   }
 }
 
@@ -836,6 +850,7 @@ const handleJson = async <T>(response: Response): Promise<T> => {
       throw new ApiRequestError(message || `Error del servidor (${response.status}). Revisa el backend.`, {
         code: errorCode,
         status: response.status,
+        payload: errorPayload,
       });
     }
     await response.text().catch(() => "");
@@ -1012,6 +1027,7 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+    inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
   };
 };
 
@@ -1025,6 +1041,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
       cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
+      inventory_stock_policy: payload.inventoryStockPolicy,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1036,6 +1053,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+    inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
   };
 };
 
@@ -4116,6 +4134,47 @@ const dayOfWeekLabel = (dayOfWeek: number) => {
   return map[dayOfWeek] ?? "";
 };
 
+export type InventoryAvailabilityItem = {
+  inventoryItemId: number;
+  name: string;
+  sku?: string;
+  unit: string;
+  available: string;
+  required: string;
+  missing: string;
+  affectedProducts: Array<{ productId: number; productName: string; quantity: string }>;
+};
+
+export type InventoryAvailabilityCheck = {
+  ok: boolean;
+  policy: InventoryStockPolicy;
+  hasInsufficientStock: boolean;
+  items: InventoryAvailabilityItem[];
+  message?: string;
+};
+
+const mapInventoryAvailability = (data: any): InventoryAvailabilityCheck => ({
+  ok: Boolean(data.ok),
+  policy: normalizeInventoryStockPolicy(data.policy),
+  hasInsufficientStock: Boolean(data.has_insufficient_stock),
+  message: data.message,
+  items: Array.isArray(data.items) ? data.items.map((item: any) => ({
+    inventoryItemId: Number(item.inventory_item_id),
+    name: String(item.name ?? ""),
+    sku: item.sku ?? "",
+    unit: String(item.unit ?? ""),
+    available: String(item.available ?? "0"),
+    required: String(item.required ?? "0"),
+    missing: String(item.missing ?? "0"),
+    affectedProducts: Array.isArray(item.affected_products) ? item.affected_products.map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name ?? ""), quantity: String(product.quantity ?? "0") })) : [],
+  })) : [],
+});
+
+export const checkOrderInventoryAvailability = async (orderId: number | string): Promise<InventoryAvailabilityCheck> => {
+  const response = await request(`/inventory/orders/${orderId}/availability-check/`, { method: "POST" });
+  return mapInventoryAvailability(await handleJson<any>(response));
+};
+
 export const createPayment = async (payload: {
   orderId: number | string;
   method: PaymentMethod;
@@ -4127,6 +4186,7 @@ export const createPayment = async (payload: {
   tipAmount?: number;
   reference?: string;
   splitPart?: number;
+  inventoryWarningConfirmed?: boolean;
 }): Promise<Payment> => {
   if (!payload.orderId) {
     throw new Error("createPayment: missing orderId");
@@ -4148,6 +4208,7 @@ export const createPayment = async (payload: {
       card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
       split_part: payload.splitPart ?? null,
+      inventory_warning_confirmed: Boolean(payload.inventoryWarningConfirmed),
     }),
   });
   const data = await handleJson<{

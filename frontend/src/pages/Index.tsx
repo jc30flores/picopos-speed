@@ -40,6 +40,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  ApiRequestError,
+  checkOrderInventoryAvailability,
   createOrder,
   Customer,
   createPayment,
@@ -74,12 +76,15 @@ import {
   printPaymentTicket,
   getPrintingStatus,
   getFeatureFlags,
+  getFeatureSettings,
   Category,
   Discount,
   ModifierGroup,
   Product,
   PaymentMethod,
   PaymentMethodOption,
+  InventoryAvailabilityCheck,
+  InventoryStockPolicy,
   ServiceType,
   CashSessionSnapshot,
   CashTransaction,
@@ -433,6 +438,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const previousServiceTypeRef = useRef<string>("");
   const [paymentReference, setPaymentReference] = useState("");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
+  const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
   const [pendingReferenceDraft, setPendingReferenceDraft] = useState("");
@@ -1461,6 +1468,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
+    getFeatureSettings().then((settings) => setInventoryStockPolicy(settings.inventoryStockPolicy)).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -2343,6 +2351,41 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   };
 
+
+  const showStockWarningModal = (check: InventoryAvailabilityCheck, mode: "warn" | "block"): Promise<boolean> => {
+    if (mode === "block") {
+      setStockWarning({ check, mode });
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => setStockWarning({ check, mode, resolve }));
+  };
+
+  const closeStockWarning = (confirmed: boolean) => {
+    stockWarning?.resolve?.(confirmed);
+    setStockWarning(null);
+  };
+
+  const validateInventoryBeforeFinalPayment = async (orderId: number | string): Promise<boolean | null> => {
+    try {
+      const check = await checkOrderInventoryAvailability(orderId);
+      if (!check.hasInsufficientStock) return false;
+      if (check.policy === "block") {
+        await showStockWarningModal(check, "block");
+        return null;
+      }
+      if (check.policy === "warn") {
+        const confirmed = await showStockWarningModal(check, "warn");
+        return confirmed ? true : null;
+      }
+      toast.warning("Hay artículos con stock insuficiente, pero la política actual permite continuar.");
+      return false;
+    } catch (error) {
+      console.error("Inventory availability check failed", error);
+      toast.warning("No se pudo verificar inventario. Revisa la conexión o intenta de nuevo.");
+      return inventoryStockPolicy === "block" ? null : false;
+    }
+  };
+
   const handleSubmitPayment = async () => {
     if (isProcessingPayment) return;
     if (!checkoutDraft || checkoutDraft.items.length === 0) {
@@ -2411,6 +2454,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ? latestRemaining
             : Math.min(paymentAmountForApi, latestRemaining);
 
+      const inventoryWarningConfirmed = amountForApi >= latestRemaining - 0.01 ? await validateInventoryBeforeFinalPayment(Number(orderId)) : false;
+      if (inventoryWarningConfirmed === null) return;
+
       const paymentResult = await createPayment({
         orderId,
         method: paymentMethod,
@@ -2422,6 +2468,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
+        inventoryWarningConfirmed,
       });
       setLastPaymentId(paymentResult.id);
       setLastPaymentAutoPrint(selectedPaymentAutoPrint);
@@ -2487,7 +2534,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
     } catch (error) {
       console.error("Failed to create payment", error);
-      toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
+      if (error instanceof ApiRequestError && error.code === "INVENTORY_STOCK_INSUFFICIENT") {
+        const availability = (error.payload as any)?.availability;
+        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item: any) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
+        else toast.error(error.message);
+      } else {
+        toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
+      }
     } finally {
       setIsProcessingPayment(false);
     }
@@ -3677,6 +3730,37 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       {/* Payment Dialog */}
+
+      <Dialog open={Boolean(stockWarning)} onOpenChange={(open) => { if (!open) closeStockWarning(false); }}>
+        <DialogContent className="max-w-3xl border-red-500/30 bg-background">
+          <DialogHeader><DialogTitle>Stock insuficiente</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">Algunos artículos no tienen suficiente stock para completar esta venta.</p>
+            <div className="max-h-80 overflow-auto rounded-xl border">
+              <table className="w-full min-w-[680px] text-sm">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2 text-left">Artículo</th><th className="px-3 py-2 text-right">Disponible</th><th className="px-3 py-2 text-right">Requerido</th><th className="px-3 py-2 text-right">Faltante</th><th className="px-3 py-2 text-left">Unidad</th><th className="px-3 py-2 text-left">Usado en</th></tr></thead>
+                <tbody>
+                  {stockWarning?.check.items.map((item) => (
+                    <tr key={item.inventoryItemId} className="border-t">
+                      <td className="px-3 py-2 font-medium">{item.name}</td>
+                      <td className="px-3 py-2 text-right">{item.available}</td>
+                      <td className="px-3 py-2 text-right">{item.required}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-red-400">{item.missing}</td>
+                      <td className="px-3 py-2">{item.unit}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.affectedProducts.map((product) => `${product.productName} x${product.quantity}`).join(", ") || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => closeStockWarning(false)}>{stockWarning?.mode === "block" ? "Entendido" : "Cancelar"}</Button>
+              {stockWarning?.mode === "warn" ? <Button onClick={() => closeStockWarning(true)}>Continuar de todos modos</Button> : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setPaymentMethodAutoSelectedFromOrderType(false); setShowCashPanel(false); setActiveTenderField(null); } }}>
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">

@@ -35,7 +35,7 @@ from apps.dte.services.dte_service import (
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.core.money import to_cents, from_cents
-from apps.inventory.services import apply_inventory_for_order
+from apps.inventory.services import InventoryStockPolicyError, apply_inventory_for_order, reverse_inventory_for_order, validate_order_inventory_policy
 
 
 logger = logging.getLogger(__name__)
@@ -238,6 +238,14 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         if method == "cash" and received_cents < applied_cents + tip_cents:
             return Response({"detail": "Cash received must cover amount + tip"}, status=status.HTTP_400_BAD_REQUEST)
         change_cents = max(received_cents - (applied_cents + tip_cents), 0)
+        will_complete_payment = applied_cents >= remaining_cents
+        inventory_warning_confirmed = bool(serializer.validated_data.pop("inventory_warning_confirmed", False))
+        if will_complete_payment:
+            try:
+                validate_order_inventory_policy(order, warning_confirmed=inventory_warning_confirmed)
+            except InventoryStockPolicyError as exc:
+                return Response({"code": "INVENTORY_STOCK_INSUFFICIENT", "detail": exc.message, "availability": exc.availability}, status=status.HTTP_400_BAD_REQUEST)
+
         if order.financial_locked_at is None:
             order.financial_locked_at = timezone.now()
             order.save(update_fields=["amount_due_cents", "financial_locked_at", "updated_at"])
@@ -285,7 +293,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
 
         if remaining <= 0:
             persist_sale_snapshot(payment.order)
-            apply_inventory_for_order(payment.order, user=request.user)
+            try:
+                apply_inventory_for_order(payment.order, user=request.user, warning_confirmed=inventory_warning_confirmed)
+            except InventoryStockPolicyError as exc:
+                raise ValidationError({"code": "INVENTORY_STOCK_INSUFFICIENT", "detail": exc.message, "availability": exc.availability}) from exc
             log_audit(
                 request,
                 "payment.completed",
@@ -625,6 +636,7 @@ class PaymentRecordRefundView(APIView):
             created_by=request.user,
         )
         order.recalculate_financials()
+        inventory_reversal = reverse_inventory_for_order(order, user=request.user, reason=f"Reversión por devolución de venta #{order.order_number}: {reason}")
         cash_tx = None
         if is_cash_refund:
             cash_tx, _ = _create_cash_out_for_refund(refund, request.user)
@@ -645,6 +657,7 @@ class PaymentRecordRefundView(APIView):
                 "order": OrderSerializer(order, context={"request": request}).data,
                 "cash_transaction_id": cash_tx.id if cash_tx else None,
                 "fiscal_result": fiscal_result,
+                "inventory_reversal": inventory_reversal,
                 **dte_action,
             },
             status=status.HTTP_201_CREATED,
@@ -691,6 +704,7 @@ class RefundListCreateView(generics.ListCreateAPIView):
             created_by=request.user,
         )
         refund.order.recalculate_financials()
+        inventory_reversal = reverse_inventory_for_order(refund.order, user=request.user, reason=f"Reversión por devolución de venta #{refund.order.order_number}: {refund.reason}")
         cash_tx = None
         if is_cash_refund:
             cash_tx, created = _create_cash_out_for_refund(refund, request.user)
@@ -728,6 +742,7 @@ class RefundListCreateView(generics.ListCreateAPIView):
                 "refund": RefundSerializer(refund).data,
                 "order": OrderSerializer(refund.order).data,
                 "print_job": PrintJobSerializer(job).data,
+                "inventory_reversal": inventory_reversal,
             },
             status=status.HTTP_201_CREATED,
         )
