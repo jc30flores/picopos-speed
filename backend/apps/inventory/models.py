@@ -70,6 +70,7 @@ class InventoryMovement(models.Model):
     TYPE_INVENTORY_LOSS = "inventory_loss"
     TYPE_INVENTORY_DAMAGED = "inventory_damaged"
     TYPE_INVENTORY_CORRECTION = "inventory_correction"
+    TYPE_INVENTORY_COUNT_ADJUSTMENT = "inventory_count_adjustment"
     TYPE_CHOICES = [
         (TYPE_INITIAL_STOCK, "Stock inicial"),
         (TYPE_STOCK_ADD, "Entrada"),
@@ -80,6 +81,7 @@ class InventoryMovement(models.Model):
         (TYPE_INVENTORY_LOSS, "Pérdida"),
         (TYPE_INVENTORY_DAMAGED, "Producto dañado"),
         (TYPE_INVENTORY_CORRECTION, "Corrección de stock"),
+        (TYPE_INVENTORY_COUNT_ADJUSTMENT, "Ajuste por conteo"),
     ]
 
     inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="movements")
@@ -100,6 +102,104 @@ class InventoryMovement(models.Model):
             models.Index(fields=["reference_type", "reference_id"]),
             models.Index(fields=["inventory_item", "created_at"]),
         ]
+
+
+class InventoryCountSession(models.Model):
+    TYPE_COMPLETE = "complete"
+    TYPE_MANUAL = "manual"
+    TYPE_CATEGORY = "category"
+    TYPE_CHOICES = [
+        (TYPE_COMPLETE, "Conteo completo"),
+        (TYPE_MANUAL, "Conteo manual"),
+        (TYPE_CATEGORY, "Conteo por categoría"),
+    ]
+
+    STATUS_DRAFT = "draft"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_FINALIZED = "finalized"
+    STATUS_APPLIED = "applied"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Borrador"),
+        (STATUS_IN_PROGRESS, "En progreso"),
+        (STATUS_FINALIZED, "Finalizado"),
+        (STATUS_APPLIED, "Aplicado"),
+        (STATUS_CANCELLED, "Cancelado"),
+    ]
+
+    code = models.CharField(max_length=32, unique=True, blank=True, default="")
+    count_type = models.CharField(max_length=16, choices=TYPE_CHOICES, default=TYPE_MANUAL)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    notes = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_counts_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finalized_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_counts_finalized")
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    applied_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_counts_applied")
+    applied_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory_counts_cancelled")
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.CharField(max_length=255, blank=True, default="")
+    total_items = models.PositiveIntegerField(default=0)
+    counted_items = models.PositiveIntegerField(default=0)
+    total_differences = models.PositiveIntegerField(default=0)
+    total_positive_differences = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    total_negative_differences = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["count_type", "created_at"]),
+            models.Index(fields=["code"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.code:
+            self.code = f"CI-{self.id:06d}"
+            super().save(update_fields=["code"])
+
+    def refresh_summary(self, *, save=True):
+        lines = list(self.lines.all())
+        self.total_items = len(lines)
+        self.counted_items = sum(1 for line in lines if line.counted_stock is not None)
+        diffs = [line.difference for line in lines if line.counted_stock is not None and line.difference != 0]
+        self.total_differences = len(diffs)
+        self.total_positive_differences = sum((diff for diff in diffs if diff > 0), start=0)
+        self.total_negative_differences = sum((diff for diff in diffs if diff < 0), start=0)
+        if save:
+            self.save(update_fields=["total_items", "counted_items", "total_differences", "total_positive_differences", "total_negative_differences", "updated_at"])
+
+    def __str__(self) -> str:
+        return self.code or f"Conteo #{self.id}"
+
+
+class InventoryCountLine(models.Model):
+    session = models.ForeignKey(InventoryCountSession, on_delete=models.CASCADE, related_name="lines")
+    inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="count_lines")
+    system_stock = models.DecimalField(max_digits=12, decimal_places=3)
+    counted_stock = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    difference = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    note = models.CharField(max_length=255, blank=True, default="")
+    stock_before_apply = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    stock_after_apply = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    movement = models.ForeignKey(InventoryMovement, null=True, blank=True, on_delete=models.SET_NULL, related_name="count_lines")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["inventory_item__name", "id"]
+        unique_together = (("session", "inventory_item"),)
+        indexes = [models.Index(fields=["session", "inventory_item"])]
+
+    def recalculate_difference(self):
+        self.difference = 0 if self.counted_stock is None else self.counted_stock - self.system_stock
+
+    def save(self, *args, **kwargs):
+        self.recalculate_difference()
+        super().save(*args, **kwargs)
 
 
 class InventorySaleApplication(models.Model):

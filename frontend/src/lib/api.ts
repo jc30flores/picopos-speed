@@ -93,6 +93,48 @@ export type InventoryMovement = {
   createdAt: string;
 };
 
+
+export type InventoryCountLine = {
+  id: number;
+  session: number;
+  inventoryItem: number;
+  inventoryItemName: string;
+  inventoryItemSku: string;
+  inventoryItemUnit: string;
+  systemStock: number;
+  countedStock: number | null;
+  difference: number;
+  note: string;
+  stockBeforeApply: number | null;
+  stockAfterApply: number | null;
+  movement: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InventoryCountSession = {
+  id: number;
+  code: string;
+  countType: "complete" | "manual" | "category" | string;
+  countTypeDisplay: string;
+  status: "draft" | "in_progress" | "finalized" | "applied" | "cancelled" | string;
+  statusDisplay: string;
+  notes: string;
+  createdByUsername?: string;
+  createdAt: string;
+  updatedAt: string;
+  finalizedAt?: string | null;
+  appliedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string;
+  totalItems: number;
+  countedItems: number;
+  totalDifferences: number;
+  totalPositiveDifferences: number;
+  totalNegativeDifferences: number;
+  lines?: InventoryCountLine[];
+};
+
 export type InventoryProductLink = {
   id?: number;
   inventoryItemId: number;
@@ -1542,6 +1584,130 @@ export const getInventoryMovements = async (inventoryItemId?: number, filters?: 
     createdByUsername: row.created_by_username ?? "",
     createdAt: row.created_at,
   }));
+};
+
+
+const mapInventoryCountLine = (row: any): InventoryCountLine => ({
+  id: row.id,
+  session: row.session,
+  inventoryItem: row.inventory_item,
+  inventoryItemName: row.inventory_item_name,
+  inventoryItemSku: row.inventory_item_sku ?? "",
+  inventoryItemUnit: row.inventory_item_unit ?? "",
+  systemStock: Number(row.system_stock ?? 0),
+  countedStock: row.counted_stock == null ? null : Number(row.counted_stock),
+  difference: Number(row.difference ?? 0),
+  note: row.note ?? "",
+  stockBeforeApply: row.stock_before_apply == null ? null : Number(row.stock_before_apply),
+  stockAfterApply: row.stock_after_apply == null ? null : Number(row.stock_after_apply),
+  movement: row.movement ?? null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const mapInventoryCountSession = (row: any): InventoryCountSession => ({
+  id: row.id,
+  code: row.code || `CI-${row.id}`,
+  countType: row.count_type,
+  countTypeDisplay: row.count_type_display ?? row.count_type,
+  status: row.status,
+  statusDisplay: row.status_display ?? row.status,
+  notes: row.notes ?? "",
+  createdByUsername: row.created_by_username ?? "",
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  finalizedAt: row.finalized_at ?? null,
+  appliedAt: row.applied_at ?? null,
+  cancelledAt: row.cancelled_at ?? null,
+  cancelReason: row.cancel_reason ?? "",
+  totalItems: Number(row.total_items ?? 0),
+  countedItems: Number(row.counted_items ?? 0),
+  totalDifferences: Number(row.total_differences ?? 0),
+  totalPositiveDifferences: Number(row.total_positive_differences ?? 0),
+  totalNegativeDifferences: Number(row.total_negative_differences ?? 0),
+  lines: Array.isArray(row.lines) ? row.lines.map(mapInventoryCountLine) : undefined,
+});
+
+export const getInventoryCounts = async (filters?: { status?: string; countType?: string; dateFrom?: string; dateTo?: string; user?: number; inventoryItem?: number; q?: string }): Promise<InventoryCountSession[]> => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.countType) params.set("count_type", filters.countType);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  if (filters?.q) params.set("q", filters.q);
+  const response = await request(`/inventory/counts/${params.toString() ? `?${params.toString()}` : ""}`);
+  return (await handleJson<any[]>(response)).map(mapInventoryCountSession);
+};
+
+export const createInventoryCount = async (payload: { countType: "complete" | "manual" | "category"; notes?: string; itemIds?: number[] }): Promise<InventoryCountSession> => {
+  const response = await request("/inventory/counts/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count_type: payload.countType, notes: payload.notes ?? "", item_ids: payload.itemIds ?? [] }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const getInventoryCount = async (id: number): Promise<InventoryCountSession> => {
+  const response = await request(`/inventory/counts/${id}/`);
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const updateInventoryCountLines = async (id: number, lines: Array<{ id: number; countedStock?: number | null; note?: string }>): Promise<InventoryCountSession> => {
+  const response = await request(`/inventory/counts/${id}/lines/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: lines.map((line) => ({ id: line.id, counted_stock: line.countedStock, note: line.note ?? "" })) }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const finalizeInventoryCount = async (id: number): Promise<InventoryCountSession> => {
+  const response = await request(`/inventory/counts/${id}/finalize/`, { method: "POST" });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const applyInventoryCount = async (id: number): Promise<{ message: string; movementsCreated: number; session: InventoryCountSession }> => {
+  const response = await request(`/inventory/counts/${id}/apply/`, { method: "POST" });
+  const data = await handleJson<any>(response);
+  return { message: data.message, movementsCreated: Number(data.movements_created ?? 0), session: mapInventoryCountSession(data.session) };
+};
+
+export const cancelInventoryCount = async (id: number, cancelReason?: string): Promise<InventoryCountSession> => {
+  const response = await request(`/inventory/counts/${id}/cancel/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cancel_reason: cancelReason ?? "" }) });
+  return mapInventoryCountSession(await handleJson<any>(response));
+};
+
+export const getInventoryReportAdjustments = async (filters?: { dateFrom?: string; dateTo?: string; inventoryItem?: number; user?: number; movementType?: string }): Promise<InventoryMovement[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.movementType) params.set("movement_type", filters.movementType);
+  const response = await request(`/inventory/reports/adjustments/${params.toString() ? `?${params.toString()}` : ""}`);
+  const data = await handleJson<any[]>(response);
+  return data.map((row) => ({ id: row.id, inventoryItem: row.inventory_item, inventoryItemName: row.inventory_item_name, movementType: row.movement_type, quantityChange: Number(row.quantity_change), quantityBefore: Number(row.quantity_before), quantityAfter: Number(row.quantity_after), reason: row.reason ?? "", referenceType: row.reference_type ?? "", referenceId: row.reference_id ?? "", createdByUsername: row.created_by_username ?? "", createdAt: row.created_at }));
+};
+
+export const getInventoryReportCounts = async (filters?: { dateFrom?: string; dateTo?: string; status?: string; countType?: string; user?: number; inventoryItem?: number }): Promise<InventoryCountSession[]> => {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.countType) params.set("count_type", filters.countType);
+  if (filters?.user) params.set("user", String(filters.user));
+  if (filters?.inventoryItem) params.set("inventory_item", String(filters.inventoryItem));
+  const response = await request(`/inventory/reports/counts/${params.toString() ? `?${params.toString()}` : ""}`);
+  return (await handleJson<any[]>(response)).map(mapInventoryCountSession);
+};
+
+export const downloadInventoryPdf = async (url: string, filename: string): Promise<void> => {
+  const response = await request(url);
+  if (!response.ok) throw new Error("No se pudo descargar el PDF");
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
 };
 
 export const getCatalogInventoryLinks = async (productId: number): Promise<InventoryProductLink[]> => {

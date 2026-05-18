@@ -5,6 +5,8 @@ from rest_framework import serializers
 from apps.inventory.models import (
     CatalogProductInventoryLink,
     CategoryInventoryLink,
+    InventoryCountLine,
+    InventoryCountSession,
     InventoryItem,
     InventoryMovement,
     ProductInventoryOverride,
@@ -185,3 +187,90 @@ class CategoryInventoryLinkSerializer(serializers.ModelSerializer):
 
 class ProductEffectiveInventoryLinkWriteSerializer(serializers.Serializer):
     links = serializers.ListField(child=serializers.DictField(), allow_empty=True)
+
+
+class InventoryCountLineSerializer(serializers.ModelSerializer):
+    inventory_item_name = serializers.CharField(source="inventory_item.name", read_only=True)
+    inventory_item_sku = serializers.CharField(source="inventory_item.sku", read_only=True)
+    inventory_item_unit = serializers.CharField(source="inventory_item.unit", read_only=True)
+
+    class Meta:
+        model = InventoryCountLine
+        fields = [
+            "id",
+            "session",
+            "inventory_item",
+            "inventory_item_name",
+            "inventory_item_sku",
+            "inventory_item_unit",
+            "system_stock",
+            "counted_stock",
+            "difference",
+            "note",
+            "stock_before_apply",
+            "stock_after_apply",
+            "movement",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["session", "difference", "stock_before_apply", "stock_after_apply", "movement", "created_at", "updated_at"]
+
+
+class InventoryCountSessionListSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    finalized_by_username = serializers.CharField(source="finalized_by.username", read_only=True)
+    applied_by_username = serializers.CharField(source="applied_by.username", read_only=True)
+    cancelled_by_username = serializers.CharField(source="cancelled_by.username", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    count_type_display = serializers.CharField(source="get_count_type_display", read_only=True)
+
+    class Meta:
+        model = InventoryCountSession
+        fields = [
+            "id", "code", "count_type", "count_type_display", "status", "status_display", "notes",
+            "created_by", "created_by_username", "created_at", "updated_at",
+            "finalized_by", "finalized_by_username", "finalized_at",
+            "applied_by", "applied_by_username", "applied_at",
+            "cancelled_by", "cancelled_by_username", "cancelled_at", "cancel_reason",
+            "total_items", "counted_items", "total_differences", "total_positive_differences", "total_negative_differences",
+        ]
+
+
+class InventoryCountSessionDetailSerializer(InventoryCountSessionListSerializer):
+    lines = InventoryCountLineSerializer(many=True, read_only=True)
+
+    class Meta(InventoryCountSessionListSerializer.Meta):
+        fields = InventoryCountSessionListSerializer.Meta.fields + ["lines"]
+
+
+class InventoryCountCreateSerializer(serializers.Serializer):
+    count_type = serializers.ChoiceField(choices=["complete", "manual", "category"])
+    notes = serializers.CharField(required=False, allow_blank=True)
+    item_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=False)
+    category_id = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        count_type = attrs.get("count_type")
+        if count_type == "manual" and not attrs.get("item_ids"):
+            raise serializers.ValidationError({"item_ids": "Selecciona al menos un artículo para el conteo manual."})
+        if count_type == "category":
+            raise serializers.ValidationError({"count_type": "El conteo por categoría aún no está disponible."})
+        return attrs
+
+
+class InventoryCountUpdateSerializer(serializers.Serializer):
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class InventoryCountLineUpdateSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    counted_stock = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal("0"), required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+
+class InventoryCountLinesBulkUpdateSerializer(serializers.Serializer):
+    lines = InventoryCountLineUpdateSerializer(many=True)
+
+
+class InventoryCountCancelSerializer(serializers.Serializer):
+    cancel_reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
