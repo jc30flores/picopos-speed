@@ -749,13 +749,16 @@ export type EmployeeHoursDetailResponse = {
     date: string;
     dailyTotals: { shiftMinutes: number; breakMinutes: number; netMinutes: number };
     cycles: Array<{
+      id: number;
       clockInAt: string | null;
       breakStartAt: string | null;
       breakEndAt: string | null;
       clockOutAt: string | null;
       shiftMinutes: number;
       breakMinutes: number;
+      breakSeconds: number;
       netMinutes: number;
+      clockOutNextDay: boolean;
       status: string;
     }>;
   }>;

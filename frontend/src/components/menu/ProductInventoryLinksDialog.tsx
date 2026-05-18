@@ -49,7 +49,7 @@ export const ProductInventoryLinksDialog = ({ open, onOpenChange, value, onSave 
   const handleToggleSelected = (item: InventoryItem, checked: boolean) => {
     setSelected((prev) => ({ ...prev, [item.id]: checked }));
     if (checked) {
-      setDraft((prev) => ({ ...prev, [item.id]: prev[item.id] ?? "1" }));
+      setDraft((prev) => ({ ...prev, [item.id]: prev[item.id] ?? "" }));
       setErrors((prev) => ({ ...prev, [item.id]: "" }));
     }
   };

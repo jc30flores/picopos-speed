@@ -88,7 +88,7 @@ export const ProductFormDialog = ({
   const [localImageUrl, setLocalImageUrl] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
   const [requiresKitchen, setRequiresKitchen] = useState(false);
-  const [disposableFee, setDisposableFee] = useState("0");
+  const [disposableFee, setDisposableFee] = useState("");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
@@ -96,10 +96,11 @@ export const ProductFormDialog = ({
   const [trackInventory, setTrackInventory] = useState(false);
   const [trackingMode, setTrackingMode] = useState<"link" | "create">("link");
   const [trackedInventoryItemId, setTrackedInventoryItemId] = useState<number | null>(null);
-  const [trackedInventoryQuantity, setTrackedInventoryQuantity] = useState("1");
-  const [newInventoryItem, setNewInventoryItem] = useState<ProductInventoryTrackingCreatePayload>({ name: "", sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
+  const [trackedInventoryQuantity, setTrackedInventoryQuantity] = useState("");
+  const [newInventoryItem, setNewInventoryItem] = useState<ProductInventoryTrackingCreatePayload>({ name: "", sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [inventoryItemQuery, setInventoryItemQuery] = useState("");
+  const [inventoryItemOpen, setInventoryItemOpen] = useState(false);
   const [globalInventoryStockPolicy, setGlobalInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
@@ -128,6 +129,11 @@ export const ProductFormDialog = ({
   }, [globalInventoryStockPolicy, inventoryStockPolicy, selectedCategory]);
 
   const selectedTrackedInventoryItem = useMemo(() => inventoryItems.find((item) => item.id === trackedInventoryItemId) ?? null, [inventoryItems, trackedInventoryItemId]);
+  const selectedTrackedInventoryLabel = selectedTrackedInventoryItem
+    ? `${selectedTrackedInventoryItem.name} · Stock ${selectedTrackedInventoryItem.currentStock} ${selectedTrackedInventoryItem.unit}`
+    : editingProduct?.trackedInventoryItem === trackedInventoryItemId && editingProduct.trackedInventoryItemName
+      ? `${editingProduct.trackedInventoryItemName} · Stock ${editingProduct.trackedInventoryItemCurrentStock ?? 0} ${editingProduct.trackedInventoryItemUnit ?? ""}`
+      : "Artículo de inventario vinculado";
   const duplicateInventoryItemWarning = trackInventory && trackedInventoryItemId && inventoryLinks.some((row) => row.inventoryItemId === trackedInventoryItemId);
 
   useEffect(() => {
@@ -141,7 +147,7 @@ export const ProductFormDialog = ({
       setExistingImageUrl(editingProduct.imageUrl ?? null);
       setAvailable(editingProduct.available);
       setRequiresKitchen(editingProduct.requiresKitchen);
-      setDisposableFee(String(editingProduct.disposableFee ?? 0));
+      setDisposableFee(Number(editingProduct.disposableFee ?? 0) === 0 ? "" : String(editingProduct.disposableFee ?? 0));
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
       setInventoryLinks(editingProduct.inventoryLinks ?? []);
       setInventoryStockPolicy(editingProduct.inventoryStockPolicy ?? "inherit");
@@ -149,8 +155,8 @@ export const ProductFormDialog = ({
       setTrackInventory(Boolean(editingProduct.trackInventory));
       setTrackingMode(editingProduct.trackedInventoryItem ? "link" : "create");
       setTrackedInventoryItemId(editingProduct.trackedInventoryItem ?? null);
-      setTrackedInventoryQuantity(String(editingProduct.trackedInventoryQuantity ?? 1));
-      setNewInventoryItem({ name: editingProduct.name, sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
+      setTrackedInventoryQuantity(Number(editingProduct.trackedInventoryQuantity ?? 1) === 1 ? "" : String(editingProduct.trackedInventoryQuantity ?? 1));
+      setNewInventoryItem({ name: editingProduct.name, sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
     } else {
       setName("");
       setDescription("");
@@ -161,7 +167,7 @@ export const ProductFormDialog = ({
       setExistingImageUrl(null);
       setAvailable(true);
       setRequiresKitchen(false);
-      setDisposableFee("0");
+      setDisposableFee("");
       setDisposableApplyTo([]);
       setInventoryLinks([]);
       setInventoryStockPolicy("inherit");
@@ -169,8 +175,8 @@ export const ProductFormDialog = ({
       setTrackInventory(false);
       setTrackingMode("create");
       setTrackedInventoryItemId(null);
-      setTrackedInventoryQuantity("1");
-      setNewInventoryItem({ name: "", sku: "", unit: "Unidad", currentStock: 0, minStock: 0, maxStock: null });
+      setTrackedInventoryQuantity("");
+      setNewInventoryItem({ name: "", sku: "", unit: "Unidad", currentStock: undefined, minStock: null, maxStock: null });
     }
   }, [editingProduct, open]);
 
@@ -264,7 +270,7 @@ export const ProductFormDialog = ({
     if (!isValid()) return;
     const parsedPrice = price === "" ? NaN : Number(price);
     if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) return;
-    const quantityToDiscount = Number(trackedInventoryQuantity);
+    const quantityToDiscount = trackedInventoryQuantity.trim() === "" ? 1 : Number(trackedInventoryQuantity);
     if (trackInventory && (!Number.isFinite(quantityToDiscount) || quantityToDiscount <= 0)) {
       toast.error("La cantidad a descontar debe ser mayor a 0.");
       return;
@@ -496,7 +502,7 @@ export const ProductFormDialog = ({
 
               <div>
                 <Label htmlFor="disposable-fee">Desechables (por unidad)</Label>
-                <Input id="disposable-fee" type="number" min="0" step="0.01" value={disposableFee} onChange={(e) => setDisposableFee(e.target.value)} className="mt-1" />
+                <Input id="disposable-fee" type="number" min="0" step="0.01" placeholder="0" value={disposableFee} onChange={(e) => setDisposableFee(e.target.value)} className="mt-1" />
               </div>
 
               <div className="space-y-2 pt-1">
@@ -603,21 +609,41 @@ export const ProductFormDialog = ({
                           <Input placeholder="Nombre del artículo de inventario" value={newInventoryItem.name} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, name: event.target.value }))} />
                           <Input placeholder="SKU/código" value={newInventoryItem.sku ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, sku: event.target.value }))} />
                           <Input placeholder="Unidad" value={newInventoryItem.unit} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, unit: event.target.value }))} />
-                          <Input type="number" min="0" step="0.001" placeholder="Stock inicial" value={newInventoryItem.currentStock ?? 0} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, currentStock: Number(event.target.value || 0) }))} />
-                          <Input type="number" min="0" step="0.001" placeholder="Stock mínimo" value={newInventoryItem.minStock ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, minStock: event.target.value === "" ? null : Number(event.target.value) }))} />
-                          <Input type="number" min="0" step="0.001" placeholder="Stock máximo" value={newInventoryItem.maxStock ?? ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, maxStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.currentStock ? String(newInventoryItem.currentStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, currentStock: event.target.value === "" ? undefined : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.minStock ? String(newInventoryItem.minStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, minStock: event.target.value === "" ? null : Number(event.target.value) }))} />
+                          <Input type="number" min="0" step="0.001" placeholder="0" value={newInventoryItem.maxStock ? String(newInventoryItem.maxStock) : ""} onChange={(event) => setNewInventoryItem((prev) => ({ ...prev, maxStock: event.target.value === "" ? null : Number(event.target.value) }))} />
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <Input placeholder="Buscar artículo de inventario" value={inventoryItemQuery} onChange={(event) => setInventoryItemQuery(event.target.value)} />
-                          <Select value={trackedInventoryItemId ? String(trackedInventoryItemId) : ""} onValueChange={(value) => setTrackedInventoryItemId(Number(value))}>
-                            <SelectTrigger><SelectValue placeholder="Artículo de inventario vinculado" /></SelectTrigger>
-                            <SelectContent>
-                              {inventoryItems.map((item) => (
-                                <SelectItem key={item.id} value={String(item.id)}>{item.name} · Stock {item.currentStock} {item.unit}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <Popover open={inventoryItemOpen} onOpenChange={setInventoryItemOpen}>
+                            <PopoverTrigger asChild>
+                              <Button type="button" variant="outline" className="h-11 w-full justify-start text-left font-normal">
+                                {selectedTrackedInventoryLabel}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                              <Command shouldFilter={false}>
+                                <CommandInput placeholder="Artículo de inventario vinculado" value={inventoryItemQuery} onValueChange={setInventoryItemQuery} />
+                                <CommandList>
+                                  <CommandGroup>
+                                    {inventoryItems.map((item) => (
+                                      <CommandItem
+                                        key={item.id}
+                                        value={`${item.name} ${item.sku ?? ""}`}
+                                        onSelect={() => {
+                                          setTrackedInventoryItemId(item.id);
+                                          setInventoryItemOpen(false);
+                                          setInventoryItemQuery("");
+                                        }}
+                                      >
+                                        {item.name} · Stock {item.currentStock} {item.unit}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
                           {selectedTrackedInventoryItem ? (
                             <p className="text-xs text-muted-foreground">Actual: {selectedTrackedInventoryItem.currentStock} · Mín: {selectedTrackedInventoryItem.minStock ?? "—"} · Máx: {selectedTrackedInventoryItem.maxStock ?? "—"}</p>
                           ) : null}
@@ -625,7 +651,7 @@ export const ProductFormDialog = ({
                       )}
                       <div className="space-y-1">
                         <Label>Cantidad a descontar por venta</Label>
-                        <Input type="number" min="0.001" step="0.001" value={trackedInventoryQuantity} onChange={(event) => setTrackedInventoryQuantity(event.target.value)} />
+                        <Input type="number" min="0.001" step="0.001" placeholder="1" value={trackedInventoryQuantity} onChange={(event) => setTrackedInventoryQuantity(event.target.value)} />
                       </div>
                       {duplicateInventoryItemWarning ? <p className="text-sm text-amber-600">Este artículo también está en componentes. Revisa que no se descuente doble.</p> : null}
                     </div>
