@@ -8,10 +8,23 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name="inventoryitem",
-            name="max_stock",
-            field=models.DecimalField(blank=True, decimal_places=3, max_digits=12, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                        ALTER TABLE inventory_inventoryitem
+                        ADD COLUMN IF NOT EXISTS max_stock NUMERIC(12, 3);
+                    """,
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name="inventoryitem",
+                    name="max_stock",
+                    field=models.DecimalField(blank=True, decimal_places=3, max_digits=12, null=True),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="inventorymovement",
