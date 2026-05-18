@@ -23,6 +23,7 @@ from apps.inventory.serializers import (
     InventoryAdjustStockSerializer,
     InventoryItemSerializer,
     InventoryMovementSerializer,
+    InventoryFormalAdjustmentSerializer,
     ProductEffectiveInventoryLinkWriteSerializer,
 )
 from apps.inventory.services import resolve_effective_inventory_links_for_product
@@ -136,10 +137,89 @@ class InventoryMovementListView(generics.ListAPIView):
         item_id = self.request.query_params.get("inventory_item")
         if item_id and item_id.isdigit():
             queryset = queryset.filter(inventory_item_id=int(item_id))
-        movement_type = self.request.query_params.get("movement_type")
+        movement_type = self.request.query_params.get("movement_type") or self.request.query_params.get("adjustment_type")
         if movement_type:
-            queryset = queryset.filter(movement_type=movement_type)
+            aliases = {
+                "entry": [InventoryMovement.TYPE_INVENTORY_ENTRY, InventoryMovement.TYPE_STOCK_ADD],
+                "loss": [InventoryMovement.TYPE_INVENTORY_LOSS],
+                "damaged": [InventoryMovement.TYPE_INVENTORY_DAMAGED],
+                "correction": [InventoryMovement.TYPE_INVENTORY_CORRECTION, InventoryMovement.TYPE_STOCK_ADJUST],
+                "sales": [InventoryMovement.TYPE_SALE_DEDUCTION],
+            }
+            queryset = queryset.filter(movement_type__in=aliases.get(movement_type, [movement_type]))
+        user_id = self.request.query_params.get("user")
+        if user_id and user_id.isdigit():
+            queryset = queryset.filter(created_by_id=int(user_id))
+        date_from = self.request.query_params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = self.request.query_params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
         return queryset.order_by("-created_at", "-id")[:500]
+
+
+class InventoryAdjustmentCreateView(APIView):
+    permission_classes = [IsAdminOrManager]
+
+    MOVEMENT_TYPE_BY_ADJUSTMENT = {
+        "entry": InventoryMovement.TYPE_INVENTORY_ENTRY,
+        "loss": InventoryMovement.TYPE_INVENTORY_LOSS,
+        "damaged": InventoryMovement.TYPE_INVENTORY_DAMAGED,
+        "correction": InventoryMovement.TYPE_INVENTORY_CORRECTION,
+    }
+
+    DEFAULT_REASON_BY_ADJUSTMENT = {
+        "entry": "Entrada de producto",
+        "loss": "Pérdida",
+        "damaged": "Producto dañado",
+        "correction": "Corrección de stock",
+    }
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = InventoryFormalAdjustmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        item = InventoryItem.objects.select_for_update().filter(pk=data["inventory_item"]).first()
+        if not item:
+            return Response({"detail": "Artículo de inventario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        adjustment_type = data["adjustment_type"]
+        before = Decimal(item.current_stock)
+        if adjustment_type == "entry":
+            change = Decimal(data["quantity"])
+            after = before + change
+        elif adjustment_type in {"loss", "damaged"}:
+            quantity = Decimal(data["quantity"])
+            if quantity > before:
+                return Response({"quantity": ["La cantidad no puede ser mayor al stock disponible."]}, status=status.HTTP_400_BAD_REQUEST)
+            change = -quantity
+            after = before + change
+        else:
+            after = Decimal(data["set_stock"])
+            change = after - before
+
+        item.current_stock = after
+        item.save(update_fields=["current_stock", "updated_at"])
+        movement = InventoryMovement.objects.create(
+            inventory_item=item,
+            movement_type=self.MOVEMENT_TYPE_BY_ADJUSTMENT[adjustment_type],
+            quantity_change=change,
+            quantity_before=before,
+            quantity_after=after,
+            reference_type="inventory_adjustment",
+            reason=data.get("reason") or self.DEFAULT_REASON_BY_ADJUSTMENT[adjustment_type],
+            created_by=request.user,
+        )
+        return Response({
+            "message": "Ajuste registrado correctamente.",
+            "item": InventoryItemSerializer(item).data,
+            "movement": InventoryMovementSerializer(movement).data,
+            "stock_before": before,
+            "stock_after": after,
+            "adjustment_type": adjustment_type,
+        }, status=status.HTTP_201_CREATED)
 
 
 class CatalogProductInventoryLinksView(APIView):

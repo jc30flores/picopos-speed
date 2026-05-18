@@ -9,6 +9,7 @@ class InventoryItem(models.Model):
     unit = models.CharField(max_length=24, default="unidad")
     current_stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     min_stock = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    max_stock = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     notes = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -65,12 +66,20 @@ class InventoryMovement(models.Model):
     TYPE_STOCK_ADJUST = "stock_adjustment"
     TYPE_SALE_DEDUCTION = "sale_deduction"
     TYPE_REVERSAL = "reversal"
+    TYPE_INVENTORY_ENTRY = "inventory_entry"
+    TYPE_INVENTORY_LOSS = "inventory_loss"
+    TYPE_INVENTORY_DAMAGED = "inventory_damaged"
+    TYPE_INVENTORY_CORRECTION = "inventory_correction"
     TYPE_CHOICES = [
         (TYPE_INITIAL_STOCK, "Stock inicial"),
         (TYPE_STOCK_ADD, "Entrada"),
         (TYPE_STOCK_ADJUST, "Ajuste"),
         (TYPE_SALE_DEDUCTION, "Descuento por venta"),
         (TYPE_REVERSAL, "Reversión"),
+        (TYPE_INVENTORY_ENTRY, "Entrada de producto"),
+        (TYPE_INVENTORY_LOSS, "Pérdida"),
+        (TYPE_INVENTORY_DAMAGED, "Producto dañado"),
+        (TYPE_INVENTORY_CORRECTION, "Corrección de stock"),
     ]
 
     inventory_item = models.ForeignKey(InventoryItem, on_delete=models.PROTECT, related_name="movements")

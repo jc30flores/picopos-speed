@@ -50,6 +50,7 @@ class InventoryItemSerializer(serializers.ModelSerializer):
             "unit",
             "current_stock",
             "min_stock",
+            "max_stock",
             "notes",
             "is_active",
             "created_at",
@@ -95,6 +96,30 @@ class InventoryAdjustStockSerializer(serializers.Serializer):
         has_delta = attrs.get("delta") is not None
         if has_set == has_delta:
             raise serializers.ValidationError("Debes enviar set_stock o delta (solo uno).")
+        return attrs
+
+
+class InventoryFormalAdjustmentSerializer(serializers.Serializer):
+    ADJUSTMENT_TYPES = {"entry", "loss", "damaged", "correction"}
+
+    inventory_item = serializers.IntegerField()
+    adjustment_type = serializers.ChoiceField(choices=sorted(ADJUSTMENT_TYPES))
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=3, required=False, min_value=Decimal("0.001"))
+    set_stock = serializers.DecimalField(max_digits=12, decimal_places=3, required=False, min_value=Decimal("0"))
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+    def validate(self, attrs):
+        adjustment_type = attrs.get("adjustment_type")
+        quantity = attrs.get("quantity")
+        set_stock = attrs.get("set_stock")
+        reason = (attrs.get("reason") or "").strip()
+        if adjustment_type in {"entry", "loss", "damaged"} and quantity is None:
+            raise serializers.ValidationError({"quantity": "La cantidad es obligatoria y debe ser mayor a 0."})
+        if adjustment_type == "correction" and set_stock is None:
+            raise serializers.ValidationError({"set_stock": "El stock real es obligatorio y debe ser mayor o igual a 0."})
+        if adjustment_type in {"loss", "damaged", "correction"} and not reason:
+            raise serializers.ValidationError({"reason": "El motivo es obligatorio para este tipo de ajuste."})
+        attrs["reason"] = reason
         return attrs
 
 

@@ -28,6 +28,7 @@ class PaymentMethod(models.Model):
         default=FISCAL_TRANSFER,
     )
     is_default = models.BooleanField(default=False)
+    auto_print_ticket = models.BooleanField(default=False)
     auto_select_order_type = models.ForeignKey(
         ServiceType,
         on_delete=models.SET_NULL,

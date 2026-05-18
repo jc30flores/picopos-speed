@@ -46,6 +46,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
             "color",
             "order",
             "is_default",
+            "auto_print_ticket",
             "fiscal_payment_type",
             "linked_order_type_id",
             "linked_order_type",

@@ -459,6 +459,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   });
   const [cashCloseFlowState, setCashCloseFlowState] = useState<CashCloseFlowState>("idle");
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
+  const [lastPaymentAutoPrint, setLastPaymentAutoPrint] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
@@ -1557,6 +1558,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [paymentMethods, selectedPaymentMethodCode],
   );
   const selectedPaymentIsCash = Boolean(selectedPaymentMethodOption) && (isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode));
+  const selectedPaymentAutoPrint = Boolean(selectedPaymentMethodOption?.autoPrintTicket);
   const selectedServiceType = useMemo(
     () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
     [serviceTypes, serviceType],
@@ -2275,7 +2277,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       } else {
         toast.success("Venta completada sin envío a cocina");
       }
-      if (lastPaymentId && postSalePrintChoice) {
+      const shouldPrintTicket = Boolean(lastPaymentId) && (postSalePrintChoice || lastPaymentAutoPrint);
+      if (shouldPrintTicket && lastPaymentId) {
+        try {
         const printResult = await printPaymentTicket(lastPaymentId);
         if (printResult.pdfBlob) {
         setFallbackPdfModal({
@@ -2313,6 +2317,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
         if (printResult.drawerError) {
           toast.warning(printResult.drawerError);
+        }
+        } catch (printError) {
+          console.error("Auto ticket print failed", printError);
+          toast.warning("El pago se registró, pero no se pudo imprimir el ticket automáticamente.");
         }
       }
       setIsKitchenPromptOpen(false);
@@ -2416,6 +2424,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
       });
       setLastPaymentId(paymentResult.id);
+      setLastPaymentAutoPrint(selectedPaymentAutoPrint);
       if (shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode)) {
         await triggerDrawerOpen({ showSuccessToast: false });
       }
@@ -2470,6 +2479,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           setKitchenPromptOrderId(orderId);
           setPostSaleKitchenChoice(hasKitchenItems);
           setPostSalePrintChoice(true);
+          setLastPaymentAutoPrint(selectedPaymentAutoPrint);
           setIsKitchenPromptOpen(true);
         }
       } else {

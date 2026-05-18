@@ -73,6 +73,7 @@ export type InventoryItem = {
   unit: string;
   currentStock: number;
   minStock?: number | null;
+  maxStock?: number | null;
   notes?: string;
   isActive: boolean;
 };
@@ -408,6 +409,7 @@ export type PaymentMethodOption = {
   fiscalPaymentType?: "CASH" | "CARD" | "TRANSFER";
   linkedOrderTypeId?: number | null;
   linkedOrderTypeName?: string | null;
+  autoPrintTicket?: boolean;
 };
 
 export type CashSessionSnapshot = {
@@ -1419,13 +1421,14 @@ export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> =>
     unit: row.unit,
     currentStock: Number(row.current_stock ?? 0),
     minStock: row.min_stock != null ? Number(row.min_stock) : null,
+    maxStock: row.max_stock != null ? Number(row.max_stock) : null,
     notes: row.notes ?? "",
     isActive: Boolean(row.is_active),
   }));
 };
 
 export const createInventoryItem = async (payload: {
-  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request("/inventory/items/", {
     method: "POST",
@@ -1436,16 +1439,17 @@ export const createInventoryItem = async (payload: {
       unit: payload.unit,
       initial_stock: payload.initialStock ?? 0,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const updateInventoryItem = async (id: number, payload: {
-  name: string; sku?: string; unit: string; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request(`/inventory/items/${id}/`, {
     method: "PATCH",
@@ -1455,12 +1459,13 @@ export const updateInventoryItem = async (id: number, payload: {
       sku: payload.sku ?? "",
       unit: payload.unit,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
@@ -1470,7 +1475,7 @@ export const addInventoryStock = async (id: number, quantity: number, reason?: s
     body: JSON.stringify({ quantity, reason: reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
@@ -1480,12 +1485,47 @@ export const adjustInventoryStock = async (id: number, payload: { setStock?: num
     body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
-export const getInventoryMovements = async (inventoryItemId?: number): Promise<InventoryMovement[]> => {
+export const createInventoryAdjustment = async (payload: {
+  inventoryItem: number;
+  adjustmentType: "entry" | "loss" | "damaged" | "correction";
+  quantity?: number;
+  setStock?: number;
+  reason?: string;
+}): Promise<{ message: string; item: InventoryItem; movement: InventoryMovement; stockBefore: number; stockAfter: number; adjustmentType: string }> => {
+  const response = await request("/inventory/adjustments/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inventory_item: payload.inventoryItem,
+      adjustment_type: payload.adjustmentType,
+      quantity: payload.quantity,
+      set_stock: payload.setStock,
+      reason: payload.reason ?? "",
+    }),
+  });
+  const row = await handleJson<any>(response);
+  const itemRow = row.item;
+  const movementRow = row.movement;
+  return {
+    message: row.message ?? "Ajuste registrado correctamente.",
+    item: { id: itemRow.id, name: itemRow.name, sku: itemRow.sku ?? "", unit: itemRow.unit, currentStock: Number(itemRow.current_stock ?? 0), minStock: itemRow.min_stock != null ? Number(itemRow.min_stock) : null, maxStock: itemRow.max_stock != null ? Number(itemRow.max_stock) : null, notes: itemRow.notes ?? "", isActive: Boolean(itemRow.is_active) },
+    movement: { id: movementRow.id, inventoryItem: movementRow.inventory_item, inventoryItemName: movementRow.inventory_item_name, movementType: movementRow.movement_type, quantityChange: Number(movementRow.quantity_change), quantityBefore: Number(movementRow.quantity_before), quantityAfter: Number(movementRow.quantity_after), reason: movementRow.reason ?? "", referenceType: movementRow.reference_type ?? "", referenceId: movementRow.reference_id ?? "", createdByUsername: movementRow.created_by_username ?? "", createdAt: movementRow.created_at },
+    stockBefore: Number(row.stock_before),
+    stockAfter: Number(row.stock_after),
+    adjustmentType: row.adjustment_type,
+  };
+};
+
+export const getInventoryMovements = async (inventoryItemId?: number, filters?: { movementType?: string; dateFrom?: string; dateTo?: string; user?: number }): Promise<InventoryMovement[]> => {
   const params = new URLSearchParams();
   if (inventoryItemId) params.set("inventory_item", String(inventoryItemId));
+  if (filters?.movementType) params.set("movement_type", filters.movementType);
+  if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+  if (filters?.dateTo) params.set("date_to", filters.dateTo);
+  if (filters?.user) params.set("user", String(filters.user));
   const response = await request(`/inventory/movements/${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await handleJson<Array<any>>(response);
   return data.map((row) => ({
@@ -4022,6 +4062,7 @@ const mapPaymentMethodOption = (m: any): PaymentMethodOption => ({
   fiscalPaymentType: (m.fiscal_payment_type || (m.is_cash ? "CASH" : "TRANSFER")) as PaymentMethodOption["fiscalPaymentType"],
   linkedOrderTypeId: m.linked_order_type_id ?? null,
   linkedOrderTypeName: m.linked_order_type_name ?? null,
+  autoPrintTicket: Boolean(m.auto_print_ticket),
 });
 
 export const getPaymentMethods = async (options?: { includeInactive?: boolean }): Promise<PaymentMethodOption[]> => {
@@ -4044,6 +4085,7 @@ export const createPaymentMethod = async (payload: Partial<PaymentMethodOption> 
       is_default: Boolean(payload.isDefault),
       fiscal_payment_type: payload.fiscalPaymentType || (payload.isCash ? "CASH" : "TRANSFER"),
       linked_order_type_id: payload.linkedOrderTypeId ?? null,
+      auto_print_ticket: Boolean(payload.autoPrintTicket),
     }),
   });
   return mapPaymentMethodOption(await handleJson<any>(response));
@@ -4060,6 +4102,7 @@ export const updatePaymentMethod = async (id: number, payload: Partial<PaymentMe
   if (payload.isDefault !== undefined) body.is_default = payload.isDefault;
   if (payload.fiscalPaymentType !== undefined) body.fiscal_payment_type = payload.fiscalPaymentType;
   if (payload.linkedOrderTypeId !== undefined) body.linked_order_type_id = payload.linkedOrderTypeId ?? null;
+  if (payload.autoPrintTicket !== undefined) body.auto_print_ticket = payload.autoPrintTicket;
   const response = await request(`/payments/methods/${id}/`, { method: 'PATCH', body: JSON.stringify(body) });
   return mapPaymentMethodOption(await handleJson<any>(response));
 };
