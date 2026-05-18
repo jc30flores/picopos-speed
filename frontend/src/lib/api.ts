@@ -73,6 +73,7 @@ export type InventoryItem = {
   unit: string;
   currentStock: number;
   minStock?: number | null;
+  maxStock?: number | null;
   notes?: string;
   isActive: boolean;
 };
@@ -1419,13 +1420,14 @@ export const getInventoryItems = async (q?: string): Promise<InventoryItem[]> =>
     unit: row.unit,
     currentStock: Number(row.current_stock ?? 0),
     minStock: row.min_stock != null ? Number(row.min_stock) : null,
+    maxStock: row.max_stock != null ? Number(row.max_stock) : null,
     notes: row.notes ?? "",
     isActive: Boolean(row.is_active),
   }));
 };
 
 export const createInventoryItem = async (payload: {
-  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; initialStock?: number; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request("/inventory/items/", {
     method: "POST",
@@ -1436,16 +1438,17 @@ export const createInventoryItem = async (payload: {
       unit: payload.unit,
       initial_stock: payload.initialStock ?? 0,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const updateInventoryItem = async (id: number, payload: {
-  name: string; sku?: string; unit: string; minStock?: number | null; notes?: string; isActive: boolean;
+  name: string; sku?: string; unit: string; minStock?: number | null; maxStock?: number | null; notes?: string; isActive: boolean;
 }): Promise<InventoryItem> => {
   const response = await request(`/inventory/items/${id}/`, {
     method: "PATCH",
@@ -1455,12 +1458,13 @@ export const updateInventoryItem = async (id: number, payload: {
       sku: payload.sku ?? "",
       unit: payload.unit,
       min_stock: payload.minStock,
+      max_stock: payload.maxStock,
       notes: payload.notes ?? "",
       is_active: payload.isActive,
     }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const addInventoryStock = async (id: number, quantity: number, reason?: string): Promise<InventoryItem> => {
@@ -1470,7 +1474,7 @@ export const addInventoryStock = async (id: number, quantity: number, reason?: s
     body: JSON.stringify({ quantity, reason: reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const adjustInventoryStock = async (id: number, payload: { setStock?: number; delta?: number; reason?: string }): Promise<InventoryItem> => {
@@ -1480,7 +1484,7 @@ export const adjustInventoryStock = async (id: number, payload: { setStock?: num
     body: JSON.stringify({ set_stock: payload.setStock, delta: payload.delta, reason: payload.reason ?? "" }),
   });
   const row = await handleJson<any>(response);
-  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
+  return { id: row.id, name: row.name, sku: row.sku ?? "", unit: row.unit, currentStock: Number(row.current_stock ?? 0), minStock: row.min_stock != null ? Number(row.min_stock) : null, maxStock: row.max_stock != null ? Number(row.max_stock) : null, notes: row.notes ?? "", isActive: Boolean(row.is_active) };
 };
 
 export const getInventoryMovements = async (inventoryItemId?: number): Promise<InventoryMovement[]> => {
