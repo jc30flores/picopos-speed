@@ -108,6 +108,17 @@ class ProductModifierGroup(models.Model):
 
 
 class Product(models.Model):
+    INVENTORY_STOCK_POLICY_INHERIT = "inherit"
+    INVENTORY_STOCK_POLICY_ALLOW = "allow"
+    INVENTORY_STOCK_POLICY_WARN = "warn"
+    INVENTORY_STOCK_POLICY_BLOCK = "block"
+    INVENTORY_STOCK_POLICY_CHOICES = [
+        (INVENTORY_STOCK_POLICY_INHERIT, "Heredar configuración general"),
+        (INVENTORY_STOCK_POLICY_ALLOW, "Permitir venta aunque no haya stock"),
+        (INVENTORY_STOCK_POLICY_WARN, "Advertir antes de vender"),
+        (INVENTORY_STOCK_POLICY_BLOCK, "Bloquear venta si no hay stock"),
+    ]
+
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -120,6 +131,7 @@ class Product(models.Model):
     disposable_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
+    inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
     modifier_groups = models.ManyToManyField(
         ModifierGroup,
         blank=True,

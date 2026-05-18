@@ -36,6 +36,8 @@ export type ModifierGroup = {
   modifiers: Modifier[];
 };
 
+export type ProductInventoryStockPolicy = "inherit" | "allow" | "warn" | "block";
+
 export type Product = {
   id: number;
   name: string;
@@ -64,6 +66,7 @@ export type Product = {
   modifierGroupsPos?: number[];
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
   inventoryLinks?: InventoryProductLink[];
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
 };
 
 export type InventoryItem = {
@@ -1192,6 +1195,7 @@ export const getProducts = async (options?: {
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1223,6 +1227,7 @@ export const getProducts = async (options?: {
       disposableFee: Number(item.disposable_fee ?? 0),
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
+      inventoryStockPolicy: item.inventory_stock_policy ?? "inherit",
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
       modifierGroupLinks: (item.modifier_group_links ?? []).map((link) => ({
@@ -1252,6 +1257,7 @@ export const createProduct = async (payload: {
   disposableApplyTo?: string[];
   modifierGroupIds?: number[];
   inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
+  inventoryStockPolicy?: ProductInventoryStockPolicy;
 }): Promise<Product> => {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -1260,6 +1266,7 @@ export const createProduct = async (payload: {
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1301,6 +1308,7 @@ export const createProduct = async (payload: {
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1328,6 +1336,7 @@ export const createProduct = async (payload: {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1359,6 +1368,7 @@ export const updateProduct = async (
     disposableApplyTo?: string[];
     modifierGroupIds?: number[];
     inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
+    inventoryStockPolicy?: ProductInventoryStockPolicy;
   }
 ): Promise<Product> => {
   const formData = new FormData();
@@ -1368,6 +1378,7 @@ export const updateProduct = async (
   formData.append("category_id", payload.categoryId.toString());
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
+  formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
   if (payload.image) {
@@ -1406,6 +1417,7 @@ export const updateProduct = async (
     image_url: string | null;
     available: boolean;
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1431,6 +1443,7 @@ export const updateProduct = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1872,6 +1885,7 @@ export const updateProductModifierGroups = async (
     disposable_fee?: string;
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
     modifier_groups: number[];
     modifier_groups_pos?: number[];
     modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
@@ -1893,6 +1907,7 @@ export const updateProductModifierGroups = async (
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
@@ -1937,6 +1952,7 @@ export const updateProductAvailability = async (
     available: boolean;
     is_archived?: boolean;
     requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
     modifier_groups: number[];
   }>(response);
   return {
@@ -1954,6 +1970,7 @@ export const updateProductAvailability = async (
     available: data.available,
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
     modifierGroups: data.modifier_groups,
   };
 };
@@ -2931,6 +2948,7 @@ export const duplicateProduct = async (productId: number): Promise<Product> => {
     disposableFee: Number(data.disposable_fee ?? 0),
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: data.inventory_stock_policy ?? "inherit",
     modifierGroups: data.modifier_groups ?? [],
     modifierGroupsPos: data.modifier_groups_pos ?? [],
     modifierGroupLinks: (data.modifier_group_links ?? []).map((link: any) => ({
@@ -4132,6 +4150,61 @@ export const getEmployeeStats = async (): Promise<EmployeeStats> => {
 const dayOfWeekLabel = (dayOfWeek: number) => {
   const map = ["D", "L", "M", "X", "J", "V", "S"];
   return map[dayOfWeek] ?? "";
+};
+
+
+export type CartAvailabilityItem = {
+  productId: number;
+  productName: string;
+  resolvedPolicy: InventoryStockPolicy;
+  isTracked: boolean;
+  canAddOne: boolean;
+  maxAddableNow: number;
+  currentCartQuantity: number;
+  status: "ok" | "blocked" | "warning" | "allowed_without_stock";
+  message?: string;
+  missing: Array<{ inventoryItemId: number; name: string; available: string; reservedInCart: string; requiredForNext: string; missing: string; unit: string }>;
+};
+
+export type CartAvailability = {
+  items: CartAvailabilityItem[];
+  cartHasBlockedItems: boolean;
+  cartHasWarnings: boolean;
+};
+
+export const checkCartInventoryAvailability = async (payload: { cartItems: Array<{ productId: number; quantity: number }>; candidateProductIds?: number[] }): Promise<CartAvailability> => {
+  const response = await request("/inventory/cart-availability/", {
+    method: "POST",
+    body: JSON.stringify({
+      cart_items: payload.cartItems.map((item) => ({ product_id: item.productId, quantity: item.quantity })),
+      candidate_product_ids: payload.candidateProductIds ?? [],
+    }),
+  });
+  const data = await handleJson<any>(response);
+  return {
+    cartHasBlockedItems: Boolean(data.cart_has_blocked_items),
+    cartHasWarnings: Boolean(data.cart_has_warnings),
+    items: Array.isArray(data.items) ? data.items.map((item: any) => ({
+      productId: Number(item.product_id),
+      productName: String(item.product_name ?? ""),
+      resolvedPolicy: normalizeInventoryStockPolicy(item.resolved_policy),
+      isTracked: Boolean(item.is_tracked),
+      canAddOne: Boolean(item.can_add_one),
+      maxAddableNow: Number(item.max_addable_now ?? 0),
+      currentCartQuantity: Number(item.current_cart_quantity ?? 0),
+      status: item.status ?? "ok",
+      message: item.message ?? "",
+      missing: Array.isArray(item.missing) ? item.missing.map((miss: any) => ({
+        inventoryItemId: Number(miss.inventory_item_id),
+        name: String(miss.name ?? ""),
+        available: String(miss.available ?? "0"),
+        reservedInCart: String(miss.reserved_in_cart ?? "0"),
+        requiredForNext: String(miss.required_for_next ?? "0"),
+        missing: String(miss.missing ?? "0"),
+        unit: String(miss.unit ?? ""),
+      })) : [],
+    })) : [],
+  };
 };
 
 export type InventoryAvailabilityItem = {

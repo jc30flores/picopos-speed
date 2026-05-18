@@ -37,9 +37,20 @@ from apps.inventory.serializers import (
     InventoryCountUpdateSerializer,
     ProductEffectiveInventoryLinkWriteSerializer,
 )
-from apps.inventory.services import check_order_inventory_availability, resolve_effective_inventory_links_for_product, reverse_inventory_for_order
+from apps.inventory.services import check_cart_inventory_availability, check_order_inventory_availability, resolve_effective_inventory_links_for_product, reverse_inventory_for_order
 
 logger = logging.getLogger(__name__)
+
+
+class CartInventoryAvailabilityView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def post(self, request):
+        cart_items = request.data.get("cart_items") or []
+        candidate_product_ids = request.data.get("candidate_product_ids") or []
+        if not isinstance(cart_items, list) or not isinstance(candidate_product_ids, list):
+            return Response({"detail": "Formato de carrito inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(check_cart_inventory_availability(cart_items=cart_items, candidate_product_ids=candidate_product_ids))
 
 
 class OrderInventoryAvailabilityCheckView(APIView):
@@ -301,7 +312,16 @@ def _filter_inventory_movements(queryset, params):
 
 
 def _pdf_response(filename: str, title: str, rows: list[list[str]]):
+    from importlib.util import find_spec
     from io import BytesIO
+
+    if find_spec("reportlab") is None:
+        html_rows = "".join("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows)
+        html = f"<html><head><title>{title}</title><style>body{{font-family:sans-serif;padding:24px}}table{{width:100%;border-collapse:collapse}}td{{border:1px solid #bbb;padding:6px;font-size:12px}}tr:first-child td{{background:#166534;color:white;font-weight:bold}}</style></head><body><h1>{title}</h1><p>Generado: {timezone.localtime(timezone.now()).strftime('%Y-%m-%d %H:%M')}</p><table>{html_rows}</table></body></html>"
+        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        response["Content-Disposition"] = f'inline; filename="{filename.replace(".pdf", ".html")}"'
+        return response
+
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib.styles import getSampleStyleSheet

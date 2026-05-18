@@ -323,6 +323,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "disposable_fee",
             "disposable_apply_to",
             "requires_kitchen",
+            "inventory_stock_policy",
             "modifier_groups",
             "modifier_groups_pos",
             "modifier_group_links",

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import {
   Category,
   InventoryProductLink,
   Product,
+  ProductInventoryStockPolicy,
   ProductSpecialPriceRule,
   createCategory,
   createProduct,
@@ -84,6 +86,7 @@ export const ProductFormDialog = ({
   const [disposableFee, setDisposableFee] = useState("0");
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
+  const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
   const [inventoryModalOpen, setInventoryModalOpen] = useState(false);
 
   const { activeServiceTypes: serviceTypes } = useServiceTypes();
@@ -106,6 +109,7 @@ export const ProductFormDialog = ({
       setDisposableFee(String(editingProduct.disposableFee ?? 0));
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
       setInventoryLinks(editingProduct.inventoryLinks ?? []);
+      setInventoryStockPolicy(editingProduct.inventoryStockPolicy ?? "inherit");
     } else {
       setName("");
       setDescription("");
@@ -119,6 +123,7 @@ export const ProductFormDialog = ({
       setDisposableFee("0");
       setDisposableApplyTo([]);
       setInventoryLinks([]);
+      setInventoryStockPolicy("inherit");
     }
   }, [editingProduct, open]);
 
@@ -209,6 +214,7 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
+        inventoryStockPolicy,
       });
     } else {
       await createProduct({
@@ -221,6 +227,7 @@ export const ProductFormDialog = ({
         requiresKitchen,
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
+        inventoryStockPolicy,
         inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
     }
@@ -451,6 +458,21 @@ export const ProductFormDialog = ({
                     ))}
                   </div>
                 )}
+
+                <div className="mt-3 space-y-2 rounded-lg border bg-muted/20 p-3">
+                  <Label>Política de venta por inventario</Label>
+                  <Select value={inventoryStockPolicy} onValueChange={(value) => setInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">Heredar configuración general</SelectItem>
+                      <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
+                      <SelectItem value="warn">Advertir antes de vender</SelectItem>
+                      <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Define cómo se comporta este producto cuando no hay inventario suficiente. Si eliges heredar, usará la configuración global.</p>
+                  <p className="text-xs text-muted-foreground">{inventoryLinks.length > 0 ? "Este producto tiene inventario vinculado." : "Este producto no tiene inventario vinculado. La política de stock no bloqueará ventas hasta que se vincule inventario."}</p>
+                </div>
               </div>
 
               <div className="md:col-span-2 space-y-3 rounded-xl border p-3">
