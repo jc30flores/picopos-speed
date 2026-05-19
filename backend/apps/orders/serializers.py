@@ -5,7 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import DecimalField, ExpressionWrapper, F, Sum
-from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee
+from apps.orders.models import Order, OrderItem, OrderItemModifier, AppliedDiscount, OrderInvoice, OrderFee, DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest
 from apps.menu.models import Product, Discount, Modifier
 from apps.core.models import Branch, Customer, ServiceType, Table, TaxConfig
 from apps.core.service_types import normalize_service_type
@@ -53,6 +53,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "is_custom",
             "quantity",
             "assigned_name",
+            "table_guest_id",
             "applied_special_price_rule_id",
             "applied_modifiers",
             "unit_price_list",
@@ -129,6 +130,9 @@ class OrderSerializer(serializers.ModelSerializer):
     subtotal_after_discounts = serializers.SerializerMethodField()
     tax_total = serializers.SerializerMethodField()
     total_payable = serializers.SerializerMethodField()
+    table_session_id = serializers.SerializerMethodField()
+    table_label = serializers.SerializerMethodField()
+    table_order_mode = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -178,6 +182,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "subtotal_after_discounts",
             "tax_total",
             "total_payable",
+            "table_session_id",
+            "table_label",
+            "table_order_mode",
         ]
 
     def get_service_type(self, obj: Order):
@@ -236,6 +243,22 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_total_payable(self, obj: Order):
         return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+    def get_table_session_id(self, obj: Order):
+        session = obj.table_sessions.order_by("-id").first()
+        return session.id if session else None
+
+    def get_table_label(self, obj: Order):
+        session = obj.table_sessions.order_by("-id").first()
+        if not session:
+            return ""
+        names = [link.table.name for link in session.session_tables.select_related("table").all()]
+        return " + ".join(names[:2]) + ("" if len(names) <= 2 else f" +{len(names)-2}")
+
+    def get_table_order_mode(self, obj: Order):
+        session = obj.table_sessions.order_by("-id").first()
+        return session.order_mode if session else None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -734,3 +757,42 @@ class OrderCustomerUpdateSerializer(serializers.ModelSerializer):
             update_fields.extend(["whatsapp_num_cliente", "whatsapp_num_cliente_country"])
         instance.save(update_fields=update_fields)
         return instance
+
+
+class DiningAreaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DiningArea
+        fields = ["id", "name", "sort_order", "is_active", "created_at", "updated_at"]
+
+
+class RestaurantTableSerializer(serializers.ModelSerializer):
+    area_name = serializers.CharField(source="area.name", read_only=True)
+
+    class Meta:
+        model = RestaurantTable
+        fields = [
+            "id", "area", "area_name", "name", "number", "capacity", "shape", "x", "y", "width", "height", "rotation",
+            "color", "is_active", "sort_order", "created_at", "updated_at",
+        ]
+
+
+class TableGuestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TableGuest
+        fields = ["id", "session", "label", "seat_number", "is_active", "is_paid", "created_at", "updated_at"]
+
+
+class TableSessionSerializer(serializers.ModelSerializer):
+    table_ids = serializers.SerializerMethodField()
+    tables = RestaurantTableSerializer(source="session_tables", many=True, read_only=True)
+    guests = TableGuestSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = TableSession
+        fields = [
+            "id", "status", "guests_count", "order_mode", "primary_order", "opened_by", "opened_at", "closed_by", "closed_at",
+            "notes", "total_cached", "table_ids", "guests", "created_at", "updated_at",
+        ]
+
+    def get_table_ids(self, obj):
+        return list(obj.session_tables.values_list("table_id", flat=True))
