@@ -6016,6 +6016,7 @@ export const updateRestaurantTable = async (id: number, payload: Partial<{ area:
 };
 export const deleteRestaurantTable = async (id: number): Promise<{ detail: string }> => {
   const response = await request(`/orders/tables/${id}/`, { method: 'DELETE' });
+  if (response.status === 204) return { detail: 'Mesa eliminada.' };
   return handleJson<{ detail: string }>(response);
 };
 export const getTableLayout = async (): Promise<TableLayout> => {
