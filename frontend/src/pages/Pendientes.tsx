@@ -160,6 +160,7 @@ const PendientesPage = () => {
                   <TableRow>
                     <TableHead># Orden</TableHead>
                     <TableHead>Cliente</TableHead>
+                    <TableHead>Mesa</TableHead>
                     <TableHead>Servicio</TableHead>
                     <TableHead>Estado</TableHead>
                     <TableHead>Referencia</TableHead>
@@ -173,6 +174,7 @@ const PendientesPage = () => {
                     <TableRow key={row.id} className="align-middle">
                       <TableCell className="font-semibold">#{row.orderNumber}</TableCell>
                       <TableCell>{row.customerName || "Consumidor final"}</TableCell>
+                      <TableCell>{row.tableLabel ? <Badge variant="secondary">{row.tableLabel}</Badge> : <span className="text-muted-foreground">-</span>}</TableCell>
                       <TableCell><Badge variant="outline">{row.serviceType || "POS rápido"}</Badge></TableCell>
                       <TableCell>
                         <Badge className={`whitespace-nowrap border-0 ${getEstadoBadgeClass(row)}`}>
@@ -230,7 +232,7 @@ const PendientesPage = () => {
                   ))}
                   {!loading && rows.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-14 text-center">
+                      <TableCell colSpan={9} className="py-14 text-center">
                         <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-muted-foreground">
                           <ClipboardList className="h-10 w-10 opacity-60" />
                           <p className="font-semibold text-foreground">No hay órdenes abiertas.</p>

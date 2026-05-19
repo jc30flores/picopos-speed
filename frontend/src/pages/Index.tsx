@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, Armchair } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -78,6 +78,10 @@ import {
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
+  getDiningAreas,
+  getRestaurantTables,
+  getTableSessions,
+  createTableSession,
   Category,
   Discount,
   ModifierGroup,
@@ -443,6 +447,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
+  const [tableMapEnabled, setTableMapEnabled] = useState(false);
+  const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
+  const [diningAreas, setDiningAreas] = useState<any[]>([]);
+  const [restaurantTables, setRestaurantTables] = useState<any[]>([]);
+  const [tableSessions, setTableSessions] = useState<any[]>([]);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -567,6 +576,39 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       });
   }, []);
 
+
+  useEffect(() => {
+    if (!tableMapEnabled) return;
+    Promise.all([getDiningAreas().catch(() => []), getRestaurantTables().catch(() => []), getTableSessions().catch(() => [])])
+      .then(([areas, tables, sessions]) => {
+        setDiningAreas(areas);
+        setRestaurantTables(tables);
+        setTableSessions(sessions);
+      })
+      .catch(() => undefined);
+  }, [tableMapEnabled]);
+
+  const sessionByTableId = useMemo(() => {
+    const map = new Map<number, any>();
+    tableSessions.forEach((session) => {
+      (session.tableIds || []).forEach((tableId: number) => map.set(tableId, session));
+    });
+    return map;
+  }, [tableSessions]);
+
+  const openTableSession = async (tableId: number) => {
+    const existing = sessionByTableId.get(tableId);
+    if (existing?.primaryOrder) {
+      navigate(`/pos?pending_order_id=${existing.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      return;
+    }
+    try {
+      const created = await createTableSession({ tableIds: [tableId], guestsCount: 2, orderMode: "table" });
+      if (created.primaryOrder) navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir mesa.");
+    }
+  };
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
     const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
@@ -1533,6 +1575,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     getFeatureSettings().then((settings) => {
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
+      setTableMapEnabled(settings.tableMapEnabled);
     }).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
@@ -2945,6 +2988,25 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
+            {tableMapEnabled ? (
+              <Card className="p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant={posMode === "tables" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("tables")}><Armchair className="mr-2 h-4 w-4"/>Mesas</Button>
+                  <Button variant={posMode === "pos" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("pos")}>POS</Button>
+                  <Button variant="outline" className="h-10" onClick={() => navigate('/tables/editor')}>Editor de mesas</Button>
+                </div>
+                {posMode === "tables" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {restaurantTables.map((table) => {
+                      const session = sessionByTableId.get(table.id);
+                      const stateClass = !table.isActive ? "border-muted bg-muted/20" : session?.status === "sent_to_kitchen" ? "border-orange-500/50 bg-orange-500/10" : session ? "border-blue-500/50 bg-blue-500/10" : "border-emerald-500/40 bg-emerald-500/10";
+                      return <button key={table.id} onClick={() => void openTableSession(table.id)} className={cn("rounded-xl border p-3 text-left", stateClass)}><p className="font-semibold">{table.name}</p><p className="text-xs text-muted-foreground">{session ? "Ocupada" : "Libre"} · Cap. {table.capacity}</p></button>;
+                    })}
+                  </div>
+                ) : null}
+              </Card>
+            ) : null}
+
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">

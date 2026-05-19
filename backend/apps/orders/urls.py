@@ -1,8 +1,19 @@
 from django.urls import path
-from apps.orders import views
+from apps.orders import views, table_views
 from apps.dte import views as dte_views
 
 urlpatterns = [
+
+    path("tables/areas/", table_views.DiningAreaListCreateView.as_view(), name="tables-areas"),
+    path("tables/areas/<int:pk>/", table_views.DiningAreaDetailView.as_view(), name="tables-areas-detail"),
+    path("tables/", table_views.RestaurantTableListCreateView.as_view(), name="tables-list"),
+    path("tables/<int:pk>/", table_views.RestaurantTableDetailView.as_view(), name="tables-detail"),
+    path("tables/layout/", table_views.TableLayoutView.as_view(), name="tables-layout"),
+    path("tables/sessions/", table_views.TableSessionListCreateView.as_view(), name="tables-sessions"),
+    path("tables/sessions/<int:pk>/", table_views.TableSessionDetailView.as_view(), name="tables-sessions-detail"),
+    path("tables/sessions/<int:pk>/send-to-kitchen/", table_views.TableSessionSendToKitchenView.as_view(), name="tables-sessions-send-kitchen"),
+    path("tables/sessions/<int:pk>/merge/", table_views.TableSessionMergeView.as_view(), name="tables-sessions-merge"),
+    path("tables/sessions/<int:pk>/move-items/", table_views.TableSessionMoveItemsView.as_view(), name="tables-sessions-move-items"),
     path("", views.OrderCreateView.as_view(), name="orders-create"),
     path("validate-price-pin/", views.ValidatePricePinView.as_view(), name="orders-validate-price-pin"),
     path("active/", views.ActiveOrderListView.as_view(), name="orders-active"),

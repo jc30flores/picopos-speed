@@ -63,6 +63,11 @@ DEFAULT_FEATURE_FLAGS = [
         "description": "Muestra las imágenes guardadas de los productos en las tarjetas del POS.",
     },
     {
+        "key": "table_map_enabled",
+        "label": "Mapa de mesas",
+        "description": "Activa el modo restaurante con mapa de mesas, editor de salón y órdenes por mesa.",
+    },
+    {
         "key": "FF_ADV_PERMISSIONS",
         "label": "Roles y permisos avanzados",
         "description": "Habilita permisos finos, PIN supervisor y auditoría avanzada.",

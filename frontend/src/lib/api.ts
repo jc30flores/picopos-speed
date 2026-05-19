@@ -330,6 +330,7 @@ type FeatureFlagsNormalized = {
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
+  tableMapEnabled: boolean;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -341,6 +342,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryStockPolicy: "allow",
     inventoryAdvancedEnabled: false,
     posProductImagesEnabled: false,
+    tableMapEnabled: false,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -358,6 +360,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
       posProductImagesEnabled: fromMap(byKey, ['pos_product_images_enabled'], defaults.posProductImagesEnabled),
+      tableMapEnabled: fromMap(byKey, ['table_map_enabled'], defaults.tableMapEnabled),
     };
   }
   return {
@@ -368,6 +371,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
     posProductImagesEnabled: fromMap(raw, ['posProductImagesEnabled', 'pos_product_images_enabled'], defaults.posProductImagesEnabled),
+    tableMapEnabled: fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -566,6 +570,9 @@ export type Order = {
   pendingCompletedAt?: string | null;
   pendingCompletionType?: "none" | "paid" | "removed" | "canceled";
   pendingCompletionNote?: string;
+  tableSessionId?: number | null;
+  tableLabel?: string;
+  tableOrderMode?: "table" | "per_person" | null;
 };
 
 export type EmployeeStats = {
@@ -1191,6 +1198,7 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
+    tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
   };
 };
 
@@ -1207,6 +1215,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       inventory_stock_policy: payload.inventoryStockPolicy,
       inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
       pos_product_images_enabled: payload.posProductImagesEnabled,
+      table_map_enabled: payload.tableMapEnabled,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1221,6 +1230,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
+    tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
   };
 };
 
@@ -2787,6 +2797,9 @@ const mapOrder = (order: {
   pending_completed_at?: string | null;
   pending_completion_type?: Order["pendingCompletionType"];
   pending_completion_note?: string;
+  table_session_id?: number | null;
+  table_label?: string;
+  table_order_mode?: "table" | "per_person" | null;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -2859,6 +2872,9 @@ const mapOrder = (order: {
     pendingCompletedAt: order.pending_completed_at ?? null,
     pendingCompletionType: (order.pending_completion_type ?? "none") as Order["pendingCompletionType"],
     pendingCompletionNote: order.pending_completion_note ?? "",
+    tableSessionId: order.table_session_id ?? null,
+    tableLabel: order.table_label ?? "",
+    tableOrderMode: order.table_order_mode ?? null,
   };
 };
 
@@ -5955,4 +5971,31 @@ export const receivePurchaseOrder = async (id: number, payload: { notes?: string
   });
   const data = await handleJson<any>(response);
   return mapPurchaseOrder(data.order);
+};
+
+
+export type DiningArea = { id: number; name: string; sortOrder: number; isActive: boolean };
+export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
+export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
+export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[] };
+
+export const getDiningAreas = async (): Promise<DiningArea[]> => {
+  const response = await request('/orders/tables/areas/');
+  const data = await handleJson<any[]>(response);
+  return data.map((x) => ({ id: x.id, name: x.name, sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active) }));
+};
+export const getRestaurantTables = async (): Promise<RestaurantTable[]> => {
+  const response = await request('/orders/tables/');
+  const data = await handleJson<any[]>(response);
+  return data.map((x) => ({ id: x.id, area: x.area, areaName: x.area_name, name: x.name, number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape, x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: x.color ?? '', isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) }));
+};
+export const getTableSessions = async (): Promise<TableSession[]> => {
+  const response = await request('/orders/tables/sessions/');
+  const data = await handleJson<any[]>(response);
+  return data.map((x) => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) }));
+};
+export const createTableSession = async (payload: { tableIds: number[]; guestsCount: number; orderMode: 'table'|'per_person'; notes?: string; }): Promise<TableSession> => {
+  const response = await request('/orders/tables/sessions/', { method: 'POST', body: JSON.stringify({ table_ids: payload.tableIds, guests_count: payload.guestsCount, order_mode: payload.orderMode, notes: payload.notes ?? '' }) });
+  const x = await handleJson<any>(response);
+  return { id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) };
 };

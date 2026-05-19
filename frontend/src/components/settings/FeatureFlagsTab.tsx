@@ -17,9 +17,10 @@ const defaultState: FeatureSettings = {
   inventoryStockPolicy: "allow",
   inventoryAdvancedEnabled: false,
   posProductImagesEnabled: false,
+  tableMapEnabled: false,
 };
 
-type ToggleSettingKey = "posProductImagesEnabled" | "kioskEnabled" | "customerDisplayEnabled" | "kitchenDisplayEnabled" | "inventoryAdvancedEnabled" | "cashCloseExpectedTotalsControlEnabled";
+type ToggleSettingKey = "posProductImagesEnabled" | "tableMapEnabled" | "kioskEnabled" | "customerDisplayEnabled" | "kitchenDisplayEnabled" | "inventoryAdvancedEnabled" | "cashCloseExpectedTotalsControlEnabled";
 
 type ToggleSetting = {
   key: ToggleSettingKey;
@@ -38,6 +39,7 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
         title: "Imágenes de productos en POS",
         description: "Muestra las imágenes guardadas de los productos en las tarjetas del POS.",
       },
+      { key: "tableMapEnabled", title: "Mapa de mesas", description: "Activa el modo restaurante con mapa de mesas, editor de salón y órdenes por mesa." },
       { key: "kioskEnabled", title: "KIOSK", description: "Mostrar u ocultar el módulo KIOSK para todos los usuarios." },
     ],
   },

@@ -25,6 +25,7 @@ export type RoleAccessUser = Pick<AuthUser, "role" | "isSuperuser"> | null;
 
 export const appModules: AppModuleConfig[] = [
   { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
+  { key: "tables_editor", label: "Editor de mesas", path: "/tables/editor", requiredRoles: ["admin", "manager"] },
   { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin", "kiosk"] },
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
   { key: "orders_customers", label: "PEDIDOS CLIENTES", path: "/customer-display", requiredRoles: ["admin"] },
@@ -46,8 +47,8 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
-  admin: ["/", "/pos", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
-  manager: ["/", "/pos", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
+  admin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
+  manager: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   kitchen: ["/kitchen"],
   kiosk: ["/kiosk"],
