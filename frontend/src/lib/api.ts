@@ -6037,3 +6037,8 @@ export const createTableSession = async (payload: { tableIds: number[]; guestsCo
   const x = await handleJson<any>(response);
   return { id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) };
 };
+export const mergeTableSessionTables = async (sessionId: number, tableIds: number[]): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/merge/`, { method: 'POST', body: JSON.stringify({ table_ids: tableIds }) });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
+};

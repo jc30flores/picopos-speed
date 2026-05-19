@@ -456,6 +456,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [selectedOpsFilter, setSelectedOpsFilter] = useState<"all"|"free"|"occupied"|"kitchen">("all");
   const [selectedOpsTableId, setSelectedOpsTableId] = useState<number | null>(null);
   const [newSessionDialog, setNewSessionDialog] = useState<{ open: boolean; tableId: number | null; guests: number; orderMode: "table"|"per_person"; notes: string }>({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+  const [opsContextMenu, setOpsContextMenu] = useState<{ open: boolean; x: number; y: number; tableId: number | null }>({ open: false, x: 0, y: 0, tableId: null });
+  const [mergeMode, setMergeMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
+  const longPressOpsRef = useRef<number | null>(null);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -619,6 +622,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (session.status === "sent_to_kitchen") return "En cocina";
     if (session.status === "partially_paid") return "Parcial";
     return "Ocupada";
+  };
+
+
+  const handleMergeWithTable = async (targetTableId: number) => {
+    if (!mergeMode.active || !mergeMode.sessionId) return;
+    const targetSession = sessionByTableId.get(targetTableId);
+    if (targetSession) { toast.error("Solo puedes unir mesas libres en esta versión."); return; }
+    try {
+      const { mergeTableSessionTables } = await import("@/lib/api");
+      await mergeTableSessionTables(mergeMode.sessionId, [targetTableId]);
+      toast.success("Mesas unidas correctamente.");
+      setMergeMode({ active: false, sessionId: null, sourceTableId: null });
+      const sessions = await getTableSessions();
+      setTableSessions(sessions);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo unir la mesa.");
+    }
   };
 
   const beginSessionFromDialog = async () => {
@@ -3037,7 +3057,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   const selected = selectedOpsTableId === table.id;
                   const stateLabel = getSessionStateLabel(session);
                   return (
-                    <button key={table.id} onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
+                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),2000); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={() => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
                       <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-white">
                         <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
                         {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
@@ -3055,11 +3075,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           </Card>
         </div>
 
+        {opsContextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}><Card className="absolute w-64 p-2" style={{ left: Math.min(opsContextMenu.x, window.innerWidth - 270), top: Math.min(opsContextMenu.y, window.innerHeight - 320) }} onClick={(e)=>e.stopPropagation()}>{(() => { const table = restaurantTables.find((t) => t.id === opsContextMenu.tableId); const session = table ? sessionByTableId.get(table.id) : null; if (!table) return null; return <div className="space-y-1"><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"table", notes:"" }); else void openTableSession(table.id); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>{session ? "Ver orden" : "Nueva orden"}</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session} onClick={() => { setMergeMode({ active:true, sessionId: session?.id ?? null, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>Unir mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Unir cuentas requiere soporte de fusión de órdenes en backend.")}>Unir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Transferir cuenta queda preparado para próxima iteración.")}>Transferir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>Cancelar</Button></div>; })()}</Card></div> : null}
         <Dialog open={newSessionDialog.open} onOpenChange={(open) => setNewSessionDialog((prev) => ({ ...prev, open }))}>
           <DialogContent>
             <DialogHeader><DialogTitle>Nueva orden</DialogTitle></DialogHeader>
             <div className="space-y-3">
-              <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<Button type="button" variant="outline" onClick={()=>setNewSessionDialog((p)=>({...p,guests:p.guests+1}))}>+</Button><Button type="button" variant="outline" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button></div></div>
+              <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<div className="ml-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1"><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button><span className="min-w-8 text-center font-semibold">{newSessionDialog.guests}</span><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.min(99,p.guests+1)}))}>+</Button></div></div></div>{(() => { const table = restaurantTables.find((t) => t.id === newSessionDialog.tableId); const cap = Number(table?.capacity || 0); return cap > 0 && newSessionDialog.guests > cap ? <p className="text-xs text-amber-500">Sobre capacidad sugerida de la mesa.</p> : null; })()}
               <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
               <div><Label>Notas</Label><Textarea value={newSessionDialog.notes} onChange={(e)=>setNewSessionDialog((p)=>({...p,notes:e.target.value}))} /></div>
             </div>

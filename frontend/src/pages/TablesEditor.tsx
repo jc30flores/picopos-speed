@@ -37,6 +37,11 @@ const [areaModal, setAreaModal] = useState<{ open:boolean; area?:DiningArea }>({
 const [areaForm, setAreaForm] = useState({ name:"", isActive:true });
 const [tableForm, setTableForm] = useState({ area:"", name:"", number:"1", capacity:"4", shape:"round" as RestaurantTable['shape'], width:"110", height:"110", rotation:"0", color:palette[0], isActive:true });
 const [nameEdited, setNameEdited] = useState(false); const [sizeEdited, setSizeEdited] = useState(false);
+const [undoStack, setUndoStack] = useState<RestaurantTable[][]>([]);
+const [redoStack, setRedoStack] = useState<RestaurantTable[][]>([]);
+const [copiedTable, setCopiedTable] = useState<RestaurantTable | null>(null);
+const [contextMenu, setContextMenu] = useState<{open:boolean;x:number;y:number;tableId:number|null}>({open:false,x:0,y:0,tableId:null});
+const longPressRef = useRef<number | null>(null);
 
 const applyLocalTable=(id:number, patch:Partial<RestaurantTable>)=>{ setTables(prev=>prev.map(t=>t.id===id?{...t,...patch}:t)); setPendingLayout(prev=>({ ...prev, [id]: { ...(prev[id] ?? (tables.find(t=>t.id===id) as RestaurantTable)), ...(patch as any) }})); };
 const reload = async()=>{ const l=await getTableLayout(); setAreas(l.areas); setTables(l.tables); setPendingLayout({}); setSelectedAreaId(p=>p??l.areas[0]?.id??null); };
@@ -48,6 +53,54 @@ const filteredTables = useMemo(()=>{ const q=query.trim().toLowerCase(); return 
 const hasPendingChanges = Object.keys(pendingLayout).length>0;
 const recommended = useMemo(()=>getRecommendedTableSize(tableForm.shape, Number(tableForm.capacity||4)),[tableForm.shape,tableForm.capacity]);
 const nextTableNumber = (areaId:number)=>{ const nums=tables.filter(t=>t.area===areaId).map(t=>t.number).sort((a,b)=>a-b); let n=1; for(const x of nums){ if(x===n) n++; else if(x>n) break; } return n; };
+
+const pushHistory = () => {
+  setUndoStack((prev) => [...prev.slice(-49), tables.map((t) => ({ ...t }))]);
+  setRedoStack([]);
+};
+const undo = () => {
+  setUndoStack((prev) => {
+    if (!prev.length) return prev;
+    const next = [...prev];
+    const last = next.pop()!;
+    setRedoStack((r) => [...r.slice(-49), tables.map((t) => ({ ...t }))]);
+    setTables(last);
+    return next;
+  });
+};
+const redo = () => {
+  setRedoStack((prev) => {
+    if (!prev.length) return prev;
+    const next = [...prev];
+    const last = next.pop()!;
+    setUndoStack((u) => [...u.slice(-49), tables.map((t) => ({ ...t }))]);
+    setTables(last);
+    return next;
+  });
+};
+const getNextCopyNameAndNumber = (base: RestaurantTable, areaId: number) => {
+  const nums = tables.filter((t) => t.area === areaId).map((t) => t.number);
+  const max = nums.length ? Math.max(...nums) : 0;
+  const m = /^(?:Mesa\s+)(\d+)$/i.exec(base.name || "");
+  if (m || base.number) {
+    const n = max + 1;
+    return { name: `Mesa ${n}`, number: n };
+  }
+  let i = 1;
+  let candidate = `${base.name} copy ${i}`;
+  const names = new Set(tables.filter((t) => t.area === areaId).map((t) => t.name));
+  while (names.has(candidate)) { i += 1; candidate = `${base.name} copy ${i}`; }
+  return { name: candidate, number: max + 1 };
+};
+const duplicateLocal = async (base: RestaurantTable) => {
+  const targetArea = selectedAreaId ?? base.area;
+  const nn = getNextCopyNameAndNumber(base, targetArea);
+  pushHistory();
+  const saved = await createRestaurantTable({ ...base, area: targetArea, name: nn.name, number: nn.number, x: base.x + 30, y: base.y + 30 });
+  await reload();
+  setSelectedTableId(saved.id);
+};
+
 const openAreaModal=(area?:DiningArea)=>{ setAreaForm({name:area?.name??"",isActive:area?.isActive??true}); setAreaModal({open:true,area}); };
 const openTableModal=(table?:RestaurantTable)=>{ if(table){ setTableForm({ area:String(table.area), name:table.name, number:String(table.number), capacity:String(table.capacity), shape:table.shape, width:String(table.width), height:String(table.height), rotation:String(table.rotation), color:table.color||palette[0], isActive:table.isActive }); setNameEdited(true); setSizeEdited(true);} else { const aid=selectedAreaId??areas[0]?.id; const n=aid?nextTableNumber(aid):1; const rec=getRecommendedTableSize('round',4); setTableForm({ area:aid?String(aid):"", name:`Mesa ${n}`, number:String(n), capacity:"4", shape:"round", width:String(rec.width), height:String(rec.height), rotation:"0", color:palette[0], isActive:true}); setNameEdited(false); setSizeEdited(false);} setTableModal({open:true,table}); };
 
@@ -62,16 +115,42 @@ if(rotating){ const t=tables.find(x=>x.id===rotating.id); if(!t) return; const p
 const saveLayout=async()=>{ const payload=Object.entries(pendingLayout).map(([id,row])=>({id:Number(id),x:row.x,y:row.y,width:row.width,height:row.height,rotation:row.rotation})); if(!payload.length)return; await saveTableLayout({tables:payload}); setPendingLayout({}); toast.success("Mapa guardado correctamente."); };
 const duplicateTable = async (t:RestaurantTable)=>{ await createRestaurantTable({ ...t, name:`${t.name} copia`, x:t.x+24,y:t.y+24, color:t.color||palette[0], isActive:t.isActive, area:t.area }); await reload(); toast.success("Mesa duplicada correctamente."); };
 
+
+useEffect(() => {
+  const h = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (t && ["INPUT", "TEXTAREA"].includes(t.tagName)) return;
+    const meta = e.ctrlKey || e.metaKey;
+    const st = selectedTableId ? tables.find((x) => x.id === selectedTableId) : null;
+    if (meta && e.key.toLowerCase() === "c" && st) { e.preventDefault(); setCopiedTable(st); }
+    if (meta && e.key.toLowerCase() === "v" && copiedTable) { e.preventDefault(); void duplicateLocal(copiedTable); }
+    if (meta && e.key.toLowerCase() === "d" && st) { e.preventDefault(); void duplicateLocal(st); }
+    if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+    if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+    if (e.key === "Delete" && st) { e.preventDefault(); if (confirm("¿Deseas eliminar esta mesa?")) void deleteRestaurantTable(st.id).then(() => reload()); }
+    if (st && ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
+      e.preventDefault();
+      const step = e.shiftKey ? 20 : (snapToGrid ? 10 : 5);
+      pushHistory();
+      const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+      applyLocalTable(st.id, { x: Math.max(0, st.x + dx), y: Math.max(0, st.y + dy) });
+    }
+  };
+  window.addEventListener("keydown", h);
+  return () => window.removeEventListener("keydown", h);
+}, [selectedTableId, tables, copiedTable, snapToGrid]);
+
 if(enabled===null) return <div className="p-6">Cargando...</div>;
 if(!enabled) return <div className="p-6"><Card className="p-6 space-y-3"><h1 className="text-xl font-semibold">Mapa de mesas no está activo.</h1><Button onClick={()=>navigate('/settings')}>Ir a configuración</Button></Card></div>;
 
 return <div className="p-4 space-y-4">
-<Card className="p-4 flex flex-wrap items-center gap-2"><h1 className="text-xl font-semibold mr-auto">Editor de mesas</h1><Input placeholder="Buscar mesa" className="w-52" value={query} onChange={(e)=>setQuery(e.target.value)} /><Button variant="outline" onClick={()=>openAreaModal()}>Nueva área</Button><Button variant="outline" onClick={()=>openTableModal()} disabled={!areas.length}>Nueva mesa</Button><Button onClick={()=>void saveLayout()} disabled={!hasPendingChanges}>Guardar mapa</Button><Button variant="outline" onClick={()=>navigate('/pos?mode=tables')}>Vista operativa</Button><Button variant="outline" onClick={()=>setZoom(z=>Math.max(.5,z-.1))}>-</Button><Button variant="outline" onClick={()=>setZoom(1)}>{Math.round(zoom*100)}%</Button><Button variant="outline" onClick={()=>setZoom(z=>Math.min(2,z+.1))}>+</Button><Label className="ml-2 flex items-center gap-2 text-sm"><Switch checked={snapToGrid} onCheckedChange={setSnapToGrid}/>Ajustar a cuadrícula</Label>{hasPendingChanges?<span className="text-amber-500 text-sm">Cambios sin guardar</span>:null}</Card>
+<Card className="p-4 flex flex-wrap items-center gap-2"><h1 className="text-xl font-semibold mr-auto">Editor de mesas</h1><Input placeholder="Buscar mesa" className="w-52" value={query} onChange={(e)=>setQuery(e.target.value)} /><Button variant="outline" onClick={()=>openAreaModal()}>Nueva área</Button><Button variant="outline" onClick={()=>openTableModal()} disabled={!areas.length}>Nueva mesa</Button><Button onClick={()=>void saveLayout()} disabled={!hasPendingChanges}>Guardar mapa</Button><Button variant="outline" onClick={()=>navigate('/pos?mode=tables')}>Vista operativa</Button><Button variant="outline" onClick={()=>setZoom(z=>Math.max(.5,z-.1))}>-</Button><Button variant="outline" onClick={()=>setZoom(1)}>{Math.round(zoom*100)}%</Button><Button variant="outline" onClick={()=>setZoom(z=>Math.min(2,z+.1))}>+</Button><Label className="ml-2 flex items-center gap-2 text-sm"><Switch checked={snapToGrid} onCheckedChange={setSnapToGrid}/>Ajustar a cuadrícula</Label><Button variant="outline" onClick={undo} disabled={!undoStack.length}>Deshacer</Button><Button variant="outline" onClick={redo} disabled={!redoStack.length}>Rehacer</Button>{hasPendingChanges?<span className="text-amber-500 text-sm">Cambios sin guardar</span>:null}</Card>
 <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_340px] gap-4">
 <Card className="p-4 space-y-3"><div className="flex items-center justify-between"><h2 className="font-semibold">Áreas</h2><Button size="sm" onClick={()=>openAreaModal()}>Nueva</Button></div>{!areas.length?<p className="text-sm text-muted-foreground">No hay áreas aún.</p>:areas.map(a=><button key={a.id} className={cn("w-full rounded border p-2 text-left",selectedAreaId===a.id&&"border-primary")} onClick={()=>setSelectedAreaId(a.id)}>{a.name}</button>)}{selectedArea?<div className="flex gap-2"><Button size="sm" variant="outline" onClick={()=>openAreaModal(selectedArea)}>Editar</Button><Button size="sm" variant="destructive" onClick={async()=>{if(!confirm("¿Deseas eliminar/desactivar esta área?"))return; const r=await deleteTableArea(selectedArea.id); toast.success(r.detail||"Área actualizada."); await reload();}}>Eliminar/Desactivar</Button></div>:null}</Card>
 <Card className="p-4">{!areas.length?<div className="h-[65vh] rounded-xl border border-dashed flex items-center justify-center text-center p-8"><div><h3 className="text-xl font-semibold">No hay áreas configuradas</h3><p className="text-muted-foreground mt-2">Crea tu primera área para empezar a diseñar el mapa del restaurante.</p><Button className="mt-4" onClick={()=>openAreaModal()}>Crear primera área</Button></div></div>:<div ref={canvasRef} className="relative h-[65vh] overflow-auto rounded-xl border" style={{backgroundColor:'#0b1020', backgroundImage:'linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(rgba(255,255,255,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.12) 1px, transparent 1px)', backgroundSize:'20px 20px,20px 20px,100px 100px,100px 100px'}} onPointerDown={(e)=>{ if(e.target===e.currentTarget) setSelectedTableId(null); }} onPointerMove={onMove} onPointerUp={()=>{setDragging(null);setResizing(null);setRotating(null);}}>
 <div className="relative h-[1200px] w-[1800px]" style={{transform:`scale(${zoom})`, transformOrigin:'top left'}}>{filteredTables.length===0?<div className="absolute inset-0 flex items-center justify-center"><div className="text-center"><h3 className="text-lg font-semibold text-white">No hay mesas en esta área</h3><p className="text-slate-300">Agrega una mesa para comenzar a diseñar el salón.</p><Button className="mt-3" onClick={()=>openTableModal()}>Agregar primera mesa</Button></div></div>:null}
-{filteredTables.map(t=>{ const base=Math.min(t.width,t.height); const titleSize=clamp(base/7,10,16); const capSize=clamp(base/10,9,12); const showCap=base>=78; return <button key={t.id} onPointerDown={(e)=>{ e.stopPropagation(); startDrag(t,e); }} onDoubleClick={()=>openTableModal(t)} onClick={(e)=>{ e.stopPropagation(); setSelectedTableId(t.id); }} className={cn("absolute p-1 shadow transition",selectedTableId===t.id?"ring-2 ring-primary/60":"",t.shape==='round'&&'rounded-full',t.shape==='square'&&'rounded-md',t.shape==='rectangle'&&'rounded-lg',t.shape==='booth'&&'rounded-xl border-2',t.shape==='bar'&&'rounded-sm')} style={{left:t.x,top:t.y,width:t.width,height:t.height,transform:`rotate(${t.rotation}deg)`, backgroundColor:`${t.color||palette[0]}33`, borderColor:t.color||palette[0], borderWidth:2,color:'#fff'}}><div className="flex h-full w-full flex-col items-center justify-center text-center"><p className="max-w-full truncate px-1 font-semibold leading-tight" style={{fontSize:titleSize}}>{t.name}</p>{showCap?<p className="opacity-90" style={{fontSize:capSize}}>Cap. {t.capacity}</p>:null}{!t.isActive?<span className="text-[10px] text-red-300">Inactiva</span>:null}</div>
+{filteredTables.map(t=>{ const base=Math.min(t.width,t.height); const titleSize=clamp(base/7,10,16); const capSize=clamp(base/10,9,12); const showCap=base>=78; return <button key={t.id} onDoubleClick={()=>openTableModal(t)} onContextMenu={(e)=>{ e.preventDefault(); setSelectedTableId(t.id); setContextMenu({open:true,x:e.clientX,y:e.clientY,tableId:t.id}); }} onPointerDown={(e)=>{ e.stopPropagation(); startDrag(t,e); if (longPressRef.current) window.clearTimeout(longPressRef.current); longPressRef.current = window.setTimeout(()=>setContextMenu({open:true,x:e.clientX,y:e.clientY,tableId:t.id}),2000); }} onPointerUp={()=>{ if (longPressRef.current) window.clearTimeout(longPressRef.current); }} onClick={(e)=>{ e.stopPropagation(); setSelectedTableId(t.id); }} className={cn("absolute p-1 shadow transition",selectedTableId===t.id?"ring-2 ring-primary/60":"",t.shape==='round'&&'rounded-full',t.shape==='square'&&'rounded-md',t.shape==='rectangle'&&'rounded-lg',t.shape==='booth'&&'rounded-xl border-2',t.shape==='bar'&&'rounded-sm')} style={{left:t.x,top:t.y,width:t.width,height:t.height,transform:`rotate(${t.rotation}deg)`, backgroundColor:`${t.color||palette[0]}33`, borderColor:t.color||palette[0], borderWidth:2,color:'#fff'}}><div className="flex h-full w-full flex-col items-center justify-center text-center"><p className="max-w-full truncate px-1 font-semibold leading-tight" style={{fontSize:titleSize}}>{t.name}</p>{showCap?<p className="opacity-90" style={{fontSize:capSize}}>Cap. {t.capacity}</p>:null}{!t.isActive?<span className="text-[10px] text-red-300">Inactiva</span>:null}</div>
 {selectedTableId===t.id?<>
 <div className="absolute -top-7 left-1/2 -translate-x-1/2 text-[10px] bg-black/60 px-1 rounded">{Math.round(t.rotation)}°</div>
 <div title="Rotar mesa" onPointerDown={(e)=>startRotate(e,t)} className="absolute -top-8 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-primary" />
@@ -85,6 +164,8 @@ return <div className="p-4 space-y-4">
 <Dialog open={areaModal.open} onOpenChange={(open)=>setAreaModal({open,area:areaModal.area})}><DialogContent><DialogHeader><DialogTitle>{areaModal.area?'Editar área':'Nueva área'}</DialogTitle></DialogHeader><div className="space-y-3"><Label>Nombre del área</Label><Input value={areaForm.name} onChange={(e)=>setAreaForm(s=>({...s,name:e.target.value}))}/><div className="flex items-center justify-between"><Label>Activa</Label><Switch checked={areaForm.isActive} onCheckedChange={(v)=>setAreaForm(s=>({...s,isActive:v}))}/></div></div><DialogFooter><Button variant="outline" onClick={()=>setAreaModal({open:false})}>Cancelar</Button><Button onClick={async()=>{ if(!areaForm.name.trim()) return toast.error('El nombre del área es obligatorio.'); const saved=areaModal.area?await updateTableArea(areaModal.area.id,{name:areaForm.name.trim(),isActive:areaForm.isActive}):await createTableArea({name:areaForm.name.trim(),isActive:areaForm.isActive}); toast.success('Área guardada correctamente.'); setAreaModal({open:false}); await reload(); setSelectedAreaId(saved.id); }}>Guardar área</Button></DialogFooter></DialogContent></Dialog>
 
 <Dialog open={tableModal.open} onOpenChange={(open)=>setTableModal({open,table:tableModal.table})}><DialogContent><DialogHeader><DialogTitle>{tableModal.table?'Editar mesa':'Nueva mesa'}</DialogTitle></DialogHeader><div className="grid grid-cols-2 gap-3"><div className="col-span-2"><Label>Área</Label><Select value={tableForm.area} onValueChange={(v)=>setTableForm(s=>({...s,area:v}))}><SelectTrigger><SelectValue placeholder="Selecciona área"/></SelectTrigger><SelectContent>{areas.map(a=><SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}</SelectContent></Select></div><div className="col-span-2"><Label>Nombre</Label><Input placeholder="Mesa 1" value={tableForm.name} onChange={(e)=>{setNameEdited(true); setTableForm(s=>({...s,name:e.target.value}));}}/></div><div><Label>Número</Label><Input type="number" placeholder="1" value={tableForm.number} onChange={(e)=>{ const v=e.target.value; setTableForm(s=>({...s,number:v})); if(!nameEdited) setTableForm(s=>({...s,name:`Mesa ${v||1}`})); }}/></div><div><Label>Capacidad</Label><Input type="number" placeholder="4" value={tableForm.capacity} onChange={(e)=>{ const cap=e.target.value; setTableForm(s=>({...s,capacity:cap})); const r=getRecommendedTableSize(tableForm.shape,Number(cap||4)); if(!sizeEdited){ setTableForm(s=>({...s,width:String(r.width),height:String(r.height)})); } }}/></div><div><Label>Forma</Label><Select value={tableForm.shape} onValueChange={(v:RestaurantTable['shape'])=>{ setTableForm(s=>({...s,shape:v})); const r=getRecommendedTableSize(v,Number(tableForm.capacity||4)); if(!sizeEdited){ setTableForm(s=>({...s,width:String(r.width),height:String(r.height)})); } }}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{Object.entries(shapeLabel).map(([k,v])=><SelectItem key={k} value={k}>{v}</SelectItem>)}</SelectContent></Select></div><div><Label>Rotación</Label><Input type="number" placeholder="0" value={tableForm.rotation} onChange={(e)=>setTableForm(s=>({...s,rotation:e.target.value}))}/></div><div><Label>Ancho</Label><Input type="number" placeholder={String(recommended.width)} value={tableForm.width} onChange={(e)=>{ setSizeEdited(true); setTableForm(s=>({...s,width:e.target.value})); }}/></div><div><Label>Alto</Label><Input type="number" placeholder={String(recommended.height)} value={tableForm.height} onChange={(e)=>{ setSizeEdited(true); setTableForm(s=>({...s,height:e.target.value})); }}/></div><div className="col-span-2 text-xs text-muted-foreground">Tamaño sugerido para {Number(tableForm.capacity||4)} personas: {recommended.width} x {recommended.height} <Button type="button" size="sm" variant="ghost" onClick={()=>{ setSizeEdited(false); setTableForm(s=>({...s,width:String(recommended.width),height:String(recommended.height)})); }}>Usar medidas recomendadas</Button></div><div className="col-span-2"><Label>Color de mesa</Label><div className="flex gap-2 flex-wrap mb-2">{palette.map(c=><button type="button" key={c} className={cn('w-7 h-7 rounded border',tableForm.color===c&&'ring-2 ring-primary')} style={{background:c}} onClick={()=>setTableForm(s=>({...s,color:c}))} />)}</div><Input type="color" value={tableForm.color} onChange={(e)=>setTableForm(s=>({...s,color:e.target.value}))}/></div><div className="col-span-2 flex items-center justify-between"><Label>Activa</Label><Switch checked={tableForm.isActive} onCheckedChange={(v)=>setTableForm(s=>({...s,isActive:v}))}/></div></div><DialogFooter><Button variant="outline" onClick={()=>setTableModal({open:false})}>Cancelar</Button><Button onClick={async()=>{ const area=Number(tableForm.area); const num=Number(tableForm.number||1); if(!area) return toast.error('El área es obligatoria.'); if(!tableForm.name.trim()) return toast.error('El nombre de la mesa es obligatorio.'); if(tables.some(t=>t.area===area&&t.number===num&&t.id!==tableModal.table?.id)) return toast.error('Ya existe una mesa con este número en esta área.'); const payload={area,name:tableForm.name.trim(),number:num,capacity:Math.max(1,Number(tableForm.capacity||1)),shape:tableForm.shape,width:Math.max(60,Number(tableForm.width||recommended.width)),height:Math.max(50,Number(tableForm.height||recommended.height)),rotation:Number(tableForm.rotation||0),color:tableForm.color,isActive:tableForm.isActive,x:tableModal.table?.x??120,y:tableModal.table?.y??120}; const saved=tableModal.table?await updateRestaurantTable(tableModal.table.id,payload):await createRestaurantTable(payload); toast.success('Mesa guardada correctamente.'); setTableModal({open:false}); await reload(); setSelectedAreaId(saved.area); setSelectedTableId(saved.id); }}>Guardar mesa</Button></DialogFooter></DialogContent></Dialog>
+
+{contextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setContextMenu({open:false,x:0,y:0,tableId:null})}><Card className="absolute w-56 p-2" style={{ left: Math.min(contextMenu.x, window.innerWidth - 240), top: Math.min(contextMenu.y, window.innerHeight - 260) }} onClick={(e)=>e.stopPropagation()}><Button className="w-full justify-start h-11" variant="ghost" onClick={() => { const t=tables.find(x=>x.id===contextMenu.tableId); if(t) openTableModal(t); setContextMenu({open:false,x:0,y:0,tableId:null}); }}>Editar mesa</Button><Button className="w-full justify-start h-11" variant="ghost" onClick={() => { const t=tables.find(x=>x.id===contextMenu.tableId); if(t) void duplicateLocal(t); setContextMenu({open:false,x:0,y:0,tableId:null}); }}>Duplicar mesa</Button><Button className="w-full justify-start h-11" variant="ghost" onClick={() => { const t=tables.find(x=>x.id===contextMenu.tableId); if(t) setCopiedTable(t); setContextMenu({open:false,x:0,y:0,tableId:null}); }}>Copiar</Button><Button className="w-full justify-start h-11" variant="ghost" disabled={!copiedTable} onClick={() => { if(copiedTable) void duplicateLocal(copiedTable); setContextMenu({open:false,x:0,y:0,tableId:null}); }}>Pegar</Button><Button className="w-full justify-start h-11 text-red-500" variant="ghost" onClick={() => { const t=tables.find(x=>x.id===contextMenu.tableId); if(t && confirm('¿Deseas eliminar esta mesa?')) void deleteRestaurantTable(t.id).then(()=>reload()); setContextMenu({open:false,x:0,y:0,tableId:null}); }}>Eliminar/desactivar</Button></Card></div> : null}
 </div>; };
 
 export default TablesEditor;
