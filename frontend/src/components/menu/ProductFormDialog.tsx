@@ -15,6 +15,7 @@ import {
   InventoryProductLink,
   Product,
   ProductInventoryStockPolicy,
+  PosImagePolicy,
   ProductInventoryTrackingCreatePayload,
   ProductSpecialPriceRule,
   InventoryStockPolicy,
@@ -92,6 +93,7 @@ export const ProductFormDialog = ({
   const [disposableApplyTo, setDisposableApplyTo] = useState<string[]>([]);
   const [inventoryLinks, setInventoryLinks] = useState<InventoryProductLink[]>([]);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [posImagePolicy, setPosImagePolicy] = useState<PosImagePolicy>("inherit");
   const [inventoryComponentsEnabled, setInventoryComponentsEnabled] = useState(true);
   const [trackInventory, setTrackInventory] = useState(false);
   const [trackingMode, setTrackingMode] = useState<"link" | "create">("link");
@@ -151,6 +153,7 @@ export const ProductFormDialog = ({
       setDisposableApplyTo(editingProduct.disposableApplyTo ?? []);
       setInventoryLinks(editingProduct.inventoryLinks ?? []);
       setInventoryStockPolicy(editingProduct.inventoryStockPolicy ?? "inherit");
+      setPosImagePolicy(editingProduct.posImagePolicy ?? "inherit");
       setInventoryComponentsEnabled(editingProduct.inventoryComponentsEnabled ?? true);
       setTrackInventory(Boolean(editingProduct.trackInventory));
       setTrackingMode(editingProduct.trackedInventoryItem ? "link" : "create");
@@ -171,6 +174,7 @@ export const ProductFormDialog = ({
       setDisposableApplyTo([]);
       setInventoryLinks([]);
       setInventoryStockPolicy("inherit");
+      setPosImagePolicy("inherit");
       setInventoryComponentsEnabled(true);
       setTrackInventory(false);
       setTrackingMode("create");
@@ -316,6 +320,7 @@ export const ProductFormDialog = ({
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
         inventoryStockPolicy,
+        posImagePolicy,
         ...trackingPayload,
       });
     } else {
@@ -330,6 +335,7 @@ export const ProductFormDialog = ({
         disposableFee: Number(disposableFee || 0),
         disposableApplyTo,
         inventoryStockPolicy,
+        posImagePolicy,
         ...trackingPayload,
         inventoryLinks: inventoryLinks.map((row) => ({ inventoryItemId: row.inventoryItemId, quantityRequired: row.quantityRequired })),
       });
@@ -489,6 +495,22 @@ export const ProductFormDialog = ({
               <div className="md:col-span-2">
                 <ImageUploadField id="product-image" label="Imagen del producto" file={imageFile} previewUrl={previewUrl} onChange={setImageFile} />
               </div>
+
+              <div className="md:col-span-2 rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div>
+                  <Label htmlFor="product-pos-image-policy">Imagen en POS</Label>
+                  <p className="text-xs text-muted-foreground">Si el producto no tiene imagen guardada, se mostrará como tarjeta normal.</p>
+                </div>
+                <Select value={posImagePolicy} onValueChange={(value) => setPosImagePolicy(value as PosImagePolicy)}>
+                  <SelectTrigger id="product-pos-image-policy" className="max-w-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Heredar de categoría/global</SelectItem>
+                    <SelectItem value="show">Mostrar imagen en POS</SelectItem>
+                    <SelectItem value="hide">Ocultar imagen en POS</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               {previewUrl && (
                 <div className="md:col-span-2">
                   <Label className="text-sm">Vista previa</Label>

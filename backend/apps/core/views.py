@@ -46,6 +46,16 @@ FEATURE_FLAG_DEFAULTS = {
         "default": True,
         "metadata": {"policy": "allow"},
     },
+    "pos_product_images_enabled": {
+        "label": "Imágenes de productos en POS",
+        "description": "Muestra las imágenes guardadas de los productos en las tarjetas del POS.",
+        "default": False,
+    },
+    "table_map_enabled": {
+        "label": "Mapa de mesas",
+        "description": "Activa el modo restaurante con mapa de mesas, editor de salón y órdenes por mesa.",
+        "default": False,
+    },
 }
 
 CASH_EXPECTED_FIELDS = [
@@ -91,6 +101,8 @@ def get_feature_settings_payload() -> dict:
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
         "inventory_stock_policy": stock_policy,
         "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
+        "pos_product_images_enabled": bool(flags["pos_product_images_enabled"].is_enabled),
+        "table_map_enabled": bool(flags["table_map_enabled"].is_enabled),
     }
 
 
@@ -180,6 +192,8 @@ class FeatureSettingsView(APIView):
             "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
             "inventory_advanced_enabled": "FF_INVENTORY",
+            "pos_product_images_enabled": "pos_product_images_enabled",
+            "table_map_enabled": "table_map_enabled",
         }
         for field, key in mapping.items():
             if field in request.data:
