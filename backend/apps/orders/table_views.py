@@ -40,6 +40,14 @@ class DiningAreaDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateDes
     serializer_class = DiningAreaSerializer
     permission_classes = [IsAdminOrManager]
 
+    def destroy(self, request, *args, **kwargs):
+        area = self.get_object()
+        if area.tables.exists():
+            area.is_active = False
+            area.save(update_fields=["is_active", "updated_at"])
+            return Response({"detail": "El área tiene mesas asociadas y fue desactivada."}, status=200)
+        return super().destroy(request, *args, **kwargs)
+
 
 class RestaurantTableListCreateView(TableMapFeatureGuardMixin, generics.ListCreateAPIView):
     queryset = RestaurantTable.objects.select_related("area").all().order_by("area__sort_order", "sort_order", "id")
@@ -57,6 +65,21 @@ class RestaurantTableDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpda
     serializer_class = RestaurantTableSerializer
     permission_classes = [IsAdminOrManager]
 
+    def destroy(self, request, *args, **kwargs):
+        table = self.get_object()
+        has_active_session = TableSessionTable.objects.filter(
+            table=table,
+            session__status__in=["open", "sent_to_kitchen", "partially_paid"],
+        ).exists()
+        if has_active_session:
+            return Response({"detail": "No se puede eliminar una mesa con sesión activa."}, status=400)
+        has_history = TableSessionTable.objects.filter(table=table).exists()
+        if has_history:
+            table.is_active = False
+            table.save(update_fields=["is_active", "updated_at"])
+            return Response({"detail": "La mesa tiene historial y fue desactivada."}, status=200)
+        return super().destroy(request, *args, **kwargs)
+
 
 class TableLayoutView(TableMapFeatureGuardMixin, APIView):
     permission_classes = [IsAuthenticated]
@@ -64,18 +87,23 @@ class TableLayoutView(TableMapFeatureGuardMixin, APIView):
     def get(self, request):
         areas = DiningAreaSerializer(DiningArea.objects.filter(is_active=True), many=True).data
         tables = RestaurantTableSerializer(RestaurantTable.objects.select_related("area").filter(is_active=True), many=True).data
-        return Response({"areas": areas, "tables": tables})
+        sessions = TableSessionSerializer(
+            TableSession.objects.filter(status__in=["open", "sent_to_kitchen", "partially_paid"]).order_by("-opened_at"),
+            many=True,
+        ).data
+        return Response({"areas": areas, "tables": tables, "sessions": sessions})
 
     def patch(self, request):
         if not IsAdminOrManager().has_permission(request, self):
             return Response({"detail": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
         items = request.data.get("tables") or []
-        for row in items:
-            table_id = int(row.get("id"))
-            RestaurantTable.objects.filter(id=table_id).update(
-                x=float(row.get("x", 0)), y=float(row.get("y", 0)), width=max(float(row.get("width", 80)), 20),
-                height=max(float(row.get("height", 80)), 20), rotation=float(row.get("rotation", 0)),
-            )
+        with transaction.atomic():
+            for row in items:
+                table_id = int(row.get("id"))
+                RestaurantTable.objects.filter(id=table_id).update(
+                    x=float(row.get("x", 0)), y=float(row.get("y", 0)), width=max(float(row.get("width", 80)), 20),
+                    height=max(float(row.get("height", 80)), 20), rotation=float(row.get("rotation", 0)),
+                )
         return Response({"detail": "Mapa guardado correctamente."})
 
 

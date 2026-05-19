@@ -5978,21 +5978,59 @@ export type DiningArea = { id: number; name: string; sortOrder: number; isActive
 export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
 export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
 export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[] };
+export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
+
+const mapDiningArea = (x: any): DiningArea => ({ id: x.id, name: x.name, sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active) });
+const mapRestaurantTable = (x: any): RestaurantTable => ({ id: x.id, area: x.area, areaName: x.area_name, name: x.name, number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape, x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: x.color ?? '', isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) });
+const mapTableSession = (x: any): TableSession => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) });
 
 export const getDiningAreas = async (): Promise<DiningArea[]> => {
   const response = await request('/orders/tables/areas/');
   const data = await handleJson<any[]>(response);
-  return data.map((x) => ({ id: x.id, name: x.name, sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active) }));
+  return data.map(mapDiningArea);
+};
+export const createTableArea = async (payload: { name: string; sortOrder?: number; isActive?: boolean }): Promise<DiningArea> => {
+  const response = await request('/orders/tables/areas/', { method: 'POST', body: JSON.stringify({ name: payload.name, sort_order: payload.sortOrder ?? 0, is_active: payload.isActive ?? true }) });
+  return mapDiningArea(await handleJson<any>(response));
+};
+export const updateTableArea = async (id: number, payload: Partial<{ name: string; sortOrder: number; isActive: boolean }>): Promise<DiningArea> => {
+  const response = await request(`/orders/tables/areas/${id}/`, { method: 'PATCH', body: JSON.stringify({ ...(payload.name !== undefined ? { name: payload.name } : {}), ...(payload.sortOrder !== undefined ? { sort_order: payload.sortOrder } : {}), ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}) }) });
+  return mapDiningArea(await handleJson<any>(response));
+};
+export const deleteTableArea = async (id: number): Promise<{ detail: string }> => {
+  const response = await request(`/orders/tables/areas/${id}/`, { method: 'DELETE' });
+  return handleJson<{ detail: string }>(response);
 };
 export const getRestaurantTables = async (): Promise<RestaurantTable[]> => {
   const response = await request('/orders/tables/');
   const data = await handleJson<any[]>(response);
-  return data.map((x) => ({ id: x.id, area: x.area, areaName: x.area_name, name: x.name, number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape, x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: x.color ?? '', isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) }));
+  return data.map(mapRestaurantTable);
+};
+export const createRestaurantTable = async (payload: { area: number; name: string; number?: number; capacity?: number; shape?: RestaurantTable['shape']; x?: number; y?: number; width?: number; height?: number; rotation?: number; color?: string; isActive?: boolean; sortOrder?: number; }): Promise<RestaurantTable> => {
+  const response = await request('/orders/tables/', { method: 'POST', body: JSON.stringify({ area: payload.area, name: payload.name, number: payload.number ?? 1, capacity: payload.capacity ?? 4, shape: payload.shape ?? 'round', x: payload.x ?? 0, y: payload.y ?? 0, width: payload.width ?? 110, height: payload.height ?? 110, rotation: payload.rotation ?? 0, color: payload.color ?? '', is_active: payload.isActive ?? true, sort_order: payload.sortOrder ?? 0 }) });
+  return mapRestaurantTable(await handleJson<any>(response));
+};
+export const updateRestaurantTable = async (id: number, payload: Partial<{ area: number; name: string; number: number; capacity: number; shape: RestaurantTable['shape']; x: number; y: number; width: number; height: number; rotation: number; color: string; isActive: boolean; sortOrder: number; }>): Promise<RestaurantTable> => {
+  const response = await request(`/orders/tables/${id}/`, { method: 'PATCH', body: JSON.stringify({ ...(payload.area !== undefined ? { area: payload.area } : {}), ...(payload.name !== undefined ? { name: payload.name } : {}), ...(payload.number !== undefined ? { number: payload.number } : {}), ...(payload.capacity !== undefined ? { capacity: payload.capacity } : {}), ...(payload.shape !== undefined ? { shape: payload.shape } : {}), ...(payload.x !== undefined ? { x: payload.x } : {}), ...(payload.y !== undefined ? { y: payload.y } : {}), ...(payload.width !== undefined ? { width: payload.width } : {}), ...(payload.height !== undefined ? { height: payload.height } : {}), ...(payload.rotation !== undefined ? { rotation: payload.rotation } : {}), ...(payload.color !== undefined ? { color: payload.color } : {}), ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}), ...(payload.sortOrder !== undefined ? { sort_order: payload.sortOrder } : {}) }) });
+  return mapRestaurantTable(await handleJson<any>(response));
+};
+export const deleteRestaurantTable = async (id: number): Promise<{ detail: string }> => {
+  const response = await request(`/orders/tables/${id}/`, { method: 'DELETE' });
+  return handleJson<{ detail: string }>(response);
+};
+export const getTableLayout = async (): Promise<TableLayout> => {
+  const response = await request('/orders/tables/layout/');
+  const data = await handleJson<any>(response);
+  return { areas: (data.areas ?? []).map(mapDiningArea), tables: (data.tables ?? []).map(mapRestaurantTable), sessions: (data.sessions ?? []).map(mapTableSession) };
+};
+export const saveTableLayout = async (payload: { tables: Array<{ id: number; x: number; y: number; width: number; height: number; rotation: number }> }): Promise<{ detail: string }> => {
+  const response = await request('/orders/tables/layout/', { method: 'PATCH', body: JSON.stringify(payload) });
+  return handleJson<{ detail: string }>(response);
 };
 export const getTableSessions = async (): Promise<TableSession[]> => {
   const response = await request('/orders/tables/sessions/');
   const data = await handleJson<any[]>(response);
-  return data.map((x) => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) }));
+  return data.map(mapTableSession);
 };
 export const createTableSession = async (payload: { tableIds: number[]; guestsCount: number; orderMode: 'table'|'per_person'; notes?: string; }): Promise<TableSession> => {
   const response = await request('/orders/tables/sessions/', { method: 'POST', body: JSON.stringify({ table_ids: payload.tableIds, guests_count: payload.guestsCount, order_mode: payload.orderMode, notes: payload.notes ?? '' }) });
