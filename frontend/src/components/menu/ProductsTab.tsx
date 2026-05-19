@@ -12,9 +12,10 @@ import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
 import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
 import { ProductInventoryLinksDialog } from "./ProductInventoryLinksDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError, type ProductInventoryStockPolicy } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError, type ProductInventoryStockPolicy, type PosImagePolicy } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { useReorderableList } from "@/hooks/useReorderableList";
 
@@ -76,6 +77,19 @@ const categoryPolicyDescriptions: Record<ProductInventoryStockPolicy, string> = 
   block: "Bloquear venta si no hay stock",
 };
 
+const categoryPosImagePolicyLabels: Record<PosImagePolicy, string> = {
+  inherit: "Hereda imágenes",
+  show: "Muestra imágenes",
+  hide: "Oculta imágenes",
+};
+
+const categoryPosImagePolicyDescriptions: Record<PosImagePolicy, string> = {
+  inherit: "Heredar configuración global",
+  show: "Mostrar imágenes en productos",
+  hide: "Ocultar imágenes en productos",
+};
+
+
 export const ProductsTab = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -97,9 +111,11 @@ export const ProductsTab = () => {
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryInventoryStockPolicy, setNewCategoryInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [newCategoryPosImagePolicy, setNewCategoryPosImagePolicy] = useState<PosImagePolicy>("inherit");
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [editingCategoryInventoryStockPolicy, setEditingCategoryInventoryStockPolicy] = useState<ProductInventoryStockPolicy>("inherit");
+  const [editingCategoryPosImagePolicy, setEditingCategoryPosImagePolicy] = useState<PosImagePolicy>("inherit");
   const [editingCategoryImage, setEditingCategoryImage] = useState<File | null>(null);
   const [removeEditingCategoryImage, setRemoveEditingCategoryImage] = useState(false);
   const [draggingCategoryId, setDraggingCategoryId] = useState<number | null>(null);
@@ -242,9 +258,10 @@ export const ProductsTab = () => {
     const normalized = newCategoryName.trim().toUpperCase();
     if (!normalized) return;
     try {
-      await createCategory({ name: normalized, inventoryStockPolicy: newCategoryInventoryStockPolicy });
+      await createCategory({ name: normalized, inventoryStockPolicy: newCategoryInventoryStockPolicy, posProductImagesPolicy: newCategoryPosImagePolicy });
       setNewCategoryName("");
       setNewCategoryInventoryStockPolicy("inherit");
+      setNewCategoryPosImagePolicy("inherit");
       await loadMenuData();
       toast.success("Categoría creada");
     } catch (error) {
@@ -262,10 +279,12 @@ export const ProductsTab = () => {
         image: editingCategoryImage,
         removeImage: removeEditingCategoryImage,
         inventoryStockPolicy: editingCategoryInventoryStockPolicy,
+        posProductImagesPolicy: editingCategoryPosImagePolicy,
       });
       setEditingCategoryId(null);
       setEditingCategoryName("");
       setEditingCategoryInventoryStockPolicy("inherit");
+      setEditingCategoryPosImagePolicy("inherit");
       setEditingCategoryImage(null);
       setRemoveEditingCategoryImage(false);
       await loadMenuData();
@@ -605,7 +624,7 @@ export const ProductsTab = () => {
             <DialogDescription>Crear, editar y eliminar categorías desde un solo lugar.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-[1fr_260px_auto]">
+            <div className="grid gap-2 md:grid-cols-[1fr_220px_220px_auto]">
               <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="Nueva categoría" />
               <Select value={newCategoryInventoryStockPolicy} onValueChange={(value) => setNewCategoryInventoryStockPolicy(value as ProductInventoryStockPolicy)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -614,6 +633,14 @@ export const ProductsTab = () => {
                   <SelectItem value="allow">Permitir venta aunque no haya stock</SelectItem>
                   <SelectItem value="warn">Advertir antes de vender</SelectItem>
                   <SelectItem value="block">Bloquear venta si no hay stock</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={newCategoryPosImagePolicy} onValueChange={(value) => setNewCategoryPosImagePolicy(value as PosImagePolicy)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">Heredar imágenes</SelectItem>
+                  <SelectItem value="show">Mostrar imágenes</SelectItem>
+                  <SelectItem value="hide">Ocultar imágenes</SelectItem>
                 </SelectContent>
               </Select>
               <Button onClick={handleCreateCategory}>Crear</Button>
@@ -651,6 +678,18 @@ export const ProductsTab = () => {
                         </Select>
                         <p className="text-xs text-muted-foreground">Esta política se aplicará a los productos de esta categoría que tengan la política del producto en ‘Heredar’.</p>
                       </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Imágenes de productos en POS</Label>
+                        <Select value={editingCategoryPosImagePolicy} onValueChange={(value) => setEditingCategoryPosImagePolicy(value as PosImagePolicy)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="inherit">Heredar configuración global</SelectItem>
+                            <SelectItem value="show">Mostrar imágenes en productos</SelectItem>
+                            <SelectItem value="hide">Ocultar imágenes en productos</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">Controla si los productos de esta categoría muestran imagen en el POS.</p>
+                      </div>
                       <ImageUploadField
                         id={`edit-category-image-${category.id}`}
                         label="Imagen"
@@ -684,9 +723,9 @@ export const ProductsTab = () => {
                       </button>
                       <div className="flex-1 space-y-1">
                         <div className="font-medium">{category.name}</div>
-                        <Badge variant="outline" className="text-[10px]" title={categoryPolicyDescriptions[category.inventoryStockPolicy ?? "inherit"]}>{categoryPolicyLabels[category.inventoryStockPolicy ?? "inherit"]}</Badge>
+                        <div className="flex flex-wrap gap-1"><Badge variant="outline" className="text-[10px]" title={categoryPolicyDescriptions[category.inventoryStockPolicy ?? "inherit"]}>{categoryPolicyLabels[category.inventoryStockPolicy ?? "inherit"]}</Badge><Badge variant="secondary" className="text-[10px]" title={categoryPosImagePolicyDescriptions[category.posProductImagesPolicy ?? "inherit"]}>{categoryPosImagePolicyLabels[category.posProductImagesPolicy ?? "inherit"]}</Badge></div>
                       </div>
-                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryInventoryStockPolicy(category.inventoryStockPolicy ?? "inherit"); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
+                      <Button size="sm" variant="outline" onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); setEditingCategoryInventoryStockPolicy(category.inventoryStockPolicy ?? "inherit"); setEditingCategoryPosImagePolicy(category.posProductImagesPolicy ?? "inherit"); setEditingCategoryImage(null); setRemoveEditingCategoryImage(false); }}>
                         Editar
                       </Button>
                       <Button

@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, Armchair } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -78,6 +78,10 @@ import {
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
+  getDiningAreas,
+  getRestaurantTables,
+  getTableSessions,
+  createTableSession,
   Category,
   Discount,
   ModifierGroup,
@@ -442,6 +446,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
+  const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
+  const [tableMapEnabled, setTableMapEnabled] = useState(false);
+  const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
+  const [diningAreas, setDiningAreas] = useState<any[]>([]);
+  const [restaurantTables, setRestaurantTables] = useState<any[]>([]);
+  const [tableSessions, setTableSessions] = useState<any[]>([]);
+  const [selectedOpsArea, setSelectedOpsArea] = useState<number | "all">("all");
+  const [selectedOpsFilter, setSelectedOpsFilter] = useState<"all"|"free"|"occupied"|"kitchen">("all");
+  const [selectedOpsTableId, setSelectedOpsTableId] = useState<number | null>(null);
+  const [newSessionDialog, setNewSessionDialog] = useState<{ open: boolean; tableId: number | null; guests: number; orderMode: "table"|"per_person"; notes: string }>({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+  const [opsContextMenu, setOpsContextMenu] = useState<{ open: boolean; x: number; y: number; tableId: number | null }>({ open: false, x: 0, y: 0, tableId: null });
+  const [mergeMode, setMergeMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
+  const longPressOpsRef = useRef<number | null>(null);
+  const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
@@ -533,6 +551,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   );
   const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
 
+  const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+
+  const shouldShowProductImage = useCallback((product: Product) => {
+    if (!product.imageUrl || hiddenProductImages[product.id]) return false;
+    if (product.posImagePolicy === "show") return true;
+    if (product.posImagePolicy === "hide") return false;
+    const categoryPolicy = categoryById.get(product.categoryId)?.posProductImagesPolicy ?? "inherit";
+    if (categoryPolicy === "show") return true;
+    if (categoryPolicy === "hide") return false;
+    return posProductImagesEnabled;
+  }, [categoryById, hiddenProductImages, posProductImagesEnabled]);
+
   const loadMenuData = async () => {
     const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
@@ -553,6 +583,76 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       });
   }, []);
 
+
+  useEffect(() => {
+    if (!tableMapEnabled) return;
+    Promise.all([getDiningAreas().catch(() => []), getRestaurantTables().catch(() => []), getTableSessions().catch(() => [])])
+      .then(([areas, tables, sessions]) => {
+        setDiningAreas(areas);
+        setRestaurantTables(tables);
+        setTableSessions(sessions);
+      })
+      .catch(() => undefined);
+  }, [tableMapEnabled]);
+
+  const sessionByTableId = useMemo(() => {
+    const map = new Map<number, any>();
+    tableSessions.forEach((session) => {
+      (session.tableIds || []).forEach((tableId: number) => map.set(tableId, session));
+    });
+    return map;
+  }, [tableSessions]);
+
+  const openTableSession = async (tableId: number) => {
+    const existing = sessionByTableId.get(tableId);
+    if (existing?.primaryOrder) {
+      navigate(`/pos?pending_order_id=${existing.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      return;
+    }
+    try {
+      const created = await createTableSession({ tableIds: [tableId], guestsCount: 2, orderMode: "table" });
+      if (created.primaryOrder) navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir mesa.");
+    }
+  };
+
+  const getSessionStateLabel = (session: any | undefined) => {
+    if (!session) return "Libre";
+    if (session.status === "sent_to_kitchen") return "En cocina";
+    if (session.status === "partially_paid") return "Parcial";
+    return "Ocupada";
+  };
+
+
+  const handleMergeWithTable = async (targetTableId: number) => {
+    if (!mergeMode.active || !mergeMode.sessionId) return;
+    const targetSession = sessionByTableId.get(targetTableId);
+    if (targetSession) { toast.error("Solo puedes unir mesas libres en esta versión."); return; }
+    try {
+      const { mergeTableSessionTables } = await import("@/lib/api");
+      await mergeTableSessionTables(mergeMode.sessionId, [targetTableId]);
+      toast.success("Mesas unidas correctamente.");
+      setMergeMode({ active: false, sessionId: null, sourceTableId: null });
+      const sessions = await getTableSessions();
+      setTableSessions(sessions);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo unir la mesa.");
+    }
+  };
+
+  const beginSessionFromDialog = async () => {
+    if (!newSessionDialog.tableId) return;
+    try {
+      const created = await createTableSession({ tableIds: [newSessionDialog.tableId], guestsCount: Math.max(1, newSessionDialog.guests), orderMode: newSessionDialog.orderMode, notes: newSessionDialog.notes || undefined });
+      setNewSessionDialog({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+      if (created.primaryOrder) {
+        navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo iniciar orden de mesa.");
+    }
+  };
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
     const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
@@ -1516,7 +1616,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
-    getFeatureSettings().then((settings) => setInventoryStockPolicy(settings.inventoryStockPolicy)).catch(() => undefined);
+    getFeatureSettings().then((settings) => {
+      setInventoryStockPolicy(settings.inventoryStockPolicy);
+      setPosProductImagesEnabled(settings.posProductImagesEnabled);
+      setTableMapEnabled(settings.tableMapEnabled);
+    }).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -2922,12 +3026,102 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     );
   }
 
+  if (tableMapEnabled && posMode === "tables") {
+    const opsTables = restaurantTables.filter((table) => selectedOpsArea === "all" || table.area === selectedOpsArea).filter((table) => {
+      const session = sessionByTableId.get(table.id);
+      if (selectedOpsFilter === "free") return !session;
+      if (selectedOpsFilter === "occupied") return Boolean(session && session.status !== "sent_to_kitchen");
+      if (selectedOpsFilter === "kitchen") return session?.status === "sent_to_kitchen";
+      return true;
+    });
+    const freeCount = restaurantTables.filter((t) => !sessionByTableId.get(t.id)).length;
+    const kitchenCount = restaurantTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
+    const occupiedCount = restaurantTables.filter((t) => !!sessionByTableId.get(t.id) && sessionByTableId.get(t.id)?.status !== "sent_to_kitchen").length;
+
+    return (
+      <div className="h-[100dvh] bg-background p-3 sm:p-4">
+        <div className="mx-auto grid h-full max-w-[1800px] grid-cols-1 gap-3 lg:grid-cols-[250px_1fr_320px]">
+          <Card className="p-3 space-y-3">
+            <Button variant="outline" onClick={() => setPosMode("pos")}>POS rápido</Button>{selectedOpsArea !== "all" ? <Button variant="outline" onClick={() => setSelectedOpsArea("all")}>Volver a todas</Button> : null}
+            <Button variant="outline" onClick={() => navigate("/tables/editor")}>Editor de mesas</Button>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Áreas</p><button className={cn("w-full rounded border p-2 text-left", selectedOpsArea === "all" && "border-primary")} onClick={() => setSelectedOpsArea("all")}>Todas</button>{diningAreas.map((a) => <button key={a.id} className={cn("w-full rounded border p-2 text-left", selectedOpsArea === a.id && "border-primary")} onClick={() => setSelectedOpsArea(a.id)}>{a.name}</button>)}</div>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Estado</p><Button variant={selectedOpsFilter === "all" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("all")}>Todas</Button><Button variant={selectedOpsFilter === "free" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("free")}>Libres</Button><Button variant={selectedOpsFilter === "occupied" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("occupied")}>Ocupadas</Button><Button variant={selectedOpsFilter === "kitchen" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("kitchen")}>En cocina</Button></div>
+          </Card>
+
+          <Card className="p-3 overflow-auto">
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-xl font-bold">Mesas</h2><div className="flex gap-2 text-xs"><Badge variant="secondary">Libres: {freeCount}</Badge><Badge variant="secondary">Ocupadas: {occupiedCount}</Badge><Badge variant="secondary">En cocina: {kitchenCount}</Badge></div></div>
+            <div className="relative h-[calc(100dvh-170px)] overflow-auto rounded-xl border bg-slate-950">
+              <div className="relative h-[1200px] w-[1800px]">
+                {selectedOpsArea === "all" ? diningAreas.map((area) => {
+                  const areaTables = restaurantTables.filter((t) => t.area === area.id);
+                  const areaFree = areaTables.filter((t) => !sessionByTableId.get(t.id)).length;
+                  const areaKitchen = areaTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
+                  const areaOccupied = areaTables.length - areaFree;
+                  return <button key={area.id} className="absolute rounded-xl border-2 p-3 text-left text-white" style={{ left: area.x ?? 0, top: area.y ?? 0, width: area.width ?? 320, height: area.height ?? 220, borderColor: area.color || "#64748b", backgroundColor: `${area.color || "#64748b"}33` }} onClick={() => setSelectedOpsArea(area.id)}><p className="font-semibold">{area.name}</p><p className="text-xs opacity-90">Libres: {areaFree}</p><p className="text-xs opacity-90">Ocupadas: {areaOccupied}</p><p className="text-xs opacity-90">En cocina: {areaKitchen}</p></button>;
+                }) : opsTables.map((table) => {
+                  const session = sessionByTableId.get(table.id);
+                  const selected = selectedOpsTableId === table.id;
+                  const stateLabel = getSessionStateLabel(session);
+                  return (
+                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),2000); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={() => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
+                      <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-white">
+                        <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
+                        {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
+                        <span className="mt-1 rounded bg-black/40 px-1 text-[10px]">{stateLabel}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-3">
+            {!selectedOpsTableId ? <p className="text-sm text-muted-foreground">Selecciona una mesa para ver acciones.</p> : (() => { const table = restaurantTables.find((t) => t.id === selectedOpsTableId); const session = selectedOpsTableId ? sessionByTableId.get(selectedOpsTableId) : null; if (!table) return null; return <div className="space-y-2"><h3 className="font-semibold">{table.name}</h3><p className="text-sm text-muted-foreground">{session ? "Mesa ocupada" : "Mesa libre"}</p><Button className="w-full" onClick={() => session ? void openTableSession(table.id) : setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" })}>{session ? "Agregar productos" : "Nueva orden"}</Button><Button className="w-full" variant="outline" disabled={!session}>Enviar a cocina</Button><Button className="w-full" variant="outline" disabled={!session}>Unir mesa</Button><Button className="w-full" variant="outline" disabled={!session}>Cobrar mesa</Button></div>; })()}
+          </Card>
+        </div>
+
+        {opsContextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}><Card className="absolute w-64 p-2" style={{ left: Math.min(opsContextMenu.x, window.innerWidth - 270), top: Math.min(opsContextMenu.y, window.innerHeight - 320) }} onClick={(e)=>e.stopPropagation()}>{(() => { const table = restaurantTables.find((t) => t.id === opsContextMenu.tableId); const session = table ? sessionByTableId.get(table.id) : null; if (!table) return null; return <div className="space-y-1"><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"table", notes:"" }); else void openTableSession(table.id); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>{session ? "Ver orden" : "Nueva orden"}</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session} onClick={() => { setMergeMode({ active:true, sessionId: session?.id ?? null, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>Unir mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Unir cuentas requiere soporte de fusión de órdenes en backend.")}>Unir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Transferir cuenta queda preparado para próxima iteración.")}>Transferir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>Cancelar</Button></div>; })()}</Card></div> : null}
+        <Dialog open={newSessionDialog.open} onOpenChange={(open) => setNewSessionDialog((prev) => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Nueva orden</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<div className="ml-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1"><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button><span className="min-w-8 text-center font-semibold">{newSessionDialog.guests}</span><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.min(99,p.guests+1)}))}>+</Button></div></div></div>{(() => { const table = restaurantTables.find((t) => t.id === newSessionDialog.tableId); const cap = Number(table?.capacity || 0); return cap > 0 && newSessionDialog.guests > cap ? <p className="text-xs text-amber-500">Sobre capacidad sugerida de la mesa.</p> : null; })()}
+              <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
+              <div><Label>Notas</Label><Textarea value={newSessionDialog.notes} onChange={(e)=>setNewSessionDialog((p)=>({...p,notes:e.target.value}))} /></div>
+            </div>
+            <DialogFooter><Button variant="outline" onClick={()=>setNewSessionDialog({ open:false, tableId:null, guests:2, orderMode:"table", notes:"" })}>Cancelar</Button><Button onClick={() => void beginSessionFromDialog()}>Iniciar orden</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className={cn("h-full min-h-0 px-2 pb-4 pt-4 lg:px-4", requiresCashOpen && "pointer-events-none select-none opacity-80")}>
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
+            {tableMapEnabled ? (
+              <Card className="p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant={posMode === "tables" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("tables")}><Armchair className="mr-2 h-4 w-4"/>Mesas</Button>
+                  <Button variant={posMode === "pos" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("pos")}>POS</Button>
+                  <Button variant="outline" className="h-10" onClick={() => navigate('/tables/editor')}>Editor de mesas</Button>
+                </div>
+                {posMode === "tables" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {restaurantTables.map((table) => {
+                      const session = sessionByTableId.get(table.id);
+                      const stateClass = !table.isActive ? "border-muted bg-muted/20" : session?.status === "sent_to_kitchen" ? "border-orange-500/50 bg-orange-500/10" : session ? "border-blue-500/50 bg-blue-500/10" : "border-emerald-500/40 bg-emerald-500/10";
+                      return <button key={table.id} onClick={() => void openTableSession(table.id)} className={cn("rounded-xl border p-3 text-left", stateClass)}><p className="font-semibold">{table.name}</p><p className="text-xs text-muted-foreground">{session ? "Ocupada" : "Libre"} · Cap. {table.capacity}</p></button>;
+                    })}
+                  </div>
+                ) : null}
+              </Card>
+            ) : null}
+
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -2986,28 +3180,44 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
                     const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
                     const stockTitle = blocked ? (availability?.policySource === "category" ? "Bloqueado por política de categoría" : "No hay stock disponible para agregar más unidades") : product.name;
+                    const showProductImage = shouldShowProductImage(product);
                     return (
                     <Card
                       key={product.id}
-                    className={cn("p-4 hover-lift", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
-                    onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
-                    title={stockTitle}
-                    aria-disabled={blocked}
-                  >
-                    <div className="mb-1 flex items-start justify-between gap-2"><h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>{badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}</div>
-                    {productPricing.display.showOfferBadge && (
-                      <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
-                        {productPricing.appliedRule?.name?.trim() || "OFERTA"}
-                      </Badge>
-                    )}
-                    <div className="space-y-0.5">
-                      {productPricing.display.showOfferBadge && (
-                        <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                      className={cn("relative overflow-hidden hover-lift", showProductImage ? "p-2" : "p-4", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
+                      onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
+                      title={stockTitle}
+                      aria-disabled={blocked}
+                    >
+                      {showProductImage && (
+                        <div className="relative mb-2 aspect-[4/3] overflow-hidden rounded-xl bg-muted/40">
+                          <img
+                            src={product.imageUrl ?? ""}
+                            alt={product.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                            onError={() => setHiddenProductImages((previous) => ({ ...previous, [product.id]: true }))}
+                          />
+                          {badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="absolute right-2 top-2 bg-background/90 text-[10px] shadow-sm backdrop-blur">{badgeText}</Badge> : null}
+                        </div>
                       )}
-                      <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
-                    </div>
-                  </Card>
-                );
+                      <div className="mb-1 flex items-start justify-between gap-2">
+                        <h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>
+                        {!showProductImage && badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}
+                      </div>
+                      {productPricing.display.showOfferBadge && (
+                        <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                          {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                        </Badge>
+                      )}
+                      <div className="space-y-0.5">
+                        {productPricing.display.showOfferBadge && (
+                          <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                        )}
+                        <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
+                      </div>
+                    </Card>
+                  );
                 })}
               </div>
             </div>

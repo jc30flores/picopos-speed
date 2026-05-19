@@ -29,7 +29,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ["id", "name", "image", "image_path", "image_url", "remove_image", "is_active", "is_hidden", "position", "inventory_stock_policy"]
+        fields = ["id", "name", "image", "image_path", "image_url", "remove_image", "is_active", "is_hidden", "position", "inventory_stock_policy", "pos_product_images_policy"]
 
     def get_image_url(self, obj: Category) -> str | None:
         return safe_media_url(image=obj.image, image_path=obj.image_path)
@@ -328,6 +328,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "disposable_apply_to",
             "requires_kitchen",
             "inventory_stock_policy",
+            "pos_image_policy",
             "inventory_components_enabled",
             "track_inventory",
             "tracked_inventory_item",
