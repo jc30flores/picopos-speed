@@ -442,6 +442,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
+  const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
+  const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
@@ -532,6 +534,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     [availableDiscounts, cart, products, selectedDiscount, serviceType, serviceTypes]
   );
   const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
+
+  const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+
+  const shouldShowProductImage = useCallback((product: Product) => {
+    if (!product.imageUrl || hiddenProductImages[product.id]) return false;
+    if (product.posImagePolicy === "show") return true;
+    if (product.posImagePolicy === "hide") return false;
+    const categoryPolicy = categoryById.get(product.categoryId)?.posProductImagesPolicy ?? "inherit";
+    if (categoryPolicy === "show") return true;
+    if (categoryPolicy === "hide") return false;
+    return posProductImagesEnabled;
+  }, [categoryById, hiddenProductImages, posProductImagesEnabled]);
 
   const loadMenuData = async () => {
     const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
@@ -1516,7 +1530,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
-    getFeatureSettings().then((settings) => setInventoryStockPolicy(settings.inventoryStockPolicy)).catch(() => undefined);
+    getFeatureSettings().then((settings) => {
+      setInventoryStockPolicy(settings.inventoryStockPolicy);
+      setPosProductImagesEnabled(settings.posProductImagesEnabled);
+    }).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -2986,28 +3003,44 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
                     const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
                     const stockTitle = blocked ? (availability?.policySource === "category" ? "Bloqueado por política de categoría" : "No hay stock disponible para agregar más unidades") : product.name;
+                    const showProductImage = shouldShowProductImage(product);
                     return (
                     <Card
                       key={product.id}
-                    className={cn("p-4 hover-lift", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
-                    onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
-                    title={stockTitle}
-                    aria-disabled={blocked}
-                  >
-                    <div className="mb-1 flex items-start justify-between gap-2"><h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>{badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}</div>
-                    {productPricing.display.showOfferBadge && (
-                      <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
-                        {productPricing.appliedRule?.name?.trim() || "OFERTA"}
-                      </Badge>
-                    )}
-                    <div className="space-y-0.5">
-                      {productPricing.display.showOfferBadge && (
-                        <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                      className={cn("relative overflow-hidden hover-lift", showProductImage ? "p-2" : "p-4", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
+                      onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
+                      title={stockTitle}
+                      aria-disabled={blocked}
+                    >
+                      {showProductImage && (
+                        <div className="relative mb-2 aspect-[4/3] overflow-hidden rounded-xl bg-muted/40">
+                          <img
+                            src={product.imageUrl ?? ""}
+                            alt={product.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                            onError={() => setHiddenProductImages((previous) => ({ ...previous, [product.id]: true }))}
+                          />
+                          {badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="absolute right-2 top-2 bg-background/90 text-[10px] shadow-sm backdrop-blur">{badgeText}</Badge> : null}
+                        </div>
                       )}
-                      <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
-                    </div>
-                  </Card>
-                );
+                      <div className="mb-1 flex items-start justify-between gap-2">
+                        <h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>
+                        {!showProductImage && badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}
+                      </div>
+                      {productPricing.display.showOfferBadge && (
+                        <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                          {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                        </Badge>
+                      )}
+                      <div className="space-y-0.5">
+                        {productPricing.display.showOfferBadge && (
+                          <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                        )}
+                        <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
+                      </div>
+                    </Card>
+                  );
                 })}
               </div>
             </div>

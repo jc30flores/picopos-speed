@@ -6,6 +6,7 @@ export type Category = {
   id: number;
   name: string;
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posProductImagesPolicy?: PosImagePolicy;
   image?: string | null;
   imagePath?: string | null;
   imageUrl?: string | null;
@@ -38,6 +39,7 @@ export type ModifierGroup = {
 };
 
 export type ProductInventoryStockPolicy = "inherit" | "allow" | "warn" | "block";
+export type PosImagePolicy = "inherit" | "show" | "hide";
 
 export type Product = {
   id: number;
@@ -68,6 +70,7 @@ export type Product = {
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
   inventoryLinks?: InventoryProductLink[];
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posImagePolicy?: PosImagePolicy;
   inventoryComponentsEnabled?: boolean;
   trackInventory?: boolean;
   trackedInventoryItem?: number | null;
@@ -326,6 +329,7 @@ type FeatureFlagsNormalized = {
   cashCloseExpectedTotalsControlEnabled: boolean;
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
+  posProductImagesEnabled: boolean;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -336,6 +340,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     cashCloseExpectedTotalsControlEnabled: true,
     inventoryStockPolicy: "allow",
     inventoryAdvancedEnabled: false,
+    posProductImagesEnabled: false,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -352,6 +357,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
+      posProductImagesEnabled: fromMap(byKey, ['pos_product_images_enabled'], defaults.posProductImagesEnabled),
     };
   }
   return {
@@ -361,6 +367,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
+    posProductImagesEnabled: fromMap(raw, ['posProductImagesEnabled', 'pos_product_images_enabled'], defaults.posProductImagesEnabled),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -397,6 +404,11 @@ const normalizeProductInventoryStockPolicy = (value: unknown): ProductInventoryS
   return policy === "allow" || policy === "warn" || policy === "block" ? policy : "inherit";
 };
 
+const normalizePosImagePolicy = (value: unknown): PosImagePolicy => {
+  const policy = String(value || "inherit").toLowerCase();
+  return policy === "show" || policy === "hide" ? policy : "inherit";
+};
+
 type CategoryApiPayload = {
   id: number;
   name: string;
@@ -407,6 +419,7 @@ type CategoryApiPayload = {
   is_hidden?: boolean;
   position?: number;
   inventory_stock_policy?: ProductInventoryStockPolicy;
+  pos_product_images_policy?: PosImagePolicy;
 };
 
 const normalizeCategory = (data: CategoryApiPayload): Category => ({
@@ -419,6 +432,7 @@ const normalizeCategory = (data: CategoryApiPayload): Category => ({
   isHidden: Boolean(data.is_hidden),
   position: Number(data.position ?? 0),
   inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+  posProductImagesPolicy: normalizePosImagePolicy(data.pos_product_images_policy),
 });
 
 const appendProductInventoryTrackingFormData = (formData: FormData, payload: {
@@ -475,6 +489,7 @@ export type FeatureSettings = {
   cashCloseExpectedTotalsVisibleFields: string[];
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
+  posProductImagesEnabled: boolean;
 };
 
 export type FeatureSettingsOptions = {
@@ -1175,6 +1190,7 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
+    posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
   };
 };
 
@@ -1190,6 +1206,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
       inventory_stock_policy: payload.inventoryStockPolicy,
       inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
+      pos_product_images_enabled: payload.posProductImagesEnabled,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1203,6 +1220,7 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
+    posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
   };
 };
 
@@ -1226,7 +1244,7 @@ export const getTransactionTicket = async (paymentId: number): Promise<Transacti
   };
 };
 
-export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy }): Promise<Category> => {
+export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy; posProductImagesPolicy?: PosImagePolicy }): Promise<Category> => {
   const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, inventoryStockPolicy: "inherit" as ProductInventoryStockPolicy } : payload;
   const formData = new FormData();
   formData.append("name", normalizedPayload.name);
@@ -1234,6 +1252,7 @@ export const createCategory = async (payload: string | { name: string; image?: F
     formData.append("image", normalizedPayload.image);
   }
   formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_product_images_policy", normalizedPayload.posProductImagesPolicy ?? "inherit");
 
   const response = await request("/menu/categories/", {
     method: "POST",
@@ -1245,7 +1264,7 @@ export const createCategory = async (payload: string | { name: string; image?: F
 
 export const updateCategory = async (
   categoryId: number,
-  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy }
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy; posProductImagesPolicy?: PosImagePolicy }
 ): Promise<Category> => {
   const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false, inventoryStockPolicy: undefined } : payload;
   const formData = new FormData();
@@ -1260,6 +1279,9 @@ export const updateCategory = async (
   }
   if (normalizedPayload.inventoryStockPolicy !== undefined) {
     formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy);
+  }
+  if (normalizedPayload.posProductImagesPolicy !== undefined) {
+    formData.append("pos_product_images_policy", normalizedPayload.posProductImagesPolicy);
   }
 
   const response = await request(`/menu/categories/${categoryId}/`, {
@@ -1328,6 +1350,7 @@ export const getProducts = async (options?: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1369,6 +1392,7 @@ export const getProducts = async (options?: {
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
+      posImagePolicy: normalizePosImagePolicy(item.pos_image_policy),
     ...mapProductInventoryFields(item),
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
@@ -1400,6 +1424,7 @@ export const createProduct = async (payload: {
   modifierGroupIds?: number[];
   inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posImagePolicy?: PosImagePolicy;
   inventoryComponentsEnabled?: boolean;
   trackInventory?: boolean;
   trackedInventoryItem?: number | null;
@@ -1414,6 +1439,7 @@ export const createProduct = async (payload: {
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_image_policy", payload.posImagePolicy ?? "inherit");
   appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
@@ -1457,6 +1483,7 @@ export const createProduct = async (payload: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1494,6 +1521,7 @@ export const createProduct = async (payload: {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -1527,6 +1555,7 @@ export const updateProduct = async (
     modifierGroupIds?: number[];
     inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
     inventoryStockPolicy?: ProductInventoryStockPolicy;
+    posImagePolicy?: PosImagePolicy;
     inventoryComponentsEnabled?: boolean;
     trackInventory?: boolean;
     trackedInventoryItem?: number | null;
@@ -1542,6 +1571,7 @@ export const updateProduct = async (
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_image_policy", payload.posImagePolicy ?? "inherit");
   appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
@@ -1582,6 +1612,7 @@ export const updateProduct = async (
     available: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1617,6 +1648,7 @@ export const updateProduct = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -2132,6 +2164,7 @@ export const updateProductModifierGroups = async (
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -2163,6 +2196,7 @@ export const updateProductModifierGroups = async (
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -2209,6 +2243,7 @@ export const updateProductAvailability = async (
     is_archived?: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -2236,6 +2271,7 @@ export const updateProductAvailability = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
   };
