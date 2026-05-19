@@ -12,7 +12,8 @@ export type AppModuleKey =
   | "registers"
   | "dte"
   | "clients"
-  | "settings";
+  | "settings"
+  | "tables_editor";
 
 export type AppModuleConfig = {
   key: AppModuleKey;
