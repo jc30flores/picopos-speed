@@ -452,6 +452,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [diningAreas, setDiningAreas] = useState<any[]>([]);
   const [restaurantTables, setRestaurantTables] = useState<any[]>([]);
   const [tableSessions, setTableSessions] = useState<any[]>([]);
+  const [selectedOpsArea, setSelectedOpsArea] = useState<number | "all">("all");
+  const [selectedOpsFilter, setSelectedOpsFilter] = useState<"all"|"free"|"occupied"|"kitchen">("all");
+  const [selectedOpsTableId, setSelectedOpsTableId] = useState<number | null>(null);
+  const [newSessionDialog, setNewSessionDialog] = useState<{ open: boolean; tableId: number | null; guests: number; orderMode: "table"|"per_person"; notes: string }>({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -607,6 +611,26 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (created.primaryOrder) navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir mesa.");
+    }
+  };
+
+  const getSessionStateLabel = (session: any | undefined) => {
+    if (!session) return "Libre";
+    if (session.status === "sent_to_kitchen") return "En cocina";
+    if (session.status === "partially_paid") return "Parcial";
+    return "Ocupada";
+  };
+
+  const beginSessionFromDialog = async () => {
+    if (!newSessionDialog.tableId) return;
+    try {
+      const created = await createTableSession({ tableIds: [newSessionDialog.tableId], guestsCount: Math.max(1, newSessionDialog.guests), orderMode: newSessionDialog.orderMode, notes: newSessionDialog.notes || undefined });
+      setNewSessionDialog({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+      if (created.primaryOrder) {
+        navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo iniciar orden de mesa.");
     }
   };
   useEffect(() => {
@@ -2978,6 +3002,70 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background">
         <div className="text-sm text-muted-foreground">Verificando estado de caja...</div>
+      </div>
+    );
+  }
+
+  if (tableMapEnabled && posMode === "tables") {
+    const opsTables = restaurantTables.filter((table) => selectedOpsArea === "all" || table.area === selectedOpsArea).filter((table) => {
+      const session = sessionByTableId.get(table.id);
+      if (selectedOpsFilter === "free") return !session;
+      if (selectedOpsFilter === "occupied") return Boolean(session && session.status !== "sent_to_kitchen");
+      if (selectedOpsFilter === "kitchen") return session?.status === "sent_to_kitchen";
+      return true;
+    });
+    const freeCount = restaurantTables.filter((t) => !sessionByTableId.get(t.id)).length;
+    const kitchenCount = restaurantTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
+    const occupiedCount = restaurantTables.filter((t) => !!sessionByTableId.get(t.id) && sessionByTableId.get(t.id)?.status !== "sent_to_kitchen").length;
+
+    return (
+      <div className="h-[100dvh] bg-background p-3 sm:p-4">
+        <div className="mx-auto grid h-full max-w-[1800px] grid-cols-1 gap-3 lg:grid-cols-[250px_1fr_320px]">
+          <Card className="p-3 space-y-3">
+            <Button variant="outline" onClick={() => setPosMode("pos")}>POS rápido</Button>
+            <Button variant="outline" onClick={() => navigate("/tables/editor")}>Editor de mesas</Button>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Áreas</p><button className={cn("w-full rounded border p-2 text-left", selectedOpsArea === "all" && "border-primary")} onClick={() => setSelectedOpsArea("all")}>Todas</button>{diningAreas.map((a) => <button key={a.id} className={cn("w-full rounded border p-2 text-left", selectedOpsArea === a.id && "border-primary")} onClick={() => setSelectedOpsArea(a.id)}>{a.name}</button>)}</div>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Estado</p><Button variant={selectedOpsFilter === "all" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("all")}>Todas</Button><Button variant={selectedOpsFilter === "free" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("free")}>Libres</Button><Button variant={selectedOpsFilter === "occupied" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("occupied")}>Ocupadas</Button><Button variant={selectedOpsFilter === "kitchen" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("kitchen")}>En cocina</Button></div>
+          </Card>
+
+          <Card className="p-3 overflow-auto">
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-xl font-bold">Mesas</h2><div className="flex gap-2 text-xs"><Badge variant="secondary">Libres: {freeCount}</Badge><Badge variant="secondary">Ocupadas: {occupiedCount}</Badge><Badge variant="secondary">En cocina: {kitchenCount}</Badge></div></div>
+            <div className="relative h-[calc(100dvh-170px)] overflow-auto rounded-xl border bg-slate-950">
+              <div className="relative h-[1200px] w-[1800px]">
+                {opsTables.map((table) => {
+                  const session = sessionByTableId.get(table.id);
+                  const selected = selectedOpsTableId === table.id;
+                  const stateLabel = getSessionStateLabel(session);
+                  return (
+                    <button key={table.id} onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
+                      <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-white">
+                        <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
+                        {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
+                        <span className="mt-1 rounded bg-black/40 px-1 text-[10px]">{stateLabel}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-3">
+            {!selectedOpsTableId ? <p className="text-sm text-muted-foreground">Selecciona una mesa para ver acciones.</p> : (() => { const table = restaurantTables.find((t) => t.id === selectedOpsTableId); const session = selectedOpsTableId ? sessionByTableId.get(selectedOpsTableId) : null; if (!table) return null; return <div className="space-y-2"><h3 className="font-semibold">{table.name}</h3><p className="text-sm text-muted-foreground">{session ? "Mesa ocupada" : "Mesa libre"}</p><Button className="w-full" onClick={() => session ? void openTableSession(table.id) : setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" })}>{session ? "Agregar productos" : "Nueva orden"}</Button><Button className="w-full" variant="outline" disabled={!session}>Enviar a cocina</Button><Button className="w-full" variant="outline" disabled={!session}>Unir mesa</Button><Button className="w-full" variant="outline" disabled={!session}>Cobrar mesa</Button></div>; })()}
+          </Card>
+        </div>
+
+        <Dialog open={newSessionDialog.open} onOpenChange={(open) => setNewSessionDialog((prev) => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Nueva orden</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<Button type="button" variant="outline" onClick={()=>setNewSessionDialog((p)=>({...p,guests:p.guests+1}))}>+</Button><Button type="button" variant="outline" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button></div></div>
+              <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
+              <div><Label>Notas</Label><Textarea value={newSessionDialog.notes} onChange={(e)=>setNewSessionDialog((p)=>({...p,notes:e.target.value}))} /></div>
+            </div>
+            <DialogFooter><Button variant="outline" onClick={()=>setNewSessionDialog({ open:false, tableId:null, guests:2, orderMode:"table", notes:"" })}>Cancelar</Button><Button onClick={() => void beginSessionFromDialog()}>Iniciar orden</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
