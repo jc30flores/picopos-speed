@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save } from "lucide-react";
+import { ArrowLeft, Redo2, Save, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { createRestaurantTable, createTableArea, deleteRestaurantTable, deleteTableArea, getFeatureSettings, getTableLayout, saveTableLayout, updateRestaurantTable, updateTableArea, type DiningArea, type RestaurantTable } from "@/lib/api";
@@ -278,14 +278,15 @@ export default function TablesEditor() {
       <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
         <Card className="p-2">
           <div className="flex flex-wrap items-center gap-1">
+            <Button size="icon" variant="outline" className="h-8 w-8 border-emerald-500/70 bg-slate-900 text-emerald-300 hover:bg-slate-800" title="Volver al menú principal" aria-label="Volver al menú principal" onClick={() => navigate("/")}><ArrowLeft className="h-4 w-4" /></Button>
             <Input className="h-8 w-40" placeholder="Buscar mesa" value={search} onChange={(e) => setSearch(e.target.value)} />
             <Button size="sm" variant="outline" onClick={openNewTableModal}>+ Mesa</Button>
             <Button size="sm" variant="outline" onClick={() => navigate('/pos?mode=tables')}>Vista operativa</Button>
             <Button size="icon" variant="outline" title="Guardar ahora" aria-label="Guardar ahora" onClick={() => void saveNow()}><Save className="h-4 w-4" /></Button>
             <Button size="sm" variant="outline" onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}>-</Button><span className="px-1 text-xs">{Math.round(zoom * 100)}%</span><Button size="sm" variant="outline" onClick={() => setZoom((z) => Math.min(2, z + 0.1))}>+</Button>
             <Label className="ml-1 flex items-center gap-1 text-xs" title="Ajustar a cuadrícula" aria-label="Ajustar a cuadrícula"><Switch checked={snapOn} onCheckedChange={setSnapOn} />Snap {snapOn ? 'ON' : 'OFF'}</Label>
-            <Button size="icon" variant="outline" title="Deshacer" aria-label="Deshacer" disabled={!undoStack.length} onClick={() => { const u = undoStack.at(-1); if (!u) return; setRedoStack((r) => [...r, tables]); setTables(u); setUndoStack((p) => p.slice(0, -1)); queueAutosave(); }}>↶</Button>
-            <Button size="icon" variant="outline" title="Rehacer" aria-label="Rehacer" disabled={!redoStack.length} onClick={() => { const r = redoStack.at(-1); if (!r) return; setUndoStack((u) => [...u, tables]); setTables(r); setRedoStack((p) => p.slice(0, -1)); queueAutosave(); }}>↷</Button>
+            <Button size="icon" variant="outline" title="Deshacer" aria-label="Deshacer" disabled={!undoStack.length} onClick={() => { const u = undoStack.at(-1); if (!u) return; setRedoStack((r) => [...r, tables]); setTables(u); setUndoStack((p) => p.slice(0, -1)); queueAutosave(); }}><Undo2 className="h-4 w-4"/></Button>
+            <Button size="icon" variant="outline" title="Rehacer" aria-label="Rehacer" disabled={!redoStack.length} onClick={() => { const r = redoStack.at(-1); if (!r) return; setUndoStack((u) => [...u, tables]); setTables(r); setRedoStack((p) => p.slice(0, -1)); queueAutosave(); }}><Redo2 className="h-4 w-4"/></Button>
             <span className="ml-auto text-xs text-muted-foreground">{saveState === 'saving' ? 'Guardando...' : saveState === 'saved' ? 'Guardado' : saveState === 'error' ? 'Error al guardar' : 'Cambios pendientes'}</span>
           </div>
         </Card>
