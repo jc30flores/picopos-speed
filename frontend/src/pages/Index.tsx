@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMoney, toCents, toNumber } from "@/lib/money";
+import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -364,6 +364,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
+  const closeCashSubmittingRef = useRef(false);
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
   const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
@@ -1903,6 +1904,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const handleCloseCashSession = async () => {
+    if (closeCashSubmittingRef.current || isSavingCashAction) return;
     if (!canCloseCash) {
       toast.error("No tienes permisos para cerrar caja.");
       return;
@@ -1915,7 +1917,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     const totalCoins = Number(closeCoinsInput || 0);
     const totalPosCards = Number(closePosCardsInput || 0);
     const totalPedidosYa = Number(closePedidosYaInput || 0);
-    const countedTotal = totalBills + totalCoins;
+    const totalBillsCents = toCents(closeBillsInput);
+    const totalCoinsCents = toCents(closeCoinsInput);
+    const countedTotal = moneyToFixedString((totalBillsCents + totalCoinsCents) / 100);
     if (
       !Number.isFinite(totalBills) || totalBills < 0
       || !Number.isFinite(totalCoins) || totalCoins < 0
@@ -1925,13 +1929,19 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("Ingresa montos válidos para el cierre.");
       return;
     }
+    closeCashSubmittingRef.current = true;
     setCashCloseFlowState("closingInProgress");
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(
         countedTotal,
         cashNotes,
-        { bills: totalBills, coins: totalCoins, posCards: totalPosCards, pedidosYa: totalPedidosYa },
+        {
+          bills: moneyToFixedString(closeBillsInput),
+          coins: moneyToFixedString(closeCoinsInput),
+          posCards: moneyToFixedString(closePosCardsInput),
+          pedidosYa: moneyToFixedString(closePedidosYaInput),
+        },
         { sessionId: cashSnapshot.session?.id }
       );
       if (import.meta.env.DEV) {
@@ -1986,6 +1996,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashCloseFlowState("idle");
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
+      closeCashSubmittingRef.current = false;
       setIsSavingCashAction(false);
     }
   };
@@ -3745,7 +3756,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total POS tarjetas</span><span>{formatMoney(Number(closePosCardsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total PedidosYa</span><span>{formatMoney(Number(closePedidosYaInput || 0))}</span></div>
-                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney((toCents(closeBillsInput) + toCents(closeCoinsInput)) / 100)}</span></div>
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
@@ -3761,7 +3772,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     ) : null}
                     <div className="flex items-center gap-2">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>{isSavingCashAction ? "Cerrando..." : "Confirmar cierre"}</Button>
                     </div>
                   </>
                 ) : null}

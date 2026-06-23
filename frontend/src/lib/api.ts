@@ -1,4 +1,4 @@
-import { fromCents, toCents } from "@/lib/money";
+import { fromCents, moneyToFixedString, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
 
@@ -5224,9 +5224,9 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 };
 
 export const closeCashSession = async (
-  closingCashCounted: number,
+  closingCashCounted: number | string,
   notes?: string,
-  totals?: { bills?: number; coins?: number; posCards?: number; pedidosYa?: number },
+  totals?: { bills?: number | string; coins?: number | string; posCards?: number | string; pedidosYa?: number | string },
   options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
@@ -5234,11 +5234,11 @@ export const closeCashSession = async (
     method: 'POST',
     body: JSON.stringify({
       ...(options?.sessionId ? { session_id: Number(options.sessionId) } : {}),
-      total_contado: closingCashCounted,
-      total_billetes: Number(totals?.bills ?? 0),
-      total_monedas: Number(totals?.coins ?? 0),
-      total_pos_tarjetas: Number(totals?.posCards ?? 0),
-      total_pedidos_ya: Number(totals?.pedidosYa ?? 0),
+      total_contado: moneyToFixedString(closingCashCounted),
+      total_billetes: moneyToFixedString(totals?.bills ?? 0),
+      total_monedas: moneyToFixedString(totals?.coins ?? 0),
+      total_pos_tarjetas: moneyToFixedString(totals?.posCards ?? 0),
+      total_pedidos_ya: moneyToFixedString(totals?.pedidosYa ?? 0),
       notes: notes ?? '',
       ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),

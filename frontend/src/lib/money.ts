@@ -27,6 +27,12 @@ export const fromCents = (cents: number): number => {
   return safe / 100;
 };
 
+export const moneyToFixedString = (value: unknown): string => {
+  const cents = toCents(value);
+  const safeCents = Number.isFinite(cents) ? cents : 0;
+  return (safeCents / 100).toFixed(2);
+};
+
 export const addCents = (...values: Array<number>): number => values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
 
 export const formatMoney = (value: number): string => {

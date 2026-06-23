@@ -332,7 +332,7 @@ class CashSessionCloseView(APIView):
         raw_session_id = raw_payload.get("session_id")
         session_id = int(raw_session_id) if str(raw_session_id).isdigit() else None
         logger.info(
-            "cash_session.close.request user_id=%s username=%s branch_id=%s session_id=%s payload=%s",
+            "cash_session.close.payload user_id=%s username=%s branch_id=%s session_id=%s payload=%s",
             getattr(request.user, "id", None),
             getattr(request.user, "username", ""),
             branch_id,
@@ -383,7 +383,10 @@ class CashSessionCloseView(APIView):
                 _to_json_compatible(serializer.errors),
             )
             return Response(
-                {"detail": _first_serializer_error(serializer.errors), "errors": serializer.errors},
+                {
+                    "detail": "No se pudo cerrar la caja porque uno de los montos no es válido. Revisa los montos ingresados. Usa valores con máximo 2 decimales.",
+                    "errors": serializer.errors,
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         counted_cash = serializer.validated_data["total_contado"]

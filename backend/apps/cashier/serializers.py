@@ -1,4 +1,4 @@
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from rest_framework import serializers
@@ -121,12 +121,28 @@ class CashSessionSummarySerializer(serializers.Serializer):
 
 
 class CashSessionCloseSerializer(serializers.Serializer):
+    MONEY_FIELDS = ("total_billetes", "total_monedas", "total_pos_tarjetas", "total_pedidos_ya", "total_contado")
+
     total_billetes = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
     total_monedas = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
     total_pos_tarjetas = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0"))
     total_pedidos_ya = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0"))
     total_contado = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def to_internal_value(self, data):
+        normalized = dict(data)
+        errors = {}
+        for field in self.MONEY_FIELDS:
+            if field not in normalized:
+                continue
+            try:
+                normalized[field] = _normalize_money_input(normalized.get(field))
+            except serializers.ValidationError as exc:
+                errors[field] = exc.detail
+        if errors:
+            raise serializers.ValidationError(errors)
+        return super().to_internal_value(normalized)
 
     def validate(self, attrs):
         total_billetes = _q2(attrs.get("total_billetes"))
@@ -155,6 +171,22 @@ class CashSessionCloseSerializer(serializers.Serializer):
         attrs["total_pedidos_ya"] = total_pedidos_ya
         attrs["notes"] = str(attrs.get("notes", "")).strip()
         return attrs
+
+
+def _normalize_money_input(value) -> str:
+    if value is None or value == "":
+        return "0.00"
+    cleaned = str(value).replace("$", "").replace(",", "").strip()
+    try:
+        decimal_value = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        raise serializers.ValidationError("Ingresa un monto válido.")
+    if not decimal_value.is_finite():
+        raise serializers.ValidationError("Ingresa un monto válido.")
+    quantized = decimal_value.quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+    if len(quantized.as_tuple().digits) > 10:
+        raise serializers.ValidationError("El monto ingresado es demasiado alto.")
+    return f"{quantized:.2f}"
 
 
 def _q2(value: Decimal | None) -> Decimal:
