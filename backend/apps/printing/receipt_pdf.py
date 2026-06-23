@@ -312,10 +312,12 @@ def build_receipt_pdf_from_text(*, text: str, filename: str, **kwargs) -> Receip
                 page_width_mm=kwargs.get("page_width_mm"),
             )
         except ModuleNotFoundError as exc:
-            if "reportlab" in str(exc).lower():
-                logger.warning("receipt_pdf.reportlab_missing_fallback filename=%s", filename)
-            else:
-                raise
+            logger.exception(
+                "[TICKET_TRACE] generator=V2_LOGO_QR_RENDERER active=False dependency_missing=%s filename=%s",
+                exc,
+                filename,
+            )
+            raise
     lines = sanitize_receipt_text(text).split("\n")
     return build_receipt_pdf(lines=lines, filename=filename, **kwargs)
 
@@ -683,5 +685,16 @@ def build_sale_receipt_pdf(
     move(leading)
     _draw_centered_text(pdf, footer, y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=small_size)
     pdf.save()
-    return ReceiptPdfResult(pdf_bytes=stream.getvalue(), filename=filename)
+    pdf_bytes = stream.getvalue()
+    logger.info(
+        "[TICKET_TRACE] generator=V2_LOGO_QR_RENDERER active=True logo_found=%s logo_path=%s qr_enabled=%s qr_payload_len=%s page_width_mm=%.2f page_height_pt=%.2f pdf_bytes=%s",
+        bool(logo_reader),
+        str(resolved_logo_path or ""),
+        bool(qr_reader or qr_drawing),
+        len(str(qr_payload or "")),
+        float(width_mm),
+        float(height_pt),
+        len(pdf_bytes),
+    )
+    return ReceiptPdfResult(pdf_bytes=pdf_bytes, filename=filename)
 

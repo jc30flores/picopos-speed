@@ -4693,7 +4693,7 @@ export const printPaymentTicket = async (
   pdfBlob?: Blob | null;
   pdfFilename?: string | null;
 }> => {
-  const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
+  const response = await request(`/payments/${paymentId}/print-ticket/?t=${Date.now()}`, { method: "POST", cache: "no-store" });
   const contentType = response.headers.get("content-type") || "";
   if (response.ok && contentType.includes("application/pdf")) {
     const disposition = response.headers.get("content-disposition") || "";
@@ -5446,8 +5446,9 @@ export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<v
 
 
 export const fetchPaymentTicketBlob = async (paymentId: number): Promise<Blob> => {
-  const response = await request(`/payments/${paymentId}/ticket.pdf`, {
+  const response = await request(`/payments/${paymentId}/ticket.pdf?t=${Date.now()}`, {
     headers: { Accept: "application/pdf" },
+    cache: "no-store",
   });
   if (!response.ok) {
     if (response.status === 404) throw new Error("No se encontró el ticket solicitado.");
@@ -5896,7 +5897,7 @@ export const listActivities = async (q = '') => {
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {
-  const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
+  const response = await request(`/orders/${orderId}/receipt.pdf?t=${Date.now()}`, { headers: { Accept: "application/pdf" }, cache: "no-store" });
   if (!response.ok) throw new Error("No se pudo descargar PDF");
   return response.blob();
 };
