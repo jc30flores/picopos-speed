@@ -75,19 +75,42 @@ def _logo_path() -> Path | None:
     return Path(configured) if configured else None
 
 
+def _normalize_dte_status(raw_status: str | None, *, has_dte: bool) -> str:
+    text = str(raw_status or "").strip().upper()
+    if not has_dte:
+        return "SIN DTE"
+    if text in {"ACEPTADO", "PROCESADO", "RECIBIDO", "OK"}:
+        return "ACEPTADO"
+    if text in {"RECHAZADO", "FAILED", "ERROR", "INVALIDO", "INVÁLIDO"}:
+        return "RECHAZADO"
+    if text in {"INVALIDADO", "ANULADO"}:
+        return "INVALIDADO"
+    return "PENDIENTE"
+
+
 def _qr_value(ctx: dict) -> str:
-    public_url = str(ctx.get("public_url") or "").strip()
-    if public_url:
-        return public_url
     dte = ctx.get("dte") or {}
     totals = ctx.get("totals") or {}
     codigo = str(dte.get("codigo_generacion") or "").strip()
     numero = str(dte.get("numero_control") or "").strip()
     fecha = str(dte.get("fecha_dte") or ctx.get("order_datetime") or "").strip()
     total = str(totals.get("total") or "").strip()
+    estado = str(dte.get("estado_dte") or "").strip()
+    sello = str(dte.get("sello_recibido") or "").strip()
     if codigo or numero:
-        return " | ".join(part for part in [f"CG:{codigo}" if codigo else "", f"NC:{numero}" if numero else "", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else ""] if part)
-    return " | ".join(part for part in [f"ORDEN:{ctx.get('order_number') or '-'}", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else ""] if part)
+        return " | ".join(
+            part
+            for part in [
+                f"CG:{codigo}" if codigo else "",
+                f"NC:{numero}" if numero else "",
+                f"FECHA:{fecha}" if fecha else "",
+                f"TOTAL:{total}" if total else "",
+                f"ESTADO:{estado}" if estado else "",
+                f"SELLO:{sello}" if sello else "",
+            ]
+            if part
+        )
+    return " | ".join(part for part in [f"ORDEN:{ctx.get('order_number') or '-'}", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else "", "ESTADO:SIN DTE"] if part)
 
 
 def _display_payment_label(payment) -> str:
@@ -150,6 +173,15 @@ def build_receipt_context(order: Order) -> dict:
     numero_control = (identificacion.get("numeroControl") if isinstance(identificacion, dict) else "") or (dte_record.control_number if dte_record else "")
     response_payload = dte_record.response_payload if dte_record and isinstance(dte_record.response_payload, dict) else {}
     respuesta_hacienda = response_payload.get("respuesta_hacienda") if isinstance(response_payload.get("respuesta_hacienda"), dict) else {}
+    estado_raw = (
+        (dte_record.status if dte_record else "")
+        or str(response_payload.get("status") or "").strip()
+        or str(response_payload.get("estado") or "").strip()
+        or str(respuesta_hacienda.get("estado") or "").strip()
+        or str(dte_record.estado_mh if dte_record else "").strip()
+        or str(dte_record.hacienda_state if dte_record else "").strip()
+    )
+    estado_dte = _normalize_dte_status(estado_raw, has_dte=bool(dte_record))
     sello_recibido = (
         (dte_record.sello_recibido if dte_record else "")
         or (dte_record.sello_recepcion if dte_record else "")
@@ -212,6 +244,7 @@ def build_receipt_context(order: Order) -> dict:
             "reference": (main_payment.reference if main_payment else "") or "",
         },
         "dte": {
+            "estado_dte": estado_dte,
             "numero_control": numero_control,
             "codigo_generacion": codigo_generacion,
             "fecha_dte": fecha_dte or "",
@@ -285,6 +318,7 @@ def render_customer_ticket(order: Order) -> dict:
     center_lines.extend(
         [
             "DATOS DTE",
+            f"Estado DTE: {ctx['dte'].get('estado_dte') or 'SIN DTE'}",
             f"No. Control: {ctx['dte']['numero_control'] or '-'}",
             f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}",
             f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}",
