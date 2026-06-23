@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from apps.core.views import FeatureSettingsOptionsView, FeatureSettingsView
+from apps.core.views import FeatureSettingsOptionsView, FeatureSettingsView, TicketLogoView, TicketSettingsView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -23,6 +23,8 @@ urlpatterns = [
     path("api/inventory/", include("apps.inventory.urls")),
     path("api/settings/features/", FeatureSettingsView.as_view(), name="settings-features"),
     path("api/settings/features/options/", FeatureSettingsOptionsView.as_view(), name="settings-features-options"),
+    path("api/settings/ticket/", TicketSettingsView.as_view(), name="settings-ticket"),
+    path("api/settings/ticket/logo/", TicketLogoView.as_view(), name="settings-ticket-logo"),
 ]
 
 if settings.DEBUG:

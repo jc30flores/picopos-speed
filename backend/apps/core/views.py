@@ -1,5 +1,7 @@
 from django.db import models, transaction
+from pathlib import Path
 from django.db.models import Case, IntegerField, Value, When
+from PIL import Image, UnidentifiedImageError
 import logging
 from rest_framework import generics, status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -224,16 +226,22 @@ class FeatureSettingsView(APIView):
 
 
 _ALLOWED_TICKET_LOGO_TYPES = {"image/png", "image/jpeg"}
+_ALLOWED_TICKET_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 _TICKET_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 
-def _ticket_logo_url(request, settings: TicketSettings) -> str | None:
+def _ticket_logo_payload(request, settings: TicketSettings) -> dict:
     if not settings.ticket_logo:
-        return None
+        return {"ticket_logo_url": None, "ticket_logo_name": None, "has_ticket_logo": False}
     try:
-        return request.build_absolute_uri(settings.ticket_logo.url)
+        logo_url = request.build_absolute_uri(settings.ticket_logo.url)
     except ValueError:
-        return None
+        logo_url = None
+    return {
+        "ticket_logo_url": logo_url,
+        "ticket_logo_name": Path(settings.ticket_logo.name).name if settings.ticket_logo.name else None,
+        "has_ticket_logo": bool(logo_url),
+    }
 
 
 class TicketSettingsView(APIView):
@@ -241,7 +249,7 @@ class TicketSettingsView(APIView):
 
     def get(self, request):
         settings, _ = TicketSettings.objects.get_or_create(pk=1)
-        return Response({"ticket_logo_url": _ticket_logo_url(request, settings)})
+        return Response(_ticket_logo_payload(request, settings))
 
 
 class TicketLogoView(APIView):
@@ -253,16 +261,22 @@ class TicketLogoView(APIView):
         if not upload:
             return Response({"detail": "Selecciona una imagen para el logo."}, status=status.HTTP_400_BAD_REQUEST)
         content_type = (getattr(upload, "content_type", "") or "").lower()
-        if content_type not in _ALLOWED_TICKET_LOGO_TYPES:
+        extension = Path(getattr(upload, "name", "")).suffix.lower()
+        if content_type not in _ALLOWED_TICKET_LOGO_TYPES or extension not in _ALLOWED_TICKET_LOGO_EXTENSIONS:
             return Response({"detail": "Solo se permiten imágenes PNG o JPG."}, status=status.HTTP_400_BAD_REQUEST)
         if upload.size > _TICKET_LOGO_MAX_BYTES:
-            return Response({"detail": "El logo no debe superar 2 MB."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "El logo no puede superar 2 MB."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            Image.open(upload).verify()
+            upload.seek(0)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return Response({"detail": "No se pudo procesar la imagen."}, status=status.HTTP_400_BAD_REQUEST)
         settings, _ = TicketSettings.objects.get_or_create(pk=1)
         if settings.ticket_logo:
             settings.ticket_logo.delete(save=False)
         settings.ticket_logo = upload
         settings.save(update_fields=["ticket_logo", "updated_at"])
-        return Response({"ticket_logo_url": _ticket_logo_url(request, settings)})
+        return Response(_ticket_logo_payload(request, settings))
 
     def delete(self, request):
         settings, _ = TicketSettings.objects.get_or_create(pk=1)
@@ -270,7 +284,7 @@ class TicketLogoView(APIView):
             settings.ticket_logo.delete(save=False)
             settings.ticket_logo = None
             settings.save(update_fields=["ticket_logo", "updated_at"])
-        return Response({"ticket_logo_url": None})
+        return Response(_ticket_logo_payload(request, settings))
 
 
 class FeatureSettingsOptionsView(APIView):
