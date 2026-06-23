@@ -71,8 +71,6 @@ import {
   getActiveDiscounts,
   getPendingOrders,
   setOrderPending,
-  fetchPaymentTicketBlob,
-  downloadOrderReceiptPdf,
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
@@ -96,7 +94,7 @@ import {
 } from "@/lib/api";
 import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
-import { TicketPreviewDialog } from "@/components/printing/TicketPreviewDialog";
+import { smartPrintTicket } from "@/lib/ticketPrinting";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
@@ -490,7 +488,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activePartId, setActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
-  const [ticketPreview, setTicketPreview] = useState<{ open: boolean; url: string | null; title: string; subtitle: string; loading: boolean; error: string | null }>({ open: false, url: null, title: "Vista previa de ticket", subtitle: "Formato térmico optimizado para impresora 80POS genérica.", loading: false, error: null });
   const hardReloadTriggeredRef = useRef(false);
   const hydratedPendingOrderIdRef = useRef<number | null>(null);
   const consumedNavSourceRef = useRef(false);
@@ -2072,8 +2069,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       const baseOrder = await ensureOrderForQuickPrint();
       const heldOrder = baseOrder.isPending ? baseOrder : await saveCurrentOrderAsHeld(baseOrder);
-      const blob = await downloadOrderReceiptPdf(heldOrder.id);
-      openTicketPreviewFromBlob(blob, "Vista previa de ticket");
+      const result = await smartPrintTicket({ orderId: heldOrder.id, preferDirect: false });
+      if (result.method === "direct") toast.success("Ticket enviado a impresora.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket");
     }
@@ -2405,21 +2402,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
 
-  const openTicketPreviewFromBlob = (blob: Blob, title = "Vista previa de ticket") => {
-    const url = URL.createObjectURL(blob);
-    setTicketPreview((prev) => {
-      if (prev.url) URL.revokeObjectURL(prev.url);
-      return { open: true, url, title, subtitle: "Formato térmico optimizado para impresora 80POS genérica.", loading: false, error: null };
-    });
-  };
-
-  const closeTicketPreview = () => {
-    setTicketPreview((prev) => {
-      if (prev.url) URL.revokeObjectURL(prev.url);
-      return { ...prev, open: false, url: null, loading: false, error: null };
-    });
-  };
-
   const handleKitchenChoice = async (shouldSend: boolean) => {
     if (!kitchenPromptOrderId || isSubmittingKitchenChoice) return;
     try {
@@ -2433,18 +2415,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             console.debug("Kitchen send retry succeeded", error);
           }
         }
-        toast.success("Venta enviada a cocina");
-      } else {
-        toast.success("Venta completada sin envío a cocina");
+        // Evitar aviso duplicado: el flujo de cierre ya confirma la venta.
       }
       const shouldPrintTicket = Boolean(lastPaymentId) && (postSalePrintChoice || lastPaymentAutoPrint);
       if (shouldPrintTicket && lastPaymentId) {
         try {
-          const blob = await fetchPaymentTicketBlob(lastPaymentId);
-          openTicketPreviewFromBlob(blob, "Vista previa de ticket");
+          const result = await smartPrintTicket({ paymentId: lastPaymentId });
+          if (result.method === "direct") toast.success("Ticket enviado a impresora.");
         } catch (printError) {
-          console.error("Ticket preview failed", printError);
-          toast.warning("La venta fue registrada correctamente, pero no se pudo preparar el ticket.");
+          console.error("Ticket print failed", printError);
+          toast.warning("La venta fue registrada, pero no se pudo imprimir el ticket.");
         }
       }
       setIsKitchenPromptOpen(false);
@@ -2951,10 +2931,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
     try {
-      const blob = await downloadOrderReceiptPdf(activeOrder.id);
-      openTicketPreviewFromBlob(blob, "Vista previa de ticket");
+      const result = await smartPrintTicket({ orderId: activeOrder.id, preferDirect: false });
+      if (result.method === "direct") toast.success("Ticket enviado a impresora.");
     } catch (error) {
-      console.error("Failed to prepare ticket preview", error);
+      console.error("Failed to print ticket", error);
       toast.error("No se pudo preparar el ticket. Intenta nuevamente.");
     }
   };
@@ -4519,7 +4499,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
-              <span>{printerAvailable ? "Imprimir ticket" : "Descargar ticket"}</span>
+              <span>Imprimir ticket</span>
               <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
           </div>
@@ -4634,16 +4614,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             },
           }, pin)
         }
-      />
-
-      <TicketPreviewDialog
-        open={ticketPreview.open}
-        title={ticketPreview.title}
-        subtitle={ticketPreview.subtitle}
-        ticketUrl={ticketPreview.url}
-        loading={ticketPreview.loading}
-        error={ticketPreview.error}
-        onClose={closeTicketPreview}
       />
 
       <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
