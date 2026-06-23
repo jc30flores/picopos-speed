@@ -214,9 +214,18 @@ def build_receipt_context(order: Order) -> dict:
             if mod_price > 0:
                 items.append({"qty": 1, "name": f"+ {mod.modifier_name_snapshot}", "unit_price": mod_price, "line_total": mod_price})
 
+    disposable_total = Decimal("0.00")
     for fee in order.fees.all():
         fee_total = Decimal(fee.total_amount).quantize(Decimal("0.01"))
+        fee_type = str(getattr(fee, "fee_type", "") or "").strip().lower()
+        fee_name = str(getattr(fee, "fee_name", "") or "").strip()
+        if fee_type == "disposable" or fee_name.lower() == "desechables":
+            disposable_total += fee_total
+            continue
         items.append({"qty": int(fee.quantity), "name": fee.fee_name, "unit_price": Decimal(fee.unit_amount).quantize(Decimal("0.01")), "line_total": fee_total})
+    if disposable_total > 0:
+        disposable_total = disposable_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        items.append({"qty": 1, "name": "Desechables", "unit_price": disposable_total, "line_total": disposable_total})
 
     public_url = build_hacienda_consulta_publica_url(fecha_dte, codigo_generacion)
     logo_path = _logo_path()
@@ -317,20 +326,15 @@ def render_customer_ticket(order: Order) -> dict:
         center_lines.extend(wrap(str(ctx["address"]), width=_width()) or [str(ctx["address"])])
     center_lines.extend(
         [
-            "DATOS DTE",
-            f"Estado DTE: {ctx['dte'].get('estado_dte') or 'SIN DTE'}",
             f"No. Control: {ctx['dte']['numero_control'] or '-'}",
             f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}",
-            f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}",
-            f"Sello de Recepcion: {ctx['dte']['sello_recibido'] or '-'}",
-            f"Fh Procesamiento: {ctx['dte']['fh_procesamiento'] or '-'}",
+            f"Sello Recibido: {ctx['dte'].get('sello_recibido') or '-'}",
         ]
     )
 
     lines: list[str] = [_center(line) for line in center_lines]
     lines.append(_divider())
     lines.append(_center(ctx["service_type_label"]))
-    lines.append(_center(f"Atendido por: {ctx['cashier_name']}"))
     lines.append(_center(f"Orden #{ctx['order_number']}"))
     lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
     lines.append(_divider())

@@ -509,29 +509,26 @@ def build_sale_receipt_pdf(
     dte = receipt_context.get("dte") or {}
     status_label = _dte_status_label(receipt_context)
     center_cols = max(30, int(content_width / max(pdfmetrics.stringWidth("0", font_name, body_size), 1)))
-    code_cols = max(24, center_cols - 2)
     brand_lines = _wrap_line(_brand_name(receipt_context).upper(), center_cols)
     address_lines = _wrap_line(str(receipt_context.get("address") or ""), center_cols) if receipt_context.get("address") else []
     contact_lines = []
     if receipt_context.get("phone"):
         contact_lines.extend(_wrap_line(f"Tel: {receipt_context.get('phone')}", center_cols))
 
-    dte_lines: list[str] = ["DATOS DTE", f"Estado DTE: {status_label}"]
-    dte_pairs = [
-        ("No. Control", clean_display(dte.get("numero_control"), "-")),
-        ("Codigo Gen", clean_display(dte.get("codigo_generacion"), "-")),
-        ("Fecha DTE", clean_display(dte.get("fecha_dte"), "-")),
-        ("Sello", clean_display(dte.get("sello_recibido"), "-") if status_label == "ACEPTADO" else clean_display(dte.get("sello_recibido"), "Pendiente" if status_label == "PENDIENTE" else "-")),
-        ("Procesamiento", clean_display(dte.get("fh_procesamiento"), "-")),
+    dte_lines: list[str] = [
+        f"No. Control: {clean_display(dte.get('numero_control'), '-')}",
+        f"Codigo Gen: {clean_display(dte.get('codigo_generacion'), '-')}",
+        f"Sello Recibido: {clean_display(dte.get('sello_recibido'), '-') if status_label == 'ACEPTADO' else clean_display(dte.get('sello_recibido'), 'Pendiente' if status_label == 'PENDIENTE' else '-')}",
     ]
-    for label, value in dte_pairs:
-        dte_lines.append(f"{label}:")
-        dte_lines.extend(_wrap_line(value, code_cols))
+    dte_font_size = 5.2
+    longest_dte = max((pdfmetrics.stringWidth(line, font_name, dte_font_size) for line in dte_lines), default=0)
+    if longest_dte > content_width:
+        dte_font_size = max(4.4, dte_font_size * content_width / longest_dte)
+    dte_leading = max(5.2, dte_font_size + 1.0)
 
     order_dt = receipt_context.get("order_datetime")
     details_lines = [
         receipt_context.get("service_type_label") or "RESTAURANTE",
-        f"Atendido por: {receipt_context.get('cashier_name') or '-'}",
         f"Orden: #{receipt_context.get('order_number') or '-'}",
         f"Fecha: {order_dt.strftime('%Y-%m-%d %H:%M') if order_dt else '-'}",
     ]
@@ -583,7 +580,7 @@ def build_sale_receipt_pdf(
         + (len(address_lines) * small_leading)
         + (len(contact_lines) * small_leading)
         + leading * 0.45
-        + (len(dte_lines) * small_leading)
+        + (len(dte_lines) * dte_leading)
         + hr_height
         + (len(details_lines) * leading)
         + hr_height
@@ -632,13 +629,10 @@ def build_sale_receipt_pdf(
         _draw_centered_text(pdf, line, y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=small_size)
 
     move(leading * 0.45)
-    for index, line in enumerate(dte_lines):
-        pdf.setFont(font_name, section_size if index == 0 else small_size)
-        move(small_leading)
-        if index == 0:
-            _draw_centered_text(pdf, line, y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=section_size)
-        else:
-            pdf.drawString(margin_x, y, line)
+    pdf.setFont(font_name, dte_font_size)
+    for line in dte_lines:
+        move(dte_leading)
+        pdf.drawString(margin_x, y, line)
 
     hr()
     pdf.setFont(font_name, section_size)
