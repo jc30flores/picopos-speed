@@ -494,6 +494,11 @@ export type FeatureSettings = {
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
+  tableMapEnabled: boolean;
+};
+
+export type TicketSettings = {
+  ticketLogoUrl: string | null;
 };
 
 export type FeatureSettingsOptions = {
@@ -1241,6 +1246,27 @@ export const getFeatureSettingsOptions = async (): Promise<FeatureSettingsOption
     roles: data.roles ?? [],
     cashCloseExpectedTotalFields: data.cash_close_expected_total_fields ?? [],
   };
+};
+
+const mapTicketSettings = (data: any): TicketSettings => ({
+  ticketLogoUrl: data.ticket_logo_url ?? null,
+});
+
+export const getTicketSettings = async (): Promise<TicketSettings> => {
+  const response = await request("/settings/ticket/");
+  return mapTicketSettings(await handleJson<any>(response));
+};
+
+export const uploadTicketLogo = async (file: File): Promise<TicketSettings> => {
+  const formData = new FormData();
+  formData.append("logo", file);
+  const response = await request("/settings/ticket/logo/", { method: "POST", body: formData });
+  return mapTicketSettings(await handleJson<any>(response));
+};
+
+export const deleteTicketLogo = async (): Promise<TicketSettings> => {
+  const response = await request("/settings/ticket/logo/", { method: "DELETE" });
+  return mapTicketSettings(await handleJson<any>(response));
 };
 
 export const getTransactionTicket = async (paymentId: number): Promise<TransactionTicketPayload> => {

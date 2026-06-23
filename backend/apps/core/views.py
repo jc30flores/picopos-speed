@@ -2,11 +2,12 @@ from django.db import models, transaction
 from django.db.models import Case, IntegerField, Value, When
 import logging
 from rest_framework import generics, status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
+from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig, TicketSettings
 from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
 
@@ -218,6 +219,58 @@ class FeatureSettingsView(APIView):
             stock_flag.metadata = stock_metadata
             stock_flag.save(update_fields=["metadata"])
         return Response(get_feature_settings_payload())
+
+
+
+
+_ALLOWED_TICKET_LOGO_TYPES = {"image/png", "image/jpeg"}
+_TICKET_LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _ticket_logo_url(request, settings: TicketSettings) -> str | None:
+    if not settings.ticket_logo:
+        return None
+    try:
+        return request.build_absolute_uri(settings.ticket_logo.url)
+    except ValueError:
+        return None
+
+
+class TicketSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        return Response({"ticket_logo_url": _ticket_logo_url(request, settings)})
+
+
+class TicketLogoView(APIView):
+    permission_classes = [IsAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        upload = request.FILES.get("logo")
+        if not upload:
+            return Response({"detail": "Selecciona una imagen para el logo."}, status=status.HTTP_400_BAD_REQUEST)
+        content_type = (getattr(upload, "content_type", "") or "").lower()
+        if content_type not in _ALLOWED_TICKET_LOGO_TYPES:
+            return Response({"detail": "Solo se permiten imágenes PNG o JPG."}, status=status.HTTP_400_BAD_REQUEST)
+        if upload.size > _TICKET_LOGO_MAX_BYTES:
+            return Response({"detail": "El logo no debe superar 2 MB."}, status=status.HTTP_400_BAD_REQUEST)
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        if settings.ticket_logo:
+            settings.ticket_logo.delete(save=False)
+        settings.ticket_logo = upload
+        settings.save(update_fields=["ticket_logo", "updated_at"])
+        return Response({"ticket_logo_url": _ticket_logo_url(request, settings)})
+
+    def delete(self, request):
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        if settings.ticket_logo:
+            settings.ticket_logo.delete(save=False)
+            settings.ticket_logo = None
+            settings.save(update_fields=["ticket_logo", "updated_at"])
+        return Response({"ticket_logo_url": None})
 
 
 class FeatureSettingsOptionsView(APIView):

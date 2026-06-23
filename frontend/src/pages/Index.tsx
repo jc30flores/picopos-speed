@@ -3603,8 +3603,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92dvh] w-[min(94vw,720px)] max-w-2xl flex-col overflow-hidden p-0">
+          <DialogHeader className="shrink-0 border-b px-6 py-4">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <DialogTitle>Transacciones de Caja</DialogTitle>
@@ -3612,11 +3612,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             </div>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
             <div className="rounded-md border p-3 text-sm">
               <div className="font-semibold">Estado: {cashSnapshot.open ? "Caja Abierta" : "Caja Cerrada"}</div>
               {canViewSensitiveCash && cashSnapshot.open && cashSnapshot.summary && (
-                <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
+                <div className="mt-2 grid grid-cols-1 gap-2 text-muted-foreground sm:grid-cols-2">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
                   <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
@@ -3628,7 +3628,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCashOperations}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
@@ -3661,7 +3661,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </div>
 
             {cashSnapshot.open ? (
-              <div className="space-y-2 rounded-md border p-3">
+              <div className="space-y-3 rounded-md border p-3">
                 {!canCloseCash ? <div className="text-sm text-muted-foreground">No tienes permisos para cerrar caja.</div> : null}
                 {canCloseCash && closeCashStep === "idle" ? (
                   <div className="space-y-3">
@@ -3759,7 +3759,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney((toCents(closeBillsInput) + toCents(closeCoinsInput)) / 100)}</span></div>
                     </div>
                     <Label>Notas</Label>
-                    <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    <Textarea rows={2} className="max-h-24" value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     {pendingOrdersCount > 0 && !allowCloseWithPendingOrders ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
                         You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
@@ -3770,7 +3770,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         Hay {pendingOrdersCount} órdenes pendientes, pero el cierre con pendientes está habilitado por configuración.
                       </div>
                     ) : null}
-                    <div className="flex items-center gap-2">
+                    <div className="sticky bottom-0 z-10 -mx-3 flex items-center gap-2 border-t bg-background/95 p-3 backdrop-blur">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
                       <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>{isSavingCashAction ? "Cerrando..." : "Confirmar cierre"}</Button>
                     </div>
@@ -3793,7 +3793,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </Button>
                   ) : null}
                 </div>
-                <div className="max-h-52 space-y-2 overflow-y-auto">
+                <div className="max-h-[28vh] space-y-2 overflow-y-auto pr-1">
                 {cashTransactions.length === 0 ? (
                   <div className="text-muted-foreground">Sin transacciones registradas.</div>
                 ) : (

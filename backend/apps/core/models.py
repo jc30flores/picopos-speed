@@ -102,6 +102,18 @@ class FeatureFlag(models.Model):
         return f"{self.key} ({'on' if self.is_enabled else 'off'})"
 
 
+class TicketSettings(models.Model):
+    ticket_logo = models.FileField(upload_to="ticket_logos/", null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Ticket settings"
+        verbose_name_plural = "Ticket settings"
+
+    def __str__(self) -> str:
+        return "Configuración de ticket"
+
+
 class Customer(models.Model):
     CLIENT_TYPE_CHOICES = [("CF", "Consumidor Final"), ("CCF", "Credito Fiscal"), ("SX", "Sujeto Excluido")]
 

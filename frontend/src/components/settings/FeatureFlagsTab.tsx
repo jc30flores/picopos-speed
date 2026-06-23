@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getFeatureSettings, getFeatureSettingsOptions, updateFeatureSettings, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
+import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 
 const defaultState: FeatureSettings = {
   kioskEnabled: true,
@@ -63,15 +63,19 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
 export const FeatureFlagsTab = () => {
   const [settings, setSettings] = useState<FeatureSettings>(defaultState);
   const [options, setOptions] = useState<FeatureSettingsOptions>({ roles: [], cashCloseExpectedTotalFields: [] });
+  const [ticketLogoUrl, setTicketLogoUrl] = useState<string | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [s, o] = await Promise.all([getFeatureSettings(), getFeatureSettingsOptions()]);
+      const [s, o, ticket] = await Promise.all([getFeatureSettings(), getFeatureSettingsOptions(), getTicketSettings()]);
       setSettings(s);
       setOptions(o);
+      setTicketLogoUrl(ticket.ticketLogoUrl);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron cargar funciones");
     } finally {
@@ -103,6 +107,43 @@ export const FeatureFlagsTab = () => {
     const current = settings.cashCloseExpectedTotalsVisibleFields;
     const next = current.includes(code) ? current.filter((item) => item !== code) : [...current, code];
     void persist({ cashCloseExpectedTotalsVisibleFields: next });
+  };
+
+  const handleLogoSelect = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.error("Solo se permiten imágenes PNG o JPG.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("El logo no debe superar 2 MB.");
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const saved = await uploadTicketLogo(file);
+      setTicketLogoUrl(saved.ticketLogoUrl);
+      toast.success("Logo de ticket guardado");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el logo");
+    } finally {
+      setLogoBusy(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    setLogoBusy(true);
+    try {
+      const saved = await deleteTicketLogo();
+      setTicketLogoUrl(saved.ticketLogoUrl);
+      toast.success("Logo de ticket eliminado");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo quitar el logo");
+    } finally {
+      setLogoBusy(false);
+    }
   };
 
   if (loading) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando funciones...</CardContent></Card>;
@@ -143,6 +184,43 @@ export const FeatureFlagsTab = () => {
           </div>
         </section>
       ))}
+
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tickets</span>
+          <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Personalización visual</h4>
+        </div>
+        <Card className="border-border/70 bg-card/80 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Logo para ticket</CardTitle>
+            <CardDescription className="text-xs">Sube un logo PNG o JPG para mostrarlo centrado en los tickets de venta. Tamaño máximo: 2 MB.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 pt-0 md:flex-row md:items-center md:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-24 w-36 items-center justify-center overflow-hidden rounded-lg border bg-muted/30 p-2">
+                {ticketLogoUrl ? (
+                  <img src={ticketLogoUrl} alt="Logo para ticket" className="max-h-full max-w-full object-contain" />
+                ) : (
+                  <span className="px-3 text-center text-xs text-muted-foreground">Sin logo configurado</span>
+                )}
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="font-medium">Preview del logo actual</div>
+                <p className="max-w-md text-xs text-muted-foreground">Si no hay logo, el ticket conserva el encabezado de texto y se imprime normalmente.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleLogoSelect} />
+              <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={logoBusy}>
+                {logoBusy ? "Guardando..." : "Subir logo"}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => void handleRemoveLogo()} disabled={logoBusy || !ticketLogoUrl}>
+                Quitar logo
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
 
       <section className="space-y-2">
         <div className="flex items-center gap-2">
