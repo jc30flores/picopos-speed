@@ -596,6 +596,7 @@ def build_sale_receipt_pdf(
         + (qr_size + leading * 0.7 if (qr_reader or qr_drawing) else 0)
         + hr_height
         + leading
+        + small_leading
         + margin_y
         + mm_to_points(3)
     )
@@ -681,9 +682,16 @@ def build_sale_receipt_pdf(
 
     hr()
     footer = "Gracias por su visita"
+    brand_footer = "GastroPOSV by MEKA"
     pdf.setFont(font_name, small_size)
+    pdf.setFillColorRGB(0, 0, 0)
     move(leading)
     _draw_centered_text(pdf, footer, y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=small_size)
+    pdf.setFont(font_name, 5.6)
+    pdf.setFillColorRGB(0.45, 0.45, 0.45)
+    move(small_leading)
+    _draw_centered_text(pdf, brand_footer, y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=5.6)
+    pdf.setFillColorRGB(0, 0, 0)
     pdf.save()
     pdf_bytes = stream.getvalue()
     logger.info(

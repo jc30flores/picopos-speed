@@ -246,6 +246,11 @@ class USBPrinterService:
             printer.text("Gracias por su visita\n")
             printer.text(f"Order No: {ctx.get('order_number', '-')}\n")
             printer.text(f"{ctx.get('order_datetime').strftime('%Y-%m-%d %H:%M')}\n")
+            try:
+                printer.set(align="center", bold=False, custom_size=False)
+            except Exception:
+                printer.set(align="center")
+            printer.text("GastroPOSV by MEKA\n")
             printer.text("\n\n")
             if cfg["cut_enabled"]:
                 printer.cut()

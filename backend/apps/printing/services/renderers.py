@@ -365,6 +365,7 @@ def render_customer_ticket(order: Order) -> dict:
         lines.append(_line(f"Cambio: {_format_money(ctx['payment']['change_due'])}"))
     lines.append(_divider())
     lines.append(_center("Gracias por su visita"))
+    lines.append(_center("GastroPOSV by MEKA"))
 
     text = "\n".join(lines)
     items_html = "".join(
