@@ -381,8 +381,8 @@ def build_sale_receipt_pdf(
     font_name = _register_mono_font()
     width_mm = page_width_mm if page_width_mm is not None else get_printer_size_mm()
     page_width_pt = mm_to_points(width_mm)
-    margin_x = mm_to_points(3.0)
-    margin_y = mm_to_points(3.0)
+    margin_x = mm_to_points(2.6)
+    margin_y = mm_to_points(2.4)
     content_width = max(1.0, page_width_pt - margin_x * 2)
     general_size = 7.1
     item_size = 7.0
@@ -447,19 +447,21 @@ def build_sale_receipt_pdf(
     center_lines = [part for line in raw_center_lines if str(line).strip() for part in _wrap_line(str(line), center_cols)]
 
     items = receipt_context.get("items") or []
-    cols = max(30, int(content_width / max(pdfmetrics.stringWidth("0", font_name, item_size), 1)))
-    col_qty, col_unit, col_total = 4, 9, 9
-    col_desc = max(10, cols - col_qty - col_unit - col_total - 3)
-    item_lines = [f"{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'P.UNIT':>{col_unit}} {'TOTAL':>{col_total}}"]
+    cols = max(34, int(content_width / max(pdfmetrics.stringWidth("0", font_name, item_size), 1)))
+    col_qty, col_total = 4, 10
+    col_desc = max(14, cols - col_qty - col_total - 2)
+    item_lines = [f"{'CANT':<{col_qty}} {'DESCRIPCION':<{col_desc}} {'TOTAL':>{col_total}}"]
     for row in items:
         qty = str(row.get("qty", ""))
         name = str(row.get("name", ""))
         unit = f"${_money(row.get('unit_price')):.2f}"
         line_total = f"${_money(row.get('line_total')):.2f}"
         parts = wrap(name, width=col_desc, break_long_words=True, break_on_hyphens=False) or [""]
-        item_lines.append(f"{qty[:col_qty]:<{col_qty}} {parts[0]:<{col_desc}} {unit:>{col_unit}} {line_total:>{col_total}}")
+        item_lines.append(f"{qty[:col_qty]:<{col_qty}} {parts[0]:<{col_desc}} {line_total:>{col_total}}")
         for extra in parts[1:]:
-            item_lines.append(f"{'':<{col_qty}} {extra:<{col_desc}} {'':>{col_unit}} {'':>{col_total}}")
+            item_lines.append(f"{'':<{col_qty}} {extra:<{col_desc}} {'':>{col_total}}")
+        unit_label = f"P.Unit {unit}"
+        item_lines.append(f"{'':<{col_qty}} {unit_label:<{col_desc}} {'':>{col_total}}")
 
     details_lines = [
         receipt_context.get("service_type_label") or "",
@@ -492,7 +494,7 @@ def build_sale_receipt_pdf(
     payment_lines = [part for line in payment_lines if str(line).strip() for part in _wrap_line(str(line), center_cols)]
 
     height_pt = max(
-        mm_to_points(120),
+        mm_to_points(70),
         margin_y
         + logo_h
         + (len(center_lines) * leading)
@@ -520,12 +522,6 @@ def build_sale_receipt_pdf(
         tw = pdfmetrics.stringWidth(line, font_name, size)
         pdf.drawString(max(margin_x, (page_width_pt - tw) / 2.0), y, line)
     pdf.setFont(font_name, general_size)
-
-    if qr_reader:
-        y -= leading * 0.4
-        y -= qr_size
-        pdf.drawImage(qr_reader, (page_width_pt - qr_size) / 2.0, y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
-        y -= leading * 0.5
 
     def hr() -> None:
         nonlocal y
@@ -559,6 +555,11 @@ def build_sale_receipt_pdf(
     for line in payment_lines:
         y -= leading
         pdf.drawString(margin_x, y, line)
+    if qr_reader:
+        y -= leading * 0.4
+        y -= qr_size
+        pdf.drawImage(qr_reader, (page_width_pt - qr_size) / 2.0, y, width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
+        y -= leading * 0.5
     hr()
     footer = "Gracias por su visita"
     y -= leading

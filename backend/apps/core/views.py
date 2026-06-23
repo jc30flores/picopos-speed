@@ -234,7 +234,7 @@ def _ticket_logo_payload(request, settings: TicketSettings) -> dict:
     if not settings.ticket_logo:
         return {"ticket_logo_url": None, "ticket_logo_name": None, "has_ticket_logo": False}
     try:
-        logo_url = request.build_absolute_uri(settings.ticket_logo.url)
+        logo_url = settings.ticket_logo.url
     except ValueError:
         logo_url = None
     return {

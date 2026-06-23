@@ -30,7 +30,7 @@ const DEFAULT_MENU_ICON: LucideIcon = LayoutGrid;
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
+  const { accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
   const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true, loaded: false });
 
@@ -40,9 +40,6 @@ const MainMenu = () => {
         const normalizedFromSettings = normalizeFeatureFlags(settings);
         const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));
         const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
-        console.info("FEATURE_FLAGS_RAW_SETTINGS_RESPONSE", settings);
-        console.info("FEATURE_FLAGS_RAW_CORE_RESPONSE", coreFlags);
-        console.info("FEATURE_FLAGS_NORMALIZED", normalized);
         setFeatureVisibility({ kiosk: normalized.kioskEnabled, kitchen: normalized.kitchenDisplayEnabled, customerDisplay: normalized.customerDisplayEnabled, loaded: true });
       })
       .catch((error) => {
@@ -123,20 +120,6 @@ const MainMenu = () => {
                 onClick={() => {
                   const canEvaluateAttendanceGuard = attendanceResolved && !attendanceLoading;
                   const blockedByAttendance = canEvaluateAttendanceGuard && !accessState.canAccessDashboard;
-                  console.info("attendance.home.module_click", {
-                    userId: user?.id ?? null,
-                    role: user?.role ?? null,
-                    path: card.path,
-                    attendanceResolved,
-                    attendanceLoading,
-                    canEvaluateAttendanceGuard,
-                    blockedByAttendance,
-                    hasClockInToday: accessState.hasClockInToday,
-                    hasClockOutToday: accessState.hasClockOutToday,
-                    hasActiveSession: attendance?.hasActiveSession ?? false,
-                    canAccessDashboard: accessState.canAccessDashboard,
-                    attendanceError,
-                  });
                   if (blockedByAttendance) {
                     if (attendanceError) {
                       toast.error(`No se pudo validar asistencia: ${attendanceError}`);

@@ -101,6 +101,27 @@ class SystemPrinterService:
         combined_error = (result.stderr or result.stdout or f"lp exited with code {result.exit_code}").strip()
         return False, combined_error
 
+
+    def print_ticket_pdf(self, ticket_text: str, *, pdf_kwargs: dict | None = None, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
+        logger.info("printer.ticket_pdf.attempt timestamp=%s queue=%s endpoint=%s context=%s", _now_iso(), self.queue, endpoint or "", context or {})
+        if not self.is_printer_available(context=context, endpoint=endpoint):
+            return False, f"Queue '{self.queue}' not found"
+        result = build_receipt_pdf_from_text(
+            text=ticket_text,
+            filename="ticket.pdf",
+            font_size=9.0,
+            line_height=11.0,
+            **(pdf_kwargs or {}),
+        )
+        with tempfile.NamedTemporaryFile(prefix="ticket_", suffix=".pdf", delete=True) as temp:
+            temp.write(result.pdf_bytes)
+            temp.flush()
+            lp_result = self.run_command(["lp", "-d", self.queue, temp.name], timeout=20, context=context, endpoint=endpoint)
+        if lp_result.ok:
+            return True, None
+        combined_error = (lp_result.stderr or lp_result.stdout or f"lp exited with code {lp_result.exit_code}").strip()
+        return False, combined_error
+
     def open_cash_drawer(self, *, context: dict | None = None, endpoint: str | None = None) -> tuple[bool, str | None]:
         logger.info(
             "printer.drawer.attempt timestamp=%s queue=%s endpoint=%s raw_equivalent=%s context=%s",
@@ -159,7 +180,7 @@ class SystemPrinterService:
         context: dict | None = None,
         endpoint: str | None = None,
     ) -> dict:
-        printed, print_error = self.print_ticket_text(ticket_text, context=context, endpoint=endpoint)
+        printed, print_error = self.print_ticket_pdf(ticket_text, pdf_kwargs=pdf_kwargs, context=context, endpoint=endpoint)
         receipt_pdf_url = None
         receipt_pdf_path = None
         if not printed:

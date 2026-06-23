@@ -454,7 +454,7 @@ class OrderReceiptPDFView(generics.GenericAPIView):
             text=payload.get("text", ""),
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
-            qr_value=payload.get("meta", {}).get("public_url"),
+            qr_value=payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
             receipt_context=payload.get("meta", {}).get("receipt_context"),
             suppress_qr_url_lines=True,
         )

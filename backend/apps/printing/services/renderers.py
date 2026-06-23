@@ -65,8 +65,29 @@ def _format_right_label_value(label: str, value: str) -> str:
     return f"{text}{' ' * space} {value}"
 
 
-def _logo_path() -> Path:
-    return Path(settings.BASE_DIR) / "assets" / "receipt" / "logo_pdg.png"
+def _logo_path() -> Path | None:
+    try:
+        from apps.core.ticket_settings import get_ticket_logo_path
+
+        configured = get_ticket_logo_path()
+    except Exception:
+        configured = None
+    return Path(configured) if configured else None
+
+
+def _qr_value(ctx: dict) -> str:
+    public_url = str(ctx.get("public_url") or "").strip()
+    if public_url:
+        return public_url
+    dte = ctx.get("dte") or {}
+    totals = ctx.get("totals") or {}
+    codigo = str(dte.get("codigo_generacion") or "").strip()
+    numero = str(dte.get("numero_control") or "").strip()
+    fecha = str(dte.get("fecha_dte") or ctx.get("order_datetime") or "").strip()
+    total = str(totals.get("total") or "").strip()
+    if codigo or numero:
+        return " | ".join(part for part in [f"CG:{codigo}" if codigo else "", f"NC:{numero}" if numero else "", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else ""] if part)
+    return " | ".join(part for part in [f"ORDEN:{ctx.get('order_number') or '-'}", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else ""] if part)
 
 
 def _display_payment_label(payment) -> str:
@@ -166,6 +187,7 @@ def build_receipt_context(order: Order) -> dict:
         items.append({"qty": int(fee.quantity), "name": fee.fee_name, "unit_price": Decimal(fee.unit_amount).quantize(Decimal("0.01")), "line_total": fee_total})
 
     public_url = build_hacienda_consulta_publica_url(fecha_dte, codigo_generacion)
+    logo_path = _logo_path()
     return {
         "restaurant_name": branch_profile.get("branch_name") or (order.branch.name if order.branch else "Pico de Gallo"),
         "tagline": branch_profile.get("emisor_nombre") or "Pico de Gallo POS",
@@ -197,8 +219,9 @@ def build_receipt_context(order: Order) -> dict:
             "fh_procesamiento": fh_procesamiento or "",
         },
         "public_url": public_url,
-        "logo_path": str(_logo_path()),
-        "logo_exists": _logo_path().exists(),
+        "qr_value": "",
+        "logo_path": str(logo_path) if logo_path else "",
+        "logo_exists": bool(logo_path and logo_path.exists()),
     }
 
 
@@ -250,6 +273,7 @@ def render_kitchen_ticket(order: Order) -> dict:
 
 def render_customer_ticket(order: Order) -> dict:
     ctx = build_receipt_context(order)
+    ctx["qr_value"] = _qr_value(ctx)
     col_qty = 3
     col_unit = 8
     col_total = 9
@@ -340,6 +364,7 @@ def render_customer_ticket(order: Order) -> dict:
             "payment_status": order.payment_status,
             "cat017_code": ctx["payment"]["method_code_cat017"],
             "public_url": ctx["public_url"],
+            "qr_value": ctx["qr_value"],
             "logo_path": ctx["logo_path"],
             "logo_exists": ctx["logo_exists"],
             "receipt_context": ctx,

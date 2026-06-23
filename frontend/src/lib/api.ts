@@ -1,6 +1,7 @@
 import { fromCents, moneyToFixedString, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
+const API_DEBUG = import.meta.env.DEV && import.meta.env.VITE_DEBUG === "true";
 
 export type Category = {
   id: number;
@@ -3033,7 +3034,7 @@ export const createOrder = async (payload: {
     })),
   };
 
-  if (import.meta.env.DEV) {
+  if (API_DEBUG) {
     console.info("[pos-debug] create-order-payload", {
       customerId: orderPayload.customer_id ?? null,
       dteDocumentType: orderPayload.dte_document_type,
@@ -3087,7 +3088,7 @@ export const createOrder = async (payload: {
     }
     return mapOrder(data);
   } catch (error) {
-    if (import.meta.env.DEV) {
+    if (API_DEBUG) {
       const apiError = error as { message?: string; status?: number; code?: string };
       console.info("[pos-debug] create-order-error", {
         status: apiError?.status ?? null,

@@ -226,22 +226,22 @@ class USBPrinterService:
             printer.text(f"Codigo Gen: {dte.get('codigo_generacion') or '-'}\n")
             printer.text(f"Fecha DTE: {dte.get('fecha_dte') or '-'}\n")
             printer.set(align="center")
-            public_url = str(ctx.get("public_url") or "")
+            qr_payload = str(ctx.get("qr_value") or ctx.get("public_url") or "")
             qr_printed = False
-            if public_url:
+            if qr_payload:
                 try:
-                    printer.qr(public_url, size=7, ec=2)
+                    printer.qr(qr_payload, size=7, ec=2)
                     qr_printed = True
                 except Exception:
                     logger.warning("receipt_printer.native_qr_failed", exc_info=True)
                 if not qr_printed:
-                    qr_img = self._qr_image(public_url)
+                    qr_img = self._qr_image(qr_payload)
                     if qr_img is not None:
                         printer.image(qr_img, impl="bitImageRaster")
                         qr_printed = True
                 printer.text("\n")
                 printer.set(align="left")
-                printer.text(f"{public_url}\n")
+                printer.text(f"{qr_payload}\n")
             printer.set(align="center", bold=True)
             printer.text("Gracias por su visita\n")
             printer.text(f"Order No: {ctx.get('order_number', '-')}\n")
