@@ -5417,6 +5417,22 @@ export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<v
 };
 
 
+
+export const fetchPaymentTicketBlob = async (paymentId: number): Promise<Blob> => {
+  const response = await request(`/payments/${paymentId}/ticket.pdf`, {
+    headers: { Accept: "application/pdf" },
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new Error("No se encontró el ticket solicitado.");
+    throw new Error("No se pudo preparar el ticket. Intenta nuevamente.");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("El servidor devolvió un formato de ticket no válido.");
+  }
+  return response.blob();
+};
+
 export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void> => {
   const response = await request(`/payments/${paymentId}/ticket.pdf`, {
     headers: { Accept: "application/pdf,application/octet-stream,*/*" },

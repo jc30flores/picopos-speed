@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, Armchair } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -50,8 +50,6 @@ import {
   getPaymentMethods,
   getOrderById,
   updateOrderCustomerDte,
-  createPrintJob,
-  markPrintJobPrinted,
   getActiveTaxConfig,
   getCategories,
   getModifierGroups,
@@ -69,12 +67,12 @@ import {
   createCashPayout,
   openCashDrawer,
   downloadCashSessionTicketPdf,
-  downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
   getPendingOrders,
   setOrderPending,
-  printPaymentTicket,
+  fetchPaymentTicketBlob,
+  downloadOrderReceiptPdf,
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
@@ -95,11 +93,10 @@ import {
   CashSessionSnapshot,
   CashTransaction,
   Order,
-  PrintJob,
 } from "@/lib/api";
 import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
-import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { TicketPreviewDialog } from "@/components/printing/TicketPreviewDialog";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
@@ -493,8 +490,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activePartId, setActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
-  const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
-  const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
+  const [ticketPreview, setTicketPreview] = useState<{ open: boolean; url: string | null; title: string; subtitle: string; loading: boolean; error: string | null }>({ open: false, url: null, title: "Vista previa de ticket", subtitle: "Formato térmico optimizado para impresora 80POS genérica.", loading: false, error: null });
   const hardReloadTriggeredRef = useRef(false);
   const hydratedPendingOrderIdRef = useRef<number | null>(null);
   const consumedNavSourceRef = useRef(false);
@@ -2068,12 +2064,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     return saved;
   };
 
-  const printSalesTicketOnly = async (orderId: number) => {
-    const job = await createPrintJob({ orderId, type: "customer" });
-    setReceiptJob(job);
-    return job;
-  };
-
   const handleQuickPrintTicket = async () => {
     if (cart.length === 0 && !(activeOrder?.items?.length)) {
       toast.info("No hay pedido para imprimir");
@@ -2082,8 +2072,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       const baseOrder = await ensureOrderForQuickPrint();
       const heldOrder = baseOrder.isPending ? baseOrder : await saveCurrentOrderAsHeld(baseOrder);
-      await printSalesTicketOnly(heldOrder.id);
-      toast.success("Ticket enviado a impresión");
+      const blob = await downloadOrderReceiptPdf(heldOrder.id);
+      openTicketPreviewFromBlob(blob, "Vista previa de ticket");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket");
     }
@@ -2414,15 +2404,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     window.setTimeout(() => hardReloadPos(reason), 400);
   };
 
-  const triggerPdfDownload = (blob: Blob, filename: string) => {
+
+  const openTicketPreviewFromBlob = (blob: Blob, title = "Vista previa de ticket") => {
     const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 500);
+    setTicketPreview((prev) => {
+      if (prev.url) URL.revokeObjectURL(prev.url);
+      return { open: true, url, title, subtitle: "Formato térmico optimizado para impresora 80POS genérica.", loading: false, error: null };
+    });
+  };
+
+  const closeTicketPreview = () => {
+    setTicketPreview((prev) => {
+      if (prev.url) URL.revokeObjectURL(prev.url);
+      return { ...prev, open: false, url: null, loading: false, error: null };
+    });
   };
 
   const handleKitchenChoice = async (shouldSend: boolean) => {
@@ -2445,47 +2440,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const shouldPrintTicket = Boolean(lastPaymentId) && (postSalePrintChoice || lastPaymentAutoPrint);
       if (shouldPrintTicket && lastPaymentId) {
         try {
-        const printResult = await printPaymentTicket(lastPaymentId);
-        if (printResult.pdfBlob) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning("Impresora no detectada.");
-        } else if (!printResult.printed && printResult.receiptPdfUrl) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            await downloadPaymentTicketPdf(lastPaymentId);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning("Impresora no detectada.");
-        } else if (!printResult.printed && printResult.printError) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            await downloadPaymentTicketPdf(lastPaymentId);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
-        }
-        if (printResult.drawerError) {
-          toast.warning(printResult.drawerError);
-        }
+          const blob = await fetchPaymentTicketBlob(lastPaymentId);
+          openTicketPreviewFromBlob(blob, "Vista previa de ticket");
         } catch (printError) {
-          console.error("Auto ticket print failed", printError);
-          toast.warning("El pago se registró, pero no se pudo imprimir el ticket automáticamente.");
+          console.error("Ticket preview failed", printError);
+          toast.warning("La venta fue registrada correctamente, pero no se pudo preparar el ticket.");
         }
       }
       setIsKitchenPromptOpen(false);
@@ -2992,30 +2951,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
     try {
-      const job = await createPrintJob({ orderId: activeOrder.id, type: "customer" });
-      setReceiptJob(job);
-      setIsReceiptPreviewOpen(true);
+      const blob = await downloadOrderReceiptPdf(activeOrder.id);
+      openTicketPreviewFromBlob(blob, "Vista previa de ticket");
     } catch (error) {
-      console.error("Failed to create print job", error);
-      toast.error("No se pudo generar el ticket");
+      console.error("Failed to prepare ticket preview", error);
+      toast.error("No se pudo preparar el ticket. Intenta nuevamente.");
     }
-  };
-
-  const handleMarkPrinted = async () => {
-    if (!receiptJob) return;
-    try {
-      const job = await markPrintJobPrinted(receiptJob.id);
-      setReceiptJob(job);
-      toast.success("Ticket marcado como impreso");
-    } catch (error) {
-      console.error("Failed to mark printed", error);
-      toast.error("No se pudo actualizar el ticket");
-    }
-  };
-
-  const handleReprint = async () => {
-    if (!activeOrder) return;
-    await handlePrintReceipt();
   };
 
   if (isCashGateLoading) {
@@ -3103,24 +3044,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
-            {tableMapEnabled ? (
-              <Card className="p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant={posMode === "tables" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("tables")}><Armchair className="mr-2 h-4 w-4"/>Mesas</Button>
-                  <Button variant={posMode === "pos" ? "default" : "outline"} className="h-10" onClick={() => setPosMode("pos")}>POS</Button>
-                  <Button variant="outline" className="h-10" onClick={() => navigate('/tables/editor')}>Editor de mesas</Button>
-                </div>
-                {posMode === "tables" ? (
-                  <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-                    {restaurantTables.map((table) => {
-                      const session = sessionByTableId.get(table.id);
-                      const stateClass = !table.isActive ? "border-muted bg-muted/20" : session?.status === "sent_to_kitchen" ? "border-orange-500/50 bg-orange-500/10" : session ? "border-blue-500/50 bg-blue-500/10" : "border-emerald-500/40 bg-emerald-500/10";
-                      return <button key={table.id} onClick={() => void openTableSession(table.id)} className={cn("rounded-xl border p-3 text-left", stateClass)}><p className="font-semibold">{table.name}</p><p className="text-xs text-muted-foreground">{session ? "Ocupada" : "Libre"} · Cap. {table.capacity}</p></button>;
-                    })}
-                  </div>
-                ) : null}
-              </Card>
-            ) : null}
+            {/* Table mode controls are intentionally hidden from the classic POS workspace. */}
 
             {/* Search & Filters */}
             <Card className="p-4">
@@ -4712,130 +4636,139 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       />
 
-      <PrintPreviewDialog
-        open={isReceiptPreviewOpen}
-        onOpenChange={setIsReceiptPreviewOpen}
-        job={receiptJob}
-        onMarkPrinted={handleMarkPrinted}
-        onReprint={handleReprint}
+      <TicketPreviewDialog
+        open={ticketPreview.open}
+        title={ticketPreview.title}
+        subtitle={ticketPreview.subtitle}
+        ticketUrl={ticketPreview.url}
+        loading={ticketPreview.loading}
+        error={ticketPreview.error}
+        onClose={closeTicketPreview}
       />
 
       <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
-        <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
-          <DialogHeader>
-            <DialogTitle>{editingModifiersItemId ? "Editar modificadores" : "Extras (opcional)"}</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="flex h-[90vh] w-[94vw] max-w-6xl flex-col rounded-2xl border border-border/70 p-0">
+          <DialogHeader className="border-b px-5 py-4">
+            <DialogTitle className="text-2xl">Extras</DialogTitle>
+            <DialogDescription className="text-base">
               {pendingProduct
                 ? editingModifiersItemId
                   ? `Actualiza los modificadores de ${pendingProduct.name}.`
-                  : `Selecciona extras de pago para ${pendingProduct.name}.`
+                  : `Selecciona extras para ${pendingProduct.name}.`
                 : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-            {getPosModifierGroups(pendingProduct).map((group) => {
-              const groupId = String(group.id);
-              const selectedValues = selectedModifiers[groupId] ?? [];
-              const isOpen = openModifierGroups[groupId] ?? false;
-              const groupError = modifierValidationErrors[groupId];
-              return (
-                <div key={group.id} className={cn("rounded-xl border border-border/70", groupError && "border-destructive/60")}> 
-                  <button
-                    type="button"
-                    className="flex min-h-14 w-full items-center justify-between px-4 py-3 text-left"
-                    onClick={() => setOpenModifierGroups((prev) => ({ ...prev, [groupId]: !isOpen }))}
-                    aria-expanded={isOpen}
-                  >
-                    <div>
-                      <Label className="block cursor-pointer text-base font-semibold">{group.name}</Label>
-                      <p className="text-xs text-muted-foreground">
-                        {group.required ? "Obligatorio" : "Opcional"} · Min {group.minSelection} · Max {group.maxSelection}
-                      </p>
-                    </div>
-                    {isOpen ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
-                  </button>
-                  {groupError && <p className="px-4 pb-2 text-xs text-destructive">{groupError}</p>}
-                  {isOpen && (
-                    <div className="space-y-2 px-3 pb-3">
-                      {group.maxSelection === 1 ? (
-                        <RadioGroup
-                          value={selectedValues[0] || ""}
-                          onValueChange={(value) => {
-                            setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }));
-                            setModifierValidationErrors((prev) => {
-                              const next = { ...prev };
-                              delete next[groupId];
-                              return next;
-                            });
-                          }}
+          {(() => {
+            const groups = getPosModifierGroups(pendingProduct);
+            const activeGroup = groups.find((group) => openModifierGroups[String(group.id)]) ?? groups[0];
+            const activeGroupId = activeGroup ? String(activeGroup.id) : "";
+            const activeSelectedValues = activeGroup ? (selectedModifiers[activeGroupId] ?? []) : [];
+            const activeError = activeGroup ? modifierValidationErrors[activeGroupId] : undefined;
+            const selectGroup = (groupId: string) => setOpenModifierGroups(Object.fromEntries(groups.map((group) => [String(group.id), String(group.id) === groupId])));
+            return (
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 md:grid-cols-[280px_minmax(0,1fr)]">
+                <aside className="min-h-0 overflow-auto border-b bg-muted/20 p-3 md:border-b-0 md:border-r">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Grupos</p>
+                  <div className="space-y-2">
+                    {groups.map((group) => {
+                      const groupId = String(group.id);
+                      const selectedCount = (selectedModifiers[groupId] ?? []).length;
+                      const groupError = modifierValidationErrors[groupId];
+                      const active = activeGroupId === groupId;
+                      return (
+                        <button
+                          key={group.id}
+                          type="button"
+                          className={cn("w-full rounded-xl border p-3 text-left transition hover:bg-muted/50", active && "border-primary bg-primary/10", groupError && "border-destructive/70")}
+                          onClick={() => selectGroup(groupId)}
+                          aria-label={`Ver opciones de ${group.name}`}
                         >
-                          {group.modifiers
-                            .filter((mod) => mod.price > 0)
-                            .map((mod) => (
-                              <Label
-                                key={mod.id}
-                                htmlFor={`pending-${group.id}-${mod.id}`}
-                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                              >
-                                <RadioGroupItem id={`pending-${group.id}-${mod.id}`} value={String(mod.id)} />
-                                <span className="flex-1 font-medium">{mod.name}</span>
-                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                              </Label>
-                            ))}
-                        </RadioGroup>
-                      ) : (
-                        <div className="space-y-1">
-                          {group.modifiers
-                            .filter((mod) => mod.price > 0)
-                            .map((mod) => (
-                              <Label
-                                key={mod.id}
-                                htmlFor={`pending-${group.id}-${mod.id}`}
-                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                              >
-                                <Checkbox
-                                  id={`pending-${group.id}-${mod.id}`}
-                                  checked={selectedValues.includes(String(mod.id))}
-                                  onCheckedChange={(checked) => {
-                                    const current = selectedValues;
-                                    if (checked && current.length >= group.maxSelection) return;
-                                    setSelectedModifiers((prev) => ({
-                                      ...prev,
-                                      [groupId]: checked
-                                        ? [...current, String(mod.id)]
-                                        : current.filter((id) => id !== String(mod.id)),
-                                    }));
-                                    setModifierValidationErrors((prev) => {
-                                      const next = { ...prev };
-                                      delete next[groupId];
-                                      return next;
-                                    });
-                                  }}
-                                />
-                                <span className="flex-1 font-medium">{mod.name}</span>
-                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                              </Label>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold">{group.name}</span>
+                            <Badge variant={groupError ? "destructive" : selectedCount ? "default" : "outline"}>{selectedCount}/{group.maxSelection}</Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{group.required ? "Obligatorio" : "Opcional"} · Min {group.minSelection} · Max {group.maxSelection}</p>
+                          {groupError ? <p className="mt-1 text-xs text-destructive">{groupError}</p> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </aside>
 
-          <div className="pt-2">
-            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
-              {editingModifiersItemId
-                ? selectedExtrasCount > 0
-                  ? `Actualizar (${selectedExtrasCount} extras)`
-                  : "Actualizar"
-                : selectedExtrasCount > 0
-                  ? `Agregar (${selectedExtrasCount} extras)`
-                  : "Agregar"}
-            </Button>
+                <section className="flex min-h-0 flex-col">
+                  <div className="border-b px-4 py-3">
+                    <h3 className="text-lg font-semibold">{activeGroup?.name ?? "Sin extras"}</h3>
+                    {activeGroup ? <p className="text-sm text-muted-foreground">{activeGroup.required ? "Obligatorio" : "Opcional"} · Seleccionado {activeSelectedValues.length} de {activeGroup.maxSelection}</p> : null}
+                    {activeError ? <p className="mt-1 text-sm text-destructive">{activeError}</p> : null}
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-auto p-4">
+                    {activeGroup ? (
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {activeGroup.modifiers.filter((mod) => mod.price > 0).map((mod) => {
+                          const modId = String(mod.id);
+                          const selected = activeSelectedValues.includes(modId);
+                          const maxReached = !selected && activeSelectedValues.length >= activeGroup.maxSelection;
+                          const toggle = () => {
+                            if (activeGroup.maxSelection === 1) {
+                              setSelectedModifiers((prev) => ({ ...prev, [activeGroupId]: selected ? [] : [modId] }));
+                            } else {
+                              if (maxReached) return;
+                              setSelectedModifiers((prev) => ({
+                                ...prev,
+                                [activeGroupId]: selected ? activeSelectedValues.filter((id) => id !== modId) : [...activeSelectedValues, modId],
+                              }));
+                            }
+                            setModifierValidationErrors((prev) => { const next = { ...prev }; delete next[activeGroupId]; return next; });
+                          };
+                          return (
+                            <button
+                              key={mod.id}
+                              type="button"
+                              className={cn("min-h-28 rounded-2xl border p-4 text-left transition hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50", selected && "border-primary bg-primary/10 ring-2 ring-primary/20")}
+                              onClick={toggle}
+                              disabled={maxReached}
+                              aria-label={`${selected ? "Quitar" : "Agregar"} ${mod.name}`}
+                            >
+                              <div className="flex h-full flex-col justify-between gap-3">
+                                <div>
+                                  <p className="text-lg font-semibold">{mod.name}</p>
+                                  <p className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</p>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{selected ? "Seleccionado" : maxReached ? "Máximo" : "Tocar para agregar"}</span>
+                                  {activeGroup.maxSelection === 1 ? <RadioGroup value={selected ? modId : ""}><RadioGroupItem value={modId} /></RadioGroup> : <Checkbox checked={selected} />}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : <p className="text-sm text-muted-foreground">Este producto no tiene extras disponibles.</p>}
+                  </div>
+                </section>
+              </div>
+            );
+          })()}
+
+          <div className="border-t bg-background/95 px-5 py-4 backdrop-blur">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm">
+                <p className="font-semibold">{selectedExtrasCount} extra(s) seleccionado(s)</p>
+                <p className="text-muted-foreground">Total extras: {formatMoney(pendingSelectionValidation.selectedMods.reduce((sum, mod) => sum + mod.price, 0))}</p>
+                {Object.values(pendingSelectionValidation.errors)[0] ? <p className="text-destructive">{Object.values(pendingSelectionValidation.errors)[0]}</p> : null}
+              </div>
+              <Button className="h-14 min-w-48 text-base" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
+                {editingModifiersItemId
+                  ? selectedExtrasCount > 0
+                    ? `Actualizar (${selectedExtrasCount} extras)`
+                    : "Actualizar"
+                  : selectedExtrasCount > 0
+                    ? `Agregar (${selectedExtrasCount} extras)`
+                    : "Agregar"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
