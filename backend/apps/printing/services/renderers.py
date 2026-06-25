@@ -65,8 +65,52 @@ def _format_right_label_value(label: str, value: str) -> str:
     return f"{text}{' ' * space} {value}"
 
 
-def _logo_path() -> Path:
-    return Path(settings.BASE_DIR) / "assets" / "receipt" / "logo_pdg.png"
+def _logo_path() -> Path | None:
+    try:
+        from apps.core.ticket_settings import get_ticket_logo_path
+
+        configured = get_ticket_logo_path()
+    except Exception:
+        configured = None
+    return Path(configured) if configured else None
+
+
+def _normalize_dte_status(raw_status: str | None, *, has_dte: bool) -> str:
+    text = str(raw_status or "").strip().upper()
+    if not has_dte:
+        return "SIN DTE"
+    if text in {"ACEPTADO", "PROCESADO", "RECIBIDO", "OK"}:
+        return "ACEPTADO"
+    if text in {"RECHAZADO", "FAILED", "ERROR", "INVALIDO", "INVÁLIDO"}:
+        return "RECHAZADO"
+    if text in {"INVALIDADO", "ANULADO"}:
+        return "INVALIDADO"
+    return "PENDIENTE"
+
+
+def _qr_value(ctx: dict) -> str:
+    dte = ctx.get("dte") or {}
+    totals = ctx.get("totals") or {}
+    codigo = str(dte.get("codigo_generacion") or "").strip()
+    numero = str(dte.get("numero_control") or "").strip()
+    fecha = str(dte.get("fecha_dte") or ctx.get("order_datetime") or "").strip()
+    total = str(totals.get("total") or "").strip()
+    estado = str(dte.get("estado_dte") or "").strip()
+    sello = str(dte.get("sello_recibido") or "").strip()
+    if codigo or numero:
+        return " | ".join(
+            part
+            for part in [
+                f"CG:{codigo}" if codigo else "",
+                f"NC:{numero}" if numero else "",
+                f"FECHA:{fecha}" if fecha else "",
+                f"TOTAL:{total}" if total else "",
+                f"ESTADO:{estado}" if estado else "",
+                f"SELLO:{sello}" if sello else "",
+            ]
+            if part
+        )
+    return " | ".join(part for part in [f"ORDEN:{ctx.get('order_number') or '-'}", f"FECHA:{fecha}" if fecha else "", f"TOTAL:{total}" if total else "", "ESTADO:SIN DTE"] if part)
 
 
 def _display_payment_label(payment) -> str:
@@ -129,6 +173,15 @@ def build_receipt_context(order: Order) -> dict:
     numero_control = (identificacion.get("numeroControl") if isinstance(identificacion, dict) else "") or (dte_record.control_number if dte_record else "")
     response_payload = dte_record.response_payload if dte_record and isinstance(dte_record.response_payload, dict) else {}
     respuesta_hacienda = response_payload.get("respuesta_hacienda") if isinstance(response_payload.get("respuesta_hacienda"), dict) else {}
+    estado_raw = (
+        (dte_record.status if dte_record else "")
+        or str(response_payload.get("status") or "").strip()
+        or str(response_payload.get("estado") or "").strip()
+        or str(respuesta_hacienda.get("estado") or "").strip()
+        or str(dte_record.estado_mh if dte_record else "").strip()
+        or str(dte_record.hacienda_state if dte_record else "").strip()
+    )
+    estado_dte = _normalize_dte_status(estado_raw, has_dte=bool(dte_record))
     sello_recibido = (
         (dte_record.sello_recibido if dte_record else "")
         or (dte_record.sello_recepcion if dte_record else "")
@@ -161,11 +214,21 @@ def build_receipt_context(order: Order) -> dict:
             if mod_price > 0:
                 items.append({"qty": 1, "name": f"+ {mod.modifier_name_snapshot}", "unit_price": mod_price, "line_total": mod_price})
 
+    disposable_total = Decimal("0.00")
     for fee in order.fees.all():
         fee_total = Decimal(fee.total_amount).quantize(Decimal("0.01"))
+        fee_type = str(getattr(fee, "fee_type", "") or "").strip().lower()
+        fee_name = str(getattr(fee, "fee_name", "") or "").strip()
+        if fee_type == "disposable" or fee_name.lower() == "desechables":
+            disposable_total += fee_total
+            continue
         items.append({"qty": int(fee.quantity), "name": fee.fee_name, "unit_price": Decimal(fee.unit_amount).quantize(Decimal("0.01")), "line_total": fee_total})
+    if disposable_total > 0:
+        disposable_total = disposable_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        items.append({"qty": 1, "name": "Desechables", "unit_price": disposable_total, "line_total": disposable_total})
 
     public_url = build_hacienda_consulta_publica_url(fecha_dte, codigo_generacion)
+    logo_path = _logo_path()
     return {
         "restaurant_name": branch_profile.get("branch_name") or (order.branch.name if order.branch else "Pico de Gallo"),
         "tagline": branch_profile.get("emisor_nombre") or "Pico de Gallo POS",
@@ -190,6 +253,7 @@ def build_receipt_context(order: Order) -> dict:
             "reference": (main_payment.reference if main_payment else "") or "",
         },
         "dte": {
+            "estado_dte": estado_dte,
             "numero_control": numero_control,
             "codigo_generacion": codigo_generacion,
             "fecha_dte": fecha_dte or "",
@@ -197,8 +261,9 @@ def build_receipt_context(order: Order) -> dict:
             "fh_procesamiento": fh_procesamiento or "",
         },
         "public_url": public_url,
-        "logo_path": str(_logo_path()),
-        "logo_exists": _logo_path().exists(),
+        "qr_value": "",
+        "logo_path": str(logo_path) if logo_path else "",
+        "logo_exists": bool(logo_path and logo_path.exists()),
     }
 
 
@@ -250,6 +315,7 @@ def render_kitchen_ticket(order: Order) -> dict:
 
 def render_customer_ticket(order: Order) -> dict:
     ctx = build_receipt_context(order)
+    ctx["qr_value"] = _qr_value(ctx)
     col_qty = 3
     col_unit = 8
     col_total = 9
@@ -260,19 +326,15 @@ def render_customer_ticket(order: Order) -> dict:
         center_lines.extend(wrap(str(ctx["address"]), width=_width()) or [str(ctx["address"])])
     center_lines.extend(
         [
-            "DATOS DTE",
             f"No. Control: {ctx['dte']['numero_control'] or '-'}",
             f"Codigo Gen: {ctx['dte']['codigo_generacion'] or '-'}",
-            f"Fecha DTE: {ctx['dte']['fecha_dte'] or '-'}",
-            f"Sello de Recepcion: {ctx['dte']['sello_recibido'] or '-'}",
-            f"Fh Procesamiento: {ctx['dte']['fh_procesamiento'] or '-'}",
+            f"Sello Recibido: {ctx['dte'].get('sello_recibido') or '-'}",
         ]
     )
 
     lines: list[str] = [_center(line) for line in center_lines]
     lines.append(_divider())
     lines.append(_center(ctx["service_type_label"]))
-    lines.append(_center(f"Atendido por: {ctx['cashier_name']}"))
     lines.append(_center(f"Orden #{ctx['order_number']}"))
     lines.append(_center(ctx["order_datetime"].strftime("%Y-%m-%d %H:%M")))
     lines.append(_divider())
@@ -307,6 +369,7 @@ def render_customer_ticket(order: Order) -> dict:
         lines.append(_line(f"Cambio: {_format_money(ctx['payment']['change_due'])}"))
     lines.append(_divider())
     lines.append(_center("Gracias por su visita"))
+    lines.append(_center("GastroPOSV by MEKA"))
 
     text = "\n".join(lines)
     items_html = "".join(
@@ -340,6 +403,7 @@ def render_customer_ticket(order: Order) -> dict:
             "payment_status": order.payment_status,
             "cat017_code": ctx["payment"]["method_code_cat017"],
             "public_url": ctx["public_url"],
+            "qr_value": ctx["qr_value"],
             "logo_path": ctx["logo_path"],
             "logo_exists": ctx["logo_exists"],
             "receipt_context": ctx,

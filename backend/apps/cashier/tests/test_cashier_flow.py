@@ -382,6 +382,37 @@ class CashierFlowTests(TestCase):
         self.assertEqual(close.status_code, 400)
         self.assertIn('total_contado', str(close.data.get('errors', {})))
 
+
+    def test_close_session_quantizes_long_float_money_values(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {
+                'total_billetes': '93.00',
+                'total_monedas': '42.33',
+                'total_pos_tarjetas': '382.43',
+                'total_pedidos_ya': '426.62',
+                'total_contado': 135.32999999999998,
+            },
+            format='json',
+        )
+        self.assertEqual(close.status_code, 200)
+        session = CashSession.objects.get(id=close.data['session']['id'])
+        self.assertEqual(str(session.closing_counted_cash), '135.33')
+        self.assertEqual(str(session.closing_total_bills), '93.00')
+        self.assertEqual(str(session.closing_total_coins), '42.33')
+
+    def test_close_session_rejects_non_finite_money_values_with_clear_error(self):
+        self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
+        close = self.client.post(
+            '/api/cashier/session/close/',
+            {'total_billetes': '90.00', 'total_monedas': '10.00', 'total_contado': 'NaN'},
+            format='json',
+        )
+        self.assertEqual(close.status_code, 400)
+        self.assertIn('No se pudo cerrar la caja porque uno de los montos no es válido', str(close.data.get('detail')))
+        self.assertIn('Ingresa un monto válido', str(close.data.get('errors', {})))
+
     def test_close_requires_bill_and_coin_fields(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         close = self.client.post('/api/cashier/session/close/', {'total_contado': '95.00'}, format='json')

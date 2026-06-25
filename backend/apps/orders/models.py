@@ -1,7 +1,123 @@
 from django.db import models
+from django.conf import settings
 from apps.core.models import Branch, Customer, ServiceType, Table
 from apps.core.money import to_cents
 from apps.menu.models import Product, ProductSpecialPriceRule
+
+
+
+
+class DiningArea(models.Model):
+    name = models.CharField(max_length=120)
+    sort_order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    x = models.FloatField(default=0)
+    y = models.FloatField(default=0)
+    width = models.FloatField(default=320)
+    height = models.FloatField(default=220)
+    color = models.CharField(max_length=20, blank=True, default="")
+    operational_zoom = models.FloatField(default=1)
+    operational_offset_x = models.FloatField(default=0)
+    operational_offset_y = models.FloatField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class RestaurantTable(models.Model):
+    SHAPE_ROUND = "round"
+    SHAPE_SQUARE = "square"
+    SHAPE_RECTANGLE = "rectangle"
+    SHAPE_BOOTH = "booth"
+    SHAPE_BAR = "bar"
+    SHAPE_CHOICES = [
+        (SHAPE_ROUND, "Redonda"),
+        (SHAPE_SQUARE, "Cuadrada"),
+        (SHAPE_RECTANGLE, "Rectangular"),
+        (SHAPE_BOOTH, "Booth"),
+        (SHAPE_BAR, "Barra"),
+    ]
+
+    area = models.ForeignKey(DiningArea, on_delete=models.PROTECT, related_name="tables")
+    name = models.CharField(max_length=120)
+    number = models.PositiveIntegerField(default=1)
+    capacity = models.PositiveIntegerField(default=1)
+    shape = models.CharField(max_length=16, choices=SHAPE_CHOICES, default=SHAPE_SQUARE)
+    x = models.FloatField(default=0)
+    y = models.FloatField(default=0)
+    width = models.FloatField(default=120)
+    height = models.FloatField(default=80)
+    rotation = models.FloatField(default=0)
+    color = models.CharField(max_length=20, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TableSession(models.Model):
+    STATUS_OPEN = "open"
+    STATUS_SENT_TO_KITCHEN = "sent_to_kitchen"
+    STATUS_PARTIALLY_PAID = "partially_paid"
+    STATUS_PAID = "paid"
+    STATUS_CLOSED = "closed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Abierta"),
+        (STATUS_SENT_TO_KITCHEN, "En cocina"),
+        (STATUS_PARTIALLY_PAID, "Parcialmente pagada"),
+        (STATUS_PAID, "Pagada"),
+        (STATUS_CLOSED, "Cerrada"),
+        (STATUS_CANCELLED, "Cancelada"),
+    ]
+
+    ORDER_MODE_TABLE = "table"
+    ORDER_MODE_PER_PERSON = "per_person"
+    ORDER_MODE_CHOICES = [
+        (ORDER_MODE_TABLE, "Orden completa"),
+        (ORDER_MODE_PER_PERSON, "Por persona"),
+    ]
+
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    guests_count = models.PositiveIntegerField(default=1)
+    order_mode = models.CharField(max_length=24, choices=ORDER_MODE_CHOICES, default=ORDER_MODE_TABLE)
+    primary_order = models.ForeignKey('orders.Order', on_delete=models.SET_NULL, null=True, blank=True, related_name='table_sessions')
+    opened_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='opened_table_sessions')
+    opened_at = models.DateTimeField(auto_now_add=True)
+    closed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='closed_table_sessions')
+    closed_at = models.DateTimeField(null=True, blank=True)
+    notes = models.CharField(max_length=255, blank=True, default="")
+    total_cached = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TableSessionTable(models.Model):
+    session = models.ForeignKey(TableSession, on_delete=models.CASCADE, related_name='session_tables')
+    table = models.ForeignKey(RestaurantTable, on_delete=models.PROTECT, related_name='table_sessions')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("session", "table")
+
+
+class TableGuest(models.Model):
+    session = models.ForeignKey(TableSession, on_delete=models.CASCADE, related_name='guests')
+    label = models.CharField(max_length=64)
+    seat_number = models.PositiveIntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+    is_paid = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("session", "seat_number")
+        ordering = ["seat_number", "id"]
 
 
 class Order(models.Model):
@@ -159,6 +275,7 @@ class OrderItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     assigned_name = models.CharField(max_length=80, blank=True, default="")
+    table_guest = models.ForeignKey(TableGuest, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
     applied_special_price_rule = models.ForeignKey(ProductSpecialPriceRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
 
     class Meta:

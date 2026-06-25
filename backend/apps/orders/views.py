@@ -449,17 +449,21 @@ class OrderReceiptPDFView(generics.GenericAPIView):
     def get(self, request, *args, **kwargs):
         order = self.get_object()
         payload = render_customer_ticket(order)
+        logger.info("[TICKET_TRACE] endpoint=orders.receipt-pdf order_id=%s", order.id)
         filename = f"venta_{order.order_number}_{timezone.localtime(timezone.now()).strftime('%Y-%m-%d_%H-%M')}.pdf"
         result = build_receipt_pdf_from_text(
             text=payload.get("text", ""),
             filename=filename,
             logo_path=payload.get("meta", {}).get("logo_path"),
-            qr_value=payload.get("meta", {}).get("public_url"),
+            qr_value=payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
             receipt_context=payload.get("meta", {}).get("receipt_context"),
             suppress_qr_url_lines=True,
         )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+        response["Content-Disposition"] = f'inline; filename="{result.filename}"'
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
         return response
 
 

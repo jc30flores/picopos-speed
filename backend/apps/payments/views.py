@@ -766,6 +766,7 @@ class PaymentPrintTicketView(APIView):
             if not exists:
                 create_print_job(payment.order, "customer", requested_by=request.user, event="payment.paid")
             payload = render_customer_ticket(payment.order)
+            logger.info("[TICKET_TRACE] endpoint=payments.print-ticket payment_id=%s order_id=%s", payment.id, payment.order_id)
             printer = SystemPrinterService()
             print_result = printer.print_with_pdf_fallback(
                 payload.get("text", ""),
@@ -773,7 +774,7 @@ class PaymentPrintTicketView(APIView):
                 payment_id=payment.id,
                 pdf_kwargs={
                     "logo_path": payload.get("meta", {}).get("logo_path"),
-                    "qr_value": payload.get("meta", {}).get("public_url"),
+                    "qr_value": payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
                     "receipt_context": payload.get("meta", {}).get("receipt_context"),
                     "suppress_qr_url_lines": True,
                 },
@@ -798,7 +799,10 @@ class PaymentPrintTicketView(APIView):
                 with open(print_result["receipt_pdf_path"], "rb") as fh:
                     pdf_bytes = fh.read()
                 response = HttpResponse(pdf_bytes, content_type="application/pdf")
-                response["Content-Disposition"] = f'attachment; filename="{_venta_pdf_filename(payment.order)}"'
+                response["Content-Disposition"] = f'inline; filename="{_venta_pdf_filename(payment.order)}"'
+                response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response["Pragma"] = "no-cache"
+                response["Expires"] = "0"
                 response["X-Printed"] = "0"
                 response["X-Print-Error"] = str(print_result["print_error"] or "")
                 response["X-Drawer-Opened"] = "1" if drawer_opened else "0"
@@ -834,17 +838,21 @@ class PaymentTicketPDFView(APIView):
             return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
         try:
             payload = render_customer_ticket(payment.order)
+            logger.info("[TICKET_TRACE] endpoint=payments.ticket-pdf payment_id=%s order_id=%s", payment.id, payment.order_id)
             filename = _venta_pdf_filename(payment.order)
             result = build_receipt_pdf_from_text(
                 text=payload.get("text", ""),
                 filename=filename,
                 logo_path=payload.get("meta", {}).get("logo_path"),
-                qr_value=payload.get("meta", {}).get("public_url"),
+                qr_value=payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
                 receipt_context=payload.get("meta", {}).get("receipt_context"),
                 suppress_qr_url_lines=True,
             )
             response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
-            response["Content-Disposition"] = f'attachment; filename="{result.filename}"'
+            response["Content-Disposition"] = f'inline; filename="{result.filename}"'
+            response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response["Pragma"] = "no-cache"
+            response["Expires"] = "0"
             return response
         except ModuleNotFoundError as exc:
             logger.exception("payment.ticket_pdf.dependency_missing payment_id=%s", payment.id)

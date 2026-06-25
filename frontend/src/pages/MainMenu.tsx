@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
-import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun } from "lucide-react";
+import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun, LayoutGrid } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
@@ -10,7 +11,7 @@ import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
 import { toast } from "sonner";
 
-const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
+const iconByModule: Partial<Record<AppModuleKey, LucideIcon>> = {
   pos: ShoppingCart,
   pending: ClipboardList,
   kiosk: Store,
@@ -24,10 +25,12 @@ const iconByModule: Record<AppModuleKey, typeof ShoppingCart> = {
   settings: Settings,
 };
 
+const DEFAULT_MENU_ICON: LucideIcon = LayoutGrid;
+
 const MainMenu = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { attendance, accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
+  const { accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
   const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true, loaded: false });
 
@@ -37,9 +40,6 @@ const MainMenu = () => {
         const normalizedFromSettings = normalizeFeatureFlags(settings);
         const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));
         const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
-        console.info("FEATURE_FLAGS_RAW_SETTINGS_RESPONSE", settings);
-        console.info("FEATURE_FLAGS_RAW_CORE_RESPONSE", coreFlags);
-        console.info("FEATURE_FLAGS_NORMALIZED", normalized);
         setFeatureVisibility({ kiosk: normalized.kioskEnabled, kitchen: normalized.kitchenDisplayEnabled, customerDisplay: normalized.customerDisplayEnabled, loaded: true });
       })
       .catch((error) => {
@@ -62,7 +62,7 @@ const MainMenu = () => {
           if (module.key === "orders_customers") return featureVisibility.customerDisplay !== false;
           return true;
         })
-        .map((module) => ({ ...module, icon: iconByModule[module.key] })),
+        .map((module) => ({ ...module, icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON })),
     [featureVisibility.customerDisplay, featureVisibility.kiosk, featureVisibility.kitchen, user]
   );
   const isWorker = user?.role === "worker";
@@ -111,27 +111,15 @@ const MainMenu = () => {
         <AttendancePanel />
         {!isWorker ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => { console.info("MAIN_MENU_FEATURE_DECISION", { role: user?.role, module: card.key, featureVisibility }); return (
+            {cards.map((card) => {
+              const CardIcon = card.icon ?? DEFAULT_MENU_ICON;
+              return (
               <Button
                 key={card.path}
                 className="h-24 justify-start gap-3 rounded-2xl bg-secondary text-secondary-foreground px-6 text-lg font-semibold shadow-sm enabled:hover:bg-secondary/90"
                 onClick={() => {
                   const canEvaluateAttendanceGuard = attendanceResolved && !attendanceLoading;
                   const blockedByAttendance = canEvaluateAttendanceGuard && !accessState.canAccessDashboard;
-                  console.info("attendance.home.module_click", {
-                    userId: user?.id ?? null,
-                    role: user?.role ?? null,
-                    path: card.path,
-                    attendanceResolved,
-                    attendanceLoading,
-                    canEvaluateAttendanceGuard,
-                    blockedByAttendance,
-                    hasClockInToday: accessState.hasClockInToday,
-                    hasClockOutToday: accessState.hasClockOutToday,
-                    hasActiveSession: attendance?.hasActiveSession ?? false,
-                    canAccessDashboard: accessState.canAccessDashboard,
-                    attendanceError,
-                  });
                   if (blockedByAttendance) {
                     if (attendanceError) {
                       toast.error(`No se pudo validar asistencia: ${attendanceError}`);
@@ -147,10 +135,11 @@ const MainMenu = () => {
                   navigate(card.path);
                 }}
               >
-                <card.icon className="h-6 w-6" />
+                <CardIcon className="h-6 w-6" />
                 {card.label}
               </Button>
-            );})}
+              );
+            })}
           </div>
         ) : null}
       </div>

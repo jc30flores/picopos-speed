@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2, Eye } from "lucide-react";
+import { CalendarIcon, Search, Download, X, RotateCcw, Send, Repeat2, Eye, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
@@ -49,6 +49,7 @@ import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { formatDateSV, formatDateTimeSV, getLocalDateSV } from "@/lib/datetime";
 import { useAuth } from "@/context/useAuth";
 import { fromCents, toCents } from "@/lib/money";
+import { smartPrintTicket } from "@/lib/ticketPrinting";
 
 type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
@@ -112,6 +113,7 @@ export const SalesHistoryTab = () => {
   const [methodChangeReason, setMethodChangeReason] = useState("");
   const [isChangingMethod, setIsChangingMethod] = useState(false);
   const [sendingByOrderId, setSendingByOrderId] = useState<number | null>(null);
+  const [printingByPaymentId, setPrintingByPaymentId] = useState<number | null>(null);
   const [isTicketOpen, setIsTicketOpen] = useState(false);
   const [ticketLoading, setTicketLoading] = useState(false);
   const [ticketError, setTicketError] = useState<string | null>(null);
@@ -323,6 +325,21 @@ export const SalesHistoryTab = () => {
       toast.error(error instanceof Error ? error.message : "No se pudo enviar DTE");
     } finally {
       setSendingByOrderId(null);
+    }
+  };
+
+
+  const handlePrintTicket = async (sale: Sale) => {
+    if (printingByPaymentId === sale.paymentId) return;
+    setPrintingByPaymentId(sale.paymentId);
+    try {
+      const result = await smartPrintTicket({ paymentId: sale.paymentId });
+      if (result.method === "direct") toast.success("Ticket enviado a impresora.");
+    } catch (error) {
+      console.error("Failed to print transaction ticket", error);
+      toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket. Intenta nuevamente.");
+    } finally {
+      setPrintingByPaymentId(null);
     }
   };
 
@@ -585,6 +602,17 @@ export const SalesHistoryTab = () => {
                       <TableCell>{getStatusBadge(sale.status)}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 w-9 rounded-lg p-0"
+                            title="Imprimir ticket"
+                            aria-label="Imprimir ticket"
+                            onClick={() => void handlePrintTicket(sale)}
+                            disabled={printingByPaymentId === sale.paymentId}
+                          >
+                            <Printer className="h-4 w-4" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"

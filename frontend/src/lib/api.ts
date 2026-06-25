@@ -1,11 +1,13 @@
-import { fromCents, toCents } from "@/lib/money";
+import { fromCents, moneyToFixedString, toCents } from "@/lib/money";
 export const API_BASE_URL = import.meta.env.VITE_API_BASE ?? "/api";
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
+const API_DEBUG = import.meta.env.DEV && import.meta.env.VITE_DEBUG === "true";
 
 export type Category = {
   id: number;
   name: string;
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posProductImagesPolicy?: PosImagePolicy;
   image?: string | null;
   imagePath?: string | null;
   imageUrl?: string | null;
@@ -38,6 +40,7 @@ export type ModifierGroup = {
 };
 
 export type ProductInventoryStockPolicy = "inherit" | "allow" | "warn" | "block";
+export type PosImagePolicy = "inherit" | "show" | "hide";
 
 export type Product = {
   id: number;
@@ -68,6 +71,7 @@ export type Product = {
   modifierGroupLinks?: Array<{ groupId: number; showInPos: boolean }>;
   inventoryLinks?: InventoryProductLink[];
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posImagePolicy?: PosImagePolicy;
   inventoryComponentsEnabled?: boolean;
   trackInventory?: boolean;
   trackedInventoryItem?: number | null;
@@ -326,6 +330,8 @@ type FeatureFlagsNormalized = {
   cashCloseExpectedTotalsControlEnabled: boolean;
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
+  posProductImagesEnabled: boolean;
+  tableMapEnabled: boolean;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -336,6 +342,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     cashCloseExpectedTotalsControlEnabled: true,
     inventoryStockPolicy: "allow",
     inventoryAdvancedEnabled: false,
+    posProductImagesEnabled: false,
+    tableMapEnabled: false,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -352,6 +360,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
+      posProductImagesEnabled: fromMap(byKey, ['pos_product_images_enabled'], defaults.posProductImagesEnabled),
+      tableMapEnabled: fromMap(byKey, ['table_map_enabled'], defaults.tableMapEnabled),
     };
   }
   return {
@@ -361,6 +371,8 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
+    posProductImagesEnabled: fromMap(raw, ['posProductImagesEnabled', 'pos_product_images_enabled'], defaults.posProductImagesEnabled),
+    tableMapEnabled: fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -397,6 +409,11 @@ const normalizeProductInventoryStockPolicy = (value: unknown): ProductInventoryS
   return policy === "allow" || policy === "warn" || policy === "block" ? policy : "inherit";
 };
 
+const normalizePosImagePolicy = (value: unknown): PosImagePolicy => {
+  const policy = String(value || "inherit").toLowerCase();
+  return policy === "show" || policy === "hide" ? policy : "inherit";
+};
+
 type CategoryApiPayload = {
   id: number;
   name: string;
@@ -407,6 +424,7 @@ type CategoryApiPayload = {
   is_hidden?: boolean;
   position?: number;
   inventory_stock_policy?: ProductInventoryStockPolicy;
+  pos_product_images_policy?: PosImagePolicy;
 };
 
 const normalizeCategory = (data: CategoryApiPayload): Category => ({
@@ -419,6 +437,7 @@ const normalizeCategory = (data: CategoryApiPayload): Category => ({
   isHidden: Boolean(data.is_hidden),
   position: Number(data.position ?? 0),
   inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+  posProductImagesPolicy: normalizePosImagePolicy(data.pos_product_images_policy),
 });
 
 const appendProductInventoryTrackingFormData = (formData: FormData, payload: {
@@ -475,6 +494,12 @@ export type FeatureSettings = {
   cashCloseExpectedTotalsVisibleFields: string[];
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
+  posProductImagesEnabled: boolean;
+  tableMapEnabled: boolean;
+};
+
+export type TicketSettings = {
+  ticketLogoUrl: string | null;
 };
 
 export type FeatureSettingsOptions = {
@@ -551,6 +576,9 @@ export type Order = {
   pendingCompletedAt?: string | null;
   pendingCompletionType?: "none" | "paid" | "removed" | "canceled";
   pendingCompletionNote?: string;
+  tableSessionId?: number | null;
+  tableLabel?: string;
+  tableOrderMode?: "table" | "per_person" | null;
 };
 
 export type EmployeeStats = {
@@ -1175,6 +1203,8 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
+    posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
+    tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
   };
 };
 
@@ -1190,6 +1220,8 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
       inventory_stock_policy: payload.inventoryStockPolicy,
       inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
+      pos_product_images_enabled: payload.posProductImagesEnabled,
+      table_map_enabled: payload.tableMapEnabled,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1203,6 +1235,8 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
     inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
+    posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
+    tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
   };
 };
 
@@ -1213,6 +1247,27 @@ export const getFeatureSettingsOptions = async (): Promise<FeatureSettingsOption
     roles: data.roles ?? [],
     cashCloseExpectedTotalFields: data.cash_close_expected_total_fields ?? [],
   };
+};
+
+const mapTicketSettings = (data: any): TicketSettings => ({
+  ticketLogoUrl: data.ticket_logo_url ?? null,
+});
+
+export const getTicketSettings = async (): Promise<TicketSettings> => {
+  const response = await request("/settings/ticket/");
+  return mapTicketSettings(await handleJson<any>(response));
+};
+
+export const uploadTicketLogo = async (file: File): Promise<TicketSettings> => {
+  const formData = new FormData();
+  formData.append("logo", file);
+  const response = await request("/settings/ticket/logo/", { method: "POST", body: formData });
+  return mapTicketSettings(await handleJson<any>(response));
+};
+
+export const deleteTicketLogo = async (): Promise<TicketSettings> => {
+  const response = await request("/settings/ticket/logo/", { method: "DELETE" });
+  return mapTicketSettings(await handleJson<any>(response));
 };
 
 export const getTransactionTicket = async (paymentId: number): Promise<TransactionTicketPayload> => {
@@ -1226,7 +1281,7 @@ export const getTransactionTicket = async (paymentId: number): Promise<Transacti
   };
 };
 
-export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy }): Promise<Category> => {
+export const createCategory = async (payload: string | { name: string; image?: File | null; inventoryStockPolicy?: ProductInventoryStockPolicy; posProductImagesPolicy?: PosImagePolicy }): Promise<Category> => {
   const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, inventoryStockPolicy: "inherit" as ProductInventoryStockPolicy } : payload;
   const formData = new FormData();
   formData.append("name", normalizedPayload.name);
@@ -1234,6 +1289,7 @@ export const createCategory = async (payload: string | { name: string; image?: F
     formData.append("image", normalizedPayload.image);
   }
   formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_product_images_policy", normalizedPayload.posProductImagesPolicy ?? "inherit");
 
   const response = await request("/menu/categories/", {
     method: "POST",
@@ -1245,7 +1301,7 @@ export const createCategory = async (payload: string | { name: string; image?: F
 
 export const updateCategory = async (
   categoryId: number,
-  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy }
+  payload: string | { name?: string; image?: File | null; removeImage?: boolean; inventoryStockPolicy?: ProductInventoryStockPolicy; posProductImagesPolicy?: PosImagePolicy }
 ): Promise<Category> => {
   const normalizedPayload = typeof payload === "string" ? { name: payload, image: null, removeImage: false, inventoryStockPolicy: undefined } : payload;
   const formData = new FormData();
@@ -1260,6 +1316,9 @@ export const updateCategory = async (
   }
   if (normalizedPayload.inventoryStockPolicy !== undefined) {
     formData.append("inventory_stock_policy", normalizedPayload.inventoryStockPolicy);
+  }
+  if (normalizedPayload.posProductImagesPolicy !== undefined) {
+    formData.append("pos_product_images_policy", normalizedPayload.posProductImagesPolicy);
   }
 
   const response = await request(`/menu/categories/${categoryId}/`, {
@@ -1328,6 +1387,7 @@ export const getProducts = async (options?: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1369,6 +1429,7 @@ export const getProducts = async (options?: {
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
       requiresKitchen: Boolean(item.requires_kitchen),
       inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
+      posImagePolicy: normalizePosImagePolicy(item.pos_image_policy),
     ...mapProductInventoryFields(item),
       modifierGroups: item.modifier_groups,
       modifierGroupsPos: item.modifier_groups_pos ?? [],
@@ -1400,6 +1461,7 @@ export const createProduct = async (payload: {
   modifierGroupIds?: number[];
   inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
   inventoryStockPolicy?: ProductInventoryStockPolicy;
+  posImagePolicy?: PosImagePolicy;
   inventoryComponentsEnabled?: boolean;
   trackInventory?: boolean;
   trackedInventoryItem?: number | null;
@@ -1414,6 +1476,7 @@ export const createProduct = async (payload: {
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_image_policy", payload.posImagePolicy ?? "inherit");
   appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
@@ -1457,6 +1520,7 @@ export const createProduct = async (payload: {
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1494,6 +1558,7 @@ export const createProduct = async (payload: {
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -1527,6 +1592,7 @@ export const updateProduct = async (
     modifierGroupIds?: number[];
     inventoryLinks?: Array<{ inventoryItemId: number; quantityRequired: number }>;
     inventoryStockPolicy?: ProductInventoryStockPolicy;
+    posImagePolicy?: PosImagePolicy;
     inventoryComponentsEnabled?: boolean;
     trackInventory?: boolean;
     trackedInventoryItem?: number | null;
@@ -1542,6 +1608,7 @@ export const updateProduct = async (
   formData.append("available", payload.available ? "true" : "false");
   formData.append("requires_kitchen", payload.requiresKitchen ? "true" : "false");
   formData.append("inventory_stock_policy", payload.inventoryStockPolicy ?? "inherit");
+  formData.append("pos_image_policy", payload.posImagePolicy ?? "inherit");
   appendProductInventoryTrackingFormData(formData, payload);
   formData.append("disposable_fee", String(payload.disposableFee ?? 0));
   formData.append("disposable_apply_to", JSON.stringify(payload.disposableApplyTo ?? []));
@@ -1582,6 +1649,7 @@ export const updateProduct = async (
     available: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -1617,6 +1685,7 @@ export const updateProduct = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -2132,6 +2201,7 @@ export const updateProductModifierGroups = async (
     disposable_apply_to?: string[];
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -2163,6 +2233,7 @@ export const updateProductModifierGroups = async (
     disposableApplyTo: Array.isArray(data.disposable_apply_to) ? data.disposable_apply_to : [],
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
     modifierGroupsPos: data.modifier_groups_pos ?? [],
@@ -2209,6 +2280,7 @@ export const updateProductAvailability = async (
     is_archived?: boolean;
     requires_kitchen: boolean;
     inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
     inventory_components_enabled?: boolean;
     track_inventory?: boolean;
     tracked_inventory_item?: number | null;
@@ -2236,6 +2308,7 @@ export const updateProductAvailability = async (
     isArchived: Boolean(data.is_archived),
     requiresKitchen: Boolean(data.requires_kitchen),
     inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
     ...mapProductInventoryFields(data),
     modifierGroups: data.modifier_groups,
   };
@@ -2751,6 +2824,9 @@ const mapOrder = (order: {
   pending_completed_at?: string | null;
   pending_completion_type?: Order["pendingCompletionType"];
   pending_completion_note?: string;
+  table_session_id?: number | null;
+  table_label?: string;
+  table_order_mode?: "table" | "per_person" | null;
 }): Order => {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
@@ -2823,6 +2899,9 @@ const mapOrder = (order: {
     pendingCompletedAt: order.pending_completed_at ?? null,
     pendingCompletionType: (order.pending_completion_type ?? "none") as Order["pendingCompletionType"],
     pendingCompletionNote: order.pending_completion_note ?? "",
+    tableSessionId: order.table_session_id ?? null,
+    tableLabel: order.table_label ?? "",
+    tableOrderMode: order.table_order_mode ?? null,
   };
 };
 
@@ -2955,7 +3034,7 @@ export const createOrder = async (payload: {
     })),
   };
 
-  if (import.meta.env.DEV) {
+  if (API_DEBUG) {
     console.info("[pos-debug] create-order-payload", {
       customerId: orderPayload.customer_id ?? null,
       dteDocumentType: orderPayload.dte_document_type,
@@ -3009,7 +3088,7 @@ export const createOrder = async (payload: {
     }
     return mapOrder(data);
   } catch (error) {
-    if (import.meta.env.DEV) {
+    if (API_DEBUG) {
       const apiError = error as { message?: string; status?: number; code?: string };
       console.info("[pos-debug] create-order-error", {
         status: apiError?.status ?? null,
@@ -4380,7 +4459,7 @@ export const updateSchedule = async (
       ...(payload.exitTime ? { end_time: payload.exitTime } : {}),
       ...(payload.breakMinutes !== undefined ? { break_minutes: payload.breakMinutes } : {}),
       ...(payload.allowsOvertime !== undefined ? { allows_overtime: payload.allowsOvertime } : {}),
-      ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}),
+      ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}), ...(payload.x !== undefined ? { x: payload.x } : {}), ...(payload.y !== undefined ? { y: payload.y } : {}), ...(payload.width !== undefined ? { width: payload.width } : {}), ...(payload.height !== undefined ? { height: payload.height } : {}), ...(payload.color !== undefined ? { color: payload.color } : {}), ...(payload.operationalZoom !== undefined ? { operational_zoom: payload.operationalZoom } : {}), ...(payload.operationalOffsetX !== undefined ? { operational_offset_x: payload.operationalOffsetX } : {}), ...(payload.operationalOffsetY !== undefined ? { operational_offset_y: payload.operationalOffsetY } : {}),
     }),
   });
   return handleJson(response);
@@ -4614,7 +4693,7 @@ export const printPaymentTicket = async (
   pdfBlob?: Blob | null;
   pdfFilename?: string | null;
 }> => {
-  const response = await request(`/payments/${paymentId}/print-ticket/`, { method: "POST" });
+  const response = await request(`/payments/${paymentId}/print-ticket/?t=${Date.now()}`, { method: "POST", cache: "no-store" });
   const contentType = response.headers.get("content-type") || "";
   if (response.ok && contentType.includes("application/pdf")) {
     const disposition = response.headers.get("content-disposition") || "";
@@ -5172,9 +5251,9 @@ export const openCashSession = async (openingCash: number): Promise<void> => {
 };
 
 export const closeCashSession = async (
-  closingCashCounted: number,
+  closingCashCounted: number | string,
   notes?: string,
-  totals?: { bills?: number; coins?: number; posCards?: number; pedidosYa?: number },
+  totals?: { bills?: number | string; coins?: number | string; posCards?: number | string; pedidosYa?: number | string },
   options?: { sessionId?: number }
 ): Promise<{ sessionId?: number; ticketText?: string; printed?: boolean; printError?: string | null }> => {
   const branchIdRaw = localStorage.getItem("selected_branch_id");
@@ -5182,11 +5261,11 @@ export const closeCashSession = async (
     method: 'POST',
     body: JSON.stringify({
       ...(options?.sessionId ? { session_id: Number(options.sessionId) } : {}),
-      total_contado: closingCashCounted,
-      total_billetes: Number(totals?.bills ?? 0),
-      total_monedas: Number(totals?.coins ?? 0),
-      total_pos_tarjetas: Number(totals?.posCards ?? 0),
-      total_pedidos_ya: Number(totals?.pedidosYa ?? 0),
+      total_contado: moneyToFixedString(closingCashCounted),
+      total_billetes: moneyToFixedString(totals?.bills ?? 0),
+      total_monedas: moneyToFixedString(totals?.coins ?? 0),
+      total_pos_tarjetas: moneyToFixedString(totals?.posCards ?? 0),
+      total_pedidos_ya: moneyToFixedString(totals?.pedidosYa ?? 0),
       notes: notes ?? '',
       ...(branchIdRaw && Number.isFinite(Number(branchIdRaw)) ? { branch_id: Number(branchIdRaw) } : {}),
     }),
@@ -5364,6 +5443,23 @@ export const downloadCashSessionTicketPdf = async (sessionId: number): Promise<v
   URL.revokeObjectURL(url);
 };
 
+
+
+export const fetchPaymentTicketBlob = async (paymentId: number): Promise<Blob> => {
+  const response = await request(`/payments/${paymentId}/ticket.pdf?t=${Date.now()}`, {
+    headers: { Accept: "application/pdf" },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new Error("No se encontró el ticket solicitado.");
+    throw new Error("No se pudo preparar el ticket. Intenta nuevamente.");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("El servidor devolvió un formato de ticket no válido.");
+  }
+  return response.blob();
+};
 
 export const downloadPaymentTicketPdf = async (paymentId: number): Promise<void> => {
   const response = await request(`/payments/${paymentId}/ticket.pdf`, {
@@ -5801,7 +5897,7 @@ export const listActivities = async (q = '') => {
 };
 
 export const downloadOrderReceiptPdf = async (orderId: number): Promise<Blob> => {
-  const response = await request(`/orders/${orderId}/receipt.pdf`, { headers: { Accept: "application/pdf" } });
+  const response = await request(`/orders/${orderId}/receipt.pdf?t=${Date.now()}`, { headers: { Accept: "application/pdf" }, cache: "no-store" });
   if (!response.ok) throw new Error("No se pudo descargar PDF");
   return response.blob();
 };
@@ -5919,4 +6015,75 @@ export const receivePurchaseOrder = async (id: number, payload: { notes?: string
   });
   const data = await handleJson<any>(response);
   return mapPurchaseOrder(data.order);
+};
+
+
+export type DiningArea = { id: number; name: string; sortOrder: number; isActive: boolean; x:number; y:number; width:number; height:number; color?:string; operationalZoom:number; operationalOffsetX:number; operationalOffsetY:number };
+export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
+export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
+export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[] };
+export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
+
+const mapDiningArea = (x: any): DiningArea => ({ id: x.id, name: x.name, sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active), x:Number(x.x??0), y:Number(x.y??0), width:Number(x.width??320), height:Number(x.height??220), color:x.color??"", operationalZoom:Number(x.operational_zoom??1), operationalOffsetX:Number(x.operational_offset_x??0), operationalOffsetY:Number(x.operational_offset_y??0) });
+const mapRestaurantTable = (x: any): RestaurantTable => ({ id: x.id, area: x.area, areaName: x.area_name, name: x.name, number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape, x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: x.color ?? '', isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) });
+const mapTableSession = (x: any): TableSession => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) });
+
+export const getDiningAreas = async (): Promise<DiningArea[]> => {
+  const response = await request('/orders/tables/areas/');
+  const data = await handleJson<any[]>(response);
+  return data.map(mapDiningArea);
+};
+export const createTableArea = async (payload: { name: string; sortOrder?: number; isActive?: boolean; x?:number; y?:number; width?:number; height?:number; color?:string; operationalZoom?:number; operationalOffsetX?:number; operationalOffsetY?:number }): Promise<DiningArea> => {
+  const response = await request('/orders/tables/areas/', { method: 'POST', body: JSON.stringify({ name: payload.name, sort_order: payload.sortOrder ?? 0, is_active: payload.isActive ?? true, x: payload.x ?? 0, y: payload.y ?? 0, width: payload.width ?? 320, height: payload.height ?? 220, color: payload.color ?? '', operational_zoom: payload.operationalZoom ?? 1, operational_offset_x: payload.operationalOffsetX ?? 0, operational_offset_y: payload.operationalOffsetY ?? 0 }) });
+  return mapDiningArea(await handleJson<any>(response));
+};
+export const updateTableArea = async (id: number, payload: Partial<{ name: string; sortOrder: number; isActive: boolean; x:number; y:number; width:number; height:number; color:string; operationalZoom:number; operationalOffsetX:number; operationalOffsetY:number }>): Promise<DiningArea> => {
+  const response = await request(`/orders/tables/areas/${id}/`, { method: 'PATCH', body: JSON.stringify({ ...(payload.name !== undefined ? { name: payload.name } : {}), ...(payload.sortOrder !== undefined ? { sort_order: payload.sortOrder } : {}), ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}), ...(payload.x !== undefined ? { x: payload.x } : {}), ...(payload.y !== undefined ? { y: payload.y } : {}), ...(payload.width !== undefined ? { width: payload.width } : {}), ...(payload.height !== undefined ? { height: payload.height } : {}), ...(payload.color !== undefined ? { color: payload.color } : {}), ...(payload.operationalZoom !== undefined ? { operational_zoom: payload.operationalZoom } : {}), ...(payload.operationalOffsetX !== undefined ? { operational_offset_x: payload.operationalOffsetX } : {}), ...(payload.operationalOffsetY !== undefined ? { operational_offset_y: payload.operationalOffsetY } : {}) }) });
+  return mapDiningArea(await handleJson<any>(response));
+};
+export const deleteTableArea = async (id: number): Promise<{ detail: string }> => {
+  const response = await request(`/orders/tables/areas/${id}/`, { method: 'DELETE' });
+  return handleJson<{ detail: string }>(response);
+};
+export const getRestaurantTables = async (): Promise<RestaurantTable[]> => {
+  const response = await request('/orders/tables/');
+  const data = await handleJson<any[]>(response);
+  return data.map(mapRestaurantTable);
+};
+export const createRestaurantTable = async (payload: { area: number; name: string; number?: number; capacity?: number; shape?: RestaurantTable['shape']; x?: number; y?: number; width?: number; height?: number; rotation?: number; color?: string; isActive?: boolean; sortOrder?: number; }): Promise<RestaurantTable> => {
+  const response = await request('/orders/tables/', { method: 'POST', body: JSON.stringify({ area: payload.area, name: payload.name, number: payload.number ?? 1, capacity: payload.capacity ?? 4, shape: payload.shape ?? 'round', x: payload.x ?? 0, y: payload.y ?? 0, width: payload.width ?? 110, height: payload.height ?? 110, rotation: payload.rotation ?? 0, color: payload.color ?? '', is_active: payload.isActive ?? true, sort_order: payload.sortOrder ?? 0 }) });
+  return mapRestaurantTable(await handleJson<any>(response));
+};
+export const updateRestaurantTable = async (id: number, payload: Partial<{ area: number; name: string; number: number; capacity: number; shape: RestaurantTable['shape']; x: number; y: number; width: number; height: number; rotation: number; color: string; isActive: boolean; sortOrder: number; }>): Promise<RestaurantTable> => {
+  const response = await request(`/orders/tables/${id}/`, { method: 'PATCH', body: JSON.stringify({ ...(payload.area !== undefined ? { area: payload.area } : {}), ...(payload.name !== undefined ? { name: payload.name } : {}), ...(payload.number !== undefined ? { number: payload.number } : {}), ...(payload.capacity !== undefined ? { capacity: payload.capacity } : {}), ...(payload.shape !== undefined ? { shape: payload.shape } : {}), ...(payload.x !== undefined ? { x: payload.x } : {}), ...(payload.y !== undefined ? { y: payload.y } : {}), ...(payload.width !== undefined ? { width: payload.width } : {}), ...(payload.height !== undefined ? { height: payload.height } : {}), ...(payload.rotation !== undefined ? { rotation: payload.rotation } : {}), ...(payload.color !== undefined ? { color: payload.color } : {}), ...(payload.isActive !== undefined ? { is_active: payload.isActive } : {}), ...(payload.sortOrder !== undefined ? { sort_order: payload.sortOrder } : {}) }) });
+  return mapRestaurantTable(await handleJson<any>(response));
+};
+export const deleteRestaurantTable = async (id: number): Promise<{ detail: string }> => {
+  const response = await request(`/orders/tables/${id}/`, { method: 'DELETE' });
+  if (response.status === 204) return { detail: 'Mesa eliminada.' };
+  return handleJson<{ detail: string }>(response);
+};
+export const getTableLayout = async (): Promise<TableLayout> => {
+  const response = await request('/orders/tables/layout/');
+  const data = await handleJson<any>(response);
+  return { areas: (data.areas ?? []).map(mapDiningArea), tables: (data.tables ?? []).map(mapRestaurantTable), sessions: (data.sessions ?? []).map(mapTableSession) };
+};
+export const saveTableLayout = async (payload: { tables: Array<{ id: number; x: number; y: number; width: number; height: number; rotation: number }> }): Promise<{ detail: string }> => {
+  const response = await request('/orders/tables/layout/', { method: 'PATCH', body: JSON.stringify(payload) });
+  return handleJson<{ detail: string }>(response);
+};
+export const getTableSessions = async (): Promise<TableSession[]> => {
+  const response = await request('/orders/tables/sessions/');
+  const data = await handleJson<any[]>(response);
+  return data.map(mapTableSession);
+};
+export const createTableSession = async (payload: { tableIds: number[]; guestsCount: number; orderMode: 'table'|'per_person'; notes?: string; }): Promise<TableSession> => {
+  const response = await request('/orders/tables/sessions/', { method: 'POST', body: JSON.stringify({ table_ids: payload.tableIds, guests_count: payload.guestsCount, order_mode: payload.orderMode, notes: payload.notes ?? '' }) });
+  const x = await handleJson<any>(response);
+  return { id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) };
+};
+export const mergeTableSessionTables = async (sessionId: number, tableIds: number[]): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/merge/`, { method: 'POST', body: JSON.stringify({ table_ids: tableIds }) });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
 };

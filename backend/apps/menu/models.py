@@ -26,6 +26,15 @@ def product_image_upload_to(instance: "Product", filename: str) -> str:
 
 
 class Category(models.Model):
+    POS_IMAGE_POLICY_INHERIT = "inherit"
+    POS_IMAGE_POLICY_SHOW = "show"
+    POS_IMAGE_POLICY_HIDE = "hide"
+    POS_IMAGE_POLICY_CHOICES = [
+        (POS_IMAGE_POLICY_INHERIT, "Heredar configuración global"),
+        (POS_IMAGE_POLICY_SHOW, "Mostrar imágenes en productos"),
+        (POS_IMAGE_POLICY_HIDE, "Ocultar imágenes en productos"),
+    ]
+
     INVENTORY_STOCK_POLICY_INHERIT = "inherit"
     INVENTORY_STOCK_POLICY_ALLOW = "allow"
     INVENTORY_STOCK_POLICY_WARN = "warn"
@@ -44,6 +53,7 @@ class Category(models.Model):
     is_hidden = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0, db_index=True)
     inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
+    pos_product_images_policy = models.CharField(max_length=16, choices=POS_IMAGE_POLICY_CHOICES, default=POS_IMAGE_POLICY_INHERIT)
 
     class Meta:
         ordering = ["position", "id"]
@@ -120,6 +130,15 @@ class ProductModifierGroup(models.Model):
 
 
 class Product(models.Model):
+    POS_IMAGE_POLICY_INHERIT = "inherit"
+    POS_IMAGE_POLICY_SHOW = "show"
+    POS_IMAGE_POLICY_HIDE = "hide"
+    POS_IMAGE_POLICY_CHOICES = [
+        (POS_IMAGE_POLICY_INHERIT, "Heredar de categoría/global"),
+        (POS_IMAGE_POLICY_SHOW, "Mostrar imagen en POS"),
+        (POS_IMAGE_POLICY_HIDE, "Ocultar imagen en POS"),
+    ]
+
     INVENTORY_STOCK_POLICY_INHERIT = "inherit"
     INVENTORY_STOCK_POLICY_ALLOW = "allow"
     INVENTORY_STOCK_POLICY_WARN = "warn"
@@ -144,6 +163,7 @@ class Product(models.Model):
     disposable_apply_to = models.JSONField(default=list, blank=True)
     requires_kitchen = models.BooleanField(default=False)
     inventory_stock_policy = models.CharField(max_length=16, choices=INVENTORY_STOCK_POLICY_CHOICES, default=INVENTORY_STOCK_POLICY_INHERIT)
+    pos_image_policy = models.CharField(max_length=16, choices=POS_IMAGE_POLICY_CHOICES, default=POS_IMAGE_POLICY_INHERIT)
     inventory_components_enabled = models.BooleanField(default=True)
     track_inventory = models.BooleanField(default=False)
     tracked_inventory_item = models.ForeignKey(

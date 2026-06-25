@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMoney, toCents, toNumber } from "@/lib/money";
+import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -50,8 +50,6 @@ import {
   getPaymentMethods,
   getOrderById,
   updateOrderCustomerDte,
-  createPrintJob,
-  markPrintJobPrinted,
   getActiveTaxConfig,
   getCategories,
   getModifierGroups,
@@ -69,15 +67,17 @@ import {
   createCashPayout,
   openCashDrawer,
   downloadCashSessionTicketPdf,
-  downloadPaymentTicketPdf,
   validateOrderPricePin,
   getActiveDiscounts,
   getPendingOrders,
   setOrderPending,
-  printPaymentTicket,
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
+  getDiningAreas,
+  getRestaurantTables,
+  getTableSessions,
+  createTableSession,
   Category,
   Discount,
   ModifierGroup,
@@ -91,11 +91,10 @@ import {
   CashSessionSnapshot,
   CashTransaction,
   Order,
-  PrintJob,
 } from "@/lib/api";
 import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
-import { PrintPreviewDialog } from "@/components/printing/PrintPreviewDialog";
+import { smartPrintTicket } from "@/lib/ticketPrinting";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
 import { usePrivilegedActionGuard } from "@/hooks/usePrivilegedActionGuard";
 import { PrivilegePinModal } from "@/components/pos/PrivilegePinModal";
@@ -104,6 +103,11 @@ import { useAuth } from "@/context/useAuth";
 import { ClockSV } from "@/components/ClockSV";
 import { formatWhatsAppClientPhone, normalizeWhatsAppClientPhone, validateWhatsAppClientPhone, type WhatsAppCountry } from "@/lib/whatsappClientPhone";
 import { WhatsAppPhoneInput } from "@/components/dte/WhatsAppPhoneInput";
+
+const POS_DEBUG = import.meta.env.DEV && import.meta.env.VITE_DEBUG === "true";
+const posDebug = (...args: unknown[]) => {
+  if (POS_DEBUG) console.info(...args);
+};
 
 interface CartItem {
   id: string;
@@ -365,6 +369,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [payoutDescription, setPayoutDescription] = useState("");
   const [cashNotes, setCashNotes] = useState("");
   const [isSavingCashAction, setIsSavingCashAction] = useState(false);
+  const closeCashSubmittingRef = useRef(false);
   const [isOpeningDrawer, setIsOpeningDrawer] = useState(false);
   const lastDrawerOpenAtRef = useRef<number>(0);
   const openSessionInputRef = useRef<HTMLInputElement | null>(null);
@@ -442,6 +447,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
+  const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
+  const [tableMapEnabled, setTableMapEnabled] = useState(false);
+  const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
+  const [diningAreas, setDiningAreas] = useState<any[]>([]);
+  const [restaurantTables, setRestaurantTables] = useState<any[]>([]);
+  const [tableSessions, setTableSessions] = useState<any[]>([]);
+  const [selectedOpsArea, setSelectedOpsArea] = useState<number | "all">("all");
+  const [selectedOpsFilter, setSelectedOpsFilter] = useState<"all"|"free"|"occupied"|"kitchen">("all");
+  const [selectedOpsTableId, setSelectedOpsTableId] = useState<number | null>(null);
+  const [newSessionDialog, setNewSessionDialog] = useState<{ open: boolean; tableId: number | null; guests: number; orderMode: "table"|"per_person"; notes: string }>({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+  const [opsContextMenu, setOpsContextMenu] = useState<{ open: boolean; x: number; y: number; tableId: number | null }>({ open: false, x: 0, y: 0, tableId: null });
+  const [mergeMode, setMergeMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
+  const longPressOpsRef = useRef<number | null>(null);
+  const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
   const [isPendingReferenceDialogOpen, setIsPendingReferenceDialogOpen] = useState(false);
@@ -475,8 +494,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [activePartId, setActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
-  const [receiptJob, setReceiptJob] = useState<PrintJob | null>(null);
-  const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
   const hardReloadTriggeredRef = useRef(false);
   const hydratedPendingOrderIdRef = useRef<number | null>(null);
   const consumedNavSourceRef = useRef(false);
@@ -533,6 +550,18 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   );
   const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
 
+  const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+
+  const shouldShowProductImage = useCallback((product: Product) => {
+    if (!product.imageUrl || hiddenProductImages[product.id]) return false;
+    if (product.posImagePolicy === "show") return true;
+    if (product.posImagePolicy === "hide") return false;
+    const categoryPolicy = categoryById.get(product.categoryId)?.posProductImagesPolicy ?? "inherit";
+    if (categoryPolicy === "show") return true;
+    if (categoryPolicy === "hide") return false;
+    return posProductImagesEnabled;
+  }, [categoryById, hiddenProductImages, posProductImagesEnabled]);
+
   const loadMenuData = async () => {
     const [categoriesResponse, modifierGroupsResponse] = await Promise.all([
       getCategories(),
@@ -553,6 +582,76 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       });
   }, []);
 
+
+  useEffect(() => {
+    if (!tableMapEnabled) return;
+    Promise.all([getDiningAreas().catch(() => []), getRestaurantTables().catch(() => []), getTableSessions().catch(() => [])])
+      .then(([areas, tables, sessions]) => {
+        setDiningAreas(areas);
+        setRestaurantTables(tables);
+        setTableSessions(sessions);
+      })
+      .catch(() => undefined);
+  }, [tableMapEnabled]);
+
+  const sessionByTableId = useMemo(() => {
+    const map = new Map<number, any>();
+    tableSessions.forEach((session) => {
+      (session.tableIds || []).forEach((tableId: number) => map.set(tableId, session));
+    });
+    return map;
+  }, [tableSessions]);
+
+  const openTableSession = async (tableId: number) => {
+    const existing = sessionByTableId.get(tableId);
+    if (existing?.primaryOrder) {
+      navigate(`/pos?pending_order_id=${existing.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      return;
+    }
+    try {
+      const created = await createTableSession({ tableIds: [tableId], guestsCount: 2, orderMode: "table" });
+      if (created.primaryOrder) navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir mesa.");
+    }
+  };
+
+  const getSessionStateLabel = (session: any | undefined) => {
+    if (!session) return "Libre";
+    if (session.status === "sent_to_kitchen") return "En cocina";
+    if (session.status === "partially_paid") return "Parcial";
+    return "Ocupada";
+  };
+
+
+  const handleMergeWithTable = async (targetTableId: number) => {
+    if (!mergeMode.active || !mergeMode.sessionId) return;
+    const targetSession = sessionByTableId.get(targetTableId);
+    if (targetSession) { toast.error("Solo puedes unir mesas libres en esta versión."); return; }
+    try {
+      const { mergeTableSessionTables } = await import("@/lib/api");
+      await mergeTableSessionTables(mergeMode.sessionId, [targetTableId]);
+      toast.success("Mesas unidas correctamente.");
+      setMergeMode({ active: false, sessionId: null, sourceTableId: null });
+      const sessions = await getTableSessions();
+      setTableSessions(sessions);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo unir la mesa.");
+    }
+  };
+
+  const beginSessionFromDialog = async () => {
+    if (!newSessionDialog.tableId) return;
+    try {
+      const created = await createTableSession({ tableIds: [newSessionDialog.tableId], guestsCount: Math.max(1, newSessionDialog.guests), orderMode: newSessionDialog.orderMode, notes: newSessionDialog.notes || undefined });
+      setNewSessionDialog({ open: false, tableId: null, guests: 2, orderMode: "table", notes: "" });
+      if (created.primaryOrder) {
+        navigate(`/pos?pending_order_id=${created.primaryOrder}&mode=edit`, { state: { fromOpenOrders: true } });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo iniciar orden de mesa.");
+    }
+  };
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
     const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
@@ -590,7 +689,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setCheckoutDraft(null);
     setSelectedDiscount(null);
     setActiveOrder(null);
-    console.info("open_order.pos_loader.source", { order_id: pendingOrderId, mode, total_db: null, items: 0 });
+    posDebug("open_order.pos_loader.source", { order_id: pendingOrderId, mode, total_db: null, items: 0 });
     getOrderById(pendingOrderId)
       .then((order) => {
         const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
@@ -602,13 +701,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           selectedDiscount: null,
           availableDiscounts: [],
         });
-        console.info("open_order.pos_loader.source", {
+        posDebug("open_order.pos_loader.source", {
           order_id: order.id,
           mode,
           total_db: order.totalPayable ?? order.total,
           items: restoredCart.length,
         });
-        console.info("open_order.pos_loader.recomputed_totals", {
+        posDebug("open_order.pos_loader.recomputed_totals", {
           order_id: order.id,
           subtotal: hydratedPricing.subtotal,
           discounts: hydratedPricing.discountTotal,
@@ -644,7 +743,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         });
         setServiceType(order.serviceType || serviceType);
         if (mode === "pay") {
-          console.info("open_order.pay.load", {
+          posDebug("open_order.pay.load", {
             order_id: order.id,
             total_db: order.totalPayable ?? order.total,
             total_rebuilt: hydratedPricing.total,
@@ -869,7 +968,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (requiresCashOpen) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] pos-blocked", { action: "product-click", reason: "requires-cash-open" });
+        posDebug("[cash-debug] pos-blocked", { action: "product-click", reason: "requires-cash-open" });
       }
       return;
     }
@@ -964,7 +1063,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (requiresCashOpen) {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] pos-blocked", { action: "addToCart", reason: "requires-cash-open" });
+        posDebug("[cash-debug] pos-blocked", { action: "addToCart", reason: "requires-cash-open" });
       }
       return;
     }
@@ -1173,7 +1272,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
   useEffect(() => {
     if (!isPaymentOpen) return;
-    console.info("open_order.pay.modal_totals", {
+    posDebug("open_order.pay.modal_totals", {
       order_id: activeOrder?.id ?? null,
       subtotal: checkoutSummarySubtotalBefore,
       discounts: checkoutSummaryDiscount,
@@ -1246,7 +1345,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setActiveOrder(order);
       setCreatedOrderId(order.id);
       setCreatedOrderNumber(order.orderNumber ?? null);
-      console.info("open_order.save.start", { id: order.id, is_update: false });
+      posDebug("open_order.save.start", { id: order.id, is_update: false });
     } else {
       order = await getOrderById(order.id);
       setActiveOrder(order);
@@ -1271,7 +1370,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const requestOpenSession = (postAction?: () => Promise<void>, resolver?: (opened: boolean) => void) => {
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.info("[cash-debug] open-session-modal", {
+      posDebug("[cash-debug] open-session-modal", {
         source: "requestOpenSession",
         hasPostAction: Boolean(postAction),
         currentCashSession: cashSnapshot.session?.id ?? null,
@@ -1289,7 +1388,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     const hadPendingContinuation = Boolean(postOpenSessionActionRef.current);
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.info("[cash-debug] continue-checkout", { reason, executed: false, hadPendingContinuation });
+      posDebug("[cash-debug] continue-checkout", { reason, executed: false, hadPendingContinuation });
     }
     postOpenSessionActionRef.current = null;
     openSessionResolverRef.current?.(false);
@@ -1318,7 +1417,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (cart.length === 0) return;
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.info("[cash-debug] cobrar-click", {
+      posDebug("[cash-debug] cobrar-click", {
         cartItems: cart.length,
         cartTotal: total,
         currentCashSession: cashSnapshot.session?.id ?? null,
@@ -1335,7 +1434,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       await ensureCashSessionOpen(async () => {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
-          console.info("[cash-debug] continue-checkout", { reason: "cash-ready" });
+          posDebug("[cash-debug] continue-checkout", { reason: "cash-ready" });
         }
         await proceedToCheckout();
       });
@@ -1344,7 +1443,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       if (/caja no aperturada|cash session|required/i.test(message)) {
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
-          console.info("[cash-debug] checkout-blocked", { reason: message });
+          posDebug("[cash-debug] checkout-blocked", { reason: message });
         }
         try {
           const current = await getCurrentCashSession();
@@ -1353,7 +1452,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             requestOpenSession(async () => {
               if (import.meta.env.DEV) {
                 // eslint-disable-next-line no-console
-                console.info("[cash-debug] continue-checkout", { reason: "resolved-after-error" });
+                posDebug("[cash-debug] continue-checkout", { reason: "resolved-after-error" });
               }
               await proceedToCheckout();
             });
@@ -1365,7 +1464,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           requestOpenSession(async () => {
             if (import.meta.env.DEV) {
               // eslint-disable-next-line no-console
-              console.info("[cash-debug] continue-checkout", { reason: "resolved-after-refetch-failed" });
+              posDebug("[cash-debug] continue-checkout", { reason: "resolved-after-refetch-failed" });
             }
             await proceedToCheckout();
           });
@@ -1374,7 +1473,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] checkout-blocked", { reason: "order-or-backend-error", message });
+        posDebug("[cash-debug] checkout-blocked", { reason: "order-or-backend-error", message });
       }
       toast.error(message || "No se pudo continuar al cobro");
     }
@@ -1466,7 +1565,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] current-session", {
+        posDebug("[cash-debug] current-session", {
           open: snapshot.open,
           sessionId: snapshot.session?.id ?? null,
           status: getCashSessionStatus(snapshot),
@@ -1478,13 +1577,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashSnapshot(snapshot);
       setCashTransactions(transactions);
       const hasOpenCashSession = getCashSessionStatus(snapshot).hasOpenCashSession;
-      console.info("cash.open_session_modal", {
+      posDebug("cash.open_session_modal", {
         source: "loadCashData",
         reason: hasOpenCashSession ? "session_open" : "session_closed",
       });
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-modal", {
+        posDebug("[cash-debug] open-session-modal", {
           source: "loadCashData",
           action: hasOpenCashSession ? "close" : "open",
           reason: hasOpenCashSession ? "session-open" : "session-missing",
@@ -1494,13 +1593,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     } catch (error) {
       console.error("Failed to load cash data", error);
       toast.error("No se pudo cargar información de caja");
-      console.info("cash.open_session_modal", {
+      posDebug("cash.open_session_modal", {
         source: "loadCashData",
         reason: "fetch_error",
       });
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-modal", { source: "loadCashData", action: "open", reason: "fetch-error" });
+        posDebug("[cash-debug] open-session-modal", { source: "loadCashData", action: "open", reason: "fetch-error" });
       }
       setCashSnapshot({ open: false, hasOpenCashSession: false, session: undefined });
       setIsOpenSessionModalOpen(true);
@@ -1516,7 +1615,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
-    getFeatureSettings().then((settings) => setInventoryStockPolicy(settings.inventoryStockPolicy)).catch(() => undefined);
+    getFeatureSettings().then((settings) => {
+      setInventoryStockPolicy(settings.inventoryStockPolicy);
+      setPosProductImagesEnabled(settings.posProductImagesEnabled);
+      setTableMapEnabled(settings.tableMapEnabled);
+    }).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -1525,7 +1628,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-modal", { source: "cash:required", action: "open" });
+        posDebug("[cash-debug] open-session-modal", { source: "cash:required", action: "open" });
       }
       setIsOpenSessionModalOpen(true);
     };
@@ -1725,7 +1828,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     if (isSavingCashAction) return;
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.info("[cash-debug] open-session-submit", { amount: Number(openSessionAmount || 0), currentCashSession: cashSnapshot.session?.id ?? null });
+      posDebug("[cash-debug] open-session-submit", { amount: Number(openSessionAmount || 0), currentCashSession: cashSnapshot.session?.id ?? null });
     }
     setIsSavingCashAction(true);
     try {
@@ -1733,7 +1836,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const current = await getCurrentCashSession();
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-refetch", {
+        posDebug("[cash-debug] open-session-refetch", {
           open: current.open,
           sessionId: current.session?.id ?? null,
           status: getCashSessionStatus(current),
@@ -1749,7 +1852,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       const action = postOpenSessionActionRef.current;
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-result", { status: "opened", willContinueCheckout: Boolean(action) });
+        posDebug("[cash-debug] open-session-result", { status: "opened", willContinueCheckout: Boolean(action) });
       }
       postOpenSessionActionRef.current = null;
       setIsOpenSessionModalOpen(false);
@@ -1775,7 +1878,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             postOpenSessionActionRef.current = null;
             if (import.meta.env.DEV) {
               // eslint-disable-next-line no-console
-              console.info("[cash-debug] open-session-result", { status: "already-open", willContinueCheckout: Boolean(action) });
+              posDebug("[cash-debug] open-session-result", { status: "already-open", willContinueCheckout: Boolean(action) });
             }
             if (action) {
               try {
@@ -1795,7 +1898,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       }
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-debug] open-session-result", { status: "error", message, willContinueCheckout: false });
+        posDebug("[cash-debug] open-session-result", { status: "error", message, willContinueCheckout: false });
       }
       openSessionResolverRef.current?.(false);
       toast.error(`No se pudo aperturar la caja: ${message}`);
@@ -1806,6 +1909,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
   const handleCloseCashSession = async () => {
+    if (closeCashSubmittingRef.current || isSavingCashAction) return;
     if (!canCloseCash) {
       toast.error("No tienes permisos para cerrar caja.");
       return;
@@ -1818,7 +1922,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     const totalCoins = Number(closeCoinsInput || 0);
     const totalPosCards = Number(closePosCardsInput || 0);
     const totalPedidosYa = Number(closePedidosYaInput || 0);
-    const countedTotal = totalBills + totalCoins;
+    const totalBillsCents = toCents(closeBillsInput);
+    const totalCoinsCents = toCents(closeCoinsInput);
+    const countedTotal = moneyToFixedString((totalBillsCents + totalCoinsCents) / 100);
     if (
       !Number.isFinite(totalBills) || totalBills < 0
       || !Number.isFinite(totalCoins) || totalCoins < 0
@@ -1828,18 +1934,24 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       toast.error("Ingresa montos válidos para el cierre.");
       return;
     }
+    closeCashSubmittingRef.current = true;
     setCashCloseFlowState("closingInProgress");
     setIsSavingCashAction(true);
     try {
       const closeResp = await closeCashSession(
         countedTotal,
         cashNotes,
-        { bills: totalBills, coins: totalCoins, posCards: totalPosCards, pedidosYa: totalPedidosYa },
+        {
+          bills: moneyToFixedString(closeBillsInput),
+          coins: moneyToFixedString(closeCoinsInput),
+          posCards: moneyToFixedString(closePosCardsInput),
+          pedidosYa: moneyToFixedString(closePedidosYaInput),
+        },
         { sessionId: cashSnapshot.session?.id }
       );
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.info("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
+        posDebug("[cash-close-flow] close_success", { sessionId: closeResp.sessionId ?? null, printed: closeResp.printed, printError: closeResp.printError ?? null });
       }
       if (closeResp.sessionId) {
         setLastClosedSessionId(closeResp.sessionId);
@@ -1855,7 +1967,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setCashCloseFlowState("pendingUserAck");
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
-          console.info("[cash-close-flow] fallback_modal_opened");
+          posDebug("[cash-close-flow] fallback_modal_opened");
         }
         setFallbackPdfModal({
           open: true,
@@ -1866,7 +1978,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             await downloadCashSessionTicketPdf(closeResp.sessionId);
             if (import.meta.env.DEV) {
               // eslint-disable-next-line no-console
-              console.info("[cash-close-flow] user_ack_download");
+              posDebug("[cash-close-flow] user_ack_download");
             }
             setFallbackPdfModal((prev) => ({ ...prev, open: false }));
             setCashCloseFlowState("idle");
@@ -1889,6 +2001,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setCashCloseFlowState("idle");
       toast.error(error instanceof Error ? error.message : "No se pudo cerrar caja");
     } finally {
+      closeCashSubmittingRef.current = false;
       setIsSavingCashAction(false);
     }
   };
@@ -1964,12 +2077,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     return saved;
   };
 
-  const printSalesTicketOnly = async (orderId: number) => {
-    const job = await createPrintJob({ orderId, type: "customer" });
-    setReceiptJob(job);
-    return job;
-  };
-
   const handleQuickPrintTicket = async () => {
     if (cart.length === 0 && !(activeOrder?.items?.length)) {
       toast.info("No hay pedido para imprimir");
@@ -1978,8 +2085,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     try {
       const baseOrder = await ensureOrderForQuickPrint();
       const heldOrder = baseOrder.isPending ? baseOrder : await saveCurrentOrderAsHeld(baseOrder);
-      await printSalesTicketOnly(heldOrder.id);
-      toast.success("Ticket enviado a impresión");
+      const result = await smartPrintTicket({ orderId: heldOrder.id, preferDirect: false });
+      if (result.method === "direct") toast.success("Ticket enviado a impresora.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket");
     }
@@ -1994,8 +2101,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       selectedDiscount: null,
       availableDiscounts,
     });
-    console.info("open_order.update.request", { order_id: order.id, is_update: true });
-    console.info("open_order.save.payload", {
+    posDebug("open_order.update.request", { order_id: order.id, is_update: true });
+    posDebug("open_order.save.payload", {
       id: order.id,
       total_front: pricing.total,
       items: cart.length,
@@ -2010,7 +2117,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       authorizationPin: pendingEditAuthorizationPin,
       items: buildPendingPayloadItems(cart),
     });
-    console.info("open_order.save.done", {
+    posDebug("open_order.save.done", {
       id: saved.id,
       total_saved: saved.totalPayable,
       subtotal_saved: saved.subtotalBeforeDiscounts,
@@ -2065,7 +2172,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             items: buildPendingPayloadItems(cart),
           });
       if (!activeOrder?.isPending) {
-        console.info("open_order.save.start", { id: saved.id, is_update: false });
+        posDebug("open_order.save.start", { id: saved.id, is_update: false });
       }
       if (!saved.isPending) {
         throw new Error("Order was not persisted as Open Order.");
@@ -2278,7 +2385,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
     hydratedPendingOrderIdRef.current = null;
     clearPersistedDraft();
-    console.info("[pos-finalize] reset_state", {
+    posDebug("[pos-finalize] reset_state", {
       previousPath,
       nextPath: "/pos",
       previousPaymentMethod,
@@ -2300,7 +2407,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     hardReloadTriggeredRef.current = true;
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.info("[pos-debug] hard_reload", { reason });
+      posDebug("[pos-debug] hard_reload", { reason });
     }
     window.location.reload();
   }, []);
@@ -2310,16 +2417,6 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     window.setTimeout(() => hardReloadPos(reason), 400);
   };
 
-  const triggerPdfDownload = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 500);
-  };
 
   const handleKitchenChoice = async (shouldSend: boolean) => {
     if (!kitchenPromptOrderId || isSubmittingKitchenChoice) return;
@@ -2334,58 +2431,20 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             console.debug("Kitchen send retry succeeded", error);
           }
         }
-        toast.success("Venta enviada a cocina");
-      } else {
-        toast.success("Venta completada sin envío a cocina");
+        // Evitar aviso duplicado: el flujo de cierre ya confirma la venta.
       }
       const shouldPrintTicket = Boolean(lastPaymentId) && (postSalePrintChoice || lastPaymentAutoPrint);
       if (shouldPrintTicket && lastPaymentId) {
         try {
-        const printResult = await printPaymentTicket(lastPaymentId);
-        if (printResult.pdfBlob) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            triggerPdfDownload(printResult.pdfBlob as Blob, printResult.pdfFilename || `ticket_pago_${lastPaymentId}.pdf`);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning("Impresora no detectada.");
-        } else if (!printResult.printed && printResult.receiptPdfUrl) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            await downloadPaymentTicketPdf(lastPaymentId);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning("Impresora no detectada.");
-        } else if (!printResult.printed && printResult.printError) {
-        setFallbackPdfModal({
-          open: true,
-          title: "Ticket de venta",
-          message: "No se pudo imprimir. Puedes descargar el PDF del ticket.",
-          onDownload: async () => {
-            await downloadPaymentTicketPdf(lastPaymentId);
-          },
-          shouldHardReloadAfterClose: false,
-        });
-          toast.warning(`Pago registrado, pero no se pudo imprimir: ${printResult.printError}`);
-        }
-        if (printResult.drawerError) {
-          toast.warning(printResult.drawerError);
-        }
+          const result = await smartPrintTicket({ paymentId: lastPaymentId });
+          if (result.method === "direct") toast.success("Ticket enviado a impresora.");
         } catch (printError) {
-          console.error("Auto ticket print failed", printError);
-          toast.warning("El pago se registró, pero no se pudo imprimir el ticket automáticamente.");
+          console.error("Ticket print failed", printError);
+          toast.warning("La venta fue registrada, pero no se pudo imprimir el ticket.");
         }
       }
       setIsKitchenPromptOpen(false);
-      console.info("[pos-finalize] confirm", {
+      posDebug("[pos-finalize] confirm", {
         orderId: kitchenPromptOrderId,
         sendToKitchen: shouldSend,
         printChoice: postSalePrintChoice,
@@ -2557,7 +2616,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               removalReason: "Pagada en POS",
               completionType: "paid",
             });
-            console.info("open_order.finalize_paid", {
+            posDebug("open_order.finalize_paid", {
               id: finalizedOrder.id,
               subtotal: finalizedOrder.subtotalBeforeDiscounts,
               discount_total: finalizedOrder.discountTotal,
@@ -2888,30 +2947,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const handlePrintReceipt = async () => {
     if (!activeOrder) return;
     try {
-      const job = await createPrintJob({ orderId: activeOrder.id, type: "customer" });
-      setReceiptJob(job);
-      setIsReceiptPreviewOpen(true);
+      const result = await smartPrintTicket({ orderId: activeOrder.id, preferDirect: false });
+      if (result.method === "direct") toast.success("Ticket enviado a impresora.");
     } catch (error) {
-      console.error("Failed to create print job", error);
-      toast.error("No se pudo generar el ticket");
+      console.error("Failed to print ticket", error);
+      toast.error("No se pudo preparar el ticket. Intenta nuevamente.");
     }
-  };
-
-  const handleMarkPrinted = async () => {
-    if (!receiptJob) return;
-    try {
-      const job = await markPrintJobPrinted(receiptJob.id);
-      setReceiptJob(job);
-      toast.success("Ticket marcado como impreso");
-    } catch (error) {
-      console.error("Failed to mark printed", error);
-      toast.error("No se pudo actualizar el ticket");
-    }
-  };
-
-  const handleReprint = async () => {
-    if (!activeOrder) return;
-    await handlePrintReceipt();
   };
 
   if (isCashGateLoading) {
@@ -2922,12 +2963,85 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     );
   }
 
+  if (tableMapEnabled && posMode === "tables") {
+    const opsTables = restaurantTables.filter((table) => selectedOpsArea === "all" || table.area === selectedOpsArea).filter((table) => {
+      const session = sessionByTableId.get(table.id);
+      if (selectedOpsFilter === "free") return !session;
+      if (selectedOpsFilter === "occupied") return Boolean(session && session.status !== "sent_to_kitchen");
+      if (selectedOpsFilter === "kitchen") return session?.status === "sent_to_kitchen";
+      return true;
+    });
+    const freeCount = restaurantTables.filter((t) => !sessionByTableId.get(t.id)).length;
+    const kitchenCount = restaurantTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
+    const occupiedCount = restaurantTables.filter((t) => !!sessionByTableId.get(t.id) && sessionByTableId.get(t.id)?.status !== "sent_to_kitchen").length;
+
+    return (
+      <div className="h-[100dvh] bg-background p-3 sm:p-4">
+        <div className="mx-auto grid h-full max-w-[1800px] grid-cols-1 gap-3 lg:grid-cols-[250px_1fr_320px]">
+          <Card className="p-3 space-y-3">
+            <Button variant="outline" onClick={() => setPosMode("pos")}>POS rápido</Button>{selectedOpsArea !== "all" ? <Button variant="outline" onClick={() => setSelectedOpsArea("all")}>Volver a todas</Button> : null}
+            <Button variant="outline" onClick={() => navigate("/tables/editor")}>Editor de mesas</Button>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Áreas</p><button className={cn("w-full rounded border p-2 text-left", selectedOpsArea === "all" && "border-primary")} onClick={() => setSelectedOpsArea("all")}>Todas</button>{diningAreas.map((a) => <button key={a.id} className={cn("w-full rounded border p-2 text-left", selectedOpsArea === a.id && "border-primary")} onClick={() => setSelectedOpsArea(a.id)}>{a.name}</button>)}</div>
+            <div className="space-y-1 text-sm"><p className="font-semibold">Estado</p><Button variant={selectedOpsFilter === "all" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("all")}>Todas</Button><Button variant={selectedOpsFilter === "free" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("free")}>Libres</Button><Button variant={selectedOpsFilter === "occupied" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("occupied")}>Ocupadas</Button><Button variant={selectedOpsFilter === "kitchen" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("kitchen")}>En cocina</Button></div>
+          </Card>
+
+          <Card className="p-3 overflow-auto">
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-xl font-bold">Mesas</h2><div className="flex gap-2 text-xs"><Badge variant="secondary">Libres: {freeCount}</Badge><Badge variant="secondary">Ocupadas: {occupiedCount}</Badge><Badge variant="secondary">En cocina: {kitchenCount}</Badge></div></div>
+            <div className="relative h-[calc(100dvh-170px)] overflow-auto rounded-xl border bg-slate-950">
+              <div className="relative h-[1200px] w-[1800px]">
+                {selectedOpsArea === "all" ? diningAreas.map((area) => {
+                  const areaTables = restaurantTables.filter((t) => t.area === area.id);
+                  const areaFree = areaTables.filter((t) => !sessionByTableId.get(t.id)).length;
+                  const areaKitchen = areaTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
+                  const areaOccupied = areaTables.length - areaFree;
+                  return <button key={area.id} className="absolute rounded-xl border-2 p-3 text-left text-white" style={{ left: area.x ?? 0, top: area.y ?? 0, width: area.width ?? 320, height: area.height ?? 220, borderColor: area.color || "#64748b", backgroundColor: `${area.color || "#64748b"}33` }} onClick={() => setSelectedOpsArea(area.id)}><p className="font-semibold">{area.name}</p><p className="text-xs opacity-90">Libres: {areaFree}</p><p className="text-xs opacity-90">Ocupadas: {areaOccupied}</p><p className="text-xs opacity-90">En cocina: {areaKitchen}</p></button>;
+                }) : opsTables.map((table) => {
+                  const session = sessionByTableId.get(table.id);
+                  const selected = selectedOpsTableId === table.id;
+                  const stateLabel = getSessionStateLabel(session);
+                  return (
+                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),2000); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={() => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
+                      <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-white">
+                        <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
+                        {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
+                        <span className="mt-1 rounded bg-black/40 px-1 text-[10px]">{stateLabel}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-3">
+            {!selectedOpsTableId ? <p className="text-sm text-muted-foreground">Selecciona una mesa para ver acciones.</p> : (() => { const table = restaurantTables.find((t) => t.id === selectedOpsTableId); const session = selectedOpsTableId ? sessionByTableId.get(selectedOpsTableId) : null; if (!table) return null; return <div className="space-y-2"><h3 className="font-semibold">{table.name}</h3><p className="text-sm text-muted-foreground">{session ? "Mesa ocupada" : "Mesa libre"}</p><Button className="w-full" onClick={() => session ? void openTableSession(table.id) : setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" })}>{session ? "Agregar productos" : "Nueva orden"}</Button><Button className="w-full" variant="outline" disabled={!session}>Enviar a cocina</Button><Button className="w-full" variant="outline" disabled={!session}>Unir mesa</Button><Button className="w-full" variant="outline" disabled={!session}>Cobrar mesa</Button></div>; })()}
+          </Card>
+        </div>
+
+        {opsContextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}><Card className="absolute w-64 p-2" style={{ left: Math.min(opsContextMenu.x, window.innerWidth - 270), top: Math.min(opsContextMenu.y, window.innerHeight - 320) }} onClick={(e)=>e.stopPropagation()}>{(() => { const table = restaurantTables.find((t) => t.id === opsContextMenu.tableId); const session = table ? sessionByTableId.get(table.id) : null; if (!table) return null; return <div className="space-y-1"><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"table", notes:"" }); else void openTableSession(table.id); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>{session ? "Ver orden" : "Nueva orden"}</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session} onClick={() => { setMergeMode({ active:true, sessionId: session?.id ?? null, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>Unir mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Unir cuentas requiere soporte de fusión de órdenes en backend.")}>Unir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Transferir cuenta queda preparado para próxima iteración.")}>Transferir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>Cancelar</Button></div>; })()}</Card></div> : null}
+        <Dialog open={newSessionDialog.open} onOpenChange={(open) => setNewSessionDialog((prev) => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Nueva orden</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<div className="ml-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1"><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button><span className="min-w-8 text-center font-semibold">{newSessionDialog.guests}</span><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.min(99,p.guests+1)}))}>+</Button></div></div></div>{(() => { const table = restaurantTables.find((t) => t.id === newSessionDialog.tableId); const cap = Number(table?.capacity || 0); return cap > 0 && newSessionDialog.guests > cap ? <p className="text-xs text-amber-500">Sobre capacidad sugerida de la mesa.</p> : null; })()}
+              <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
+              <div><Label>Notas</Label><Textarea value={newSessionDialog.notes} onChange={(e)=>setNewSessionDialog((p)=>({...p,notes:e.target.value}))} /></div>
+            </div>
+            <DialogFooter><Button variant="outline" onClick={()=>setNewSessionDialog({ open:false, tableId:null, guests:2, orderMode:"table", notes:"" })}>Cancelar</Button><Button onClick={() => void beginSessionFromDialog()}>Iniciar orden</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
   return (
     <div className="h-[100dvh] overflow-x-hidden overflow-y-hidden bg-background">
       <div className={cn("h-full min-h-0 px-2 pb-4 pt-4 lg:px-4", requiresCashOpen && "pointer-events-none select-none opacity-80")}>
         <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[60%_40%]">
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
+            {/* Table mode controls are intentionally hidden from the classic POS workspace. */}
+
             {/* Search & Filters */}
             <Card className="p-4">
               <div className="flex flex-col gap-3">
@@ -2986,28 +3100,44 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
                     const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
                     const stockTitle = blocked ? (availability?.policySource === "category" ? "Bloqueado por política de categoría" : "No hay stock disponible para agregar más unidades") : product.name;
+                    const showProductImage = shouldShowProductImage(product);
                     return (
                     <Card
                       key={product.id}
-                    className={cn("p-4 hover-lift", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
-                    onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
-                    title={stockTitle}
-                    aria-disabled={blocked}
-                  >
-                    <div className="mb-1 flex items-start justify-between gap-2"><h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>{badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}</div>
-                    {productPricing.display.showOfferBadge && (
-                      <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
-                        {productPricing.appliedRule?.name?.trim() || "OFERTA"}
-                      </Badge>
-                    )}
-                    <div className="space-y-0.5">
-                      {productPricing.display.showOfferBadge && (
-                        <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                      className={cn("relative overflow-hidden hover-lift", showProductImage ? "p-2" : "p-4", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
+                      onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
+                      title={stockTitle}
+                      aria-disabled={blocked}
+                    >
+                      {showProductImage && (
+                        <div className="relative mb-2 aspect-[4/3] overflow-hidden rounded-xl bg-muted/40">
+                          <img
+                            src={product.imageUrl ?? ""}
+                            alt={product.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                            onError={() => setHiddenProductImages((previous) => ({ ...previous, [product.id]: true }))}
+                          />
+                          {badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="absolute right-2 top-2 bg-background/90 text-[10px] shadow-sm backdrop-blur">{badgeText}</Badge> : null}
+                        </div>
                       )}
-                      <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
-                    </div>
-                  </Card>
-                );
+                      <div className="mb-1 flex items-start justify-between gap-2">
+                        <h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>
+                        {!showProductImage && badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}
+                      </div>
+                      {productPricing.display.showOfferBadge && (
+                        <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                          {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                        </Badge>
+                      )}
+                      <div className="space-y-0.5">
+                        {productPricing.display.showOfferBadge && (
+                          <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                        )}
+                        <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
+                      </div>
+                    </Card>
+                  );
                 })}
               </div>
             </div>
@@ -3372,7 +3502,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         onOpenChange={(open) => {
           if (import.meta.env.DEV && open) {
             // eslint-disable-next-line no-console
-            console.info("[discount-debug] modal_open", {
+            posDebug("[discount-debug] modal_open", {
               manualDiscountId: selectedDiscount?.id ?? null,
               autoDiscountCandidates: availableDiscounts.filter((discount) => discount.autoApply).map((discount) => ({
                 id: discount.id,
@@ -3445,7 +3575,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                           }
                           if (import.meta.env.DEV) {
                             // eslint-disable-next-line no-console
-                            console.info("[discount-debug] manual_discount_apply", {
+                            posDebug("[discount-debug] manual_discount_apply", {
                               reason: applyReason,
                               discountId: discount.id,
                               discountName: discount.name,
@@ -3478,8 +3608,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92dvh] w-[min(94vw,720px)] max-w-2xl flex-col overflow-hidden p-0">
+          <DialogHeader className="shrink-0 border-b px-6 py-4">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <DialogTitle>Transacciones de Caja</DialogTitle>
@@ -3487,11 +3617,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             </div>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
             <div className="rounded-md border p-3 text-sm">
               <div className="font-semibold">Estado: {cashSnapshot.open ? "Caja Abierta" : "Caja Cerrada"}</div>
               {canViewSensitiveCash && cashSnapshot.open && cashSnapshot.summary && (
-                <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
+                <div className="mt-2 grid grid-cols-1 gap-2 text-muted-foreground sm:grid-cols-2">
                   <div>Efectivo inicial: {formatMoney(cashSnapshot.summary.openingCash)}</div>
                   <div>Efectivo ventas: {formatMoney(cashSnapshot.summary.totalCashSales)}</div>
                   <div>Tarjeta: {formatMoney(cashSnapshot.summary.methods.card)}</div>
@@ -3503,7 +3633,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Button className="h-14 text-base font-semibold" onClick={() => requestOpenSession()} disabled={cashSnapshot.open || !canManageCashOperations}>
                 {cashSnapshot.open ? "CAJA APERTURADA" : "APERTURAR CAJA"}
               </Button>
@@ -3536,7 +3666,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             </div>
 
             {cashSnapshot.open ? (
-              <div className="space-y-2 rounded-md border p-3">
+              <div className="space-y-3 rounded-md border p-3">
                 {!canCloseCash ? <div className="text-sm text-muted-foreground">No tienes permisos para cerrar caja.</div> : null}
                 {canCloseCash && closeCashStep === "idle" ? (
                   <div className="space-y-3">
@@ -3631,10 +3761,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <div className="flex justify-between"><span>Total monedas</span><span>{formatMoney(Number(closeCoinsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total POS tarjetas</span><span>{formatMoney(Number(closePosCardsInput || 0))}</span></div>
                       <div className="flex justify-between"><span>Total PedidosYa</span><span>{formatMoney(Number(closePedidosYaInput || 0))}</span></div>
-                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney(Number(closeBillsInput || 0) + Number(closeCoinsInput || 0))}</span></div>
+                      <div className="flex justify-between font-bold"><span>Total contado</span><span>{formatMoney((toCents(closeBillsInput) + toCents(closeCoinsInput)) / 100)}</span></div>
                     </div>
                     <Label>Notas</Label>
-                    <Textarea rows={2} value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
+                    <Textarea rows={2} className="max-h-24" value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
                     {pendingOrdersCount > 0 && !allowCloseWithPendingOrders ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
                         You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
@@ -3645,9 +3775,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         Hay {pendingOrdersCount} órdenes pendientes, pero el cierre con pendientes está habilitado por configuración.
                       </div>
                     ) : null}
-                    <div className="flex items-center gap-2">
+                    <div className="sticky bottom-0 z-10 -mx-3 flex items-center gap-2 border-t bg-background/95 p-3 backdrop-blur">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>Confirmar cierre</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>{isSavingCashAction ? "Cerrando..." : "Confirmar cierre"}</Button>
                     </div>
                   </>
                 ) : null}
@@ -3668,7 +3798,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                     </Button>
                   ) : null}
                 </div>
-                <div className="max-h-52 space-y-2 overflow-y-auto">
+                <div className="max-h-[28vh] space-y-2 overflow-y-auto pr-1">
                 {cashTransactions.length === 0 ? (
                   <div className="text-muted-foreground">Sin transacciones registradas.</div>
                 ) : (
@@ -4385,7 +4515,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               <Checkbox checked={postSaleKitchenChoice} onCheckedChange={(value) => setPostSaleKitchenChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
             <div className="flex items-center justify-between rounded-md border px-3 py-2">
-              <span>{printerAvailable ? "Imprimir ticket" : "Descargar ticket"}</span>
+              <span>Imprimir ticket</span>
               <Checkbox checked={postSalePrintChoice} onCheckedChange={(value) => setPostSalePrintChoice(value === true)} disabled={isSubmittingKitchenChoice} />
             </div>
           </div>
@@ -4404,7 +4534,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               className="h-14 text-lg"
               disabled={isSubmittingKitchenChoice}
               onClick={() => {
-                console.info("[pos-finalize] omit", {
+                posDebug("[pos-finalize] omit", {
                   orderId: kitchenPromptOrderId,
                   sendToKitchen: postSaleKitchenChoice,
                   printChoice: postSalePrintChoice,
@@ -4468,7 +4598,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 }
                 if (import.meta.env.DEV) {
                   // eslint-disable-next-line no-console
-                  console.info("[cash-close-flow] user_ack_close");
+                  posDebug("[cash-close-flow] user_ack_close");
                 }
                 setFallbackPdfModal((prev) => ({ ...prev, open: false }));
                 setCashCloseFlowState("idle");
@@ -4502,130 +4632,137 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         }
       />
 
-      <PrintPreviewDialog
-        open={isReceiptPreviewOpen}
-        onOpenChange={setIsReceiptPreviewOpen}
-        job={receiptJob}
-        onMarkPrinted={handleMarkPrinted}
-        onReprint={handleReprint}
-      />
-
       <Dialog open={isExtrasOpen} onOpenChange={closeExtrasDialog}>
-        <DialogContent className="w-[92vw] max-w-[520px] rounded-2xl border border-border/70 p-6">
-          <DialogHeader>
-            <DialogTitle>{editingModifiersItemId ? "Editar modificadores" : "Extras (opcional)"}</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="flex h-[90vh] w-[94vw] max-w-6xl flex-col rounded-2xl border border-border/70 p-0">
+          <DialogHeader className="border-b px-5 py-4">
+            <DialogTitle className="text-2xl">Extras</DialogTitle>
+            <DialogDescription className="text-base">
               {pendingProduct
                 ? editingModifiersItemId
                   ? `Actualiza los modificadores de ${pendingProduct.name}.`
-                  : `Selecciona extras de pago para ${pendingProduct.name}.`
+                  : `Selecciona extras para ${pendingProduct.name}.`
                 : "Selecciona extras de pago."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-            {getPosModifierGroups(pendingProduct).map((group) => {
-              const groupId = String(group.id);
-              const selectedValues = selectedModifiers[groupId] ?? [];
-              const isOpen = openModifierGroups[groupId] ?? false;
-              const groupError = modifierValidationErrors[groupId];
-              return (
-                <div key={group.id} className={cn("rounded-xl border border-border/70", groupError && "border-destructive/60")}> 
-                  <button
-                    type="button"
-                    className="flex min-h-14 w-full items-center justify-between px-4 py-3 text-left"
-                    onClick={() => setOpenModifierGroups((prev) => ({ ...prev, [groupId]: !isOpen }))}
-                    aria-expanded={isOpen}
-                  >
-                    <div>
-                      <Label className="block cursor-pointer text-base font-semibold">{group.name}</Label>
-                      <p className="text-xs text-muted-foreground">
-                        {group.required ? "Obligatorio" : "Opcional"} · Min {group.minSelection} · Max {group.maxSelection}
-                      </p>
-                    </div>
-                    {isOpen ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
-                  </button>
-                  {groupError && <p className="px-4 pb-2 text-xs text-destructive">{groupError}</p>}
-                  {isOpen && (
-                    <div className="space-y-2 px-3 pb-3">
-                      {group.maxSelection === 1 ? (
-                        <RadioGroup
-                          value={selectedValues[0] || ""}
-                          onValueChange={(value) => {
-                            setSelectedModifiers((prev) => ({ ...prev, [groupId]: value ? [value] : [] }));
-                            setModifierValidationErrors((prev) => {
-                              const next = { ...prev };
-                              delete next[groupId];
-                              return next;
-                            });
-                          }}
+          {(() => {
+            const groups = getPosModifierGroups(pendingProduct);
+            const activeGroup = groups.find((group) => openModifierGroups[String(group.id)]) ?? groups[0];
+            const activeGroupId = activeGroup ? String(activeGroup.id) : "";
+            const activeSelectedValues = activeGroup ? (selectedModifiers[activeGroupId] ?? []) : [];
+            const activeError = activeGroup ? modifierValidationErrors[activeGroupId] : undefined;
+            const selectGroup = (groupId: string) => setOpenModifierGroups(Object.fromEntries(groups.map((group) => [String(group.id), String(group.id) === groupId])));
+            return (
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 md:grid-cols-[280px_minmax(0,1fr)]">
+                <aside className="min-h-0 overflow-auto border-b bg-muted/20 p-3 md:border-b-0 md:border-r">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Grupos</p>
+                  <div className="space-y-2">
+                    {groups.map((group) => {
+                      const groupId = String(group.id);
+                      const selectedCount = (selectedModifiers[groupId] ?? []).length;
+                      const groupError = modifierValidationErrors[groupId];
+                      const active = activeGroupId === groupId;
+                      return (
+                        <button
+                          key={group.id}
+                          type="button"
+                          className={cn("w-full rounded-xl border p-3 text-left transition hover:bg-muted/50", active && "border-primary bg-primary/10", groupError && "border-destructive/70")}
+                          onClick={() => selectGroup(groupId)}
+                          aria-label={`Ver opciones de ${group.name}`}
                         >
-                          {group.modifiers
-                            .filter((mod) => mod.price > 0)
-                            .map((mod) => (
-                              <Label
-                                key={mod.id}
-                                htmlFor={`pending-${group.id}-${mod.id}`}
-                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                              >
-                                <RadioGroupItem id={`pending-${group.id}-${mod.id}`} value={String(mod.id)} />
-                                <span className="flex-1 font-medium">{mod.name}</span>
-                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                              </Label>
-                            ))}
-                        </RadioGroup>
-                      ) : (
-                        <div className="space-y-1">
-                          {group.modifiers
-                            .filter((mod) => mod.price > 0)
-                            .map((mod) => (
-                              <Label
-                                key={mod.id}
-                                htmlFor={`pending-${group.id}-${mod.id}`}
-                                className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border/60 px-3 py-3 text-base hover:bg-muted/40"
-                              >
-                                <Checkbox
-                                  id={`pending-${group.id}-${mod.id}`}
-                                  checked={selectedValues.includes(String(mod.id))}
-                                  onCheckedChange={(checked) => {
-                                    const current = selectedValues;
-                                    if (checked && current.length >= group.maxSelection) return;
-                                    setSelectedModifiers((prev) => ({
-                                      ...prev,
-                                      [groupId]: checked
-                                        ? [...current, String(mod.id)]
-                                        : current.filter((id) => id !== String(mod.id)),
-                                    }));
-                                    setModifierValidationErrors((prev) => {
-                                      const next = { ...prev };
-                                      delete next[groupId];
-                                      return next;
-                                    });
-                                  }}
-                                />
-                                <span className="flex-1 font-medium">{mod.name}</span>
-                                <span className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</span>
-                              </Label>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold">{group.name}</span>
+                            <Badge variant={groupError ? "destructive" : selectedCount ? "default" : "outline"}>{selectedCount}/{group.maxSelection}</Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{group.required ? "Obligatorio" : "Opcional"} · Min {group.minSelection} · Max {group.maxSelection}</p>
+                          {groupError ? <p className="mt-1 text-xs text-destructive">{groupError}</p> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </aside>
 
-          <div className="pt-2">
-            <Button className="h-12 w-full" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
-              {editingModifiersItemId
-                ? selectedExtrasCount > 0
-                  ? `Actualizar (${selectedExtrasCount} extras)`
-                  : "Actualizar"
-                : selectedExtrasCount > 0
-                  ? `Agregar (${selectedExtrasCount} extras)`
-                  : "Agregar"}
-            </Button>
+                <section className="flex min-h-0 flex-col">
+                  <div className="border-b px-4 py-3">
+                    <h3 className="text-lg font-semibold">{activeGroup?.name ?? "Sin extras"}</h3>
+                    {activeGroup ? <p className="text-sm text-muted-foreground">{activeGroup.required ? "Obligatorio" : "Opcional"} · Seleccionado {activeSelectedValues.length} de {activeGroup.maxSelection}</p> : null}
+                    {activeError ? <p className="mt-1 text-sm text-destructive">{activeError}</p> : null}
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-auto p-4">
+                    {activeGroup ? (
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {activeGroup.modifiers.filter((mod) => mod.price > 0).map((mod) => {
+                          const modId = String(mod.id);
+                          const selected = activeSelectedValues.includes(modId);
+                          const maxReached = !selected && activeSelectedValues.length >= activeGroup.maxSelection;
+                          const toggle = () => {
+                            if (activeGroup.maxSelection === 1) {
+                              setSelectedModifiers((prev) => ({ ...prev, [activeGroupId]: selected ? [] : [modId] }));
+                            } else {
+                              if (maxReached) return;
+                              setSelectedModifiers((prev) => ({
+                                ...prev,
+                                [activeGroupId]: selected ? activeSelectedValues.filter((id) => id !== modId) : [...activeSelectedValues, modId],
+                              }));
+                            }
+                            setModifierValidationErrors((prev) => { const next = { ...prev }; delete next[activeGroupId]; return next; });
+                          };
+                          return (
+                            <div
+                              key={mod.id}
+                              role="button"
+                              tabIndex={maxReached ? -1 : 0}
+                              className={cn("min-h-28 rounded-2xl border p-4 text-left transition hover:bg-muted/50", maxReached && "cursor-not-allowed opacity-50", selected && "border-primary bg-primary/10 ring-2 ring-primary/20")}
+                              onClick={() => { if (!maxReached) toggle(); }}
+                              onKeyDown={(event) => {
+                                if (maxReached) return;
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  toggle();
+                                }
+                              }}
+                              aria-disabled={maxReached}
+                              aria-label={`${selected ? "Quitar" : "Agregar"} ${mod.name}`}
+                            >
+                              <div className="flex h-full flex-col justify-between gap-3">
+                                <div>
+                                  <p className="text-lg font-semibold">{mod.name}</p>
+                                  <p className="text-sm text-muted-foreground">+${mod.price.toFixed(2)}</p>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("rounded-full px-3 py-1 text-xs font-semibold", selected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{selected ? "Seleccionado" : maxReached ? "Máximo" : "Tocar para agregar"}</span>
+                                  {activeGroup.maxSelection === 1 ? <RadioGroup value={selected ? modId : ""}><RadioGroupItem value={modId} /></RadioGroup> : <Checkbox checked={selected} />}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : <p className="text-sm text-muted-foreground">Este producto no tiene extras disponibles.</p>}
+                  </div>
+                </section>
+              </div>
+            );
+          })()}
+
+          <div className="border-t bg-background/95 px-5 py-4 backdrop-blur">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm">
+                <p className="font-semibold">{selectedExtrasCount} extra(s) seleccionado(s)</p>
+                <p className="text-muted-foreground">Total extras: {formatMoney(pendingSelectionValidation.selectedMods.reduce((sum, mod) => sum + mod.price, 0))}</p>
+                {Object.values(pendingSelectionValidation.errors)[0] ? <p className="text-destructive">{Object.values(pendingSelectionValidation.errors)[0]}</p> : null}
+              </div>
+              <Button className="h-14 min-w-48 text-base" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
+                {editingModifiersItemId
+                  ? selectedExtrasCount > 0
+                    ? `Actualizar (${selectedExtrasCount} extras)`
+                    : "Actualizar"
+                  : selectedExtrasCount > 0
+                    ? `Agregar (${selectedExtrasCount} extras)`
+                    : "Agregar"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -1,12 +1,15 @@
 from django.db import models, transaction
+from pathlib import Path
 from django.db.models import Case, IntegerField, Value, When
+from PIL import Image, UnidentifiedImageError
 import logging
 from rest_framework import generics, status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
+from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig, TicketSettings
 from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
 
@@ -45,6 +48,16 @@ FEATURE_FLAG_DEFAULTS = {
         "description": "Define cómo debe comportarse el POS cuando una venta necesita más inventario del disponible.",
         "default": True,
         "metadata": {"policy": "allow"},
+    },
+    "pos_product_images_enabled": {
+        "label": "Imágenes de productos en POS",
+        "description": "Muestra las imágenes guardadas de los productos en las tarjetas del POS.",
+        "default": False,
+    },
+    "table_map_enabled": {
+        "label": "Mapa de mesas",
+        "description": "Activa el modo restaurante con mapa de mesas, editor de salón y órdenes por mesa.",
+        "default": False,
     },
 }
 
@@ -91,6 +104,8 @@ def get_feature_settings_payload() -> dict:
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
         "inventory_stock_policy": stock_policy,
         "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
+        "pos_product_images_enabled": bool(flags["pos_product_images_enabled"].is_enabled),
+        "table_map_enabled": bool(flags["table_map_enabled"].is_enabled),
     }
 
 
@@ -180,6 +195,8 @@ class FeatureSettingsView(APIView):
             "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
             "inventory_advanced_enabled": "FF_INVENTORY",
+            "pos_product_images_enabled": "pos_product_images_enabled",
+            "table_map_enabled": "table_map_enabled",
         }
         for field, key in mapping.items():
             if field in request.data:
@@ -204,6 +221,70 @@ class FeatureSettingsView(APIView):
             stock_flag.metadata = stock_metadata
             stock_flag.save(update_fields=["metadata"])
         return Response(get_feature_settings_payload())
+
+
+
+
+_ALLOWED_TICKET_LOGO_TYPES = {"image/png", "image/jpeg"}
+_ALLOWED_TICKET_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+_TICKET_LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _ticket_logo_payload(request, settings: TicketSettings) -> dict:
+    if not settings.ticket_logo:
+        return {"ticket_logo_url": None, "ticket_logo_name": None, "has_ticket_logo": False}
+    try:
+        logo_url = settings.ticket_logo.url
+    except ValueError:
+        logo_url = None
+    return {
+        "ticket_logo_url": logo_url,
+        "ticket_logo_name": Path(settings.ticket_logo.name).name if settings.ticket_logo.name else None,
+        "has_ticket_logo": bool(logo_url),
+    }
+
+
+class TicketSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        return Response(_ticket_logo_payload(request, settings))
+
+
+class TicketLogoView(APIView):
+    permission_classes = [IsAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        upload = request.FILES.get("logo")
+        if not upload:
+            return Response({"detail": "Selecciona una imagen para el logo."}, status=status.HTTP_400_BAD_REQUEST)
+        content_type = (getattr(upload, "content_type", "") or "").lower()
+        extension = Path(getattr(upload, "name", "")).suffix.lower()
+        if content_type not in _ALLOWED_TICKET_LOGO_TYPES or extension not in _ALLOWED_TICKET_LOGO_EXTENSIONS:
+            return Response({"detail": "Solo se permiten imágenes PNG o JPG."}, status=status.HTTP_400_BAD_REQUEST)
+        if upload.size > _TICKET_LOGO_MAX_BYTES:
+            return Response({"detail": "El logo no puede superar 2 MB."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            Image.open(upload).verify()
+            upload.seek(0)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return Response({"detail": "No se pudo procesar la imagen."}, status=status.HTTP_400_BAD_REQUEST)
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        if settings.ticket_logo:
+            settings.ticket_logo.delete(save=False)
+        settings.ticket_logo = upload
+        settings.save(update_fields=["ticket_logo", "updated_at"])
+        return Response(_ticket_logo_payload(request, settings))
+
+    def delete(self, request):
+        settings, _ = TicketSettings.objects.get_or_create(pk=1)
+        if settings.ticket_logo:
+            settings.ticket_logo.delete(save=False)
+            settings.ticket_logo = None
+            settings.save(update_fields=["ticket_logo", "updated_at"])
+        return Response(_ticket_logo_payload(request, settings))
 
 
 class FeatureSettingsOptionsView(APIView):

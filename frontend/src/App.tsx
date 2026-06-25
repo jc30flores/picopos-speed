@@ -20,6 +20,7 @@ import Login from "./pages/Login";
 import CustomersPage from "./pages/Customers";
 import PendientesPage from "./pages/Pendientes";
 import InventoryPage from "./pages/Inventory";
+import TablesEditor from "./pages/TablesEditor";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { InactivityGuard } from "./components/auth/InactivityGuard";
 import { FeatureRouteGuard } from "./components/auth/FeatureRouteGuard";
@@ -136,6 +137,7 @@ const App = () => (
             />
             <Route path="/reports-history" element={<Navigate to="/" replace />} />
             <Route path="/dte" element={<Navigate to="/registros/dte" replace />} />
+            <Route path="/tables/editor" element={<ProtectedRoute allowedRoles={["admin", "manager"]}><TablesEditor /></ProtectedRoute>} />
             <Route
               path="/settings"
               element={
