@@ -677,6 +677,20 @@ export type CashSessionSnapshot = {
   };
 };
 
+export type RecentSaleAction = {
+  id: number;
+  paymentId: number;
+  orderNumber: string;
+  controlNumber: string;
+  customerName: string;
+  paymentMethod: string;
+  total: number;
+  status: string;
+  createdAt: string;
+  canPrintTicket: boolean;
+  canSendDte: boolean;
+};
+
 export type CashTransaction = {
   id: number;
   type: "cash_out" | "cash_in" | "expense" | "payout" | "card" | "transfer" | "pedidosya" | "paypal";
@@ -5295,6 +5309,38 @@ export const getCashTransactions = async (sessionId?: number, options?: { includ
     refundId: tx.refund_id ?? null,
     orderId: tx.order_id ?? null,
     createdAt: tx.created_at,
+  }));
+};
+
+type RecentSaleActionResponse = {
+  id: number | string;
+  payment_id: number | string;
+  order_number?: string | null;
+  control_number?: string | null;
+  customer_name?: string | null;
+  payment_method?: string | null;
+  total?: number | string | null;
+  status?: string | null;
+  created_at?: string | null;
+  can_print_ticket?: boolean;
+  can_send_dte?: boolean;
+};
+
+export const getRecentSalesActions = async (): Promise<RecentSaleAction[]> => {
+  const response = await request('/cashier/recent-sales/');
+  const data = await handleJson<RecentSaleActionResponse[]>(response);
+  return data.map((row) => ({
+    id: Number(row.id),
+    paymentId: Number(row.payment_id),
+    orderNumber: String(row.order_number ?? `ORD-${row.id}`),
+    controlNumber: String(row.control_number ?? ""),
+    customerName: String(row.customer_name ?? "CONSUMIDOR FINAL"),
+    paymentMethod: String(row.payment_method ?? ""),
+    total: Number(row.total ?? 0),
+    status: String(row.status ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    canPrintTicket: Boolean(row.can_print_ticket),
+    canSendDte: Boolean(row.can_send_dte),
   }));
 };
 

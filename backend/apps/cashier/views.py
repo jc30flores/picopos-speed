@@ -23,11 +23,12 @@ from apps.cashier.serializers import (
 from apps.core.audit import log_audit
 from apps.core.models import Branch
 from apps.core.feature_flags import can_view_cash_expected_totals, is_feature_enabled
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
+from apps.core.permissions import IsAdminOrManager, IsManagerOrAdmin, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
 from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id, resolve_open_cash_session
 from apps.orders.models import Order
+from apps.payments.models import Payment
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +657,50 @@ class CashSessionTicketPDFView(APIView):
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="end_of_day_{ts}.pdf"'
         return response
+
+class RecentSalesActionsView(APIView):
+    permission_classes = [IsManagerOrAdmin]
+
+    def get(self, request):
+        branch_id = resolve_branch_id(
+            request.query_params.get("branch_id")
+            or request.headers.get("X-Branch-Id")
+            or request.headers.get("x-branch-id")
+        )
+        session = get_open_cash_session_for_branch(branch_id)
+        payments_qs = Payment.objects.select_related(
+            "order", "order__customer", "order__invoice", "payment_method", "reporting_payment_method"
+        ).filter(order__isnull=False).exclude(order__status="canceled")
+        if session:
+            payments_qs = payments_qs.filter(cash_session=session)
+        else:
+            start_at, end_at = parse_business_date_range(str(timezone.localdate()), str(timezone.localdate()))
+            if start_at:
+                payments_qs = payments_qs.filter(created_at__gte=start_at)
+            if end_at:
+                payments_qs = payments_qs.filter(created_at__lte=end_at)
+            if branch_id:
+                payments_qs = payments_qs.filter(order__branch_id=branch_id)
+        rows = []
+        for payment in payments_qs.order_by("-created_at")[:50]:
+            order = payment.order
+            invoice = getattr(order, "invoice", None)
+            method = payment.reporting_payment_method or payment.payment_method
+            customer_name = (getattr(order.customer, "full_name", "") or getattr(order.customer, "name", "") or order.customer_name or "CONSUMIDOR FINAL")
+            rows.append({
+                "id": order.id,
+                "payment_id": payment.id,
+                "order_number": f"ORD-{order.order_number}",
+                "control_number": getattr(invoice, "numero_control", "") or getattr(invoice, "dte_number", "") or "",
+                "customer_name": customer_name,
+                "payment_method": getattr(method, "name", "") or payment.get_method_display(),
+                "total": f"{((payment.amount or Decimal('0')) + (payment.tip_amount or Decimal('0'))):.2f}",
+                "status": order.get_payment_status_display() if order.payment_status else order.get_status_display(),
+                "created_at": timezone.localtime(payment.created_at).isoformat(),
+                "can_print_ticket": True,
+                "can_send_dte": bool(getattr(invoice, "numero_control", "") or getattr(invoice, "dte_number", "")),
+            })
+        return Response(rows, status=status.HTTP_200_OK)
 
 
 class CashDrawerOpenView(APIView):

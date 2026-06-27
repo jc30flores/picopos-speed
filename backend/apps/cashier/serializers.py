@@ -207,6 +207,11 @@ def calculate_shift_summary(session: CashSession) -> dict:
         payment__isnull=True,
         refund__isnull=True,
     )
+    positive_manual_transactions = transactions.filter(
+        type="cash_in",
+        payment__isnull=True,
+        refund__isnull=True,
+    )
     cash_movements = [
         {
             "id": tx.id,
@@ -219,10 +224,11 @@ def calculate_shift_summary(session: CashSession) -> dict:
     ]
 
     expenses_total = _q2(expense_transactions.aggregate(total=Sum("amount")).get("total"))
+    positive_manual_total = _q2(positive_manual_transactions.aggregate(total=Sum("amount")).get("total"))
 
     cash_initial = _q2(session.opening_cash)
     cash_sales = _q2(totals_by_method.get("cash"))
-    expected_cash_in_drawer = _q2(cash_initial + cash_sales - expenses_total)
+    expected_cash_in_drawer = _q2(cash_initial + cash_sales - expenses_total + positive_manual_total)
     counted_cash = _q2(session.closing_counted_cash if session.closing_counted_cash is not None else Decimal("0"))
     counted_bills = _q2(session.closing_total_bills if session.closing_total_bills is not None else Decimal("0"))
     counted_coins = _q2(session.closing_total_coins if session.closing_total_coins is not None else Decimal("0"))

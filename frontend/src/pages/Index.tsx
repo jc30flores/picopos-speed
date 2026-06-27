@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -64,6 +64,9 @@ import {
   openCashSession,
   closeCashSession,
   getCashTransactions,
+  getRecentSalesActions,
+  dteDeliverByOrder,
+  type RecentSaleAction,
   createCashPayout,
   openCashDrawer,
   downloadCashSessionTicketPdf,
@@ -354,6 +357,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [cashSnapshot, setCashSnapshot] = useState<CashSessionSnapshot>({ open: false });
   const [isCashGateLoading, setIsCashGateLoading] = useState(true);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [isRecentSalesOpen, setIsRecentSalesOpen] = useState(false);
+  const [recentSales, setRecentSales] = useState<RecentSaleAction[]>([]);
+  const [recentSalesLoading, setRecentSalesLoading] = useState(false);
+  const [recentSalesError, setRecentSalesError] = useState("");
+  const [recentSalesPrintingId, setRecentSalesPrintingId] = useState<number | null>(null);
+  const [recentSalesSendingId, setRecentSalesSendingId] = useState<number | null>(null);
   const [lastClosedSessionId, setLastClosedSessionId] = useState<number | null>(() => {
     const raw = localStorage.getItem("last_closed_cash_session_id");
     const parsed = Number(raw);
@@ -513,6 +522,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
+  const canViewRecentSalesActions = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const requiresCashOpen = !getCashSessionStatus(cashSnapshot).hasOpenCashSession;
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
@@ -1550,12 +1560,61 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   };
 
 
+
+  const loadRecentSalesActions = async () => {
+    if (!canViewRecentSalesActions) return;
+    setRecentSalesLoading(true);
+    setRecentSalesError("");
+    try {
+      setRecentSales(await getRecentSalesActions());
+    } catch (error) {
+      const statusCode = error instanceof ApiRequestError ? error.status : undefined;
+      setRecentSalesError(statusCode === 403 ? "No tienes permiso para ver ventas recientes." : "No se pudieron cargar las ventas recientes. Intenta nuevamente.");
+    } finally {
+      setRecentSalesLoading(false);
+    }
+  };
+
+  const openRecentSalesActions = () => {
+    setIsRecentSalesOpen(true);
+    void loadRecentSalesActions();
+  };
+
+  const handleRecentSalePrint = async (sale: RecentSaleAction) => {
+    setRecentSalesPrintingId(sale.paymentId);
+    try {
+      const result = await smartPrintTicket({ paymentId: sale.paymentId });
+      toast.success(result.method === "direct" ? "Ticket enviado a impresora." : "Ticket listo para imprimir.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo imprimir el ticket. Intenta nuevamente.");
+    } finally {
+      setRecentSalesPrintingId(null);
+    }
+  };
+
+  const handleRecentSaleSendDte = async (sale: RecentSaleAction) => {
+    if (!sale.canSendDte || !sale.controlNumber) {
+      toast.warning("Este pedido aún no tiene DTE disponible para enviar.");
+      return;
+    }
+    setRecentSalesSendingId(sale.id);
+    try {
+      const result = await dteDeliverByOrder(sale.id, ["whatsapp", "email"]);
+      if (result.success) toast.success("DTE enviado al cliente.");
+      else toast.error(result.summary || "No se pudo enviar DTE");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo enviar DTE");
+    } finally {
+      setRecentSalesSendingId(null);
+    }
+  };
+
   const loadCashData = async () => {
     try {
       const snapshot = await getCurrentCashSession();
       let transactions = [] as Awaited<ReturnType<typeof getCashTransactions>>;
       try {
-        transactions = await getCashTransactions(undefined, { includeAll: true });
+        transactions = await getCashTransactions();
       } catch (transactionsError) {
         console.warn("cash.transactions.load_failed", {
           reason: transactionsError instanceof Error ? transactionsError.message : String(transactionsError),
@@ -3190,6 +3249,26 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         <TooltipContent>Descuentos</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
+
+                    {canViewRecentSalesActions ? (
+                      <TooltipProvider delayDuration={120}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              title="Ventas recientes"
+                              aria-label="Ventas recientes"
+                              className="h-11 w-11 rounded-xl border-emerald-500/60 text-emerald-600 dark:text-emerald-300"
+                              onClick={openRecentSalesActions}
+                            >
+                              <ReceiptText className="h-5 w-5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Ventas recientes</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : null}
                     <TooltipProvider delayDuration={120}>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -3593,6 +3672,51 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                 ))
               )}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+
+      <Dialog open={isRecentSalesOpen} onOpenChange={setIsRecentSalesOpen}>
+        <DialogContent className="flex max-h-[88dvh] w-[min(94vw,760px)] max-w-3xl flex-col overflow-hidden border-emerald-500/50 bg-zinc-950 text-zinc-50 p-0">
+          <DialogHeader className="border-b border-emerald-500/30 px-5 py-4">
+            <DialogTitle className="flex items-center gap-2 text-emerald-300"><ReceiptText className="h-5 w-5" /> Ventas recientes</DialogTitle>
+            <DialogDescription>Acciones rápidas para imprimir ticket o enviar DTE sin entrar a Reportes.</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {recentSalesLoading ? (
+              <div className="py-8 text-center text-sm text-zinc-400">Cargando ventas recientes...</div>
+            ) : recentSalesError ? (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{recentSalesError}</div>
+            ) : recentSales.length === 0 ? (
+              <div className="py-8 text-center text-sm text-zinc-400">No hay ventas recientes para mostrar.</div>
+            ) : (
+              <div className="space-y-3">
+                {recentSales.map((sale) => (
+                  <div key={`${sale.id}-${sale.paymentId}`} className="rounded-xl border border-emerald-500/25 bg-zinc-900/80 p-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-emerald-200">{sale.orderNumber}</span>
+                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-200">{sale.status}</Badge>
+                          <span className="text-sm font-semibold">{formatMoney(sale.total)}</span>
+                        </div>
+                        <div className="text-xs text-zinc-400">{formatDateTimeSV(sale.createdAt)} · {sale.customerName} · {sale.paymentMethod}</div>
+                        <div className="truncate text-xs text-zinc-500">DTE: {sale.controlNumber || "No disponible"}</div>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button size="sm" variant="outline" className="border-emerald-500/50" onClick={() => void handleRecentSalePrint(sale)} disabled={recentSalesPrintingId === sale.paymentId}>
+                          <Printer className="mr-1 h-4 w-4" /> {recentSalesPrintingId === sale.paymentId ? "Imprimiendo..." : "Ticket"}
+                        </Button>
+                        <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void handleRecentSaleSendDte(sale)} disabled={recentSalesSendingId === sale.id || !sale.canSendDte}>
+                          <Send className="mr-1 h-4 w-4" /> {recentSalesSendingId === sale.id ? "Enviando..." : "Enviar DTE"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
