@@ -1,8 +1,10 @@
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 import json
 import logging
 
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -22,7 +24,7 @@ from apps.cashier.serializers import (
 )
 from apps.core.audit import log_audit
 from apps.core.models import Branch
-from apps.core.feature_flags import can_view_cash_expected_totals, is_feature_enabled
+from apps.core.feature_flags import can_view_cash_expected_totals, get_pos_quick_sales_settings, is_feature_enabled
 from apps.core.permissions import IsAdminOrManager, IsManagerOrAdmin, IsCashierOrManagerOrAdmin, IsAuthenticatedAndActive, _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
@@ -658,48 +660,119 @@ class CashSessionTicketPDFView(APIView):
         response["Content-Disposition"] = f'attachment; filename="end_of_day_{ts}.pdf"'
         return response
 
-class RecentSalesActionsView(APIView):
-    permission_classes = [IsManagerOrAdmin]
+
+def _quick_sales_disabled_response(expected_mode: str):
+    settings = get_pos_quick_sales_settings()
+    if settings["mode"] != expected_mode:
+        return Response(
+            {"detail": "La función rápida de ventas no está habilitada para este modo.", "mode": settings["mode"]},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return None
+
+
+def _valid_sales_payments_queryset():
+    return (
+        Payment.objects.select_related("order", "order__customer", "order__invoice", "payment_method", "reporting_payment_method")
+        .filter(order__isnull=False, order__payment_status="paid")
+        .exclude(order__status="canceled")
+        .exclude(order__financial_status__in=["voided", "refunded_full"])
+    )
+
+
+def _scope_payments_to_session_or_today(payments_qs, *, branch_id=None, session=None):
+    if session:
+        return payments_qs.filter(Q(cash_session=session) | Q(cash_session__isnull=True, created_at__gte=session.opened_at, created_at__lte=session.closed_at or timezone.now()))
+    start_at, end_at = parse_business_date_range(str(timezone.localdate()), str(timezone.localdate()))
+    if start_at:
+        payments_qs = payments_qs.filter(created_at__gte=start_at)
+    if end_at:
+        payments_qs = payments_qs.filter(created_at__lte=end_at)
+    if branch_id:
+        payments_qs = payments_qs.filter(order__branch_id=branch_id)
+    return payments_qs
+
+
+def _latest_session_for_branch(branch_id=None):
+    qs = CashSession.objects.select_related("register", "register__branch").all()
+    if branch_id:
+        qs = qs.filter(register__branch_id=branch_id)
+    return qs.order_by("-opened_at").first()
+
+
+def _sale_action_payload(payment: Payment) -> dict:
+    order = payment.order
+    invoice = getattr(order, "invoice", None)
+    method = payment.reporting_payment_method or payment.payment_method
+    customer_name = getattr(order.customer, "full_name", "") or getattr(order.customer, "name", "") or order.customer_name or "CONSUMIDOR FINAL"
+    control_number = getattr(invoice, "numero_control", "") or getattr(invoice, "dte_number", "") or ""
+    return {
+        "id": order.id,
+        "order_id": order.id,
+        "payment_id": payment.id,
+        "order_number": f"ORD-{order.order_number}",
+        "control_number": control_number,
+        "customer_name": customer_name,
+        "payment_method": getattr(method, "name", "") or payment.get_method_display(),
+        "total": f"{((payment.amount or Decimal('0')) + (payment.tip_amount or Decimal('0'))):.2f}",
+        "status": order.get_payment_status_display() if order.payment_status else order.get_status_display(),
+        "created_at": timezone.localtime(payment.created_at).isoformat(),
+        "can_print_ticket": True,
+        "can_send_dte": bool(control_number),
+    }
+
+
+class LastSaleActionView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
+        disabled = _quick_sales_disabled_response("last_sale")
+        if disabled:
+            return disabled
         branch_id = resolve_branch_id(
             request.query_params.get("branch_id")
             or request.headers.get("X-Branch-Id")
             or request.headers.get("x-branch-id")
         )
         session = get_open_cash_session_for_branch(branch_id)
-        payments_qs = Payment.objects.select_related(
-            "order", "order__customer", "order__invoice", "payment_method", "reporting_payment_method"
-        ).filter(order__isnull=False).exclude(order__status="canceled")
-        if session:
-            payments_qs = payments_qs.filter(cash_session=session)
+        payments_qs = _scope_payments_to_session_or_today(_valid_sales_payments_queryset(), branch_id=branch_id, session=session)
+        payment = payments_qs.order_by("-created_at", "-id").first()
+        if not payment:
+            return Response({"detail": "No hay una venta reciente para reimprimir."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_sale_action_payload(payment), status=status.HTTP_200_OK)
+
+class RecentSalesActionsView(APIView):
+    permission_classes = [IsManagerOrAdmin]
+
+    def get(self, request):
+        disabled = _quick_sales_disabled_response("history")
+        if disabled:
+            return disabled
+        settings = get_pos_quick_sales_settings()
+        branch_id = resolve_branch_id(
+            request.query_params.get("branch_id")
+            or request.headers.get("X-Branch-Id")
+            or request.headers.get("x-branch-id")
+        )
+        payments_qs = _valid_sales_payments_queryset()
+        if settings["history_scope"] == "current_shift":
+            session = get_open_cash_session_for_branch(branch_id) or _latest_session_for_branch(branch_id)
+            if not session:
+                return Response([], status=status.HTTP_200_OK)
+            payments_qs = _scope_payments_to_session_or_today(payments_qs, branch_id=branch_id, session=session)
         else:
-            start_at, end_at = parse_business_date_range(str(timezone.localdate()), str(timezone.localdate()))
-            if start_at:
-                payments_qs = payments_qs.filter(created_at__gte=start_at)
-            if end_at:
-                payments_qs = payments_qs.filter(created_at__lte=end_at)
+            window_minutes = settings["history_window_minutes"]
+            if window_minutes == 1440:
+                start_at, end_at = parse_business_date_range(str(timezone.localdate()), str(timezone.localdate()))
+                if start_at:
+                    payments_qs = payments_qs.filter(created_at__gte=start_at)
+                if end_at:
+                    payments_qs = payments_qs.filter(created_at__lte=end_at)
+            else:
+                payments_qs = payments_qs.filter(created_at__gte=timezone.now() - timedelta(minutes=window_minutes))
             if branch_id:
                 payments_qs = payments_qs.filter(order__branch_id=branch_id)
-        rows = []
-        for payment in payments_qs.order_by("-created_at")[:50]:
-            order = payment.order
-            invoice = getattr(order, "invoice", None)
-            method = payment.reporting_payment_method or payment.payment_method
-            customer_name = (getattr(order.customer, "full_name", "") or getattr(order.customer, "name", "") or order.customer_name or "CONSUMIDOR FINAL")
-            rows.append({
-                "id": order.id,
-                "payment_id": payment.id,
-                "order_number": f"ORD-{order.order_number}",
-                "control_number": getattr(invoice, "numero_control", "") or getattr(invoice, "dte_number", "") or "",
-                "customer_name": customer_name,
-                "payment_method": getattr(method, "name", "") or payment.get_method_display(),
-                "total": f"{((payment.amount or Decimal('0')) + (payment.tip_amount or Decimal('0'))):.2f}",
-                "status": order.get_payment_status_display() if order.payment_status else order.get_status_display(),
-                "created_at": timezone.localtime(payment.created_at).isoformat(),
-                "can_print_ticket": True,
-                "can_send_dte": bool(getattr(invoice, "numero_control", "") or getattr(invoice, "dte_number", "")),
-            })
+        rows = [_sale_action_payload(payment) for payment in payments_qs.order_by("-created_at", "-id")[:50]]
         return Response(rows, status=status.HTTP_200_OK)
 
 

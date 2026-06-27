@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig, TicketSettings
+from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
 from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
 
@@ -59,6 +60,12 @@ FEATURE_FLAG_DEFAULTS = {
         "description": "Activa el modo restaurante con mapa de mesas, editor de salón y órdenes por mesa.",
         "default": False,
     },
+    "pos_quick_sales_button": {
+        "label": "Botón rápido de ventas en POS",
+        "description": "Controla si el botón rápido del POS reimprime la última venta, muestra historial o se oculta.",
+        "default": True,
+        "metadata": {"mode": "last_sale", "history_scope": "current_shift", "history_window_minutes": 60},
+    },
 }
 
 CASH_EXPECTED_FIELDS = [
@@ -95,6 +102,7 @@ def get_feature_settings_payload() -> dict:
     stock_policy = str(stock_policy_metadata.get("policy") or "allow").lower()
     if stock_policy not in {"allow", "warn", "block"}:
         stock_policy = "allow"
+    quick_sales = get_pos_quick_sales_settings()
     return {
         "kiosk_enabled": bool(flags["FF_KIOSK_ENABLED"].is_enabled),
         "customer_display_enabled": bool(flags["FF_CUSTOMER_DISPLAY_ENABLED"].is_enabled),
@@ -106,6 +114,9 @@ def get_feature_settings_payload() -> dict:
         "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
         "pos_product_images_enabled": bool(flags["pos_product_images_enabled"].is_enabled),
         "table_map_enabled": bool(flags["table_map_enabled"].is_enabled),
+        "pos_quick_sales_button_mode": quick_sales["mode"],
+        "pos_quick_sales_history_scope": quick_sales["history_scope"],
+        "pos_quick_sales_history_window_minutes": quick_sales["history_window_minutes"],
     }
 
 
@@ -210,6 +221,17 @@ class FeatureSettingsView(APIView):
             metadata["visible_fields"] = [str(value) for value in (request.data.get("cash_close_expected_totals_visible_fields") or [])]
         totals_flag.metadata = metadata
         totals_flag.save(update_fields=["metadata"])
+
+        quick_sales_payload = {
+            "mode": request.data.get("pos_quick_sales_button_mode") if "pos_quick_sales_button_mode" in request.data else None,
+            "history_scope": request.data.get("pos_quick_sales_history_scope") if "pos_quick_sales_history_scope" in request.data else None,
+            "history_window_minutes": request.data.get("pos_quick_sales_history_window_minutes") if "pos_quick_sales_history_window_minutes" in request.data else None,
+        }
+        if any(value is not None for value in quick_sales_payload.values()):
+            try:
+                set_pos_quick_sales_settings(**quick_sales_payload)
+            except ValueError as exc:
+                return Response({"pos_quick_sales_button": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         if "inventory_stock_policy" in request.data:
             policy = str(request.data.get("inventory_stock_policy") or "allow").strip().lower()

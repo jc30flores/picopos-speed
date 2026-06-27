@@ -54,7 +54,7 @@ class IsManagerOrAdmin(BasePermission):
 
 class IsCashierOrManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"cashier", "admin", "manager"})
+        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"cashier", "admin", "manager"}))
 
 
 class IsKitchenOrManagerOrAdmin(BasePermission):

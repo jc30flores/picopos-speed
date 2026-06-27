@@ -323,6 +323,10 @@ export type ServiceType = {
 
 
 
+export type PosQuickSalesButtonMode = "last_sale" | "history" | "hidden";
+export type PosQuickSalesHistoryScope = "current_shift" | "time_window";
+export type PosQuickSalesHistoryWindowMinutes = 15 | 30 | 60 | 120 | 240 | 1440;
+
 type FeatureFlagsNormalized = {
   kioskEnabled: boolean;
   customerDisplayEnabled: boolean;
@@ -332,6 +336,24 @@ type FeatureFlagsNormalized = {
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
   tableMapEnabled: boolean;
+  posQuickSalesButtonMode: PosQuickSalesButtonMode;
+  posQuickSalesHistoryScope: PosQuickSalesHistoryScope;
+  posQuickSalesHistoryWindowMinutes: PosQuickSalesHistoryWindowMinutes;
+};
+
+const normalizePosQuickSalesMode = (value: unknown): PosQuickSalesButtonMode => {
+  const normalized = String(value ?? "last_sale").trim().toLowerCase();
+  return normalized === "history" || normalized === "hidden" || normalized === "last_sale" ? normalized : "last_sale";
+};
+
+const normalizePosQuickSalesHistoryScope = (value: unknown): PosQuickSalesHistoryScope => {
+  const normalized = String(value ?? "current_shift").trim().toLowerCase();
+  return normalized === "time_window" || normalized === "current_shift" ? normalized : "current_shift";
+};
+
+const normalizePosQuickSalesHistoryWindow = (value: unknown): PosQuickSalesHistoryWindowMinutes => {
+  const parsed = Number(value ?? 60);
+  return ([15, 30, 60, 120, 240, 1440] as const).includes(parsed as PosQuickSalesHistoryWindowMinutes) ? parsed as PosQuickSalesHistoryWindowMinutes : 60;
 };
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
@@ -344,6 +366,9 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryAdvancedEnabled: false,
     posProductImagesEnabled: false,
     tableMapEnabled: false,
+    posQuickSalesButtonMode: "last_sale",
+    posQuickSalesHistoryScope: "current_shift",
+    posQuickSalesHistoryWindowMinutes: 60,
   };
   const fromMap = (obj: any, keys: string[], fallback: boolean) => {
     for (const k of keys) {
@@ -362,6 +387,9 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
       posProductImagesEnabled: fromMap(byKey, ['pos_product_images_enabled'], defaults.posProductImagesEnabled),
       tableMapEnabled: fromMap(byKey, ['table_map_enabled'], defaults.tableMapEnabled),
+      posQuickSalesButtonMode: defaults.posQuickSalesButtonMode,
+      posQuickSalesHistoryScope: defaults.posQuickSalesHistoryScope,
+      posQuickSalesHistoryWindowMinutes: defaults.posQuickSalesHistoryWindowMinutes,
     };
   }
   return {
@@ -373,6 +401,9 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
     posProductImagesEnabled: fromMap(raw, ['posProductImagesEnabled', 'pos_product_images_enabled'], defaults.posProductImagesEnabled),
     tableMapEnabled: fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled),
+    posQuickSalesButtonMode: normalizePosQuickSalesMode(raw?.posQuickSalesButtonMode ?? raw?.pos_quick_sales_button_mode),
+    posQuickSalesHistoryScope: normalizePosQuickSalesHistoryScope(raw?.posQuickSalesHistoryScope ?? raw?.pos_quick_sales_history_scope),
+    posQuickSalesHistoryWindowMinutes: normalizePosQuickSalesHistoryWindow(raw?.posQuickSalesHistoryWindowMinutes ?? raw?.pos_quick_sales_history_window_minutes),
   };
 };
 export type ProductSpecialPriceRule = {
@@ -496,6 +527,9 @@ export type FeatureSettings = {
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
   tableMapEnabled: boolean;
+  posQuickSalesButtonMode: PosQuickSalesButtonMode;
+  posQuickSalesHistoryScope: PosQuickSalesHistoryScope;
+  posQuickSalesHistoryWindowMinutes: PosQuickSalesHistoryWindowMinutes;
 };
 
 export type TicketSettings = {
@@ -675,6 +709,21 @@ export type CashSessionSnapshot = {
     overShortCash: number;
     methods: { cash: number; card: number; cardDebit: number; cardCredit: number; transfer: number; pedidosYa: number; payPal: number; cashIn: number };
   };
+};
+
+export type LastSaleAction = {
+  id: number;
+  orderId: number;
+  paymentId: number;
+  orderNumber: string;
+  controlNumber: string;
+  customerName: string;
+  paymentMethod: string;
+  total: number;
+  status: string;
+  createdAt: string;
+  canPrintTicket: boolean;
+  canSendDte: boolean;
 };
 
 export type RecentSaleAction = {
@@ -1219,6 +1268,9 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
     tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+    posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
+    posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
+    posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
   };
 };
 
@@ -1236,6 +1288,9 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
       pos_product_images_enabled: payload.posProductImagesEnabled,
       table_map_enabled: payload.tableMapEnabled,
+      pos_quick_sales_button_mode: payload.posQuickSalesButtonMode,
+      pos_quick_sales_history_scope: payload.posQuickSalesHistoryScope,
+      pos_quick_sales_history_window_minutes: payload.posQuickSalesHistoryWindowMinutes,
     }),
   });
   const data = await handleJson<any>(response);
@@ -1251,6 +1306,9 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
     tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+    posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
+    posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
+    posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
   };
 };
 
@@ -5324,6 +5382,26 @@ type RecentSaleActionResponse = {
   created_at?: string | null;
   can_print_ticket?: boolean;
   can_send_dte?: boolean;
+};
+
+export const getLastSaleAction = async (): Promise<LastSaleAction | null> => {
+  const response = await request('/cashier/last-sale/');
+  if (response.status === 404) return null;
+  const row = await handleJson<RecentSaleActionResponse & { order_id?: number | string }>(response);
+  return {
+    id: Number(row.id),
+    orderId: Number(row.order_id ?? row.id),
+    paymentId: Number(row.payment_id),
+    orderNumber: String(row.order_number ?? `ORD-${row.id}`),
+    controlNumber: String(row.control_number ?? ""),
+    customerName: String(row.customer_name ?? "CONSUMIDOR FINAL"),
+    paymentMethod: String(row.payment_method ?? ""),
+    total: Number(row.total ?? 0),
+    status: String(row.status ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    canPrintTicket: Boolean(row.can_print_ticket),
+    canSendDte: Boolean(row.can_send_dte),
+  };
 };
 
 export const getRecentSalesActions = async (): Promise<RecentSaleAction[]> => {

@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -65,8 +65,12 @@ import {
   closeCashSession,
   getCashTransactions,
   getRecentSalesActions,
+  getLastSaleAction,
   dteDeliverByOrder,
   type RecentSaleAction,
+  type PosQuickSalesButtonMode,
+  type PosQuickSalesHistoryScope,
+  type PosQuickSalesHistoryWindowMinutes,
   createCashPayout,
   openCashDrawer,
   downloadCashSessionTicketPdf,
@@ -363,6 +367,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [recentSalesError, setRecentSalesError] = useState("");
   const [recentSalesPrintingId, setRecentSalesPrintingId] = useState<number | null>(null);
   const [recentSalesSendingId, setRecentSalesSendingId] = useState<number | null>(null);
+  const [isQuickSaleProcessing, setIsQuickSaleProcessing] = useState(false);
+  const [quickSalesMode, setQuickSalesMode] = useState<PosQuickSalesButtonMode>("last_sale");
+  const [quickSalesHistoryScope, setQuickSalesHistoryScope] = useState<PosQuickSalesHistoryScope>("current_shift");
+  const [quickSalesHistoryWindowMinutes, setQuickSalesHistoryWindowMinutes] = useState<PosQuickSalesHistoryWindowMinutes>(60);
   const [lastClosedSessionId, setLastClosedSessionId] = useState<number | null>(() => {
     const raw = localStorage.getItem("last_closed_cash_session_id");
     const parsed = Number(raw);
@@ -522,7 +530,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
-  const canViewRecentSalesActions = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+  const canUseLastSaleQuickAction = quickSalesMode === "last_sale" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canViewRecentSalesActions = quickSalesMode === "history" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
+  const shouldShowQuickSalesButton = quickSalesMode !== "hidden" && (canUseLastSaleQuickAction || canViewRecentSalesActions);
   const requiresCashOpen = !getCashSessionStatus(cashSnapshot).hasOpenCashSession;
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
@@ -1609,6 +1619,57 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     }
   };
 
+
+
+  const handleLastSaleQuickAction = async () => {
+    if (isQuickSaleProcessing) return;
+    setIsQuickSaleProcessing(true);
+    try {
+      const sale = await getLastSaleAction();
+      if (!sale) {
+        toast.warning("No hay una venta reciente para reimprimir.");
+        return;
+      }
+
+      let dteSent = false;
+      const dteSkipped = !sale.canSendDte || !sale.controlNumber;
+      let dteContactIssue = false;
+      if (!dteSkipped) {
+        try {
+          const result = await dteDeliverByOrder(sale.orderId, ["whatsapp", "email"]);
+          dteSent = Boolean(result.success);
+          if (!result.success) {
+            const errors = Object.values(result.results ?? {}).map((row) => row?.error).filter(Boolean).join(" ");
+            dteContactIssue = /contacto|correo|email|whatsapp|tel[eé]fono|recipient|destinatario/i.test(errors || result.summary || "");
+          }
+        } catch (error) {
+          dteContactIssue = /contacto|correo|email|whatsapp|tel[eé]fono|recipient|destinatario/i.test(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      let printed = false;
+      try {
+        await smartPrintTicket({ paymentId: sale.paymentId, orderId: sale.orderId });
+        printed = true;
+      } catch (error) {
+        if (dteSent) {
+          toast.warning("DTE enviado, pero no se pudo abrir la impresión del ticket.");
+          return;
+        }
+        throw error;
+      }
+
+      if (printed && dteSent) toast.success("Ticket reenviado a impresión y DTE enviado al cliente.");
+      else if (printed && dteSkipped) toast.warning("Ticket reenviado a impresión. Este pedido aún no tiene DTE disponible para enviar.");
+      else if (printed && dteContactIssue) toast.warning("Ticket reenviado a impresión. No se encontró contacto para reenviar DTE.");
+      else if (printed) toast.warning("Ticket reenviado a impresión. No se pudo reenviar el DTE al cliente.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo procesar la última venta.");
+    } finally {
+      setIsQuickSaleProcessing(false);
+    }
+  };
+
   const loadCashData = async () => {
     try {
       const snapshot = await getCurrentCashSession();
@@ -1678,6 +1739,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setTableMapEnabled(settings.tableMapEnabled);
+      setQuickSalesMode(settings.posQuickSalesButtonMode);
+      setQuickSalesHistoryScope(settings.posQuickSalesHistoryScope);
+      setQuickSalesHistoryWindowMinutes(settings.posQuickSalesHistoryWindowMinutes);
     }).catch(() => undefined);
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
@@ -3250,22 +3314,27 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       </Tooltip>
                     </TooltipProvider>
 
-                    {canViewRecentSalesActions ? (
+                    {shouldShowQuickSalesButton ? (
                       <TooltipProvider delayDuration={120}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="outline"
                               size="icon"
-                              title="Ventas recientes"
-                              aria-label="Ventas recientes"
+                              title={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
+                              aria-label={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
                               className="h-11 w-11 rounded-xl border-emerald-500/60 text-emerald-600 dark:text-emerald-300"
-                              onClick={openRecentSalesActions}
+                              onClick={quickSalesMode === "last_sale" ? handleLastSaleQuickAction : openRecentSalesActions}
+                              disabled={isQuickSaleProcessing}
                             >
-                              <ReceiptText className="h-5 w-5" />
+                              {quickSalesMode === "last_sale" ? (
+                                <PrinterCheck className="h-5 w-5" />
+                              ) : (
+                                <History className="h-5 w-5" />
+                              )}
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>Ventas recientes</TooltipContent>
+                          <TooltipContent>{quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     ) : null}
@@ -3681,7 +3750,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         <DialogContent className="flex max-h-[88dvh] w-[min(94vw,760px)] max-w-3xl flex-col overflow-hidden border-emerald-500/50 bg-zinc-950 text-zinc-50 p-0">
           <DialogHeader className="border-b border-emerald-500/30 px-5 py-4">
             <DialogTitle className="flex items-center gap-2 text-emerald-300"><ReceiptText className="h-5 w-5" /> Ventas recientes</DialogTitle>
-            <DialogDescription>Acciones rápidas para imprimir ticket o enviar DTE sin entrar a Reportes.</DialogDescription>
+            <DialogDescription>Acciones rápidas para imprimir ticket o enviar DTE sin entrar a Reportes. {quickSalesHistoryScope === "current_shift" ? "Mostrando última apertura de caja." : quickSalesHistoryWindowMinutes === 1440 ? "Mostrando ventas de hoy." : `Mostrando últimos ${quickSalesHistoryWindowMinutes} minutos.`}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {recentSalesLoading ? (
