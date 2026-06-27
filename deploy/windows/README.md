@@ -1,6 +1,8 @@
 # Pico de Gallo en Windows con Docker Desktop
 
 Esta fase agrega operación local mediante scripts PowerShell. Todavía no es un instalador `.exe`; se trabaja desde la raíz del repositorio y se prepara la transición futura a `C:\Program Files\PicoDeGallo` y `C:\ProgramData\PicoDeGallo`.
+> Nota comercial: este flujo Docker queda como ruta técnica/opcional para desarrollo, pruebas y despliegues controlados. Para clientes normales se está preparando un paquete nativo Windows que no requiere instalación manual de Docker Desktop.
+
 
 ## Requisitos
 

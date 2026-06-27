@@ -1,0 +1,11 @@
+<service>
+  <id>PicoDeGallo-DTE-Worker</id>
+  <name>Pico de Gallo DTE Worker</name>
+  <description>Processes DTE outbox as a native Windows service.</description>
+  <executable>{{PYTHON_EXE}}</executable>
+  <arguments>manage.py dte_outbox_worker</arguments>
+  <workingdirectory>{{BACKEND_DIR}}</workingdirectory>
+  <env name="PICO_ENV_FILE" value="{{ENV_FILE}}" />
+  <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
+  <log mode="roll-by-size" />
+</service>

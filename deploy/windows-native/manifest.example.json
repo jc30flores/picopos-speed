@@ -1,0 +1,15 @@
+{
+  "name": "Pico de Gallo Native Windows Package",
+  "version": "0.0.0-dev",
+  "installable": false,
+  "reason": "Example manifest only; runtime binaries are not bundled in Git.",
+  "programFilesDir": "C:/Program Files/PicoDeGallo",
+  "programDataDir": "C:/ProgramData/PicoDeGallo",
+  "services": [
+    "PicoDeGallo-PostgreSQL",
+    "PicoDeGallo-Backend",
+    "PicoDeGallo-DTE-Worker",
+    "PicoDeGallo-DTE-Monitor",
+    "PicoDeGallo-Caddy"
+  ]
+}

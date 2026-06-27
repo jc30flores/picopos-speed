@@ -1,0 +1,36 @@
+{
+    admin off
+}
+
+{{APP_BIND_ADDRESS}}:{{APP_HTTP_PORT}} {
+    encode zstd gzip
+
+    @blocked path */.* /.* *.env* /backups* /diagnostics* /logs* *.dump *.sql
+    respond @blocked 404
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle /api {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle /admin/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle /admin {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle /static/* {
+        root * {{PROGRAM_DATA_DIR}}/static
+        file_server
+    }
+    handle /media/* {
+        root * {{PROGRAM_DATA_DIR}}/media
+        file_server
+    }
+    handle {
+        root * {{PROGRAM_FILES_DIR}}/frontend
+        try_files {path} /index.html
+        file_server
+    }
+}

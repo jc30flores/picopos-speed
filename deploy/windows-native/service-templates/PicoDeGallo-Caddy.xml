@@ -1,0 +1,10 @@
+<service>
+  <id>PicoDeGallo-Caddy</id>
+  <name>Pico de Gallo Caddy</name>
+  <description>Caddy reverse proxy and static file server for native Windows.</description>
+  <executable>{{CADDY_EXE}}</executable>
+  <arguments>run --config "{{PROGRAM_FILES_DIR}}\caddy\Caddyfile"</arguments>
+  <workingdirectory>{{PROGRAM_FILES_DIR}}\caddy</workingdirectory>
+  <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
+  <log mode="roll-by-size" />
+</service>

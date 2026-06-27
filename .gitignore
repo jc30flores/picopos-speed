@@ -37,3 +37,7 @@ deploy/windows/runtime/
 deploy/windows/backups/
 deploy/windows/diagnostics/
 *.diagnostic.zip
+# Native Windows packaging generated artifacts
+.env.windows
+deploy/windows-native/release/
+release/windows-native/
