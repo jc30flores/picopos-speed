@@ -32,3 +32,8 @@ backend/media/receipts/*.pdf
 .env.docker
 .env.docker.local
 .env.docker.test
+# Windows Docker operation generated artifacts
+deploy/windows/runtime/
+deploy/windows/backups/
+deploy/windows/diagnostics/
+*.diagnostic.zip
