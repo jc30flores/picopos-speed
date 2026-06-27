@@ -1,0 +1,13 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+  bootstrap:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
