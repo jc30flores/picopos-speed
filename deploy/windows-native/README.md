@@ -45,3 +45,11 @@ deploy/windows-native/package-release.ps1 -Version "1.0.0" -OutputDir "release/w
 ```
 
 No descarga dependencias ni agrega binarios al repo.
+
+## Build del instalador
+
+1. Preparar runtimes externos fuera de Git.
+2. Ejecutar `package-release.ps1` para producir `release/windows-native`.
+3. Ejecutar `installer/build-installer.ps1` para compilar con Inno Setup.
+4. Probar el instalador en Windows limpio.
+5. No subir binarios generados, releases ni instaladores a Git.

@@ -7,7 +7,7 @@
   <workingdirectory>{{BACKEND_DIR}}</workingdirectory>
   <env name="DJANGO_SETTINGS_MODULE" value="config.settings" />
   <env name="DOTENV_OVERRIDE" value="false" />
-  <env name="PICO_ENV_FILE" value="{{ENV_FILE}}" />
+  <env name="DJANGO_ENV_FILE" value="{{ENV_FILE}}" />
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size" />
 </service>

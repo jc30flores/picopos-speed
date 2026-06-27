@@ -35,9 +35,11 @@ if (-not $SkipFrontendBuild) {
 Copy-Item -Path (Join-Path $PSScriptRoot "scripts") -Destination (Join-Path $programFiles "scripts") -Recurse -Force
 Copy-Item -Path (Join-Path $PSScriptRoot "service-templates") -Destination (Join-Path $programFiles "services") -Recurse -Force
 Copy-Item -Path (Join-Path $PSScriptRoot "caddy") -Destination (Join-Path $programFiles "caddy") -Recurse -Force
+$thirdParty = Join-Path $PSScriptRoot "installer\THIRD_PARTY_NOTICES.md"
+if (Test-Path $thirdParty) { Copy-Item -Path $thirdParty -Destination (Join-Path $programFiles "THIRD_PARTY_NOTICES.md") -Force }
 Copy-Item -Path (Join-Path $PSScriptRoot ".env.windows.example") -Destination (Join-Path $programData "config\.env.example") -Force
 Copy-Item -Path (Join-Path $PSScriptRoot ".env.windows.example") -Destination (Join-Path $programFiles ".env.windows.example") -Force
-foreach ($dir in @("config","media","static","dte_logs","backups","diagnostics","logs","postgres-data")) { New-Item -ItemType Directory -Path (Join-Path $programData $dir) -Force | Out-Null }
+foreach ($dir in @("config","media","static","dte_logs","backups","diagnostics","logs","postgres\data")) { New-Item -ItemType Directory -Path (Join-Path $programData $dir) -Force | Out-Null }
 
 $missing = @()
 foreach ($pair in @(@("python",$PythonRuntimePath), @("postgres",$PostgresRuntimePath), @("caddy\caddy.exe",$CaddyPath), @("services\winsw.exe",$WinSWPath))) {

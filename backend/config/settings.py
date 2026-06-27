@@ -19,7 +19,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 DOTENV_OVERRIDE = _env_bool("DOTENV_OVERRIDE", default=False)
 ENV_PATH = BASE_DIR / ".env"
-DOTENV_FOUND = load_env_file(ENV_PATH, override=DOTENV_OVERRIDE)
+DJANGO_ENV_FILE = os.environ.get("DJANGO_ENV_FILE", "").strip()
+EXTERNAL_ENV_PATH = Path(DJANGO_ENV_FILE) if DJANGO_ENV_FILE else None
+DOTENV_FOUND = load_env_file(EXTERNAL_ENV_PATH or ENV_PATH, override=DOTENV_OVERRIDE)
+if EXTERNAL_ENV_PATH and not DOTENV_FOUND:
+    DOTENV_FOUND = load_env_file(ENV_PATH, override=DOTENV_OVERRIDE)
 RUNTIME_CONFIG = build_runtime(BASE_DIR)
 DJANGO_CONFIG_MODE = RUNTIME_CONFIG["mode"]
 SECRET_KEY = RUNTIME_CONFIG["SECRET_KEY"]
