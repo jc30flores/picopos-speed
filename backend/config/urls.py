@@ -2,10 +2,13 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from apps.core.health import live as health_live, ready as health_ready
 from apps.core.views import FeatureSettingsOptionsView, FeatureSettingsView, TicketLogoView, TicketSettingsView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/health/live/", health_live, name="health-live"),
+    path("api/health/ready/", health_ready, name="health-ready"),
     path("api/core/", include("apps.core.urls")),
     path("api/menu/", include("apps.menu.urls")),
     path("api/orders/", include("apps.orders.urls")),

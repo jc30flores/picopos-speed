@@ -27,3 +27,8 @@ backend/venv/
 backend/**/__pycache__/
 *.pyc
 backend/media/receipts/*.pdf
+
+# Docker local runtime env files
+.env.docker
+.env.docker.local
+.env.docker.test

@@ -1,0 +1,44 @@
+{
+	admin off
+}
+
+:8080 {
+	encode zstd gzip
+
+	@blocked path */.* /.* *.env* *.dump *.sql /backups* /dumps*
+	respond @blocked 404
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+	}
+
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle /api {
+		reverse_proxy backend:8000
+	}
+	handle /admin/* {
+		reverse_proxy backend:8000
+	}
+	handle /admin {
+		reverse_proxy backend:8000
+	}
+
+	handle /static/* {
+		root * /srv/static
+		file_server
+	}
+
+	handle /media/* {
+		root * /srv/media
+		file_server
+	}
+
+	handle {
+		root * /srv/app
+		try_files {path} /index.html
+		file_server
+	}
+}

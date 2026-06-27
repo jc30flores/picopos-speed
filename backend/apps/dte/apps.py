@@ -43,6 +43,11 @@ class DTEConfig(AppConfig):
 
         autoreload_started.connect(_watch, dispatch_uid="dte.watch_env")
 
+        background_mode = (getattr(settings, "DTE_BACKGROUND_MODE", "legacy") or "legacy").strip().lower()
+        if background_mode in {"external", "disabled"}:
+            logger.info("[DTE] background startup skipped mode=%s", background_mode)
+            return
+
         if os.environ.get("RUN_MAIN") != "true":
             return
 
@@ -57,17 +62,12 @@ class DTEConfig(AppConfig):
             start_outbox_worker()
         except Exception:  # noqa: BLE001
             logger.exception("[DTE OUTBOX] failed to start")
-        token = _env("DTE_API_TOKEN", "")
-        token_display = token if _log_secrets_enabled() else _mask_token(token)
         interval = _env("DTE_MONITOR_INTERVAL_SECONDS", "10")
-        config_msg = (
-            "[DTE] Config loaded "
-            f"MH_AMBIENTE={_env('MH_AMBIENTE', _env('DTE_AMBIENTE', '01'))} "
-            f"DTE_BASE_URL={_env('DTE_BASE_URL', '')} "
-            f"AUTH_HEADER={_env('DTE_API_AUTH_HEADER', 'Authorization')} "
-            f"AUTH_PREFIX={_env('DTE_API_AUTH_PREFIX', 'Bearer')} "
-            f"TOKEN={token_display} "
-            f"HEALTH_ENDPOINT={_env('DTE_HEALTH_ENDPOINT', '/health')} "
-            f"INTERVAL={interval}s"
+        logger.info(
+            "[DTE] Config loaded mh_ambiente=%s auth_header=%s auth_prefix=%s health_endpoint=%s interval=%ss",
+            _env("MH_AMBIENTE", _env("DTE_AMBIENTE", "01")),
+            _env("DTE_API_AUTH_HEADER", "Authorization"),
+            _env("DTE_API_AUTH_PREFIX", "Bearer"),
+            _env("DTE_HEALTH_ENDPOINT", "/health"),
+            interval,
         )
-        logger.info(config_msg)
