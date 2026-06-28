@@ -77,3 +77,9 @@ Si un release falla, marcarlo como prerelease o retirarlo de GitHub Releases, co
 - Configurar firma de código para reducir advertencias SmartScreen.
 - Ejecutar prueba obligatoria en VM Windows limpia antes de entrega a clientes.
 - Implementar instalador online solo cuando exista infraestructura segura de descarga.
+
+## 14. Actualización Fase 8: primer runtime manifest
+
+La Fase 8 decide no versionar todavía `runtime-manifest.json` definitivo porque no se verificaron todos los SHA256 reales en este entorno. El flujo soportado es configurar `WINDOWS_RUNTIME_MANIFEST_JSON` como variable/secret o, más adelante, versionar un manifest público solo cuando todos los hashes estén verificados.
+
+El workflow debe fallar si no hay manifest real o si contiene placeholders. La primera ejecución recomendada es `workflow_dispatch` con `version=0.1.0-test`, `prerelease=true` y `skip_signing=true`. Ese resultado debe validarse como prerelease técnico, no como entrega a clientes, hasta probarlo en una VM Windows limpia.

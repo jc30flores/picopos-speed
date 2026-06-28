@@ -49,16 +49,38 @@ jobs:
         shell: pwsh
         env:
           RUNTIME_MANIFEST_JSON: ${{ vars.WINDOWS_RUNTIME_MANIFEST_JSON }}
+          RUNTIME_MANIFEST_JSON_SECRET: ${{ secrets.WINDOWS_RUNTIME_MANIFEST_JSON }}
         run: |
           if (-not (Test-Path $env:RUNTIME_MANIFEST_PATH)) {
-            if ([string]::IsNullOrWhiteSpace($env:RUNTIME_MANIFEST_JSON)) {
-              throw "Falta deploy/windows-native/vendor/runtime-manifest.json o variable WINDOWS_RUNTIME_MANIFEST_JSON con URLs HTTPS + SHA256 reales."
+            $manifestJson = $env:RUNTIME_MANIFEST_JSON
+            if ([string]::IsNullOrWhiteSpace($manifestJson)) { $manifestJson = $env:RUNTIME_MANIFEST_JSON_SECRET }
+            if ([string]::IsNullOrWhiteSpace($manifestJson)) {
+              throw "Falta deploy/windows-native/vendor/runtime-manifest.json o WINDOWS_RUNTIME_MANIFEST_JSON en variables/secrets con URLs HTTPS + SHA256 reales."
             }
-            $env:RUNTIME_MANIFEST_JSON | Set-Content -Path $env:RUNTIME_MANIFEST_PATH -Encoding UTF8
+            $manifestJson | Set-Content -Path $env:RUNTIME_MANIFEST_PATH -Encoding UTF8
           }
           $text = Get-Content $env:RUNTIME_MANIFEST_PATH -Raw
           if ($text -match 'example\.invalid|replace-with-expected-sha256') {
             throw 'runtime-manifest.json contiene placeholders; configure runtimes versionados y hashes reales antes de publicar.'
+          }
+
+
+      - name: Summarize build plan
+        shell: pwsh
+        run: |
+          $manifest = Get-Content $env:RUNTIME_MANIFEST_PATH -Raw | ConvertFrom-Json
+          Write-Host "Version resuelta: ${{ steps.version.outputs.version }}"
+          Write-Host "Runtimes esperados:"
+          $manifest.runtimes.PSObject.Properties | ForEach-Object { Write-Host "- $($_.Name) $($_.Value.version)" }
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            Write-Host "Publicación: workflow_dispatch; se creará/actualizará release con prerelease=${{ github.event.inputs.prerelease }}."
+          } else {
+            Write-Host "Publicación: tag ${{ github.ref_name }}; se creará/actualizará GitHub Release."
+          }
+          if ('${{ github.event.inputs.skip_signing }}' -eq 'false') {
+            Write-Host 'Firma solicitada; se usará certificado solo si los secrets están configurados.'
+          } else {
+            Write-Host 'Firma omitida por configuración; puede aparecer advertencia SmartScreen.'
           }
 
       - name: Fetch and verify Windows runtimes

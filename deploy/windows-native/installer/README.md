@@ -49,3 +49,12 @@ Assets esperados del release:
 - `manifest.json`
 
 No subas a Git los instaladores generados, runtimes, certificados, `.env` reales ni releases finales.
+
+## Primer release con runtime manifest real
+
+Antes de ejecutar el workflow, configure uno de estos orígenes:
+
+- `deploy/windows-native/vendor/runtime-manifest.json` versionado con URLs públicas HTTPS y SHA256 reales verificados.
+- `WINDOWS_RUNTIME_MANIFEST_JSON` como variable o secret de GitHub si alguna URL no debe quedar en Git.
+
+No use `runtime-manifest.example.json` como manifest real. El workflow lo rechazará por placeholders. Para la primera prueba manual use `workflow_dispatch` con `version=0.1.0-test`, `prerelease=true` y `skip_signing=true`. Si el build falla, clasifique el error como `RUNTIME_DOWNLOAD`, `HASH_MISMATCH`, `PYTHON_PACKAGE`, `FRONTEND_BUILD`, `INNO_SETUP`, `SIGNING`, `RELEASE_UPLOAD` o `SECURITY_VALIDATION` antes de corregir.
