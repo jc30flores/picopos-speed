@@ -143,8 +143,25 @@ jobs:
         shell: pwsh
         run: |
           $resolved = Get-Content release/runtime-cache/resolved-runtimes.json -Raw | ConvertFrom-Json
-          if (-not $resolved.innoSetup) { throw 'El manifest no resolvió innoSetup.' }
-          Start-Process -FilePath $resolved.innoSetup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $innoInstaller = $resolved.innoSetup
+
+          if ([string]::IsNullOrWhiteSpace([string]$innoInstaller)) {
+            $candidate = Get-ChildItem -Path 'release/runtime-cache' -Recurse -File |
+              Where-Object { $_.Name -match '(?i)inno.*setup.*\.exe$|innosetup.*\.exe$' } |
+              Select-Object -First 1
+
+            if ($candidate) {
+              $innoInstaller = $candidate.FullName
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace([string]$innoInstaller) -or -not (Test-Path -LiteralPath $innoInstaller)) {
+            $keys = ($resolved.PSObject.Properties.Name -join ', ')
+            throw "No se pudo resolver el instalador de Inno Setup. Keys en resolved-runtimes: $keys"
+          }
+
+          Write-Host 'Instalando Inno Setup desde runtime verificado.'
+          Start-Process -FilePath $innoInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { throw 'ISCC.exe no quedó instalado en la ruta esperada.' }
 
       - name: Prepare code signing certificate
