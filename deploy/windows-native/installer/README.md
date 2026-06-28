@@ -34,3 +34,18 @@ deploy/windows-native/installer/build-installer.ps1 `
 ```
 
 El resultado esperado es `release/installers/PicoDeGallo-Setup-1.2.3.exe` más checksum SHA256 y manifiesto de build.
+
+
+## Flujo recomendado en CI
+
+El build local es opcional. Para distribución comercial, usa `.github/workflows/windows-native-installer.yml` en GitHub Actions. El workflow corre en `windows-latest`, descarga runtimes desde `deploy/windows-native/vendor/runtime-manifest.json`, verifica SHA256, ejecuta `package-release.ps1`, ejecuta `build-installer.ps1`, sube artifacts internos y publica en GitHub Releases.
+
+Para publicar una versión estable, crea un tag como `v1.0.0`. Para una prueba controlada, usa `workflow_dispatch` con `prerelease=true`. Si no hay certificado de firma configurado, usa `skip_signing=true`; el instalador será funcional pero Windows SmartScreen puede advertir que no está firmado.
+
+Assets esperados del release:
+
+- `PicoDeGallo-Setup-${VERSION}.exe`
+- `PicoDeGallo-Setup-${VERSION}.exe.sha256`
+- `manifest.json`
+
+No subas a Git los instaladores generados, runtimes, certificados, `.env` reales ni releases finales.
