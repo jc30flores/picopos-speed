@@ -40,7 +40,7 @@ foreach ($prop in $manifest.runtimes.PSObject.Properties) {
     } elseif ($item.archiveType -eq 'installer') {
         $resolved[$name] = $download
     } else {
-        Fail "archiveType no soportado para $name: $($item.archiveType)"
+        Fail "archiveType no soportado para ${name}: $($item.archiveType)"
     }
 }
 $resolvedPath = Join-Path $out.FullName 'resolved-runtimes.json'
