@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 
 const defaultState: FeatureSettings = {
@@ -18,6 +19,9 @@ const defaultState: FeatureSettings = {
   inventoryAdvancedEnabled: false,
   posProductImagesEnabled: false,
   tableMapEnabled: false,
+  posQuickSalesButtonMode: "last_sale",
+  posQuickSalesHistoryScope: "current_shift",
+  posQuickSalesHistoryWindowMinutes: 60,
 };
 
 type ToggleSettingKey = "posProductImagesEnabled" | "tableMapEnabled" | "kioskEnabled" | "customerDisplayEnabled" | "kitchenDisplayEnabled" | "inventoryAdvancedEnabled" | "cashCloseExpectedTotalsControlEnabled";
@@ -59,6 +63,21 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
     ],
   },
 ];
+
+const quickSalesModes = [
+  { value: "last_sale", title: "Última venta", description: "Un clic reimprime el ticket de la última venta y vuelve a enviar el DTE al cliente. Ideal para cajeros." },
+  { value: "history", title: "Historial", description: "Muestra ventas recientes para imprimir ticket o reenviar DTE. Solo gerente/admin." },
+  { value: "hidden", title: "Oculto", description: "No mostrar este botón en el POS." },
+] as const;
+
+const quickSalesWindows = [
+  { value: 15, label: "15 minutos" },
+  { value: 30, label: "30 minutos" },
+  { value: 60, label: "1 hora" },
+  { value: 120, label: "2 horas" },
+  { value: 240, label: "4 horas" },
+  { value: 1440, label: "Hoy" },
+] as const;
 
 export const FeatureFlagsTab = () => {
   const [settings, setSettings] = useState<FeatureSettings>(defaultState);
@@ -184,6 +203,74 @@ export const FeatureFlagsTab = () => {
           </div>
         </section>
       ))}
+
+
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">POS</span>
+          <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Control rápido</h4>
+        </div>
+        <Card className="border-emerald-500/30 bg-card/90 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Botón rápido de ventas en POS</CardTitle>
+            <CardDescription className="text-xs">Define si el botón del POS reimprime la última venta, muestra historial autorizado o queda oculto.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 pt-0">
+            <div className="grid gap-2 md:grid-cols-3">
+              {quickSalesModes.map((mode) => {
+                const selected = settings.posQuickSalesButtonMode === mode.value;
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => void persist({ posQuickSalesButtonMode: mode.value })}
+                    className={cn(
+                      "rounded-xl border p-3 text-left transition",
+                      selected ? "border-emerald-500 bg-emerald-500/10 shadow-sm" : "border-border/70 bg-background/40 hover:border-emerald-500/50",
+                    )}
+                  >
+                    <div className="font-semibold">{mode.title}</div>
+                    <p className="mt-1 text-xs leading-snug text-muted-foreground">{mode.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            {settings.posQuickSalesButtonMode === "history" ? (
+              <div className="space-y-3 rounded-xl border border-border/70 bg-background/50 p-3">
+                <div>
+                  <div className="text-sm font-semibold">Qué ventas mostrar</div>
+                  <p className="text-xs text-muted-foreground">El historial solo está disponible para gerente/admin y respeta esta ventana.</p>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => void persist({ posQuickSalesHistoryScope: "current_shift" })}
+                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "current_shift" ? "border-emerald-500 bg-emerald-500/10" : "border-border/70")}
+                  >
+                    Última apertura de caja
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void persist({ posQuickSalesHistoryScope: "time_window" })}
+                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "time_window" ? "border-emerald-500 bg-emerald-500/10" : "border-border/70")}
+                  >
+                    Período hacia atrás
+                  </button>
+                </div>
+                {settings.posQuickSalesHistoryScope === "time_window" ? (
+                  <Select value={String(settings.posQuickSalesHistoryWindowMinutes)} onValueChange={(value) => void persist({ posQuickSalesHistoryWindowMinutes: Number(value) as FeatureSettings["posQuickSalesHistoryWindowMinutes"] })}>
+                    <SelectTrigger className="max-w-xs"><SelectValue placeholder="Período" /></SelectTrigger>
+                    <SelectContent>
+                      {quickSalesWindows.map((window) => <SelectItem key={window.value} value={String(window.value)}>{window.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : null}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </section>
 
       <section className="space-y-2">
         <div className="flex items-center gap-2">

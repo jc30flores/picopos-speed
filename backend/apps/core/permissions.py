@@ -44,12 +44,17 @@ class IsKitchen(BasePermission):
 
 class IsAdminOrManager(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"admin", "manager"})
+        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"admin", "manager"}))
+
+
+class IsManagerOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"admin", "manager"}))
 
 
 class IsCashierOrManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"cashier", "admin", "manager"})
+        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"cashier", "admin", "manager"}))
 
 
 class IsKitchenOrManagerOrAdmin(BasePermission):
