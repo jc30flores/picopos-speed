@@ -37,9 +37,10 @@ Copy-Item -Path (Join-Path $PSScriptRoot "service-templates") -Destination (Join
 Copy-Item -Path (Join-Path $PSScriptRoot "caddy") -Destination (Join-Path $programFiles "caddy") -Recurse -Force
 $thirdParty = Join-Path $PSScriptRoot "installer\THIRD_PARTY_NOTICES.md"
 if (Test-Path $thirdParty) { Copy-Item -Path $thirdParty -Destination (Join-Path $programFiles "THIRD_PARTY_NOTICES.md") -Force }
+foreach ($dir in @("config","media","static","dte_logs","backups","diagnostics","logs","postgres\data")) { New-Item -ItemType Directory -Path (Join-Path $programData $dir) -Force | Out-Null }
+
 Copy-Item -Path (Join-Path $PSScriptRoot ".env.windows.example") -Destination (Join-Path $programData "config\.env.example") -Force
 Copy-Item -Path (Join-Path $PSScriptRoot ".env.windows.example") -Destination (Join-Path $programFiles ".env.windows.example") -Force
-foreach ($dir in @("config","media","static","dte_logs","backups","diagnostics","logs","postgres\data")) { New-Item -ItemType Directory -Path (Join-Path $programData $dir) -Force | Out-Null }
 
 $missing = @()
 foreach ($pair in @(@("python",$PythonRuntimePath), @("postgres",$PostgresRuntimePath), @("caddy\caddy.exe",$CaddyPath), @("services\winsw.exe",$WinSWPath))) {
