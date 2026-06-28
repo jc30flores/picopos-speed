@@ -53,7 +53,49 @@ foreach ($pair in @(@("python",$PythonRuntimePath), @("postgres",$PostgresRuntim
 
 if (-not $SkipDependencyInstall -and -not [string]::IsNullOrWhiteSpace($PythonRuntimePath)) {
     $pythonExe = Join-Path $programFiles "python\python.exe"
-    if (Test-Path $pythonExe) { & $pythonExe -m pip install --no-index --find-links (Join-Path $programFiles "wheels") -r (Join-Path $programFiles "backend\requirements.txt") }
+    $requirements = Join-Path $programFiles "backend\requirements.txt"
+
+    if (Test-Path $pythonExe) {
+        $pythonRoot = Join-Path $programFiles "python"
+        $sitePackages = Join-Path $pythonRoot "Lib\site-packages"
+        New-Item -ItemType Directory -Path $sitePackages -Force | Out-Null
+
+        # El paquete embeddable de Python para Windows no trae pip y usa python*._pth.
+        # Agregamos site-packages al path embebido para que el runtime instalado pueda importar Django/dependencias.
+        $pthFile = Get-ChildItem -Path $pythonRoot -Filter "python*._pth" -File | Select-Object -First 1
+        if ($pthFile) {
+            $rawLines = @(Get-Content -LiteralPath $pthFile.FullName)
+            $cleanLines = @()
+
+            foreach ($line in $rawLines) {
+                $trimmed = $line.Trim()
+                if ($trimmed -eq "Lib\site-packages") { continue }
+                if ($trimmed -eq "import site") { continue }
+                if ($trimmed -eq "#import site") { continue }
+                $cleanLines += $line
+            }
+
+            $cleanLines += "Lib\site-packages"
+            $cleanLines += "import site"
+            Set-Content -LiteralPath $pthFile.FullName -Value $cleanLines -Encoding ASCII
+        }
+
+        $buildPythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $buildPythonCommand) {
+            throw "No se encontró Python de build para instalar dependencias en el runtime embebido."
+        }
+
+        $buildPython = $buildPythonCommand.Source
+
+        & $buildPython -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "Falló actualización de pip en Python de build." }
+
+        & $buildPython -m pip install --target $sitePackages -r $requirements
+        if ($LASTEXITCODE -ne 0) { throw "Falló instalación de dependencias Python en runtime embebido." }
+
+        & $pythonExe -c "import django, waitress, psycopg2, requests; print('Python runtime OK')"
+        if ($LASTEXITCODE -ne 0) { throw "El runtime Python embebido no puede importar dependencias básicas." }
+    }
 }
 $status = if ($missing.Count -eq 0) { "INSTALLABLE" } else { "NOT_INSTALLABLE" }
 $versionJson = @{ version=$Version; builtAt=(Get-Date -Format o); status=$status } | ConvertTo-Json -Depth 4
