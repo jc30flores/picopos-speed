@@ -88,6 +88,22 @@ jobs:
         run: |
           deploy/windows-native/vendor/fetch-runtimes.ps1 -ManifestPath $env:RUNTIME_MANIFEST_PATH -OutputDir release/runtime-cache
 
+      - name: Validate resolved runtimes
+        shell: pwsh
+        run: |
+          $resolved = Get-Content release/runtime-cache/resolved-runtimes.json -Raw | ConvertFrom-Json
+          $required = @('python','postgres','caddy','winsw','innoSetup')
+          foreach ($key in $required) {
+            $value = $resolved.$key
+            if ([string]::IsNullOrWhiteSpace([string]$value)) {
+              throw "resolved-runtimes.json no contiene ruta para $key"
+            }
+            if (-not (Test-Path -LiteralPath $value)) {
+              throw "Runtime resuelto no existe para ${key}: $value"
+            }
+          }
+          Write-Host "resolved-runtimes.json contiene todos los runtimes requeridos."
+
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
