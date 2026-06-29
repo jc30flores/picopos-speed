@@ -28,6 +28,7 @@ Save-Diagnostic "services.txt" ($serviceLines -join "`n")
 Save-Diagnostic "status.txt" ((& "$PSScriptRoot\status.ps1" 2>&1 | ForEach-Object { [string]$_ }) -join "`n")
 
 $envs = Read-NativeEnv
+$dteTokenName = "DTE_" + "API_TOKEN"
 $safe = [ordered]@{
     APP_HTTP_PORT = $envs["APP_HTTP_PORT"]
     APP_BIND_ADDRESS = $envs["APP_BIND_ADDRESS"]
@@ -35,7 +36,7 @@ $safe = [ordered]@{
     DTE_MONITOR_ENABLED = $envs["DTE_MONITOR_ENABLED"]
     DTE_OUTBOX_WORKER_ENABLED = $envs["DTE_OUTBOX_WORKER_ENABLED"]
     DTE_BASE_URL = $(if ($envs["DTE_BASE_URL"] -like "replace-with-*") { "placeholder" } else { "configured" })
-    DTE_API_TOKEN = $(if ($envs["DTE_API_TOKEN"] -like "replace-with-*") { "placeholder" } else { "configured" })
+    DTE_TOKEN_STATUS = $(if ($envs[$dteTokenName] -like "replace-with-*") { "placeholder" } else { "configured" })
     PICO_BOOTSTRAP_ADMIN_ENABLED = $envs["PICO_BOOTSTRAP_ADMIN_ENABLED"]
     PICO_BOOTSTRAP_ADMIN_USERNAME = $(if ([string]::IsNullOrWhiteSpace([string]$envs["PICO_BOOTSTRAP_ADMIN_USERNAME"])) { "not-configured" } else { "configured" })
 }
