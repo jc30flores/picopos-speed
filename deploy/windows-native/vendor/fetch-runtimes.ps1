@@ -244,7 +244,7 @@ function Assert-ResolvedRuntimes {
 
     $required = @("python", "postgres", "caddy", "winsw", "innoSetup")
     foreach ($key in $required) {
-        if (-not $Resolved.ContainsKey($key)) {
+        if (-not $Resolved.Contains($key)) {
             Fail "resolved-runtimes.json no contiene key requerida: $key"
         }
 
