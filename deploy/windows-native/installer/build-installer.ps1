@@ -102,6 +102,7 @@ function Test-RequiredReleaseLayout {
         "ProgramFiles\PicoDeGallo\caddy\caddy.exe",
         "ProgramFiles\PicoDeGallo\services\winsw.exe",
         "ProgramFiles\PicoDeGallo\scripts",
+        "ProgramFiles\PicoDeGallo\scripts\open-kiosk.ps1",
         "ProgramFiles\PicoDeGallo\version.json",
         "ProgramData\PicoDeGallo\config\.env.example",
         "manifest.json"

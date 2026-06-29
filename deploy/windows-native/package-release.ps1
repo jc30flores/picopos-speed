@@ -281,6 +281,7 @@ function Test-ReleasePayloadSafety {
         "ProgramFiles\PicoDeGallo\postgres\bin\createdb.exe",
         "ProgramFiles\PicoDeGallo\caddy\caddy.exe",
         "ProgramFiles\PicoDeGallo\services\winsw.exe",
+        "ProgramFiles\PicoDeGallo\scripts\open-kiosk.ps1",
         "ProgramData\PicoDeGallo\config\.env.example",
         "manifest.json"
     )

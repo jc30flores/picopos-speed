@@ -30,6 +30,10 @@ Gunicorn se mantiene para Docker/Linux. Para Windows nativo se prepara Waitress 
 python -m waitress --listen=127.0.0.1:8000 config.wsgi:application
 ```
 
+El instalador `0.1.2-test` tambien ejecuta `bootstrap_initial_admin` para crear el usuario de prueba `admin` con PIN `000000`. Es solo para validacion de instalador y debe cambiarse antes de produccion.
+
+Al terminar una instalacion exitosa, `open-kiosk.ps1` espera `/api/health/ready/` y abre `http://127.0.0.1:9282` en Edge kiosko/fullscreen cuando Edge esta disponible. Para salir: `Alt+F4`.
+
 ## DTE activo
 
 DTE sigue activo. `DTE_BACKGROUND_MODE=external` separa backend web, worker y monitor. El instalador final deberá escribir `DTE_BASE_URL` y `DTE_API_TOKEN` reales en `C:\ProgramData\PicoDeGallo\config\.env`.

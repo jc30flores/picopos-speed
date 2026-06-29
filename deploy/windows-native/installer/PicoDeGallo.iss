@@ -43,7 +43,8 @@ Source: "{#ProgramDataPayload}\config\.env.example"; DestDir: "{commonappdata}\P
 Source: "{#ProgramFilesPayload}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{autoprograms}\Pico de Gallo\Abrir Pico de Gallo"; Filename: "http://127.0.0.1:9282"
+Name: "{autodesktop}\Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-kiosk.ps1"" -AppMode"
+Name: "{autoprograms}\Pico de Gallo\Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-kiosk.ps1"" -AppMode"
 Name: "{autoprograms}\Pico de Gallo\Iniciar Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Detener Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Estado Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\status.ps1"""
@@ -85,6 +86,11 @@ begin
       'Instalando y validando servicios de Pico de Gallo...',
       'powershell.exe',
       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\install-services.ps1') + '"'
+    );
+    ExecOrFail(
+      'Abriendo Pico de Gallo...',
+      'powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\open-kiosk.ps1') + '"'
     );
   end;
 end;

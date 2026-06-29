@@ -30,7 +30,8 @@ foreach ($svc in $ordered) {
 
 if ($PurgeData) {
     $answer = Read-Host "Escribe BORRAR DATOS PICO DE GALLO para eliminar ProgramData"
-    if ($answer -eq "BORRAR DATOS PICO DE GALLO") {
+    $confirm = Read-Host "Repite BORRAR DATOS PICO DE GALLO para confirmar"
+    if ($answer -eq "BORRAR DATOS PICO DE GALLO" -and $confirm -eq "BORRAR DATOS PICO DE GALLO") {
         Remove-Item -LiteralPath $Script:ProgramDataDir -Recurse -Force
         Write-Warning "Datos eliminados."
     } else {

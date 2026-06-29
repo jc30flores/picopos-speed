@@ -47,6 +47,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install packaging validation dependencies
+        shell: pwsh
+        run: pip install --disable-pip-version-check PyYAML
+
+      - name: Validate Windows-safe git paths
+        shell: pwsh
+        run: python scripts/ci/validate_windows_paths.py
+
+      - name: Validate native packaging static contract
+        shell: pwsh
+        run: python scripts/ci/validate_windows_native_packaging.py
+
       - name: Resolve version
         id: version
         shell: pwsh

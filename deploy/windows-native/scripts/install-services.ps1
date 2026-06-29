@@ -156,7 +156,7 @@ function Invoke-WinSWCommand {
     Invoke-LoggedCommand `
         -FilePath $wrapper `
         -ArgumentList @($Command) `
-        -LogName ("winsw-{0}.log" -f $ServiceId)
+        -LogName "service-install.log"
 }
 
 function Wait-ServiceStatus {
@@ -190,6 +190,9 @@ function Start-WinSWService {
     }
     if ($service.Status -eq "Running") {
         Write-InstallLog "SERVICE_ALREADY_RUNNING $ServiceId"
+        if ($ServiceId -eq "PicoDeGallo-PostgreSQL") {
+            Write-InstallLog -LogName "postgres-service.log" -Message "SERVICE_ALREADY_RUNNING $ServiceId"
+        }
         return
     }
 
@@ -203,6 +206,9 @@ function Start-WinSWService {
     }
 
     Wait-ServiceStatus -ServiceId $ServiceId -DesiredStatus "Running" -TimeoutSeconds 90
+    if ($ServiceId -eq "PicoDeGallo-PostgreSQL") {
+        Write-InstallLog -LogName "postgres-service.log" -Message "SERVICE_RUNNING $ServiceId"
+    }
     Write-SafeHost "Servicio iniciado: $ServiceId"
 }
 
@@ -242,12 +248,23 @@ function Install-WinSWServices {
 
         $targetXml = Join-Path $serviceDir "$serviceId.xml"
         $targetExe = Get-ServiceWrapperPath -ServiceId $serviceId
+        $existingService = Get-ServiceSafe $serviceId
+
+        if ($existingService -and $existingService.Status -eq "Running") {
+            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_STOP_FOR_UPDATE $serviceId"
+            Stop-Service -Name $serviceId -ErrorAction Stop
+            Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 90
+        }
 
         Render-Template -Source $template -Destination $targetXml -Tokens $Tokens
+        if ((Get-Content -LiteralPath $targetXml -Raw).Contains("{{")) {
+            throw "XML WinSW renderizado contiene placeholders sin resolver: $targetXml"
+        }
         Copy-Item -LiteralPath $winswSource -Destination $targetExe -Force
 
         if (Get-ServiceSafe $serviceId) {
             Write-InstallLog "SERVICE_ALREADY_INSTALLED $serviceId"
+            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_XML_UPDATED $serviceId"
             Write-SafeHost "Servicio ya instalado: $serviceId"
         } else {
             Invoke-WinSWCommand -ServiceId $serviceId -Command "install"
@@ -298,10 +315,51 @@ function Initialize-PostgresDataDirectory {
         Invoke-LoggedCommand `
             -FilePath $initdb `
             -ArgumentList @("-D", $dataDir, "-E", "UTF8", "--locale=C", "--username=$dbUser", "--pwfile=$pwFile", "--auth=scram-sha-256") `
-            -LogName "postgres-initdb.log"
+            -LogName "postgres-init.log"
     } finally {
         Remove-Item -LiteralPath $pwFile -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Set-PostgresConfigValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        throw "No existe archivo de configuracion PostgreSQL: $ConfigPath"
+    }
+
+    $escaped = [regex]::Escape($Key)
+    $line = "$Key = $Value"
+    $content = Get-Content -LiteralPath $ConfigPath -Encoding UTF8
+    $updated = $false
+    $newContent = @(foreach ($item in $content) {
+        if ($item -match "^\s*#?\s*$escaped\s*=") {
+            $updated = $true
+            $line
+        } else {
+            $item
+        }
+    })
+    if (-not $updated) {
+        $newContent += $line
+    }
+    Set-Content -LiteralPath $ConfigPath -Value $newContent -Encoding UTF8
+}
+
+function Configure-PostgresDataDirectory {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap)
+
+    $dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
+    $config = Join-Path $dataDir "postgresql.conf"
+    $dbPort = Get-RequiredEnvValue -Map $EnvMap -Name "DB_PORT"
+
+    Set-PostgresConfigValue -ConfigPath $config -Key "port" -Value $dbPort
+    Set-PostgresConfigValue -ConfigPath $config -Key "listen_addresses" -Value "'127.0.0.1'"
+    Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_CONFIGURED port=$dbPort listen_addresses=127.0.0.1"
 }
 
 function Wait-PostgresReady {
@@ -321,6 +379,7 @@ function Wait-PostgresReady {
         & $pgIsReady -h $dbHost -p $dbPort -U $dbUser | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-InstallLog "POSTGRES_READY $dbHost`:$dbPort"
+            Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_READY $dbHost`:$dbPort"
             return
         }
         Start-Sleep -Seconds 2
@@ -368,7 +427,7 @@ END
         Invoke-LoggedCommand `
             -FilePath $psql `
             -ArgumentList @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", $roleSql) `
-            -LogName "postgres-db-setup.log" `
+            -LogName "db-setup.log" `
             -Environment $pgEnv
     } finally {
         Remove-Item -LiteralPath $roleSql -Force -ErrorAction SilentlyContinue
@@ -378,7 +437,7 @@ END
     $exists = Invoke-LoggedCommand `
         -FilePath $psql `
         -ArgumentList @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", "postgres", "-tAc", "SELECT 1 FROM pg_database WHERE datname = '$escapedDbName';") `
-        -LogName "postgres-db-setup.log" `
+        -LogName "db-setup.log" `
         -Environment $pgEnv `
         -ReturnStdout
 
@@ -386,7 +445,7 @@ END
         Invoke-LoggedCommand `
             -FilePath $createdb `
             -ArgumentList @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-O", $dbUser, $dbName) `
-            -LogName "postgres-db-setup.log" `
+            -LogName "db-setup.log" `
             -Environment $pgEnv
     }
 }
@@ -423,6 +482,15 @@ function Validate-EmbeddedPythonImports {
         -LogName "python-runtime.log"
 }
 
+function Get-DjangoEnvironment {
+    return @{
+        DJANGO_ENV_FILE = (Get-EnvPath)
+        DOTENV_OVERRIDE = "false"
+        DJANGO_SETTINGS_MODULE = "config.settings"
+        PYTHONUNBUFFERED = "1"
+    }
+}
+
 function Run-DjangoSetup {
     $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
     $backend = Join-Path $Script:ProgramFilesDir "backend"
@@ -433,33 +501,39 @@ function Run-DjangoSetup {
         throw "No existe backend Django en $backend"
     }
 
-    $djangoEnv = @{
-        DJANGO_ENV_FILE = (Get-EnvPath)
-        DOTENV_OVERRIDE = "false"
-        DJANGO_SETTINGS_MODULE = "config.settings"
-        PYTHONUNBUFFERED = "1"
-    }
+    $djangoEnv = Get-DjangoEnvironment
 
     Invoke-LoggedCommand `
         -FilePath $python `
         -ArgumentList @("manage.py", "check_runtime_config", "--strict") `
         -WorkingDirectory $backend `
         -Environment $djangoEnv `
-        -LogName "django-check-runtime.log"
+        -LogName "check-runtime-config.log"
 
     Invoke-LoggedCommand `
         -FilePath $python `
         -ArgumentList @("manage.py", "migrate", "--noinput") `
         -WorkingDirectory $backend `
         -Environment $djangoEnv `
-        -LogName "django-migrate.log"
+        -LogName "migrate.log"
 
     Invoke-LoggedCommand `
         -FilePath $python `
         -ArgumentList @("manage.py", "collectstatic", "--noinput") `
         -WorkingDirectory $backend `
         -Environment $djangoEnv `
-        -LogName "django-collectstatic.log"
+        -LogName "collectstatic.log"
+}
+
+function Run-InitialAdminBootstrap {
+    $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
+    $backend = Join-Path $Script:ProgramFilesDir "backend"
+    Invoke-LoggedCommand `
+        -FilePath $python `
+        -ArgumentList @("manage.py", "bootstrap_initial_admin") `
+        -WorkingDirectory $backend `
+        -Environment (Get-DjangoEnvironment) `
+        -LogName "bootstrap-admin.log"
 }
 
 function Wait-HttpOk {
@@ -476,7 +550,7 @@ function Wait-HttpOk {
             $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5
             $status = [int]$response.StatusCode
             if ($status -ge 200 -and $status -lt 300) {
-                Write-InstallLog -LogName "health-check.log" -Message "HTTP_OK $Name $Uri status=$status"
+                Write-InstallLog -LogName "healthcheck.log" -Message "HTTP_OK $Name $Uri status=$status"
                 return
             }
             $lastError = "status=$status"
@@ -486,7 +560,7 @@ function Wait-HttpOk {
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
 
-    Write-InstallLog -LogName "health-check.log" -Message "HTTP_FAILED $Name $Uri $lastError"
+    Write-InstallLog -LogName "healthcheck.log" -Message "HTTP_FAILED $Name $Uri $lastError"
     throw "Validacion HTTP fallo para $Name ($Uri): $lastError"
 }
 
@@ -528,16 +602,20 @@ $tokens = @{
     BACKEND_DIR = (Join-Path $Script:ProgramFilesDir "backend")
     ENV_FILE = (Get-EnvPath)
     CADDY_EXE = (Join-Path $Script:ProgramFilesDir "caddy\caddy.exe")
+    APP_HTTP_PORT = if ([string]::IsNullOrWhiteSpace([string]$envs["APP_HTTP_PORT"])) { "9282" } else { [string]$envs["APP_HTTP_PORT"] }
+    APP_BIND_ADDRESS = if ([string]::IsNullOrWhiteSpace([string]$envs["APP_BIND_ADDRESS"])) { "127.0.0.1" } else { [string]$envs["APP_BIND_ADDRESS"] }
 }
 
 Validate-EmbeddedPythonImports
 Initialize-PostgresDataDirectory -EnvMap $envs
+Configure-PostgresDataDirectory -EnvMap $envs
 Render-Caddyfile -EnvMap $envs
 Install-WinSWServices -Tokens $tokens
 Start-WinSWService -ServiceId "PicoDeGallo-PostgreSQL"
 Wait-PostgresReady -EnvMap $envs
 Ensure-ApplicationDatabase -EnvMap $envs
 Run-DjangoSetup
+Run-InitialAdminBootstrap
 Start-ApplicationServices
 Validate-PostInstall
 

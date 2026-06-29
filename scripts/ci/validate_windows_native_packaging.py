@@ -20,6 +20,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 NATIVE = REPO / "deploy" / "windows-native"
 WORKFLOW = REPO / ".github" / "workflows" / "windows-native-installer.yml"
+WINDOWS_INVALID_CHARS = set('<>:"|?*')
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 def fail(message: str) -> None:
@@ -50,6 +59,31 @@ def read_text_safe(path: Path) -> str:
     if path.name in {".env", ".env.windows", ".env.docker"}:
         fail(f"Refusing to read real env file: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def windows_path_errors(path: Path) -> list[str]:
+    errors: list[str] = []
+    for part in str(path).replace("\\", "/").split("/"):
+        if not part:
+            continue
+        if any(char in WINDOWS_INVALID_CHARS for char in part):
+            errors.append("invalid character")
+        if part.endswith(" ") or part.endswith("."):
+            errors.append("trailing space/dot")
+        if part.split(".")[0].upper() in WINDOWS_RESERVED_NAMES:
+            errors.append("reserved device name")
+    return sorted(set(errors))
+
+
+def validate_windows_safe_git_paths() -> None:
+    offenders = []
+    for path in git_ls_files():
+        errors = windows_path_errors(path)
+        if errors:
+            offenders.append(f"{path} ({', '.join(errors)})")
+    if offenders:
+        fail("Windows-incompatible git paths found: " + "; ".join(offenders[:50]))
+    print("git paths are Windows-safe")
 
 
 def validate_yaml() -> None:
@@ -133,7 +167,67 @@ def validate_dte_examples() -> None:
             fail(f"{name} has unsafe value in {env_example.relative_to(REPO)}")
     if "DTE_BACKGROUND_MODE=external" not in text:
         fail("DTE_BACKGROUND_MODE=external missing from .env.windows.example")
+    if "DTE_MONITOR_ENABLED=true" not in text:
+        fail("DTE_MONITOR_ENABLED=true missing from .env.windows.example")
+    if "DTE_OUTBOX_WORKER_ENABLED=true" not in text:
+        fail("DTE_OUTBOX_WORKER_ENABLED=true missing from .env.windows.example")
+    for name, expected in {
+        "PICO_BOOTSTRAP_ADMIN_ENABLED": "true",
+        "PICO_BOOTSTRAP_ADMIN_USERNAME": "admin",
+        "PICO_BOOTSTRAP_ADMIN_PASSWORD": "000000",
+    }.items():
+        match = re.search(rf"(?m)^{name}=(.*)$", text)
+        if not match or match.group(1).strip() != expected:
+            fail(f"{name}={expected} missing from .env.windows.example")
     print("DTE example placeholders are non-empty and external")
+
+
+def validate_native_installer_contract() -> None:
+    required_scripts = [
+        NATIVE / "scripts" / "open-kiosk.ps1",
+        NATIVE / "scripts" / "install-services.ps1",
+        NATIVE / "scripts" / "status.ps1",
+    ]
+    for path in required_scripts:
+        if not path.exists():
+            fail(f"required native script missing: {path.relative_to(REPO)}")
+
+    common = read_text_safe(NATIVE / "scripts" / "common.ps1")
+    if "New-Object byte[] $Bytes" in common:
+        fail("common.ps1 still uses New-Object byte[] for New-RandomSecret")
+    if "[byte[]]::new($Bytes)" not in common:
+        fail("common.ps1 does not use [byte[]]::new($Bytes) in New-RandomSecret")
+
+    install = read_text_safe(NATIVE / "scripts" / "install-services.ps1")
+    if "Servicio previsto" in install:
+        fail("install-services.ps1 still contains placeholder service logic")
+    for token in [
+        "winsw.exe",
+        'Command "install"',
+        "Start-WinSWService",
+        "migrate",
+        "collectstatic",
+        "bootstrap_initial_admin",
+        "/api/health/live/",
+        "/api/health/ready/",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing required token: {token}")
+
+    inno = read_text_safe(NATIVE / "installer" / "PicoDeGallo.iss")
+    for token in ["install-services.ps1", "open-kiosk.ps1", "{autodesktop}\\Pico de Gallo", "ExecOrFail"]:
+        if token not in inno:
+            fail(f"PicoDeGallo.iss missing required token: {token}")
+
+    for path in sorted((NATIVE / "service-templates").glob("*.xml")):
+        text = read_text_safe(path)
+        if "runserver" in text:
+            fail(f"service template uses runserver: {path.relative_to(REPO)}")
+    backend_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-Backend.xml")
+    if "-m waitress --listen=127.0.0.1:8000 config.wsgi:application" not in backend_template:
+        fail("backend service template does not use python -m waitress")
+
+    print("native installer contract OK")
 
 
 def should_scan_text(path: Path) -> bool:
@@ -215,6 +309,7 @@ def validate_local_release_if_present() -> None:
 
 def main() -> int:
     checks = [
+        validate_windows_safe_git_paths,
         validate_yaml,
         validate_json_examples,
         validate_inno_setup_script,
@@ -223,6 +318,7 @@ def main() -> int:
         validate_no_real_env_in_native_scope,
         validate_no_versioned_node_dirs_in_native_scope,
         validate_dte_examples,
+        validate_native_installer_contract,
         validate_forbidden_references,
         validate_local_release_if_present,
     ]
