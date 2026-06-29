@@ -298,8 +298,8 @@ function Test-ReleasePayloadSafety {
     if (-not $pthFile) {
         Fail "Runtime Python embebido no contiene python*._pth."
     }
-    $pthContent = Get-Content -LiteralPath $pthFile.FullName -Raw
-    if ($pthContent -notmatch "(?m)^Lib\\site-packages$" -or $pthContent -notmatch "(?m)^import site$") {
+    $pthLines = @(Get-Content -LiteralPath $pthFile.FullName | ForEach-Object { ([string]$_).Trim() })
+    if (($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
         Fail "Runtime Python embebido no habilita Lib\site-packages e import site."
     }
     foreach ($module in @("django", "waitress", "psycopg2", "requests")) {
