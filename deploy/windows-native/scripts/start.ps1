@@ -20,6 +20,12 @@ function Start-NativeService {
 }
 
 Start-NativeService "PicoDeGallo-PostgreSQL"
+$envs = Read-NativeEnv
+$dbHost = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_HOST"])) { "127.0.0.1" } else { [string]$envs["DB_HOST"] }
+$dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } else { [int]$envs["DB_PORT"] }
+if (-not (Wait-TcpPort -HostName $dbHost -Port $dbPort -TimeoutSeconds 60)) {
+    throw "PostgreSQL no quedo escuchando en $dbHost`:$dbPort"
+}
 Start-NativeService "PicoDeGallo-Backend"
 Wait-HttpOk -Uri "http://127.0.0.1:8000/api/health/ready/" -Name "backend-ready-direct" -TimeoutSeconds 120 | Out-Null
 Start-NativeService "PicoDeGallo-DTE-Worker"

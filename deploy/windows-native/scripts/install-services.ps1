@@ -159,6 +159,100 @@ function Invoke-WinSWCommand {
         -LogName "service-install.log"
 }
 
+function Test-TcpPort {
+    param(
+        [string]$HostName = "127.0.0.1",
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutMilliseconds = 2000
+    )
+
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne([TimeSpan]::FromMilliseconds($TimeoutMilliseconds))) {
+            return $false
+        }
+        $client.EndConnect($async)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Write-LogTail {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogName,
+        [int]$Lines = 80,
+        [string]$TargetLogName = "service-install.log"
+    )
+
+    $path = Join-Path (Get-LogsDir) $LogName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-InstallLog -LogName $TargetLogName -Message "LOG_TAIL_MISSING $LogName"
+        return
+    }
+
+    Write-InstallLog -LogName $TargetLogName -Message "LOG_TAIL_BEGIN $LogName"
+    $tail = Get-Content -LiteralPath $path -Tail $Lines -ErrorAction SilentlyContinue
+    if ($tail) {
+        Add-Content -LiteralPath (Get-NativeLogPath $TargetLogName) -Value (Protect-Text (($tail | ForEach-Object { [string]$_ }) -join "`n")) -Encoding UTF8
+    }
+    Write-InstallLog -LogName $TargetLogName -Message "LOG_TAIL_END $LogName"
+}
+
+function Write-ServiceFailureDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceId,
+        [int]$Port = 0,
+        [string]$HostName = "127.0.0.1"
+    )
+
+    $service = Get-ServiceSafe $ServiceId
+    $status = if ($service) { [string]$service.Status } else { "not-installed" }
+    Write-InstallLog -LogName "service-install.log" -Message "SERVICE_FAILURE $ServiceId status=$status"
+    Write-InstallLog -LogName "install-services.log" -Message "SERVICE_FAILURE $ServiceId status=$status"
+    if ($Port -gt 0) {
+        $portStatus = if (Test-TcpPort -HostName $HostName -Port $Port) { "listening" } else { "closed" }
+        Write-InstallLog -LogName "healthcheck.log" -Message "TCP_STATUS $HostName`:$Port $portStatus"
+    }
+
+    foreach ($logName in @(
+        "$ServiceId.wrapper.log",
+        "$ServiceId.err.log",
+        "$ServiceId.out.log",
+        "postgres-init.log",
+        "postgres-service.log"
+    )) {
+        Write-LogTail -LogName $logName -TargetLogName "service-install.log"
+    }
+}
+
+function Wait-TcpPort {
+    param(
+        [string]$HostName = "127.0.0.1",
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutSeconds = 60,
+        [string]$ServiceId
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-TcpPort -HostName $HostName -Port $Port) {
+            Write-InstallLog -LogName "healthcheck.log" -Message "TCP_OK $HostName`:$Port"
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+
+    Write-InstallLog -LogName "healthcheck.log" -Message "TCP_FAILED $HostName`:$Port"
+    if (-not [string]::IsNullOrWhiteSpace($ServiceId)) {
+        Write-ServiceFailureDiagnostics -ServiceId $ServiceId -HostName $HostName -Port $Port
+    }
+    throw "Puerto TCP no quedo escuchando: $HostName`:$Port"
+}
+
 function Wait-ServiceStatus {
     param(
         [Parameter(Mandatory = $true)][string]$ServiceId,
@@ -178,6 +272,7 @@ function Wait-ServiceStatus {
 
     $current = Get-ServiceSafe $ServiceId
     $status = if ($current) { [string]$current.Status } else { "not-installed" }
+    Write-ServiceFailureDiagnostics -ServiceId $ServiceId
     throw "Servicio $ServiceId no llego a estado $DesiredStatus. Estado actual: $status"
 }
 
@@ -201,6 +296,7 @@ function Start-WinSWService {
     } catch {
         $service = Get-ServiceSafe $ServiceId
         if (-not $service -or $service.Status -ne "Running") {
+            Write-ServiceFailureDiagnostics -ServiceId $ServiceId
             throw
         }
     }
@@ -227,7 +323,10 @@ function Assert-AllServicesRunning {
 }
 
 function Install-WinSWServices {
-    param([Parameter(Mandatory = $true)][hashtable]$Tokens)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Tokens,
+        [string[]]$ServiceIds = $Script:Services
+    )
 
     $serviceDir = Join-Path $Script:ProgramFilesDir "services"
     $templateDir = Join-Path $serviceDir "templates"
@@ -240,7 +339,7 @@ function Install-WinSWServices {
         throw "No existen templates de servicios en $templateDir"
     }
 
-    foreach ($serviceId in $Script:Services) {
+    foreach ($serviceId in $ServiceIds) {
         $template = Join-Path $templateDir "$serviceId.xml"
         if (-not (Test-Path -LiteralPath $template -PathType Leaf)) {
             throw "Falta template WinSW para $serviceId"
@@ -273,7 +372,11 @@ function Install-WinSWServices {
         }
     }
 
-    Assert-AllServicesInstalled
+    foreach ($serviceId in $ServiceIds) {
+        if (-not (Get-ServiceSafe $serviceId)) {
+            throw "Servicio requerido no instalado: $serviceId"
+        }
+    }
 }
 
 function Quote-PostgresIdentifier {
@@ -318,6 +421,16 @@ function Initialize-PostgresDataDirectory {
             -LogName "postgres-init.log"
     } finally {
         Remove-Item -LiteralPath $pwFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-PostgresRuntimeTools {
+    $postgresBin = Join-Path $Script:ProgramFilesDir "postgres\bin"
+    foreach ($tool in @("postgres.exe", "pg_ctl.exe", "initdb.exe", "psql.exe", "pg_dump.exe", "pg_restore.exe", "createdb.exe")) {
+        $path = Join-Path $postgresBin $tool
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Falta herramienta PostgreSQL requerida: $path"
+        }
     }
 }
 
@@ -564,12 +677,17 @@ function Wait-HttpOk {
     throw "Validacion HTTP fallo para $Name ($Uri): $lastError"
 }
 
-function Start-ApplicationServices {
+function Start-BackendService {
     Start-WinSWService -ServiceId "PicoDeGallo-Backend"
     Wait-HttpOk -Name "backend-ready-direct" -Uri "http://127.0.0.1:8000/api/health/ready/" -TimeoutSeconds 120
+}
 
+function Start-DteServices {
     Start-WinSWService -ServiceId "PicoDeGallo-DTE-Worker"
     Start-WinSWService -ServiceId "PicoDeGallo-DTE-Monitor"
+}
+
+function Start-CaddyService {
     Start-WinSWService -ServiceId "PicoDeGallo-Caddy"
 }
 
@@ -598,6 +716,7 @@ $tokens = @{
     PROGRAM_FILES_DIR = $Script:ProgramFilesDir
     PROGRAM_DATA_DIR = $Script:ProgramDataDir
     POSTGRES_BIN_DIR = (Join-Path $Script:ProgramFilesDir "postgres\bin")
+    POSTGRES_DATA_DIR = (Join-Path $Script:ProgramDataDir "postgres\data")
     PYTHON_EXE = (Join-Path $Script:ProgramFilesDir "python\python.exe")
     BACKEND_DIR = (Join-Path $Script:ProgramFilesDir "backend")
     ENV_FILE = (Get-EnvPath)
@@ -607,16 +726,25 @@ $tokens = @{
 }
 
 Validate-EmbeddedPythonImports
+Assert-PostgresRuntimeTools
 Initialize-PostgresDataDirectory -EnvMap $envs
 Configure-PostgresDataDirectory -EnvMap $envs
-Render-Caddyfile -EnvMap $envs
-Install-WinSWServices -Tokens $tokens
+Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-PostgreSQL")
 Start-WinSWService -ServiceId "PicoDeGallo-PostgreSQL"
+$dbHost = Get-RequiredEnvValue -Map $envs -Name "DB_HOST"
+$dbPort = [int](Get-RequiredEnvValue -Map $envs -Name "DB_PORT")
+Wait-TcpPort -HostName $dbHost -Port $dbPort -TimeoutSeconds 60 -ServiceId "PicoDeGallo-PostgreSQL"
 Wait-PostgresReady -EnvMap $envs
 Ensure-ApplicationDatabase -EnvMap $envs
 Run-DjangoSetup
 Run-InitialAdminBootstrap
-Start-ApplicationServices
+Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-Backend")
+Start-BackendService
+Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-DTE-Worker", "PicoDeGallo-DTE-Monitor")
+Start-DteServices
+Render-Caddyfile -EnvMap $envs
+Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-Caddy")
+Start-CaddyService
 Validate-PostInstall
 
 foreach ($svc in $Script:Services) {

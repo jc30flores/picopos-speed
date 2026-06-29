@@ -205,6 +205,8 @@ def validate_native_installer_contract() -> None:
         "winsw.exe",
         'Command "install"',
         "Start-WinSWService",
+        "Wait-TcpPort",
+        "POSTGRES_DATA_DIR",
         "migrate",
         "collectstatic",
         "bootstrap_initial_admin",
@@ -215,9 +217,11 @@ def validate_native_installer_contract() -> None:
             fail(f"install-services.ps1 missing required token: {token}")
 
     inno = read_text_safe(NATIVE / "installer" / "PicoDeGallo.iss")
-    for token in ["install-services.ps1", "open-kiosk.ps1", "{autodesktop}\\Pico de Gallo", "ExecOrFail"]:
+    for token in ["install-services.ps1", "open-kiosk.ps1", "{autodesktop}\\Pico de Gallo.url", "InternetShortcut", "ExecOrFail"]:
         if token not in inno:
             fail(f"PicoDeGallo.iss missing required token: {token}")
+    if re.search(r'(?im)^Name:\s*"\{autodesktop\}\\Pico de Gallo";\s*Filename:\s*"powershell\.exe"', inno):
+        fail("desktop shortcut opens visible PowerShell instead of a browser URL")
 
     for path in sorted((NATIVE / "service-templates").glob("*.xml")):
         text = read_text_safe(path)
@@ -226,6 +230,13 @@ def validate_native_installer_contract() -> None:
     backend_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-Backend.xml")
     if "-m waitress --listen=127.0.0.1:8000 config.wsgi:application" not in backend_template:
         fail("backend service template does not use python -m waitress")
+    postgres_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-PostgreSQL.xml")
+    if "pg_ctl" in postgres_template or "runservice" in postgres_template:
+        fail("PostgreSQL service template must not use pg_ctl runservice under WinSW")
+    if "postgres.exe" not in postgres_template:
+        fail("PostgreSQL service template must execute postgres.exe directly")
+    if "{{POSTGRES_DATA_DIR}}" not in postgres_template:
+        fail("PostgreSQL service template must use POSTGRES_DATA_DIR")
 
     print("native installer contract OK")
 

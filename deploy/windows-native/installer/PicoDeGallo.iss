@@ -43,14 +43,16 @@ Source: "{#ProgramDataPayload}\config\.env.example"; DestDir: "{commonappdata}\P
 Source: "{#ProgramFilesPayload}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{autodesktop}\Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-kiosk.ps1"" -AppMode"
-Name: "{autoprograms}\Pico de Gallo\Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-kiosk.ps1"" -AppMode"
 Name: "{autoprograms}\Pico de Gallo\Iniciar Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Detener Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Estado Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\status.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Diagnóstico Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\diagnostics.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\backup.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Restaurar Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\restore.ps1"""
+
+[INI]
+Filename: "{autodesktop}\Pico de Gallo.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://127.0.0.1:9282"
+Filename: "{autoprograms}\Pico de Gallo\Pico de Gallo.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://127.0.0.1:9282"
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-services.ps1"""; Flags: runhidden; RunOnceId: "StopPicoDeGalloServices"

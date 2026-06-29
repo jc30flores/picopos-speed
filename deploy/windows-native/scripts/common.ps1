@@ -135,6 +135,49 @@ function Get-AppUrl {
     return "http://127.0.0.1:$port"
 }
 
+function Test-TcpPort {
+    param(
+        [string]$HostName = "127.0.0.1",
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutMilliseconds = 2000
+    )
+
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne([TimeSpan]::FromMilliseconds($TimeoutMilliseconds))) {
+            return $false
+        }
+        $client.EndConnect($async)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Wait-TcpPort {
+    param(
+        [string]$HostName = "127.0.0.1",
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutSeconds = 60,
+        [string]$LogName = "healthcheck.log"
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-TcpPort -HostName $HostName -Port $Port) {
+            Write-NativeLog -LogName $LogName -Message "TCP_OK $HostName`:$Port"
+            return $true
+        }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+
+    Write-NativeLog -LogName $LogName -Message "TCP_FAILED $HostName`:$Port"
+    return $false
+}
+
 function Test-DteEnv {
     $envs = Read-NativeEnv
     if ($envs["DTE_BACKGROUND_MODE"] -ne "external") {
