@@ -307,7 +307,7 @@ function Test-ReleasePayloadSafety {
         @{ Name = "DB_PASSWORD real"; Regex = "(?im)^\s*DB_PASSWORD\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{8,}$" },
         @{ Name = "DTE_API_TOKEN real"; Regex = "(?im)^\s*DTE_API_TOKEN\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{12,}$" },
         @{ Name = "DJANGO_SECRET_KEY real"; Regex = "(?im)^\s*DJANGO_SECRET_KEY\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{20,}$" },
-        @{ Name = "Bearer token"; Regex = "(?i)Bearer\s+[A-Za-z0-9._~+/=-]{24,}" }
+        @{ Name = "Bearer token"; Regex = "(?i)Bearer[ \t]+[A-Za-z0-9._~+/=-]{24,}" }
     )
 
     foreach ($file in $textFiles) {
