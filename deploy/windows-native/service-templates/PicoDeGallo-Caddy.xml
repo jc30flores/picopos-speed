@@ -5,6 +5,9 @@
   <executable>{{CADDY_EXE}}</executable>
   <arguments>run --config "{{PROGRAM_FILES_DIR}}\caddy\Caddyfile"</arguments>
   <workingdirectory>{{PROGRAM_FILES_DIR}}\caddy</workingdirectory>
+  <startmode>Automatic</startmode>
+  <depend>PicoDeGallo-Backend</depend>
+  <onfailure action="restart" delay="10 sec" />
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size" />
 </service>

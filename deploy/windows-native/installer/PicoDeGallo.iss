@@ -51,18 +51,23 @@ Name: "{autoprograms}\Pico de Gallo\Diagnóstico Pico de Gallo"; Filename: "powe
 Name: "{autoprograms}\Pico de Gallo\Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\backup.ps1"""
 Name: "{autoprograms}\Pico de Gallo\Restaurar Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\restore.ps1"""
 
-[Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\init-env.ps1"""; StatusMsg: "Creando configuración local..."; Flags: runhidden; Check: EnvMissing
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-services.ps1"""; StatusMsg: "Instalando servicios de Pico de Gallo..."; Flags: runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start.ps1"""; StatusMsg: "Iniciando servicios..."; Flags: runhidden
-
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-services.ps1"""; Flags: runhidden; RunOnceId: "StopPicoDeGalloServices"
 
 [Code]
-function EnvMissing: Boolean;
+procedure ExecOrFail(Description: String; FileName: String; Parameters: String);
+var
+  ResultCode: Integer;
 begin
-  Result := not FileExists(ExpandConstant('{commonappdata}\PicoDeGallo\config\.env'));
+  WizardForm.StatusLabel.Caption := Description;
+  if not Exec(FileName, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
+    MsgBox(Description + ' no pudo ejecutarse.', mbError, MB_OK);
+    RaiseException(Description + ' no pudo ejecutarse.');
+  end;
+  if ResultCode <> 0 then begin
+    MsgBox(Description + ' fallo con codigo ' + IntToStr(ResultCode) + '. Revise C:\ProgramData\PicoDeGallo\logs.', mbError, MB_OK);
+    RaiseException(Description + ' fallo con codigo ' + IntToStr(ResultCode) + '.');
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -74,6 +79,13 @@ begin
       Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\stop.ps1') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\backup.ps1') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
+  end;
+  if CurStep = ssPostInstall then begin
+    ExecOrFail(
+      'Instalando y validando servicios de Pico de Gallo...',
+      'powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\install-services.ps1') + '"'
+    );
   end;
 end;
 

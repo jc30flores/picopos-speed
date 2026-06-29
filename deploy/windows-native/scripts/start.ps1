@@ -1,3 +1,15 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
-foreach($svc in $Script:Services){ $s=Get-ServiceSafe $svc; if($s){ Start-Service $svc; Write-SafeHost "Iniciado $svc" } else { Write-SafeHost "No instalado $svc" } }
+Assert-Admin
+
+foreach ($svc in $Script:Services) {
+    $service = Get-ServiceSafe $svc
+    if (-not $service) {
+        throw "Servicio requerido no instalado: $svc"
+    }
+    if ($service.Status -ne "Running") {
+        Start-Service $svc
+        $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(90))
+    }
+    Write-SafeHost "Iniciado $svc"
+}

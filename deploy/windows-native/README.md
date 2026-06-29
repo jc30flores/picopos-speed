@@ -27,7 +27,7 @@ Docker se conserva como herramienta técnica opcional para desarrollo, pruebas y
 Gunicorn se mantiene para Docker/Linux. Para Windows nativo se prepara Waitress como servidor WSGI compatible:
 
 ```powershell
-python -m waitress.runner --listen=127.0.0.1:8000 config.wsgi:application
+python -m waitress --listen=127.0.0.1:8000 config.wsgi:application
 ```
 
 ## DTE activo

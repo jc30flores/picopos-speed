@@ -204,12 +204,20 @@ function Install-EmbeddedPythonDependencies {
 
     Enable-EmbeddedPythonSitePackages -PythonRoot $PythonRoot
 
-    $buildPythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $buildPythonCommand) {
-        Fail "No se encontro Python de build para instalar dependencias en el runtime embebido."
+    $pipCommand = Get-Command pip.exe -ErrorAction SilentlyContinue
+    if (-not $pipCommand) {
+        $pipCommand = Get-Command pip -ErrorAction SilentlyContinue
+    }
+    if (-not $pipCommand -or [string]::IsNullOrWhiteSpace($pipCommand.Source)) {
+        Fail "No se encontro pip del Python de build para instalar dependencias en el runtime embebido."
     }
 
-    $buildPython = $buildPythonCommand.Source
+    $pipExe = (Resolve-Path -LiteralPath $pipCommand.Source).Path
+    $pythonRootResolved = (Resolve-Path -LiteralPath $PythonRoot).Path
+    if ($pipExe.StartsWith($pythonRootResolved, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Fail "pip resuelto pertenece al runtime embebido. Debe usarse pip del Python de build."
+    }
+
     $oldNoBytecode = $env:PYTHONDONTWRITEBYTECODE
     $oldPipNoCache = $env:PIP_NO_CACHE_DIR
     $oldPipDisableVersion = $env:PIP_DISABLE_PIP_VERSION_CHECK
@@ -219,9 +227,20 @@ function Install-EmbeddedPythonDependencies {
         $env:PIP_NO_CACHE_DIR = "1"
         $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 
-        & $buildPython -m pip install --disable-pip-version-check --no-cache-dir --no-compile --target $sitePackages -r $Requirements
+        & $pipExe --version
+        if ($LASTEXITCODE -ne 0) {
+            Fail "pip del Python de build no esta operativo."
+        }
+
+        & $pipExe install --disable-pip-version-check --no-cache-dir --no-compile --target $sitePackages -r $Requirements
         if ($LASTEXITCODE -ne 0) {
             Fail "Fallo instalacion de dependencias Python en runtime embebido."
+        }
+
+        $pthFile = Get-ChildItem -LiteralPath $PythonRoot -Filter "python*._pth" -File | Select-Object -First 1
+        $pthContent = Get-Content -LiteralPath $pthFile.FullName -Raw
+        if ($pthContent -notmatch "(?m)^Lib\\site-packages$" -or $pthContent -notmatch "(?m)^import site$") {
+            Fail "python*._pth no habilita Lib\site-packages e import site."
         }
 
         & $pythonExe -c "import django, waitress, psycopg2, requests; print('Python runtime OK')"
@@ -252,6 +271,7 @@ function Test-ReleasePayloadSafety {
         "ProgramFiles\PicoDeGallo\backend\manage.py",
         "ProgramFiles\PicoDeGallo\frontend",
         "ProgramFiles\PicoDeGallo\python\python.exe",
+        "ProgramFiles\PicoDeGallo\python\Lib\site-packages",
         "ProgramFiles\PicoDeGallo\postgres\bin\postgres.exe",
         "ProgramFiles\PicoDeGallo\postgres\bin\pg_ctl.exe",
         "ProgramFiles\PicoDeGallo\postgres\bin\initdb.exe",
@@ -268,6 +288,22 @@ function Test-ReleasePayloadSafety {
     foreach ($path in $requiredPaths) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $path))) {
             Fail "Release incompleto: falta $path"
+        }
+    }
+
+    $pythonRoot = Join-Path $Root "ProgramFiles\PicoDeGallo\python"
+    $sitePackages = Join-Path $pythonRoot "Lib\site-packages"
+    $pthFile = Get-ChildItem -LiteralPath $pythonRoot -Filter "python*._pth" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pthFile) {
+        Fail "Runtime Python embebido no contiene python*._pth."
+    }
+    $pthContent = Get-Content -LiteralPath $pthFile.FullName -Raw
+    if ($pthContent -notmatch "(?m)^Lib\\site-packages$" -or $pthContent -notmatch "(?m)^import site$") {
+        Fail "Runtime Python embebido no habilita Lib\site-packages e import site."
+    }
+    foreach ($module in @("django", "waitress", "psycopg2", "requests")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $sitePackages $module))) {
+            Fail "Runtime Python embebido no contiene modulo requerido: $module"
         }
     }
 

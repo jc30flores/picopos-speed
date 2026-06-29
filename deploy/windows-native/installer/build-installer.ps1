@@ -91,6 +91,7 @@ function Test-RequiredReleaseLayout {
         "ProgramFiles\PicoDeGallo\backend",
         "ProgramFiles\PicoDeGallo\frontend",
         "ProgramFiles\PicoDeGallo\python\python.exe",
+        "ProgramFiles\PicoDeGallo\python\Lib\site-packages",
         "ProgramFiles\PicoDeGallo\postgres\bin\postgres.exe",
         "ProgramFiles\PicoDeGallo\postgres\bin\pg_ctl.exe",
         "ProgramFiles\PicoDeGallo\postgres\bin\initdb.exe",
@@ -109,6 +110,22 @@ function Test-RequiredReleaseLayout {
     foreach ($item in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $item))) {
             Fail "ReleaseDir no contiene $item"
+        }
+    }
+
+    $pythonRoot = Join-Path $Root "ProgramFiles\PicoDeGallo\python"
+    $sitePackages = Join-Path $pythonRoot "Lib\site-packages"
+    $pthFile = Get-ChildItem -LiteralPath $pythonRoot -Filter "python*._pth" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pthFile) {
+        Fail "Runtime Python embebido no contiene python*._pth."
+    }
+    $pthContent = Get-Content -LiteralPath $pthFile.FullName -Raw
+    if ($pthContent -notmatch "(?m)^Lib\\site-packages$" -or $pthContent -notmatch "(?m)^import site$") {
+        Fail "Runtime Python embebido no habilita Lib\site-packages e import site."
+    }
+    foreach ($module in @("django", "waitress", "psycopg2", "requests")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $sitePackages $module))) {
+            Fail "Runtime Python embebido no contiene modulo requerido: $module"
         }
     }
 }
