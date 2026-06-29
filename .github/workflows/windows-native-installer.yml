@@ -183,6 +183,17 @@ jobs:
             Write-Host "Parsed $($_.Name)"
           }
 
+      - name: Validate Inno Setup script
+        shell: pwsh
+        run: |
+          $issPath = 'deploy/windows-native/installer/PicoDeGallo.iss'
+          $content = Get-Content -LiteralPath $issPath -Raw
+          $badEscape = '\' + '"'
+          if ($content.Contains($badEscape)) {
+            throw '[INNO_BUILD] PicoDeGallo.iss usa comillas escapadas con backslash; Inno Setup requiere comillas dobles duplicadas.'
+          }
+          Write-Host "Inno script linted: $issPath"
+
       - name: Install frontend dependencies
         working-directory: frontend
         shell: pwsh

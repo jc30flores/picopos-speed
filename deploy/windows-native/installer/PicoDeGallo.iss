@@ -44,20 +44,20 @@ Source: "{#ProgramFilesPayload}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags
 
 [Icons]
 Name: "{autoprograms}\Pico de Gallo\Abrir Pico de Gallo"; Filename: "http://127.0.0.1:9282"
-Name: "{autoprograms}\Pico de Gallo\Iniciar Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\start.ps1\""
-Name: "{autoprograms}\Pico de Gallo\Detener Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\stop.ps1\""
-Name: "{autoprograms}\Pico de Gallo\Estado Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\status.ps1\""
-Name: "{autoprograms}\Pico de Gallo\Diagnóstico Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\diagnostics.ps1\""
-Name: "{autoprograms}\Pico de Gallo\Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\backup.ps1\""
-Name: "{autoprograms}\Pico de Gallo\Restaurar Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\restore.ps1\""
+Name: "{autoprograms}\Pico de Gallo\Iniciar Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start.ps1"""
+Name: "{autoprograms}\Pico de Gallo\Detener Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop.ps1"""
+Name: "{autoprograms}\Pico de Gallo\Estado Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\status.ps1"""
+Name: "{autoprograms}\Pico de Gallo\Diagnóstico Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\diagnostics.ps1"""
+Name: "{autoprograms}\Pico de Gallo\Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\backup.ps1"""
+Name: "{autoprograms}\Pico de Gallo\Restaurar Backup Pico de Gallo"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\restore.ps1"""
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\init-env.ps1\""; StatusMsg: "Creando configuración local..."; Flags: runhidden; Check: EnvMissing
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\install-services.ps1\""; StatusMsg: "Instalando servicios de Pico de Gallo..."; Flags: runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\start.ps1\""; StatusMsg: "Iniciando servicios..."; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\init-env.ps1"""; StatusMsg: "Creando configuración local..."; Flags: runhidden; Check: EnvMissing
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-services.ps1"""; StatusMsg: "Instalando servicios de Pico de Gallo..."; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start.ps1"""; StatusMsg: "Iniciando servicios..."; Flags: runhidden
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\scripts\uninstall-services.ps1\""; Flags: runhidden; RunOnceId: "StopPicoDeGalloServices"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-services.ps1"""; Flags: runhidden; RunOnceId: "StopPicoDeGalloServices"
 
 [Code]
 function EnvMissing: Boolean;

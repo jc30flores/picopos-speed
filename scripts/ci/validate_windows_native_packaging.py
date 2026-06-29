@@ -76,6 +76,14 @@ def validate_json_examples() -> None:
         print(f"json parsed {real_manifest.relative_to(REPO)}")
 
 
+def validate_inno_setup_script() -> None:
+    path = NATIVE / "installer" / "PicoDeGallo.iss"
+    content = path.read_text(encoding="utf-8")
+    if r"\"" in content:
+        fail(f"{path.relative_to(REPO)} uses backslash-escaped quotes; Inno Setup requires doubled quotes")
+    print(f"inno script linted {path.relative_to(REPO)}")
+
+
 def validate_xml_templates() -> None:
     for path in sorted((NATIVE / "service-templates").glob("*.xml")):
         ET.parse(path)
@@ -209,6 +217,7 @@ def main() -> int:
     checks = [
         validate_yaml,
         validate_json_examples,
+        validate_inno_setup_script,
         validate_xml_templates,
         validate_no_versioned_native_binaries,
         validate_no_real_env_in_native_scope,
