@@ -69,8 +69,8 @@ function Assert-SafeUrl {
         "cutt.ly",
         "tiny.cc"
     )
-    $host = $uri.Host.ToLowerInvariant()
-    if ($blockedHosts -contains $host) {
+    $runtimeHost = $uri.Host.ToLowerInvariant()
+    if ($blockedHosts -contains $runtimeHost) {
         Fail "URL insegura/no versionada para ${Name}."
     }
 
