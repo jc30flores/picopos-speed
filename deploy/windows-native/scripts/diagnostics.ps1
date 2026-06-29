@@ -1,3 +1,4 @@
+$ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 $stamp=Get-Date -Format 'yyyy-MM-dd-HHmmss'
 $root=Join-Path (Get-DiagnosticsDir) "diag-$stamp"
@@ -22,3 +23,4 @@ $zip=Join-Path (Get-DiagnosticsDir) "PicoDeGallo-Native-Diagnostico-$stamp.zip"
 Compress-Archive -Path (Join-Path $root '*') -DestinationPath $zip -Force
 Remove-Item $root -Recurse -Force
 Write-SafeHost "Diagnóstico generado: $zip"
+. $null

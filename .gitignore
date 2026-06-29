@@ -40,4 +40,6 @@ deploy/windows/diagnostics/
 # Native Windows packaging generated artifacts
 .env.windows
 deploy/windows-native/release/
+release/runtime-cache/
 release/windows-native/
+release/installers/

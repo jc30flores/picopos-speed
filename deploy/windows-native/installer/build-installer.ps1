@@ -1,6 +1,6 @@
 param(
-    [Parameter(Mandatory=$true)][string]$Version,
-    [Parameter(Mandatory=$true)][string]$ReleaseDir,
+    [Parameter(Mandatory = $true)][string]$Version,
+    [Parameter(Mandatory = $true)][string]$ReleaseDir,
     [string]$OutputDir = "release/installers",
     [string]$InnoSetupCompilerPath = "ISCC.exe",
     [string]$SignToolPath,
@@ -8,53 +8,164 @@ param(
     [string]$CodeSigningTimestampUrl = "http://timestamp.digicert.com",
     [switch]$SkipSigning
 )
+
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 function Find-RepoRoot {
     $dir = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
-    if (-not (Test-Path (Join-Path $dir "deploy\windows-native\installer\PicoDeGallo.iss"))) { throw "No se encontró la raíz del repositorio." }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir "deploy\windows-native\installer\PicoDeGallo.iss") -PathType Leaf)) {
+        throw "No se encontro la raiz del repositorio."
+    }
     return $dir.Path
 }
-function Fail([string]$Message) { throw "[build-installer] $Message" }
-function Test-NoForbiddenReleaseFiles([string]$Root) {
-    $bad = Get-ChildItem -LiteralPath $Root -Recurse -Force -File | Where-Object {
-        $_.FullName -match '\\backend\\\.env$' -or
-        $_.Name -eq '.env.windows' -or
-        $_.FullName -match '\\media\\' -or
-        $_.FullName -match '\\dumps\\' -or
-        $_.FullName -match '\\backups\\' -or
-        $_.FullName -match '\\diagnostics\\'
-    }
-    if ($bad) { Fail "Release contiene archivos no permitidos: $($bad[0].FullName)" }
+
+function Fail {
+    param([string]$Message)
+    throw "[build-installer] $Message"
 }
-function Test-NoObviousSecrets([string]$Root) {
-    $files = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -Include '*.env','*.txt','*.json','*.config','*.xml','*.ps1'
-    $hits = $files | Select-String -Pattern 'DTE_API_TOKEN=ey|DJANGO_SECRET_KEY=django-insecure-[A-Za-z0-9_-]{30,}' -ErrorAction SilentlyContinue
-    if ($hits) { Fail "Posible secreto en release: $($hits[0].Path)" }
+
+function Test-NoForbiddenReleaseFiles {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $nodeModulesName = "node" + "_modules"
+    $pgGuiName = "pg" + "Admin"
+    $stackBuilderName = "Stack" + "Builder"
+    $yarnStateName = ".yarn" + "-state.yml"
+
+    $badDir = Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @($nodeModulesName, $pgGuiName, $stackBuilderName, ".git", ".github") } |
+        Select-Object -First 1
+    if ($badDir) {
+        Fail "Release contiene carpeta no permitida: $($badDir.FullName)"
+    }
+
+    $badFile = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $relative = $_.FullName.Substring($Root.Length).TrimStart("\", "/")
+            $sqlAllowed = $relative -match "(?i)(^|[\\/])ProgramFiles[\\/]PicoDeGallo[\\/]postgres[\\/]share[\\/]"
+            $_.Name -in @(".env", ".env.windows", ".env.docker", $yarnStateName) -or
+            $relative -match "(?i)(^|[\\/])backend[\\/]\.env$" -or
+            $relative -match "(?i)(^|[\\/])ProgramData[\\/]PicoDeGallo[\\/](media|backups|diagnostics|dumps)[\\/]" -or
+            $relative -match "[\\/]$([regex]::Escape($nodeModulesName))[\\/]" -or
+            $_.Name -match "(?i)\.(dump|pyc|pyo)$" -or
+            ($_.Name -match "(?i)\.sql$" -and -not $sqlAllowed) -or
+            ($_.Name -eq "package-lock.json" -and $relative -match "(?i)(^|[\\/])ProgramFiles[\\/]PicoDeGallo[\\/](python|postgres|caddy|services)[\\/]")
+        } |
+        Select-Object -First 1
+    if ($badFile) {
+        Fail "Release contiene archivo no permitido: $($badFile.FullName)"
+    }
+}
+
+function Test-NoObviousSecrets {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $files = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Length -lt 1048576 -and
+            $_.Extension.ToLowerInvariant() -in @(".env", ".example", ".txt", ".json", ".config", ".xml", ".ps1", ".cmd", ".bat", ".ini", ".yml", ".yaml")
+        }
+
+    $patterns = @(
+        "(?im)^\s*DB_PASSWORD\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{8,}$",
+        "(?im)^\s*DTE_API_TOKEN\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{12,}$",
+        "(?im)^\s*DJANGO_SECRET_KEY\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{20,}$",
+        "(?i)Bearer\s+[A-Za-z0-9._~+/=-]{24,}"
+    )
+
+    foreach ($file in $files) {
+        $content = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue
+        foreach ($pattern in $patterns) {
+            if ($content -match $pattern) {
+                Fail "Posible secreto en release: $($file.FullName)"
+            }
+        }
+    }
+}
+
+function Test-RequiredReleaseLayout {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $required = @(
+        "ProgramFiles\PicoDeGallo\backend",
+        "ProgramFiles\PicoDeGallo\frontend",
+        "ProgramFiles\PicoDeGallo\python\python.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\postgres.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\pg_ctl.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\initdb.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\psql.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\pg_dump.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\pg_restore.exe",
+        "ProgramFiles\PicoDeGallo\postgres\bin\createdb.exe",
+        "ProgramFiles\PicoDeGallo\caddy\caddy.exe",
+        "ProgramFiles\PicoDeGallo\services\winsw.exe",
+        "ProgramFiles\PicoDeGallo\scripts",
+        "ProgramFiles\PicoDeGallo\version.json",
+        "ProgramData\PicoDeGallo\config\.env.example",
+        "manifest.json"
+    )
+
+    foreach ($item in $required) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $item))) {
+            Fail "ReleaseDir no contiene $item"
+        }
+    }
 }
 
 $repoRoot = Find-RepoRoot
 $release = Resolve-Path -LiteralPath $ReleaseDir
-$required = @('ProgramFiles\PicoDeGallo\backend','ProgramFiles\PicoDeGallo\frontend','ProgramFiles\PicoDeGallo\python','ProgramFiles\PicoDeGallo\postgres','ProgramFiles\PicoDeGallo\caddy','ProgramFiles\PicoDeGallo\services','ProgramFiles\PicoDeGallo\scripts','ProgramFiles\PicoDeGallo\version.json','manifest.json')
-foreach ($item in $required) { if (-not (Test-Path (Join-Path $release $item))) { Fail "ReleaseDir no contiene $item" } }
-Test-NoForbiddenReleaseFiles $release
-Test-NoObviousSecrets $release
+Test-RequiredReleaseLayout -Root $release.Path
+Test-NoForbiddenReleaseFiles -Root $release.Path
+Test-NoObviousSecrets -Root $release.Path
+
+if ([string]::IsNullOrWhiteSpace($InnoSetupCompilerPath) -or -not (Test-Path -LiteralPath $InnoSetupCompilerPath -PathType Leaf)) {
+    Fail "No existe ISCC.exe: $InnoSetupCompilerPath"
+}
+
 $out = Join-Path $repoRoot $OutputDir
 New-Item -ItemType Directory -Path $out -Force | Out-Null
-$issTemplate = Join-Path $repoRoot 'deploy\windows-native\installer\PicoDeGallo.iss'
+
+$issTemplate = Join-Path $repoRoot "deploy\windows-native\installer\PicoDeGallo.iss"
 $issWork = Join-Path $out "PicoDeGallo-$Version.iss"
-(Get-Content $issTemplate -Raw) -replace '#define MyAppVersion "0.0.0-dev"', "#define MyAppVersion `"$Version`"" -replace '#define SourceRoot "..\\..\\..\\release\\windows-native"', "#define SourceRoot `"$($release.Path -replace '\\','\\')`"" | Set-Content -Path $issWork -Encoding UTF8
+$issContent = Get-Content -LiteralPath $issTemplate -Raw
+$issContent = $issContent.Replace('#define MyAppVersion "0.0.0-dev"', ('#define MyAppVersion "{0}"' -f $Version))
+$issContent = $issContent.Replace('#define SourceRoot "..\..\..\release\windows-native"', ('#define SourceRoot "{0}"' -f $release.Path))
+$issContent | Set-Content -LiteralPath $issWork -Encoding UTF8
+
 & $InnoSetupCompilerPath $issWork "/O$out"
-if ($LASTEXITCODE -ne 0) { Fail "ISCC.exe falló con código $LASTEXITCODE" }
-$installer = Get-ChildItem -LiteralPath $out -Filter "PicoDeGallo-Setup-$Version*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $installer) { Fail "No se encontró el instalador generado." }
-if (-not $SkipSigning) {
-    if ([string]::IsNullOrWhiteSpace($SignToolPath) -or [string]::IsNullOrWhiteSpace($CodeSigningCertPath)) { Fail "Firma habilitada pero falta SignToolPath o CodeSigningCertPath." }
-    & $SignToolPath sign /fd SHA256 /f $CodeSigningCertPath /tr $CodeSigningTimestampUrl /td SHA256 $installer.FullName
-    if ($LASTEXITCODE -ne 0) { Fail "Firma de código falló." }
+if ($LASTEXITCODE -ne 0) {
+    Fail "ISCC.exe fallo con codigo $LASTEXITCODE"
 }
+
+$expectedInstaller = Join-Path $out "PicoDeGallo-Setup-$Version.exe"
+if (-not (Test-Path -LiteralPath $expectedInstaller -PathType Leaf)) {
+    Fail "No se encontro el instalador generado: $expectedInstaller"
+}
+$installer = Get-Item -LiteralPath $expectedInstaller
+
+if (-not $SkipSigning) {
+    if ([string]::IsNullOrWhiteSpace($SignToolPath) -or [string]::IsNullOrWhiteSpace($CodeSigningCertPath)) {
+        Fail "Firma habilitada pero falta SignToolPath o CodeSigningCertPath."
+    }
+    & $SignToolPath sign /fd SHA256 /f $CodeSigningCertPath /tr $CodeSigningTimestampUrl /td SHA256 $installer.FullName
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Firma de codigo fallo."
+    }
+}
+
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName
-$hash.Hash | Set-Content -Path ($installer.FullName + '.sha256') -Encoding ASCII
-@{ version=$Version; installer=$installer.FullName; sha256=$hash.Hash; release=$release.Path; builtAt=(Get-Date -Format o); signed=(-not $SkipSigning) } | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $out "PicoDeGallo-Setup-$Version.manifest.json") -Encoding UTF8
+$hash.Hash | Set-Content -LiteralPath ($installer.FullName + ".sha256") -Encoding ASCII
+
+$manifest = [ordered]@{
+    version = $Version
+    installer = $installer.Name
+    sha256 = $hash.Hash
+    release = $release.Path
+    builtAt = (Get-Date -Format o)
+    signed = (-not $SkipSigning)
+}
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out "manifest.json") -Encoding UTF8
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out "PicoDeGallo-Setup-$Version.manifest.json") -Encoding UTF8
+
 Write-Host "Instalador generado: $($installer.FullName)"

@@ -1,4 +1,5 @@
 param([Parameter(Mandatory=$true)][string]$BackupPath)
+$ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 $backup=Resolve-Path $BackupPath
 foreach($f in @('manifest.json','database.dump')){ if(-not(Test-Path (Join-Path $backup.Path $f))){ throw "Backup inválido: falta $f" } }

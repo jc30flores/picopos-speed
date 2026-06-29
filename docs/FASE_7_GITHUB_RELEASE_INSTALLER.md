@@ -6,7 +6,7 @@ La distribución comercial debe terminar en un único asset descargable desde Gi
 
 ## 2. Flujo recomendado
 
-GitHub Actions ejecuta `.github/workflows/windows-native-installer.yml` en `windows-latest`. El workflow descarga runtimes Windows fuera de Git, verifica SHA256, ejecuta `deploy/windows-native/package-release.ps1`, compila el instalador con `deploy/windows-native/installer/build-installer.ps1`, sube artifacts internos y publica assets en GitHub Releases.
+GitHub Actions ejecuta `.github/workflows/windows-native-installer.yml` en `windows-latest`. El workflow descarga runtimes Windows fuera de Git, verifica SHA256, prepara PostgreSQL minimo, instala dependencias en Python embeddable con Python de build, ejecuta `deploy/windows-native/package-release.ps1`, compila el instalador con `deploy/windows-native/installer/build-installer.ps1`, sube artifacts internos y publica assets en GitHub Releases.
 
 ## 3. Disparo por tag
 
@@ -44,7 +44,7 @@ el workflow puede firmar el instalador. Si `skip_signing=true` o faltan secrets,
 
 ## 8. Validaciones de seguridad
 
-El workflow valida PowerShell, XML de servicios, payload de release, archivos prohibidos, existencia del `.exe`, SHA256 y manifest. No debe subir `.env` real, secretos, media, dumps, backups, diagnostics ni runtimes por separado.
+El workflow valida PowerShell, XML de servicios, runtimes resueltos, payload de release, archivos prohibidos, existencia del `.exe`, SHA256 y `manifest.json`. No debe subir `.env` real, secretos, media, dumps, backups, diagnostics ni runtimes por separado.
 
 ## 9. Offline vs online installer
 
@@ -73,6 +73,7 @@ Si un release falla, marcarlo como prerelease o retirarlo de GitHub Releases, co
 ## 13. Riesgos pendientes
 
 - Completar manifest real de runtimes con hashes verificados.
+- Confirmar que PostgreSQL resuelto apunta al runtime minimo preparado y no a una raiz con herramientas GUI.
 - Validar licencia/distribución comercial de cada runtime.
 - Configurar firma de código para reducir advertencias SmartScreen.
 - Ejecutar prueba obligatoria en VM Windows limpia antes de entrega a clientes.

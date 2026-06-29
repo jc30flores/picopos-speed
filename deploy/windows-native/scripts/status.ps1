@@ -1,3 +1,4 @@
+$ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 Write-SafeHost "URL: $(Get-AppUrl)"
 foreach($svc in $Script:Services){ $s=Get-ServiceSafe $svc; if($s){ Write-SafeHost "$svc=$($s.Status)" } else { Write-SafeHost "$svc=not-installed" } }

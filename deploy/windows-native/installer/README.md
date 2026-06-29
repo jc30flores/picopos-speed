@@ -9,7 +9,7 @@ Esta carpeta contiene infraestructura para generar `PicoDeGallo-Setup-x.y.z.exe`
    - PostgreSQL portable/runtime para Windows.
    - Caddy para Windows.
    - WinSW o wrapper equivalente.
-2. Ejecutar `deploy/windows-native/package-release.ps1` con rutas reales a esos runtimes.
+2. Ejecutar `deploy/windows-native/package-release.ps1` con rutas reales a esos runtimes. PostgreSQL debe apuntar al runtime minimo preparado, no a la raiz completa de un instalador que incluya herramientas GUI.
 3. Ejecutar `deploy/windows-native/installer/build-installer.ps1` apuntando al release generado.
 4. Probar el instalador en una VM Windows limpia.
 5. No subir a Git el instalador, los runtimes ni el release generado.
@@ -33,12 +33,12 @@ deploy/windows-native/installer/build-installer.ps1 `
   -SkipSigning
 ```
 
-El resultado esperado es `release/installers/PicoDeGallo-Setup-1.2.3.exe` más checksum SHA256 y manifiesto de build.
+El resultado esperado es `release/installers/PicoDeGallo-Setup-1.2.3.exe`, `release/installers/PicoDeGallo-Setup-1.2.3.exe.sha256` y `release/installers/manifest.json`.
 
 
 ## Flujo recomendado en CI
 
-El build local es opcional. Para distribución comercial, usa `.github/workflows/windows-native-installer.yml` en GitHub Actions. El workflow corre en `windows-latest`, descarga runtimes desde `deploy/windows-native/vendor/runtime-manifest.json`, verifica SHA256, ejecuta `package-release.ps1`, ejecuta `build-installer.ps1`, sube artifacts internos y publica en GitHub Releases.
+El build local es opcional. Para distribucion comercial, usa `.github/workflows/windows-native-installer.yml` en GitHub Actions. El workflow corre en `windows-latest`, descarga runtimes desde `deploy/windows-native/vendor/runtime-manifest.json` o `WINDOWS_RUNTIME_MANIFEST_JSON`, verifica SHA256, prepara PostgreSQL minimo, ejecuta `package-release.ps1`, ejecuta `build-installer.ps1`, sube artifacts internos y publica en GitHub Releases.
 
 Para publicar una versión estable, crea un tag como `v1.0.0`. Para una prueba controlada, usa `workflow_dispatch` con `prerelease=true`. Si no hay certificado de firma configurado, usa `skip_signing=true`; el instalador será funcional pero Windows SmartScreen puede advertir que no está firmado.
 
@@ -57,4 +57,4 @@ Antes de ejecutar el workflow, configure uno de estos orígenes:
 - `deploy/windows-native/vendor/runtime-manifest.json` versionado con URLs públicas HTTPS y SHA256 reales verificados.
 - `WINDOWS_RUNTIME_MANIFEST_JSON` como variable o secret de GitHub si alguna URL no debe quedar en Git.
 
-No use `runtime-manifest.example.json` como manifest real. El workflow lo rechazará por placeholders. Para la primera prueba manual use `workflow_dispatch` con `version=0.1.0-test`, `prerelease=true` y `skip_signing=true`. Si el build falla, clasifique el error como `RUNTIME_DOWNLOAD`, `HASH_MISMATCH`, `PYTHON_PACKAGE`, `FRONTEND_BUILD`, `INNO_SETUP`, `SIGNING`, `RELEASE_UPLOAD` o `SECURITY_VALIDATION` antes de corregir.
+No use `runtime-manifest.example.json` como manifest real. El workflow lo rechazara por placeholders. Para la primera prueba manual use `workflow_dispatch` con `version=0.1.0-test`, `prerelease=true` y `skip_signing=true`. Si el build falla, clasifique el error como `RUNTIME_MANIFEST`, `RUNTIME_DOWNLOAD`, `HASH_MISMATCH`, `RUNTIME_RESOLVE`, `POWERSHELL_PARSE`, `XML_TEMPLATE`, `FRONTEND_BUILD`, `PYTHON_EMBEDDED_DEPS`, `POSTGRES_RUNTIME_BLOAT`, `RELEASE_PAYLOAD_SAFETY`, `INNO_INSTALL`, `INNO_BUILD`, `SIGNING`, `ARTIFACT_UPLOAD` o `RELEASE_UPLOAD` antes de corregir.

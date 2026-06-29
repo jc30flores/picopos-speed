@@ -3,7 +3,7 @@
   <name>Pico de Gallo PostgreSQL</name>
   <description>Portable PostgreSQL runtime for Pico de Gallo.</description>
   <executable>{{POSTGRES_BIN_DIR}}\pg_ctl.exe</executable>
-  <arguments>runservice -N PicoDeGallo-PostgreSQL -D "{{PROGRAM_DATA_DIR}}\postgres-data" -w</arguments>
+  <arguments>runservice -N PicoDeGallo-PostgreSQL -D "{{PROGRAM_DATA_DIR}}\postgres\data" -w</arguments>
   <workingdirectory>{{POSTGRES_BIN_DIR}}</workingdirectory>
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size" />

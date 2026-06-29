@@ -52,7 +52,7 @@ pwsh -NoProfile -File deploy/windows-native/vendor/fetch-runtimes.ps1 `
   -OutputDir .runtime-cache-test
 ```
 
-El script debe rechazar placeholders, `latest`, URL no HTTPS, hash faltante y hash incorrecto. `.runtime-cache-test` no debe agregarse a Git.
+El script debe rechazar placeholders, `latest`, URL no HTTPS, hash faltante y hash incorrecto. Tambien debe generar `resolved-runtimes.json` con rutas absolutas para `python`, `postgres`, `caddy`, `winsw` e `innoSetup`. `.runtime-cache-test` no debe agregarse a Git.
 
 ## 9. Ejecutar workflow_dispatch
 
@@ -69,6 +69,8 @@ El script debe rechazar placeholders, `latest`, URL no HTTPS, hash faltante y ha
    - `PicoDeGallo-Setup-0.1.0-test.exe`
    - `PicoDeGallo-Setup-0.1.0-test.exe.sha256`
    - `manifest.json`
+
+El runtime PostgreSQL del release debe ser el directorio preparado por allowlist (`bin/`, `lib/`, `share/`), no la raiz completa del ZIP fuente.
 
 ## 10. Publicar por tag
 
@@ -131,6 +133,7 @@ DTE sigue activo. El workflow solo descarga runtimes, compila frontend, empaquet
 - Falta validar la distribución comercial de cada runtime.
 - Falta certificado de firma para reducir SmartScreen.
 - Falta primer build en GitHub Actions con manifest real.
+- Falta validar en Actions que Python embeddable importe `django`, `waitress`, `psycopg2` y `requests`.
 - Falta prueba completa en VM Windows limpia.
 
 ## 18. Próxima fase

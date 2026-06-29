@@ -36,15 +36,21 @@ DTE sigue activo. `DTE_BACKGROUND_MODE=external` separa backend web, worker y mo
 
 ## Release local
 
-`package-release.ps1` prepara una carpeta de release y marca el resultado como `NOT_INSTALLABLE` si faltan binarios externos.
+`package-release.ps1` prepara una carpeta de release instalable y falla si falta cualquier runtime externo. No copia runtimes desde el repositorio y no genera un paquete `NOT_INSTALLABLE`: para el instalador nativo todos los binarios deben venir del manifest verificado o de rutas locales explicitas.
 
 Ejemplo:
 
 ```powershell
-deploy/windows-native/package-release.ps1 -Version "1.0.0" -OutputDir "release/windows-native" -SkipFrontendBuild -SkipDependencyInstall
+deploy/windows-native/package-release.ps1 `
+  -Version "1.0.0" `
+  -OutputDir "release/windows-native" `
+  -PythonRuntimePath "C:\runtimes\python" `
+  -PostgresRuntimePath "C:\runtimes\postgres-min" `
+  -CaddyPath "C:\runtimes\caddy.exe" `
+  -WinSWPath "C:\runtimes\winsw.exe"
 ```
 
-No descarga dependencias ni agrega binarios al repo.
+Para pruebas reales pase rutas a Python embeddable, PostgreSQL minimo, Caddy y WinSW. En CI, las dependencias Python se instalan con el Python de build hacia `Lib\site-packages` del runtime embebido; esto usa red de pip salvo que se configure un wheelhouse externo. No se agregan binarios al repo.
 
 ## Build del instalador
 
@@ -57,7 +63,7 @@ No descarga dependencias ni agrega binarios al repo.
 
 ## Release automatizado por GitHub Actions
 
-El flujo recomendado para distribución comercial ya no es que el cliente ni el operador construyan localmente. Al crear un tag `v*` o ejecutar manualmente el workflow `Build native Windows installer`, GitHub Actions prepara runtimes Windows verificados por SHA256, genera el release nativo, compila `PicoDeGallo-Setup-${VERSION}.exe` y lo publica como asset de GitHub Releases.
+El flujo recomendado para distribucion comercial ya no es que el cliente ni el operador construyan localmente. Al crear un tag `v*` o ejecutar manualmente el workflow `Build native Windows installer`, GitHub Actions prepara runtimes Windows verificados por SHA256, reduce PostgreSQL a runtime minimo, genera el release nativo, compila `PicoDeGallo-Setup-${VERSION}.exe` y lo publica como asset de GitHub Releases.
 
 El build local con `package-release.ps1` y `installer/build-installer.ps1` queda como ruta técnica opcional para validación. El cliente final descarga únicamente el `.exe` publicado; no clona el repositorio y no instala Docker Desktop, WSL2, Python, Node.js, PostgreSQL, Caddy ni Inno Setup.
 

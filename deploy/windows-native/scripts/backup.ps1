@@ -1,3 +1,4 @@
+$ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 $stamp=Get-Date -Format 'yyyy-MM-dd-HHmmss'
 $dir=Join-Path (Get-BackupsDir) "PicoDeGallo-Native-Backup-$stamp"

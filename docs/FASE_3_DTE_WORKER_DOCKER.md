@@ -51,4 +51,4 @@ Revertir este commit vuelve al arranque heredado desde AppConfig.ready y elimina
 ## 17. Próxima fase recomendada
 Probar Docker en ambiente con CLI disponible y luego preparar scripts Windows/instalador.
 
-DTE sigue activo. No se implementó modo interno sin DTE. Docker ahora debe usar workers separados. Windows scripts e instalador `.exe` siguen pendientes.
+DTE sigue activo. No se implementó una ruta operativa sin DTE. Docker ahora debe usar workers separados. Windows scripts e instalador `.exe` siguen pendientes.

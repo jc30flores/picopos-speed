@@ -1,4 +1,5 @@
 param([switch]$Force,[string]$DteBaseUrl='replace-with-dte-api-base-url',[string]$DteApiToken='replace-with-dte-api-token')
+$ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 $target=Get-EnvPath
 if ((Test-Path $target) -and -not $Force) { throw 'El archivo de configuración ya existe. Usa -Force para regenerar.' }
