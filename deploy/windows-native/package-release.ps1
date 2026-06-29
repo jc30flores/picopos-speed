@@ -238,8 +238,8 @@ function Install-EmbeddedPythonDependencies {
         }
 
         $pthFile = Get-ChildItem -LiteralPath $PythonRoot -Filter "python*._pth" -File | Select-Object -First 1
-        $pthContent = Get-Content -LiteralPath $pthFile.FullName -Raw
-        if ($pthContent -notmatch "(?m)^Lib\\site-packages$" -or $pthContent -notmatch "(?m)^import site$") {
+        $pthLines = @(Get-Content -LiteralPath $pthFile.FullName | ForEach-Object { ([string]$_).Trim() })
+        if (($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
             Fail "python*._pth no habilita Lib\site-packages e import site."
         }
 
