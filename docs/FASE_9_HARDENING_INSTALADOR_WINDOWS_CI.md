@@ -7,10 +7,11 @@
 - `resolved-runtimes.json` podia quedar sin keys utiles, incluido `innoSetup`.
 - Python embeddable fallaba con `python.exe: No module named pip`.
 - PostgreSQL se copiaba desde la raiz completa del ZIP e incluia componentes no runtime como GUI y dependencias web.
+- En GitHub Actions se detectaron fallos adicionales durante el endurecimiento: uso de `$host` en PowerShell, validacion de `OrderedDictionary` con metodo incorrecto, falso positivo de token `Bearer` por regex multilinea, splatting de parametros con arreglo al llamar `build-installer.ps1`, comillas `\"` invalidas en Inno Setup y cache de pip inexistente en el post-step de `actions/setup-python`.
 
 ## 2. Causa raiz
 
-El flujo estaba validando tarde y copiando demasiado. `fetch-runtimes.ps1` resolvia PostgreSQL a la raiz extraida, `package-release.ps1` no tenia una validacion interna completa de payload y el workflow tenia validaciones parciales que descubrian errores despues de preparar un release incompleto.
+El flujo estaba validando tarde y copiando demasiado. `fetch-runtimes.ps1` resolvia PostgreSQL a la raiz extraida, `package-release.ps1` no tenia una validacion interna completa de payload y el workflow tenia validaciones parciales que descubrian errores despues de preparar un release incompleto. Ademas, algunos errores eran propios de PowerShell/Inno en Windows y no se podian reproducir completamente desde Linux sin ejecutar el workflow.
 
 ## 3. Correcciones aplicadas
 
@@ -21,6 +22,9 @@ El flujo estaba validando tarde y copiando demasiado. `fetch-runtimes.ps1` resol
 - Python embeddable recibe dependencias con el Python de build mediante `pip install --target`.
 - La validacion `Test-ReleasePayloadSafety` corre dentro de `package-release.ps1`.
 - El workflow instala Inno Setup solo desde el runtime verificado y valida `ISCC.exe`.
+- La llamada a `build-installer.ps1` usa splatting con hashtable para parametros nombrados.
+- `PicoDeGallo.iss` usa comillas duplicadas de Inno Setup en `Parameters`, no escapes `\"`.
+- Se elimino el cache de pip de `actions/setup-python`, porque el empaquetado usa `pip --no-cache-dir`.
 - `build-installer.ps1` genera `.exe`, `.sha256` y `manifest.json`.
 - Se agrego `scripts/ci/validate_windows_native_packaging.py` para validaciones estaticas desde Linux.
 
@@ -54,16 +58,43 @@ DTE sigue activo con `DTE_BACKGROUND_MODE=external`. El workflow solo compila y 
 
 ## 11. Resultado del workflow final
 
-Pendiente de ejecutar en GitHub Actions para esta revision.
+Workflow ejecutado en GitHub Actions con:
+
+- Rama: `codex/implementar-cambios-para-configuraciones-runtime-xyowqd`
+- Version: `0.1.0-test`
+- `prerelease=true`
+- `skip_signing=true`
+- `RUN_ID`: `28341637334`
+- Resultado: `success`
+- URL: `https://github.com/jc30flores/picopos-speed/actions/runs/28341637334`
+
+Pasaron todos los pasos: manifest, descarga y SHA256 de runtimes, `resolved-runtimes.json`, parseo PowerShell, XML, lint de Inno Setup, `npm ci`, `package-release.ps1`, payload safety, instalacion de Inno Setup, build del instalador, validacion de salida, artifact y GitHub Release.
 
 ## 12. Estado del instalador
 
-Pendiente de confirmar si se genero `PicoDeGallo-Setup-0.1.0-test.exe`, su `.sha256` y `manifest.json`.
+Se genero el instalador de prueba:
+
+- `PicoDeGallo-Setup-0.1.0-test.exe`
+- `PicoDeGallo-Setup-0.1.0-test.exe.sha256`
+- `manifest.json`
+
+El asset `.exe` publicado pesa aproximadamente 66.5 MB. El instalador no esta firmado porque la ejecucion uso `skip_signing=true`.
 
 ## 13. Artifact o release
 
-Pendiente de registrar el `RUN_ID`, artifact o release generado.
+Artifact del workflow:
+
+- Nombre: `PicoDeGallo-Installer-0.1.0-test`
+- `RUN_ID`: `28341637334`
+- Estado: no expirado al momento de la revision
+
+GitHub Release:
+
+- Tag: `0.1.0-test`
+- Prerelease: si
+- URL: `https://github.com/jc30flores/picopos-speed/releases/tag/0.1.0-test`
+- Assets publicados: `PicoDeGallo-Setup-0.1.0-test.exe`, `PicoDeGallo-Setup-0.1.0-test.exe.sha256`, `manifest.json`
 
 ## 14. Proximo paso
 
-Ejecutar el workflow manual con `version=0.1.0-test`, `prerelease=true` y `skip_signing=true`. Si pasa, descargar el `.exe` desde GitHub Releases y probarlo en una VM Windows limpia.
+Descargar unicamente `PicoDeGallo-Setup-0.1.0-test.exe` desde GitHub Releases y probarlo en una VM Windows limpia sin Python, Node.js, PostgreSQL, Caddy, Inno Setup, Docker Desktop ni WSL2 preinstalados. Validar instalacion, servicios, migraciones, frontend, DTE configurado con placeholders seguros y arranque sin envio fiscal real.
