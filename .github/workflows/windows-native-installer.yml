@@ -297,19 +297,21 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $args = @(
+          $isccPath = '${{ steps.inno.outputs.iscc }}'
+          if ([string]::IsNullOrWhiteSpace($isccPath)) { throw '[INNO_BUILD] ISCC.exe no fue resuelto por el paso Install Inno Setup.' }
+          $buildArgs = @(
             '-Version', '${{ steps.version.outputs.version }}',
             '-ReleaseDir', 'release/windows-native',
             '-OutputDir', $env:INSTALLER_OUTPUT_DIR,
-            '-InnoSetupCompilerPath', '${{ steps.inno.outputs.iscc }}'
+            '-ISCCPath', $isccPath
           )
           if ('${{ steps.signing.outputs.skip }}' -eq 'true') {
-            $args += '-SkipSigning'
+            $buildArgs += '-SkipSigning'
           } else {
             $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe | Sort-Object FullName -Descending | Select-Object -First 1).FullName
-            $args += @('-SignToolPath', $signtool, '-CodeSigningCertPath', '${{ steps.signing.outputs.cert }}', '-CodeSigningTimestampUrl', '${{ secrets.WINDOWS_CODESIGN_TIMESTAMP_URL }}')
+            $buildArgs += @('-SignToolPath', $signtool, '-CodeSigningCertPath', '${{ steps.signing.outputs.cert }}', '-CodeSigningTimestampUrl', '${{ secrets.WINDOWS_CODESIGN_TIMESTAMP_URL }}')
           }
-          & deploy/windows-native/installer/build-installer.ps1 @args
+          & deploy/windows-native/installer/build-installer.ps1 @buildArgs
 
       - name: Validate installer output
         shell: pwsh

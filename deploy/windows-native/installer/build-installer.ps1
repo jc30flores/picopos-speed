@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$ReleaseDir,
     [string]$OutputDir = "release/installers",
-    [string]$InnoSetupCompilerPath = "ISCC.exe",
+    [Alias("InnoSetupCompilerPath")][string]$ISCCPath = "ISCC.exe",
     [string]$SignToolPath,
     [string]$CodeSigningCertPath,
     [string]$CodeSigningTimestampUrl = "http://timestamp.digicert.com",
@@ -119,8 +119,8 @@ Test-RequiredReleaseLayout -Root $release.Path
 Test-NoForbiddenReleaseFiles -Root $release.Path
 Test-NoObviousSecrets -Root $release.Path
 
-if ([string]::IsNullOrWhiteSpace($InnoSetupCompilerPath) -or -not (Test-Path -LiteralPath $InnoSetupCompilerPath -PathType Leaf)) {
-    Fail "No existe ISCC.exe: $InnoSetupCompilerPath"
+if ([string]::IsNullOrWhiteSpace($ISCCPath) -or -not (Test-Path -LiteralPath $ISCCPath -PathType Leaf)) {
+    Fail "No existe ISCC.exe: $ISCCPath"
 }
 
 $out = Join-Path $repoRoot $OutputDir
@@ -133,7 +133,7 @@ $issContent = $issContent.Replace('#define MyAppVersion "0.0.0-dev"', ('#define 
 $issContent = $issContent.Replace('#define SourceRoot "..\..\..\release\windows-native"', ('#define SourceRoot "{0}"' -f $release.Path))
 $issContent | Set-Content -LiteralPath $issWork -Encoding UTF8
 
-& $InnoSetupCompilerPath $issWork "/O$out"
+& $ISCCPath $issWork "/O$out"
 if ($LASTEXITCODE -ne 0) {
     Fail "ISCC.exe fallo con codigo $LASTEXITCODE"
 }
