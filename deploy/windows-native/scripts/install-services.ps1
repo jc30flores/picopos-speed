@@ -130,6 +130,48 @@ function Format-CommandForLog {
     return ($quoted -join " ")
 }
 
+function Get-TextTail {
+    param(
+        [string]$Text,
+        [int]$Lines = 80
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+    $parts = @($Text -split "`r?`n")
+    if ($parts.Count -gt $Lines) {
+        $parts = $parts[($parts.Count - $Lines)..($parts.Count - 1)]
+    }
+    return (($parts | ForEach-Object { [string]$_ }) -join "`n").Trim()
+}
+
+function Get-CommandFailureArtifactPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$StreamName,
+        [Parameter(Mandatory = $true)][string]$LogName
+    )
+
+    $step = [string]$Script:LastInstallStep
+    if ([string]::IsNullOrWhiteSpace($step)) {
+        $step = [System.IO.Path]::GetFileNameWithoutExtension($LogName)
+    }
+    $safeStep = [regex]::Replace($step, "[^A-Za-z0-9_.-]+", "-").Trim("-")
+    if ([string]::IsNullOrWhiteSpace($safeStep)) {
+        $safeStep = "command"
+    }
+    return (Join-Path (Get-LogsDir) ("failed-{0}-{1}.log" -f $safeStep, $StreamName))
+}
+
+function Save-CommandFailureArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Text
+    )
+
+    [System.IO.File]::WriteAllText($Path, (Protect-Text $Text), (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
+}
+
 function Invoke-LoggedCommand {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -147,59 +189,85 @@ function Invoke-LoggedCommand {
     $logPath = Get-NativeLogPath $LogName
     $stdout = Join-Path (Get-LogsDir) ("{0}.stdout.tmp" -f ([Guid]::NewGuid().ToString("N")))
     $stderr = Join-Path (Get-LogsDir) ("{0}.stderr.tmp" -f ([Guid]::NewGuid().ToString("N")))
-    $oldEnvironment = @{}
     $exitCode = 0
-
-    Write-InstallLog -LogName $LogName -Message ("RUN " + (Format-CommandForLog -FilePath $FilePath -ArgumentList $ArgumentList))
-
-    try {
-        foreach ($name in $Environment.Keys) {
-            $oldEnvironment[$name] = [Environment]::GetEnvironmentVariable([string]$name, "Process")
-            [Environment]::SetEnvironmentVariable([string]$name, [string]$Environment[$name], "Process")
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-            Push-Location $WorkingDirectory
-        }
-
-        try {
-            & $FilePath @ArgumentList > $stdout 2> $stderr
-            $exitCode = $LASTEXITCODE
-        } catch {
-            Write-InstallLog -LogName $LogName -Message ("FAILED_TO_LAUNCH " + $_.Exception.Message)
-            throw
-        } finally {
-            if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-                Pop-Location
-            }
-        }
-    } finally {
-        foreach ($name in $Environment.Keys) {
-            [Environment]::SetEnvironmentVariable([string]$name, $oldEnvironment[$name], "Process")
-        }
-    }
-
     $stdoutText = ""
     $stderrText = ""
-    if (Test-Path -LiteralPath $stdout -PathType Leaf) {
-        $stdoutText = Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue
-        if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
-            Add-Content -LiteralPath $logPath -Value (Protect-Text $stdoutText) -Encoding UTF8
+    $safeCommand = Format-CommandForLog -FilePath $FilePath -ArgumentList $ArgumentList
+    $safeWorkingDirectory = if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { "" } else { $WorkingDirectory }
+    $envKeys = @($Environment.Keys | ForEach-Object { [string]$_ } | Sort-Object)
+
+    Write-InstallLog -LogName $LogName -Message ("RUN " + $safeCommand)
+
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $FilePath
+        $psi.Arguments = ConvertTo-StartProcessArgumentString -ArgumentList $ArgumentList
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $psi.WorkingDirectory = $WorkingDirectory
+        }
+        foreach ($name in $envKeys) {
+            $psi.EnvironmentVariables[[string]$name] = [string]$Environment[$name]
+        }
+
+        $process.StartInfo = $psi
+        try {
+            [void]$process.Start()
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            $stdoutTask.Wait()
+            $stderrTask.Wait()
+            $exitCode = [int]$process.ExitCode
+            $stdoutText = [string]$stdoutTask.Result
+            $stderrText = [string]$stderrTask.Result
+        } catch {
+            $stdoutTail = Get-TextTail -Text $stdoutText -Lines 80
+            $stderrTail = Get-TextTail -Text $stderrText -Lines 80
+            Write-InstallLog -LogName $LogName -Message ("FAILED_TO_LAUNCH COMMAND_LAUNCH_FAILED command={0} workingDirectory={1} stdout={2} stderr={3} envKeys={4} exceptionType={5} exception={6} stdoutTail={7} stderrTail={8}" -f $safeCommand, $safeWorkingDirectory, $stdout, $stderr, ($envKeys -join ","), $_.Exception.GetType().FullName, $_.Exception.ToString(), $stdoutTail, $stderrTail)
+            throw
+        }
+    } finally {
+        if ($process) {
+            $process.Dispose()
         }
     }
-    if (Test-Path -LiteralPath $stderr -PathType Leaf) {
-        $stderrText = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
-        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
-            Add-Content -LiteralPath $logPath -Value (Protect-Text $stderrText) -Encoding UTF8
-        }
+
+    [System.IO.File]::WriteAllText($stdout, $stdoutText, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
+    [System.IO.File]::WriteAllText($stderr, $stderrText, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
+
+    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+        Write-InstallLog -LogName $LogName -Message "STDOUT_BEGIN"
+        Add-Content -LiteralPath $logPath -Value (Protect-Text $stdoutText) -Encoding UTF8
+        Write-InstallLog -LogName $LogName -Message "STDOUT_END"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+        Write-InstallLog -LogName $LogName -Message "STDERR_BEGIN"
+        Add-Content -LiteralPath $logPath -Value (Protect-Text $stderrText) -Encoding UTF8
+        Write-InstallLog -LogName $LogName -Message "STDERR_END"
+    }
+
+    Write-InstallLog -LogName $LogName -Message ("EXIT_CODE " + $exitCode)
+    if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($stderrText)) {
+        Write-InstallLog -LogName $LogName -Message ("COMMAND_STDERR_NONFATAL command={0} stderrTail={1}" -f $safeCommand, (Get-TextTail -Text $stderrText -Lines 40))
+    }
+    if ($exitCode -ne 0) {
+        $failedStdout = Get-CommandFailureArtifactPath -StreamName "stdout" -LogName $LogName
+        $failedStderr = Get-CommandFailureArtifactPath -StreamName "stderr" -LogName $LogName
+        Save-CommandFailureArtifact -Path $failedStdout -Text $stdoutText
+        Save-CommandFailureArtifact -Path $failedStderr -Text $stderrText
+        $stdoutTail = Get-TextTail -Text $stdoutText -Lines 80
+        $stderrTail = Get-TextTail -Text $stderrText -Lines 80
+        Write-InstallLog -LogName $LogName -Message ("COMMAND_FAILED exitCode={0} command={1} stdout={2} stderr={3} stdoutTail={4} stderrTail={5}" -f $exitCode, $safeCommand, $failedStdout, $failedStderr, $stdoutTail, $stderrTail)
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+        throw "Comando fallo con codigo $exitCode. Revise $logPath"
     }
 
     Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
-
-    Write-InstallLog -LogName $LogName -Message ("EXIT_CODE " + $exitCode)
-    if ($exitCode -ne 0) {
-        throw "Comando fallo con codigo $exitCode. Revise $logPath"
-    }
 
     if ($ReturnStdout) {
         return $stdoutText
@@ -860,11 +928,38 @@ function ConvertTo-StartProcessArgumentString {
 
     $escaped = foreach ($arg in $ArgumentList) {
         $text = [string]$arg
-        if ($text -match '[\s"]') {
-            '"' + $text.Replace('"', '\"') + '"'
-        } else {
+        if ($text.Length -gt 0 -and $text -notmatch '[\s"]') {
             $text
+            continue
         }
+
+        $builder = New-Object System.Text.StringBuilder
+        [void]$builder.Append('"')
+        $backslashes = 0
+        foreach ($char in $text.ToCharArray()) {
+            if ($char -eq '\') {
+                $backslashes += 1
+                continue
+            }
+            if ($char -eq '"') {
+                if ($backslashes -gt 0) {
+                    [void]$builder.Append("\" * ($backslashes * 2))
+                    $backslashes = 0
+                }
+                [void]$builder.Append('\"')
+                continue
+            }
+            if ($backslashes -gt 0) {
+                [void]$builder.Append("\" * $backslashes)
+                $backslashes = 0
+            }
+            [void]$builder.Append($char)
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append("\" * ($backslashes * 2))
+        }
+        [void]$builder.Append('"')
+        $builder.ToString()
     }
     return ($escaped -join " ")
 }
@@ -2433,6 +2528,7 @@ function Get-DjangoEnvironment {
         DJANGO_SETTINGS_MODULE = "config.settings"
         PYTHONUNBUFFERED = "1"
         PYTHONDONTWRITEBYTECODE = "1"
+        PICO_INSTALLER_PREFLIGHT = "1"
     }
 }
 
@@ -2483,10 +2579,12 @@ function Assert-DjangoRuntimePayload {
 }
 
 function Validate-DjangoRuntime {
-    Assert-DjangoRuntimePayload
-    $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
-    $backend = Join-Path $Script:ProgramFilesDir "backend"
-    $script = @"
+    $currentCheck = "payload"
+    try {
+        Assert-DjangoRuntimePayload
+        $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
+        $backend = Join-Path $Script:ProgramFilesDir "backend"
+        $script = @"
 import importlib
 import os
 
@@ -2497,18 +2595,54 @@ importlib.import_module("config.wsgi")
 print("DJANGO_SETTINGS_IMPORT_OK")
 "@
 
-    Invoke-LoggedCommand `
-        -FilePath $python `
-        -ArgumentList @("-c", $script) `
-        -WorkingDirectory $backend `
-        -Environment (Get-DjangoEnvironment) `
-        -LogName "backend-runtime.log"
+        $currentCheck = "import config.settings/config.wsgi"
+        Invoke-LoggedCommand `
+            -FilePath $python `
+            -ArgumentList @("-c", $script) `
+            -WorkingDirectory $backend `
+            -Environment (Get-DjangoEnvironment) `
+            -LogName "backend-runtime.log"
+        Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_SETTINGS_IMPORT_OK"
 
-    Invoke-DjangoManage `
-        -ArgumentList @("manage.py", "help", "check_runtime_config") `
-        -LogName "backend-runtime.log"
+        $currentCheck = "manage.py help check_runtime_config"
+        Invoke-DjangoManage `
+            -ArgumentList @("manage.py", "help", "check_runtime_config") `
+            -LogName "backend-runtime.log"
+        Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_MANAGEMENT_COMMAND_OK help check_runtime_config"
 
-    Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_MANAGEMENT_COMMAND_OK check_runtime_config"
+        $currentCheck = "manage.py check_runtime_config"
+        Invoke-DjangoManage `
+            -ArgumentList @("manage.py", "check_runtime_config") `
+            -LogName "backend-runtime.log"
+        Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_MANAGEMENT_COMMAND_OK check_runtime_config"
+
+        $currentCheck = "django db select"
+        $dbScript = @"
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+import django
+django.setup()
+
+from django.db import connection
+
+with connection.cursor() as cursor:
+    cursor.execute("SELECT 1")
+    value = cursor.fetchone()[0]
+print("DJANGO_DB_SELECT_OK value=" + str(value))
+"@
+        Invoke-LoggedCommand `
+            -FilePath $python `
+            -ArgumentList @("-c", $dbScript) `
+            -WorkingDirectory $backend `
+            -Environment (Get-DjangoEnvironment) `
+            -LogName "backend-runtime.log"
+        Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_DB_SELECT_OK"
+        Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_RUNTIME_VALIDATION_OK"
+    } catch {
+        Write-InstallLog -LogName "backend-runtime.log" -Message ("DJANGO_RUNTIME_VALIDATION_FAILED command={0} message={1}" -f $currentCheck, $_.Exception.Message)
+        throw
+    }
 }
 
 function Run-DjangoCheckRuntime {
@@ -2576,6 +2710,7 @@ function Wait-HttpOk {
 
 function Start-BackendService {
     Start-WinSWService -ServiceId "PicoDeGallo-Backend"
+    Wait-HttpOk -Name "backend-live-direct" -Uri "http://127.0.0.1:8000/api/health/live/" -TimeoutSeconds 120
     Wait-HttpOk -Name "backend-ready-direct" -Uri "http://127.0.0.1:8000/api/health/ready/" -TimeoutSeconds 120
 }
 

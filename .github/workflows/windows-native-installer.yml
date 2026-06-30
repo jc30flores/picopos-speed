@@ -194,6 +194,10 @@ jobs:
         shell: pwsh
         run: ./scripts/ci/test_winsw_service_account.ps1
 
+      - name: Test native command runner
+        shell: pwsh
+        run: ./scripts/ci/test_native_command_runner.ps1
+
       - name: Validate service XML templates
         shell: pwsh
         run: |

@@ -83,6 +83,115 @@ Save-Diagnostic "service-files.txt" ($serviceFileFacts -join "`n")
 $caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
 Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { 'present' } else { 'missing' })")
 
+function ConvertTo-DiagnosticArgumentString {
+    param([string[]]$ArgumentList = @())
+
+    $escaped = foreach ($arg in $ArgumentList) {
+        $text = [string]$arg
+        if ($text.Length -gt 0 -and $text -notmatch '[\s"]') {
+            $text
+            continue
+        }
+
+        $builder = New-Object System.Text.StringBuilder
+        [void]$builder.Append('"')
+        $backslashes = 0
+        foreach ($char in $text.ToCharArray()) {
+            if ($char -eq '\') {
+                $backslashes += 1
+                continue
+            }
+            if ($char -eq '"') {
+                if ($backslashes -gt 0) {
+                    [void]$builder.Append("\" * ($backslashes * 2))
+                    $backslashes = 0
+                }
+                [void]$builder.Append('\"')
+                continue
+            }
+            if ($backslashes -gt 0) {
+                [void]$builder.Append("\" * $backslashes)
+                $backslashes = 0
+            }
+            [void]$builder.Append($char)
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append("\" * ($backslashes * 2))
+        }
+        [void]$builder.Append('"')
+        $builder.ToString()
+    }
+    return ($escaped -join " ")
+}
+
+function Invoke-DiagnosticProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$WorkingDirectory,
+        [hashtable]$Environment = @{}
+    )
+
+    $safeCommandParts = @($FilePath) + @($ArgumentList)
+    $safeCommand = ($safeCommandParts | ForEach-Object {
+        $part = [string]$_
+        if ($part -match '\s') { '"' + $part.Replace('"', '\"') + '"' } else { $part }
+    }) -join " "
+    $lines = @("RUN $safeCommand")
+    $stdoutText = ""
+    $stderrText = ""
+    $exitCode = 1
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $FilePath
+        $psi.Arguments = ConvertTo-DiagnosticArgumentString -ArgumentList $ArgumentList
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $psi.WorkingDirectory = $WorkingDirectory
+        }
+        foreach ($name in @($Environment.Keys | Sort-Object)) {
+            $psi.EnvironmentVariables[[string]$name] = [string]$Environment[$name]
+        }
+        $process.StartInfo = $psi
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdoutTask.Wait()
+        $stderrTask.Wait()
+        $exitCode = [int]$process.ExitCode
+        $stdoutText = [string]$stdoutTask.Result
+        $stderrText = [string]$stderrTask.Result
+    } catch {
+        $lines += "COMMAND_LAUNCH_FAILED exceptionType=$($_.Exception.GetType().FullName)"
+        $lines += "exception=$($_.Exception.ToString())"
+    } finally {
+        if ($process) {
+            $process.Dispose()
+        }
+    }
+
+    $lines += "EXIT_CODE $exitCode"
+    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+        $lines += "STDOUT_BEGIN"
+        $lines += ($stdoutText -split "`r?`n" | ForEach-Object { [string]$_ })
+        $lines += "STDOUT_END"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+        $lines += "STDERR_BEGIN"
+        $lines += ($stderrText -split "`r?`n" | ForEach-Object { [string]$_ })
+        $lines += "STDERR_END"
+        if ($exitCode -eq 0) {
+            $lines += "STDERR_NONFATAL exitCode=0"
+        }
+    }
+    return $lines
+}
+
 function Get-BackendRuntimeDiagnostic {
     $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
     $backend = Join-Path $Script:ProgramFilesDir "backend"
@@ -98,33 +207,64 @@ function Get-BackendRuntimeDiagnostic {
         return ($facts -join "`n")
     }
 
-    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED")
-    $oldEnv = @{}
-    foreach ($name in $envNames) {
-        $oldEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    $runtimeEnv = @{
+        DJANGO_ENV_FILE = (Get-EnvPath)
+        DOTENV_OVERRIDE = "false"
+        DJANGO_SETTINGS_MODULE = "config.settings"
+        PYTHONUNBUFFERED = "1"
+        PYTHONDONTWRITEBYTECODE = "1"
+        PICO_INSTALLER_PREFLIGHT = "1"
     }
-    try {
-        [Environment]::SetEnvironmentVariable("DJANGO_ENV_FILE", (Get-EnvPath), "Process")
-        [Environment]::SetEnvironmentVariable("DOTENV_OVERRIDE", "false", "Process")
-        [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "config.settings", "Process")
-        [Environment]::SetEnvironmentVariable("PYTHONUNBUFFERED", "1", "Process")
-        Push-Location $backend
-        try {
-            $output = & $python -c "import importlib, os; module=os.environ.get('DJANGO_SETTINGS_MODULE') or 'config.settings'; print('DJANGO_SETTINGS_MODULE=' + module); importlib.import_module(module); importlib.import_module('config.wsgi'); print('DJANGO_SETTINGS_IMPORT_OK')" 2>&1
-            $facts += "settings_import_exit=$LASTEXITCODE"
-            $facts += ($output | ForEach-Object { [string]$_ })
-            $helpOutput = & $python manage.py help check_runtime_config 2>&1
-            $facts += "check_runtime_config_help_exit=$LASTEXITCODE"
-            $facts += ($helpOutput | Select-Object -First 40 | ForEach-Object { [string]$_ })
-        } finally {
-            Pop-Location
-        }
-    } catch {
-        $facts += "backend_runtime_exception=$($_.Exception.Message)"
-    } finally {
-        foreach ($name in $envNames) {
-            [Environment]::SetEnvironmentVariable($name, $oldEnv[$name], "Process")
-        }
+
+    $facts += Invoke-DiagnosticProcess `
+        -FilePath $python `
+        -ArgumentList @("-c", "import importlib, os; module=os.environ.get('DJANGO_SETTINGS_MODULE') or 'config.settings'; print('DJANGO_SETTINGS_MODULE=' + module); importlib.import_module(module); importlib.import_module('config.wsgi'); print('DJANGO_SETTINGS_IMPORT_OK')") `
+        -WorkingDirectory $backend `
+        -Environment $runtimeEnv
+
+    $helpResult = Invoke-DiagnosticProcess `
+        -FilePath $python `
+        -ArgumentList @("manage.py", "help", "check_runtime_config") `
+        -WorkingDirectory $backend `
+        -Environment $runtimeEnv
+    $facts += "check_runtime_config_help_exit=$(($helpResult | Where-Object { $_ -like 'EXIT_CODE *' } | Select-Object -First 1).Replace('EXIT_CODE ', ''))"
+    $facts += $helpResult
+
+    $facts += Invoke-DiagnosticProcess `
+        -FilePath $python `
+        -ArgumentList @("manage.py", "check_runtime_config") `
+        -WorkingDirectory $backend `
+        -Environment $runtimeEnv
+
+    $envs = Read-NativeEnv
+    $dbHost = [string]$envs["DB_HOST"]
+    if ([string]::IsNullOrWhiteSpace($dbHost)) { $dbHost = "127.0.0.1" }
+    $dbPort = 5432
+    if (-not [string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) {
+        [void][int]::TryParse([string]$envs["DB_PORT"], [ref]$dbPort)
+    }
+    if (Test-TcpPort -HostName $dbHost -Port $dbPort -TimeoutMilliseconds 1000) {
+        $dbScript = @"
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+import django
+django.setup()
+
+from django.db import connection
+
+with connection.cursor() as cursor:
+    cursor.execute("SELECT 1")
+    value = cursor.fetchone()[0]
+print("DJANGO_DB_SELECT_OK value=" + str(value))
+"@
+        $facts += Invoke-DiagnosticProcess `
+            -FilePath $python `
+            -ArgumentList @("-c", $dbScript) `
+            -WorkingDirectory $backend `
+            -Environment $runtimeEnv
+    } else {
+        $facts += "DJANGO_DB_SELECT_SKIPPED postgres_tcp_unavailable $dbHost`:$dbPort"
     }
     return ($facts -join "`n")
 }
@@ -150,8 +290,28 @@ if (Test-Path -LiteralPath $runAsDir -PathType Container) {
 
 $installServicesError = Join-Path (Get-LogsDir) "install-services-error.log"
 if (Test-Path -LiteralPath $installServicesError -PathType Leaf) {
+    Save-Diagnostic "install-services-error.log" (Get-Content -LiteralPath $installServicesError -Raw -ErrorAction SilentlyContinue)
     Save-Diagnostic "install-services-error-tail.txt" ((Get-Content -LiteralPath $installServicesError -Tail 200 -ErrorAction SilentlyContinue) -join "`n")
 }
+
+$backendRuntimeLog = Join-Path (Get-LogsDir) "backend-runtime.log"
+if (Test-Path -LiteralPath $backendRuntimeLog -PathType Leaf) {
+    Save-Diagnostic "backend-runtime.log" (Get-Content -LiteralPath $backendRuntimeLog -Raw -ErrorAction SilentlyContinue)
+}
+
+$failedCommandFiles = Get-ChildItem -LiteralPath (Get-LogsDir) -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "failed-*-stdout.log" -or $_.Name -like "failed-*-stderr.log" } |
+    Sort-Object LastWriteTime -Descending
+foreach ($file in $failedCommandFiles) {
+    Save-Diagnostic "failed-$($file.Name).txt" (Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue)
+}
+
+$tmpFiles = Get-ChildItem -LiteralPath (Get-LogsDir) -File -Filter "*.tmp" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending
+$tmpLines = foreach ($file in $tmpFiles) {
+    "$($file.Name) LastWriteTime=$($file.LastWriteTime.ToString('o')) Size=$($file.Length)"
+}
+Save-Diagnostic "tmp-files.txt" ($tmpLines -join "`n")
 
 $icacls = Join-Path $env:SystemRoot "System32\icacls.exe"
 if (Test-Path -LiteralPath $icacls -PathType Leaf) {

@@ -267,6 +267,33 @@ def validate_native_installer_contract() -> None:
         fail("install-services.ps1 must explicitly reject privileged PostgreSQL service accounts")
     if re.search(r"Invoke-LoggedCommand[\s\S]{0,240}(--password|--pass|password=)", install, re.I):
         fail("Invoke-LoggedCommand must not be used for commands containing service-account passwords")
+    invoke_logged_start = install.find("function Invoke-LoggedCommand")
+    invoke_logged_end = install.find("function Render-Template", invoke_logged_start)
+    if invoke_logged_start < 0 or invoke_logged_end < 0:
+        fail("install-services.ps1 missing Invoke-LoggedCommand body")
+    invoke_logged_body = install[invoke_logged_start:invoke_logged_end]
+    if re.search(r"&\s*\$FilePath\s+@ArgumentList\s*>\s*\$stdout\s*2>\s*\$stderr", invoke_logged_body):
+        fail("Invoke-LoggedCommand still uses fragile native PowerShell stderr redirection")
+    for token in [
+        "System.Diagnostics.ProcessStartInfo",
+        "UseShellExecute = $false",
+        "RedirectStandardOutput = $true",
+        "RedirectStandardError = $true",
+        "EnvironmentVariables",
+        "EXIT_CODE",
+        "STDOUT_BEGIN",
+        "STDERR_BEGIN",
+        "COMMAND_STDERR_NONFATAL",
+        "COMMAND_FAILED exitCode=",
+        "stdoutTail",
+        "stderrTail",
+        "COMMAND_LAUNCH_FAILED",
+        "Protect-Text",
+    ]:
+        if token not in invoke_logged_body:
+            fail(f"Invoke-LoggedCommand missing robust native runner token: {token}")
+    if "failed-{0}-{1}.log" not in install:
+        fail("install-services.ps1 missing clear failed command artifact naming")
     winsw_account_start = install.find("function Install-WinSWServiceWithAccount")
     winsw_account_end = install.find("function Stop-ExistingServicesForLogArchive", winsw_account_start)
     if winsw_account_start < 0 or winsw_account_end < 0:
@@ -414,6 +441,8 @@ def validate_native_installer_contract() -> None:
         fail("windows-native-installer workflow must run PostgreSQL config blank-line fixture")
     if "scripts/ci/test_winsw_service_account.ps1" not in workflow:
         fail("windows-native-installer workflow must run or explicitly skip WinSW service account fixture")
+    if "scripts/ci/test_native_command_runner.ps1" not in workflow:
+        fail("windows-native-installer workflow must run native command runner fixture")
     postgres_config_test = read_text_safe(REPO / "scripts" / "ci" / "test_postgres_config_lines.ps1")
     for token in ["Blank lines were not preserved", "UTF-8 BOM detected", "NUL byte detected", "PostgreSQL config blank-line fixture OK"]:
         if token not in postgres_config_test:
@@ -422,11 +451,31 @@ def validate_native_installer_contract() -> None:
     for token in ["PicoDeGallo-WinSW-Account-Test", "PicoDeGalloSvcTest", "Set-WindowsServiceLogonAccountSafe", "Service stayed LocalSystem", "WinSW service account fixture OK"]:
         if token not in winsw_account_test:
             fail(f"WinSW service account fixture missing token: {token}")
+    native_runner_test_path = REPO / "scripts" / "ci" / "test_native_command_runner.ps1"
+    if not native_runner_test_path.exists():
+        fail("scripts/ci/test_native_command_runner.ps1 missing")
+    native_runner_test = read_text_safe(native_runner_test_path)
+    for token in [
+        "COMMAND_STDERR_NONFATAL",
+        "stderr exit 0",
+        "COMMAND_FAILED exitCode=5",
+        "failed-native-command-runner-test-stderr.log",
+        "TEST_SECRET_VALUE",
+        "***REDACTED***",
+        "cwd with space",
+        "ErrorActionPreference=Stop",
+    ]:
+        if token not in native_runner_test:
+            fail(f"native command runner fixture missing token: {token}")
 
     for token in [
         "Validate-DjangoRuntime",
         "DJANGO_SETTINGS_IMPORT_OK",
         "DJANGO_MANAGEMENT_COMMAND_OK check_runtime_config",
+        "DJANGO_DB_SELECT_OK",
+        "DJANGO_RUNTIME_VALIDATION_OK",
+        "PICO_INSTALLER_PREFLIGHT",
+        "PYTHONDONTWRITEBYTECODE",
         'manage.py", "help", "check_runtime_config"',
     ]:
         if token not in install:
@@ -436,12 +485,12 @@ def validate_native_installer_contract() -> None:
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:
         if token not in package:
             fail(f"package-release.ps1 missing PostgreSQL runtime validation token: {token}")
-    for token in ["Invoke-BackendRuntimeImportCheck", "..\\backend", "config\\settings.py", "config\\wsgi.py", "check_runtime_config.py", "DJANGO_SETTINGS_IMPORT_OK"]:
+    for token in ["Invoke-BackendRuntimeImportCheck", "..\\backend", "config\\settings.py", "config\\wsgi.py", "check_runtime_config.py", "DJANGO_SETTINGS_IMPORT_OK", "PICO_INSTALLER_PREFLIGHT"]:
         if token not in package:
             fail(f"package-release.ps1 missing backend payload validation token: {token}")
 
     diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
-    for token in ["backend-runtime.txt", "DJANGO_SETTINGS_MODULE", "DJANGO_SETTINGS_IMPORT_OK", "check_runtime_config_help_exit"]:
+    for token in ["backend-runtime.txt", "backend-runtime.log", "install-services-error.log", "failed-*-stdout.log", "tmp-files.txt", "DJANGO_SETTINGS_MODULE", "DJANGO_SETTINGS_IMPORT_OK", "check_runtime_config_help_exit", "PICO_INSTALLER_PREFLIGHT", "DJANGO_DB_SELECT_OK", "STDERR_NONFATAL"]:
         if token not in diagnostics:
             fail(f"diagnostics.ps1 missing backend runtime diagnostic token: {token}")
 

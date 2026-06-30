@@ -45,7 +45,8 @@ class DTEConfig(AppConfig):
 
         background_mode = (getattr(settings, "DTE_BACKGROUND_MODE", "legacy") or "legacy").strip().lower()
         if background_mode in {"external", "disabled"}:
-            logger.info("[DTE] background startup skipped mode=%s", background_mode)
+            if os.environ.get("PICO_INSTALLER_PREFLIGHT") != "1":
+                logger.debug("[DTE] background startup skipped mode=%s", background_mode)
             return
 
         if os.environ.get("RUN_MAIN") != "true":

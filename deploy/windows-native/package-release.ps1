@@ -246,7 +246,7 @@ function Invoke-BackendRuntimeImportCheck {
     )
     [System.IO.File]::WriteAllLines($envFile, $envLines, [System.Text.UTF8Encoding]::new($false))
 
-    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE")
+    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "PICO_INSTALLER_PREFLIGHT")
     $oldEnv = @{}
     foreach ($name in $envNames) {
         $oldEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -258,6 +258,7 @@ function Invoke-BackendRuntimeImportCheck {
         [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "config.settings", "Process")
         [Environment]::SetEnvironmentVariable("PYTHONUNBUFFERED", "1", "Process")
         [Environment]::SetEnvironmentVariable("PYTHONDONTWRITEBYTECODE", "1", "Process")
+        [Environment]::SetEnvironmentVariable("PICO_INSTALLER_PREFLIGHT", "1", "Process")
 
         Push-Location $backend
         try {

@@ -1,15 +1,18 @@
 from io import StringIO
 from unittest import mock
+import apps.dte as dte_module
 from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 from apps.dte.apps import DTEConfig
 
 class DTEBackgroundModeTests(SimpleTestCase):
+    def _config(self):
+        return DTEConfig("apps.dte", dte_module)
+
     @override_settings(DTE_BACKGROUND_MODE="external")
     @mock.patch.dict("os.environ", {"RUN_MAIN": "true"})
     def test_external_does_not_start_ready_workers(self):
-        config = DTEConfig("dte", mock.MagicMock())
-        config.path = "/tmp"
+        config = self._config()
         with mock.patch("apps.dte.monitor.start_monitor") as monitor, mock.patch("apps.dte.outbox.start_outbox_worker") as outbox:
             config.ready()
         monitor.assert_not_called()
@@ -18,18 +21,24 @@ class DTEBackgroundModeTests(SimpleTestCase):
     @override_settings(DTE_BACKGROUND_MODE="disabled")
     @mock.patch.dict("os.environ", {"RUN_MAIN": "true"})
     def test_disabled_does_not_start_ready_workers(self):
-        config = DTEConfig("dte", mock.MagicMock())
-        config.path = "/tmp"
+        config = self._config()
         with mock.patch("apps.dte.monitor.start_monitor") as monitor, mock.patch("apps.dte.outbox.start_outbox_worker") as outbox:
             config.ready()
         monitor.assert_not_called()
         outbox.assert_not_called()
 
+    @override_settings(DTE_BACKGROUND_MODE="external")
+    @mock.patch.dict("os.environ", {"RUN_MAIN": "true", "PICO_INSTALLER_PREFLIGHT": "1"})
+    def test_preflight_suppresses_external_background_notice(self):
+        config = self._config()
+        with mock.patch("apps.dte.apps.logger.debug") as debug:
+            config.ready()
+        debug.assert_not_called()
+
     @override_settings(DTE_BACKGROUND_MODE="legacy")
     @mock.patch.dict("os.environ", {"RUN_MAIN": "true"})
     def test_legacy_starts_existing_ready_workers(self):
-        config = DTEConfig("dte", mock.MagicMock())
-        config.path = "/tmp"
+        config = self._config()
         with mock.patch("apps.dte.monitor.start_monitor") as monitor, mock.patch("apps.dte.outbox.start_outbox_worker") as outbox:
             config.ready()
         monitor.assert_called_once()
