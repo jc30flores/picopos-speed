@@ -1205,6 +1205,10 @@ function Test-PostgresServiceAccountStartName {
         }
     }
 
+    if ($trimmed -ieq (".\{0}" -f $Script:PicoServiceAccountName)) {
+        return $true
+    }
+
     if ($trimmed -ieq (Get-PicoServiceAccountLogonName)) {
         return $true
     }
