@@ -1097,10 +1097,10 @@ function Assert-WinSWServiceFiles {
     $targetXml = Join-Path $serviceDir "$ServiceId.xml"
     $targetExe = Join-Path $serviceDir "$ServiceId.exe"
     if (-not (Test-Path -LiteralPath $targetExe -PathType Leaf)) {
-        throw "No se genero wrapper WinSW final para $ServiceId: $targetExe"
+        throw ("No se genero wrapper WinSW final para {0}: {1}" -f $ServiceId, $targetExe)
     }
     if (-not (Test-Path -LiteralPath $targetXml -PathType Leaf)) {
-        throw "No se genero XML WinSW final para $ServiceId: $targetXml"
+        throw ("No se genero XML WinSW final para {0}: {1}" -f $ServiceId, $targetXml)
     }
     $xmlText = Get-Content -LiteralPath $targetXml -Raw
     if ($xmlText.Contains("{{")) {
