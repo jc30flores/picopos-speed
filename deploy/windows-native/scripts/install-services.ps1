@@ -2432,6 +2432,7 @@ function Get-DjangoEnvironment {
         DOTENV_OVERRIDE = "false"
         DJANGO_SETTINGS_MODULE = "config.settings"
         PYTHONUNBUFFERED = "1"
+        PYTHONDONTWRITEBYTECODE = "1"
     }
 }
 

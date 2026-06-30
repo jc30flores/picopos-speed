@@ -246,7 +246,7 @@ function Invoke-BackendRuntimeImportCheck {
     )
     [System.IO.File]::WriteAllLines($envFile, $envLines, [System.Text.UTF8Encoding]::new($false))
 
-    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED")
+    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE")
     $oldEnv = @{}
     foreach ($name in $envNames) {
         $oldEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -257,6 +257,7 @@ function Invoke-BackendRuntimeImportCheck {
         [Environment]::SetEnvironmentVariable("DOTENV_OVERRIDE", "false", "Process")
         [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "config.settings", "Process")
         [Environment]::SetEnvironmentVariable("PYTHONUNBUFFERED", "1", "Process")
+        [Environment]::SetEnvironmentVariable("PYTHONDONTWRITEBYTECODE", "1", "Process")
 
         Push-Location $backend
         try {
@@ -275,6 +276,7 @@ function Invoke-BackendRuntimeImportCheck {
         foreach ($name in $envNames) {
             [Environment]::SetEnvironmentVariable($name, $oldEnv[$name], "Process")
         }
+        Remove-PythonBytecode -Root $backend
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 

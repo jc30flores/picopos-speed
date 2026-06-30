@@ -11,6 +11,7 @@
   <env name="DOTENV_OVERRIDE" value="false" />
   <env name="DJANGO_ENV_FILE" value="{{ENV_FILE}}" />
   <env name="PYTHONUNBUFFERED" value="1" />
+  <env name="PYTHONDONTWRITEBYTECODE" value="1" />
   <onfailure action="restart" delay="10 sec" />
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size" />
