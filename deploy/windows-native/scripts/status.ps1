@@ -46,10 +46,43 @@ function Get-PostgresXmlMode {
     return "unknown"
 }
 
+function Get-PostgresXmlServiceAccountStatus {
+    $xmlPath = Join-Path (Join-Path $Script:ProgramFilesDir "services") "PicoDeGallo-PostgreSQL.xml"
+    if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf)) {
+        return "missing"
+    }
+    $content = Get-Content -LiteralPath $xmlPath -Raw -ErrorAction SilentlyContinue
+    if ($content -notmatch "<serviceaccount>") {
+        return "absent"
+    }
+    if ($content -match "<password>") {
+        return "present-with-password-field"
+    }
+    if ($content -match [regex]::Escape($Script:PicoServiceAccountName)) {
+        return "present-no-password"
+    }
+    return "present-unknown-user"
+}
+
+function Get-PostgresForegroundRunAs {
+    $logPath = Join-Path (Get-LogsDir) "postgres-service.log"
+    if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+        return "unknown"
+    }
+    $content = Get-Content -LiteralPath $logPath -Tail 200 -ErrorAction SilentlyContinue
+    if (($content -join "`n") -match "POSTGRES_FOREGROUND_TEST_RUN_AS\s+$([regex]::Escape($Script:PicoServiceAccountName))") {
+        return $Script:PicoServiceAccountName
+    }
+    return "unknown"
+}
+
 function Show-PostgresErrorTail {
     foreach ($logName in @(
         "postgres-foreground-test.err.log",
+        "postgres-foreground-test.out.log",
+        "PicoDeGallo-PostgreSQL.wrapper.log",
         "PicoDeGallo-PostgreSQL.err.log",
+        "PicoDeGallo-PostgreSQL.out.log",
         "postgres-service.log"
     )) {
         $path = Join-Path (Get-LogsDir) $logName
@@ -73,10 +106,12 @@ $dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } e
 
 Write-SafeHost "URL: $appUrl"
 Write-SafeHost "POSTGRES_XML_EXECUTABLE=$(Get-PostgresXmlMode)"
+Write-SafeHost "POSTGRES_XML_SERVICEACCOUNT=$(Get-PostgresXmlServiceAccountStatus)"
+Write-SafeHost "POSTGRES_FOREGROUND_TEST_RUN_AS=$(Get-PostgresForegroundRunAs)"
 foreach ($svc in $Script:Services) {
     $service = Get-ServiceSafe $svc
     if ($service) {
-        Write-SafeHost "$svc=$($service.Status)"
+        Write-SafeHost "$svc=$($service.Status) StartName=$(Get-ServiceStartNameSafe -Name $svc)"
     } else {
         Write-SafeHost "$svc=not-installed"
     }

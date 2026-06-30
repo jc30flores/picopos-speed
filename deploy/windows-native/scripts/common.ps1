@@ -18,6 +18,7 @@ $Script:Services = @(
     "PicoDeGallo-DTE-Monitor",
     "PicoDeGallo-Caddy"
 )
+$Script:PicoServiceAccountName = "PicoDeGalloSvc"
 
 function Get-EnvPath { Join-Path $Script:ProgramDataDir "config\.env" }
 function Get-LogsDir { Join-Path $Script:ProgramDataDir "logs" }
@@ -124,6 +125,21 @@ function Assert-Admin {
 function Get-ServiceSafe {
     param([Parameter(Mandatory = $true)][string]$Name)
     Get-Service -Name $Name -ErrorAction SilentlyContinue
+}
+
+function Get-ServiceStartNameSafe {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    try {
+        $escaped = $Name.Replace("'", "''")
+        $service = Get-CimInstance Win32_Service -Filter "Name='$escaped'" -ErrorAction Stop
+        if ($service -and -not [string]::IsNullOrWhiteSpace([string]$service.StartName)) {
+            return [string]$service.StartName
+        }
+    } catch {
+        return "unknown"
+    }
+    return "unknown"
 }
 
 function Get-AppUrl {

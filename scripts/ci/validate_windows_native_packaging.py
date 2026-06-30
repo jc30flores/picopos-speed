@@ -224,6 +224,22 @@ def validate_native_installer_contract() -> None:
         fail("install-services.ps1 must reference postgres.exe")
     if "stderr" not in install.lower():
         fail("install-services.ps1 must capture/read stderr for PostgreSQL diagnostics")
+    for token in [
+        "PicoDeGalloSvc",
+        "New-SecureRandomPassword",
+        "Ensure-PicoServiceAccount",
+        "Grant-PicoServiceAccountPermissions",
+        "Invoke-AsPicoServiceAccount",
+        "Install-WinSWServiceWithAccount",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing PostgreSQL service-account token: {token}")
+    if not re.search(r"Start-Process\s+@startParams", install) or "Credential = $Credential" not in install:
+        fail("install-services.ps1 must start PostgreSQL commands with a PSCredential")
+    if "POSTGRES_FOREGROUND_TEST_RUN_AS" not in install:
+        fail("install-services.ps1 must log the foreground PostgreSQL account")
+    if re.search(r"PICO_SERVICE_ACCOUNT_PASSWORD\s*=\s*[^{}\s][^\r\n]*", install):
+        fail("install-services.ps1 contains a literal PICO service account password assignment")
 
     package = read_text_safe(NATIVE / "package-release.ps1")
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:
@@ -251,6 +267,14 @@ def validate_native_installer_contract() -> None:
         fail("PostgreSQL service template must execute postgres.exe directly")
     if "{{POSTGRES_DATA_DIR}}" not in postgres_template:
         fail("PostgreSQL service template must use POSTGRES_DATA_DIR")
+    if "<serviceaccount>" not in postgres_template and "PICO_SERVICE_ACCOUNT_XML" not in postgres_template:
+        fail("PostgreSQL service template must include a WinSW serviceaccount block or placeholder")
+    if "<autoRefresh>false</autoRefresh>" not in postgres_template:
+        fail("PostgreSQL service template must disable WinSW autoRefresh for password-free final XML")
+    if re.search(r"(?i)LocalSystem|NT AUTHORITY\\SYSTEM", postgres_template):
+        fail("PostgreSQL service template must not force LocalSystem/SYSTEM")
+    if re.search(r"PICO_SERVICE_ACCOUNT_PASSWORD\s*=\s*[^{}\s][^\r\n]*", postgres_template):
+        fail("PostgreSQL service template contains a literal service account password")
 
     print("native installer contract OK")
 

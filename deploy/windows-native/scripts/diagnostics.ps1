@@ -19,13 +19,24 @@ Save-Diagnostic "powershell.txt" ($PSVersionTable | Out-String)
 $serviceLines = foreach ($svc in $Script:Services) {
     $service = Get-ServiceSafe $svc
     if ($service) {
-        "$svc $($service.Status)"
+        "$svc $($service.Status) StartName=$(Get-ServiceStartNameSafe -Name $svc)"
     } else {
         "$svc not-installed"
     }
 }
 Save-Diagnostic "services.txt" ($serviceLines -join "`n")
 Save-Diagnostic "status.txt" ((& "$PSScriptRoot\status.ps1" 2>&1 | ForEach-Object { [string]$_ }) -join "`n")
+
+$postgresXml = Join-Path (Join-Path $Script:ProgramFilesDir "services") "PicoDeGallo-PostgreSQL.xml"
+if (Test-Path -LiteralPath $postgresXml -PathType Leaf) {
+    $postgresXmlContent = Get-Content -LiteralPath $postgresXml -Raw -ErrorAction SilentlyContinue
+    $postgresXmlFacts = @(
+        "serviceaccount=$(if ($postgresXmlContent -match '<serviceaccount>') { 'present' } else { 'absent' })",
+        "password_field=$(if ($postgresXmlContent -match '<password>') { 'present' } else { 'absent' })",
+        "pico_user=$(if ($postgresXmlContent -match [regex]::Escape($Script:PicoServiceAccountName)) { 'present' } else { 'absent' })"
+    )
+    Save-Diagnostic "postgres-serviceaccount.txt" ($postgresXmlFacts -join "`n")
+}
 
 $envs = Read-NativeEnv
 $dteTokenName = "DTE_" + "API_TOKEN"

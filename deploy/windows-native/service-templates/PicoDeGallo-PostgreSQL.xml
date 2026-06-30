@@ -6,6 +6,8 @@
   <arguments>-D "{{POSTGRES_DATA_DIR}}"</arguments>
   <workingdirectory>{{POSTGRES_BIN_DIR}}</workingdirectory>
   <startmode>Automatic</startmode>
+  <autoRefresh>false</autoRefresh>
+{{PICO_SERVICE_ACCOUNT_XML}}
   <onfailure action="restart" delay="10 sec" />
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size">
