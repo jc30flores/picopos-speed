@@ -176,10 +176,16 @@ function Invoke-PostgresRuntimeVersionChecks {
             $stdoutText = ""
             $stderrText = ""
             if (Test-Path -LiteralPath $stdout -PathType Leaf) {
-                $stdoutText = ([string](Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue)).Trim()
+                $stdoutRaw = Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue
+                if ($null -ne $stdoutRaw) {
+                    $stdoutText = ([string]$stdoutRaw).Trim()
+                }
             }
             if (Test-Path -LiteralPath $stderr -PathType Leaf) {
-                $stderrText = ([string](Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)).Trim()
+                $stderrRaw = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
+                if ($null -ne $stderrRaw) {
+                    $stderrText = ([string]$stderrRaw).Trim()
+                }
             }
 
             if ($exitCode -ne 0) {
