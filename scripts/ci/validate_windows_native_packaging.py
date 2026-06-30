@@ -301,13 +301,35 @@ def validate_native_installer_contract() -> None:
         "Write-PostgresConfigLines",
         "Test-PostgresConfigEncoding",
         "bytes NUL",
-        "UTF8Encoding]::new($false)",
+        "New-Object -TypeName System.Text.UTF8Encoding",
+        "ArgumentList @($false)",
         "postgres-config-validation.log",
         "POSTGRES_CONFIG_ENCODING_OK",
         "POSTGRES_CONFIG_PRE_FOREGROUND_OK",
+        "POSTGRES_CONFIG_SET key=",
     ]:
         if token not in install:
             fail(f"install-services.ps1 missing PostgreSQL config encoding guard: {token}")
+    write_lines_start = install.find("function Write-PostgresConfigLines")
+    write_lines_end = install.find("function Test-PostgresDataDirectoryInitialized", write_lines_start)
+    if write_lines_start < 0 or write_lines_end < 0:
+        fail("install-services.ps1 missing Write-PostgresConfigLines body")
+    write_lines_body = install[write_lines_start:write_lines_end]
+    if "ValidateNotNullOrEmpty" in write_lines_body:
+        fail("Write-PostgresConfigLines must accept blank PostgreSQL config lines")
+    if re.search(r"\[Parameter\(\s*Mandatory\s*=\s*\$true\s*\)\]\s*\[string\[\]\]\$Lines", write_lines_body):
+        fail("Write-PostgresConfigLines Lines parameter must not be mandatory because blank lines bind as empty strings in Windows PowerShell 5.1")
+    for token in ["[AllowEmptyString()]", "[AllowEmptyCollection()]", "@($Lines)", '"`r`n"', "Write-PostgresConfigText -Path $Path -Text $text"]:
+        if token not in write_lines_body:
+            fail(f"Write-PostgresConfigLines missing blank-line preservation token: {token}")
+    set_config_start = install.find("function Set-PostgresConfigValue")
+    set_config_end = install.find("function Set-PostgresHbaHostAuth", set_config_start)
+    if set_config_start < 0 or set_config_end < 0:
+        fail("install-services.ps1 missing Set-PostgresConfigValue body")
+    set_config_body = install[set_config_start:set_config_end]
+    for token in ["Read-PostgresConfigLines", "POSTGRES_CONFIG_SET", "replaced=$replaced"]:
+        if token not in set_config_body:
+            fail(f"Set-PostgresConfigValue missing idempotent config token: {token}")
     foreground_start = install.find("function Test-PostgresForegroundStartup")
     foreground_end = install.find("function Wait-PostgresReady", foreground_start)
     if foreground_start < 0 or foreground_end < 0:
@@ -347,6 +369,14 @@ def validate_native_installer_contract() -> None:
             continue
         if token not in diagnostics:
             fail(f"diagnostics.ps1 missing diagnostic token: {token}")
+
+    workflow = read_text_safe(REPO / ".github" / "workflows" / "windows-native-installer.yml")
+    if "scripts/ci/test_postgres_config_lines.ps1" not in workflow:
+        fail("windows-native-installer workflow must run PostgreSQL config blank-line fixture")
+    postgres_config_test = read_text_safe(REPO / "scripts" / "ci" / "test_postgres_config_lines.ps1")
+    for token in ["Blank lines were not preserved", "UTF-8 BOM detected", "NUL byte detected", "PostgreSQL config blank-line fixture OK"]:
+        if token not in postgres_config_test:
+            fail(f"PostgreSQL config fixture missing token: {token}")
 
     package = read_text_safe(NATIVE / "package-release.ps1")
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:

@@ -186,6 +186,10 @@ jobs:
             Write-Host "Parsed $($_.Name)"
           }
 
+      - name: Test PostgreSQL config helpers
+        shell: pwsh
+        run: ./scripts/ci/test_postgres_config_lines.ps1
+
       - name: Validate service XML templates
         shell: pwsh
         run: |

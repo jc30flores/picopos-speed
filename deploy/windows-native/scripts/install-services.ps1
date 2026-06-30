@@ -1512,7 +1512,7 @@ function Quote-PostgresLiteral {
 }
 
 function Get-Utf8NoBomEncoding {
-    return [System.Text.UTF8Encoding]::new($false)
+    return New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)
 }
 
 function Get-BytePrefixHex {
@@ -1607,11 +1607,23 @@ function Write-PostgresConfigText {
 function Write-PostgresConfigLines {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string[]]$Lines
+        [AllowEmptyString()][AllowEmptyCollection()][string[]]$Lines = @(),
+        [switch]$AllowEmpty
     )
 
-    [System.IO.File]::WriteAllLines($Path, $Lines, (Get-Utf8NoBomEncoding))
-    Test-PostgresConfigEncoding -Path $Path
+    $lineArray = @($Lines) | ForEach-Object {
+        if ($null -eq $_) {
+            ""
+        } else {
+            [string]$_
+        }
+    }
+    if ($lineArray.Count -eq 0 -and -not $AllowEmpty) {
+        throw "No se escribio configuracion PostgreSQL vacia en $Path."
+    }
+
+    $text = ($lineArray -join "`r`n") + "`r`n"
+    Write-PostgresConfigText -Path $Path -Text $text
 }
 
 function Test-PostgresDataDirectoryInitialized {
@@ -1736,20 +1748,26 @@ function Set-PostgresConfigValue {
 
     $escaped = [regex]::Escape($Key)
     $line = "$Key = $Value"
-    $content = Read-PostgresConfigLines -Path $ConfigPath
-    $updated = $false
+    $originalLength = (Get-Item -LiteralPath $ConfigPath -ErrorAction Stop).Length
+    $content = @(Read-PostgresConfigLines -Path $ConfigPath)
+    if ($content.Count -eq 0 -and $originalLength -gt 0) {
+        throw "No se pudo leer ninguna linea de postgresql.conf aunque el archivo no esta vacio: $ConfigPath"
+    }
+
+    $replaced = $false
     $newContent = @(foreach ($item in $content) {
-        if ($item -match "^\s*#?\s*$escaped\s*=") {
-            $updated = $true
+        if (-not $replaced -and $item -match "^\s*#?\s*$escaped\s*=") {
+            $replaced = $true
             $line
         } else {
             $item
         }
     })
-    if (-not $updated) {
+    if (-not $replaced) {
         $newContent += $line
     }
     Write-PostgresConfigLines -Path $ConfigPath -Lines $newContent
+    Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_SET key=$Key path=$ConfigPath replaced=$replaced"
 }
 
 function Set-PostgresHbaHostAuth {
