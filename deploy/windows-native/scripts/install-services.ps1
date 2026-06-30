@@ -1160,6 +1160,22 @@ function Archive-ExistingNativeLogs {
     Write-SafeHost "Logs anteriores archivados en $archiveDir"
 }
 
+function Get-InstalledVersionForInstallLog {
+    $versionPath = Join-Path $Script:ProgramFilesDir "version.json"
+    if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+        return "missing"
+    }
+    try {
+        $json = Get-Content -LiteralPath $versionPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($json.version) {
+            return [string]$json.version
+        }
+    } catch {
+        return "error"
+    }
+    return "unknown"
+}
+
 function Test-TcpPort {
     param(
         [string]$HostName = "127.0.0.1",
@@ -1495,6 +1511,109 @@ function Quote-PostgresLiteral {
     return ("'" + $Value.Replace("'", "''") + "'")
 }
 
+function Get-Utf8NoBomEncoding {
+    return [System.Text.UTF8Encoding]::new($false)
+}
+
+function Get-BytePrefixHex {
+    param(
+        [byte[]]$Bytes,
+        [int]$Count = 16
+    )
+
+    if (-not $Bytes -or $Bytes.Length -eq 0) {
+        return ""
+    }
+    $take = [Math]::Min($Bytes.Length, $Count)
+    $prefix = [byte[]]::new($take)
+    [Array]::Copy($Bytes, 0, $prefix, 0, $take)
+    return [System.BitConverter]::ToString($prefix).Replace("-", " ")
+}
+
+function Read-PostgresConfigLines {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "No existe archivo de configuracion PostgreSQL: $Path"
+    }
+
+    [byte[]]$bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_LEGACY_UTF16_LE_READ path=$Path"
+        return [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::Unicode)
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_LEGACY_UTF16_BE_READ path=$Path"
+        return [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::BigEndianUnicode)
+    }
+    if ($bytes -contains 0) {
+        throw "Archivo $Path parece UTF-16 o contiene bytes NUL; no se puede leer de forma segura."
+    }
+
+    return [System.IO.File]::ReadAllLines($Path, (Get-Utf8NoBomEncoding))
+}
+
+function Test-PostgresConfigEncoding {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "No existe archivo de configuracion PostgreSQL: $Path"
+    }
+
+    [byte[]]$bytes = [System.IO.File]::ReadAllBytes($Path)
+    $fileName = Split-Path -Leaf $Path
+    $firstBytes = Get-BytePrefixHex -Bytes $bytes -Count 16
+    Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_BYTES $fileName length=$($bytes.Length) firstBytes=$firstBytes"
+
+    if ($bytes.Length -eq 0) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_ERROR $fileName empty"
+        throw "Archivo $Path esta vacio."
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_ERROR $fileName utf16-le-bom"
+        throw "Archivo $Path parece UTF-16 LE; debe ser UTF-8 sin BOM o ASCII."
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_ERROR $fileName utf16-be-bom"
+        throw "Archivo $Path parece UTF-16 BE; debe ser UTF-8 sin BOM o ASCII."
+    }
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_ERROR $fileName utf8-bom"
+        throw "Archivo $Path contiene BOM UTF-8; debe ser UTF-8 sin BOM o ASCII."
+    }
+    if ($bytes -contains 0) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_ERROR $fileName bytes NUL"
+        throw "Archivo $Path parece UTF-16 o contiene bytes NUL."
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($Path, (Get-Utf8NoBomEncoding))
+    $preview = (($lines | Select-Object -First 8) -join "`n")
+    if (-not [string]::IsNullOrWhiteSpace($preview)) {
+        Write-InstallLog -LogName "postgres-config-validation.log" -Message ("POSTGRES_CONFIG_PREVIEW $fileName`n" + $preview)
+    }
+    Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_ENCODING_OK $fileName"
+}
+
+function Write-PostgresConfigText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowEmptyString()][string]$Text
+    )
+
+    [System.IO.File]::WriteAllText($Path, $Text, (Get-Utf8NoBomEncoding))
+    Test-PostgresConfigEncoding -Path $Path
+}
+
+function Write-PostgresConfigLines {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Lines
+    )
+
+    [System.IO.File]::WriteAllLines($Path, $Lines, (Get-Utf8NoBomEncoding))
+    Test-PostgresConfigEncoding -Path $Path
+}
+
 function Test-PostgresDataDirectoryInitialized {
     param([Parameter(Mandatory = $true)][string]$DataDir)
 
@@ -1617,7 +1736,7 @@ function Set-PostgresConfigValue {
 
     $escaped = [regex]::Escape($Key)
     $line = "$Key = $Value"
-    $content = Get-Content -LiteralPath $ConfigPath -Encoding UTF8
+    $content = Read-PostgresConfigLines -Path $ConfigPath
     $updated = $false
     $newContent = @(foreach ($item in $content) {
         if ($item -match "^\s*#?\s*$escaped\s*=") {
@@ -1630,7 +1749,7 @@ function Set-PostgresConfigValue {
     if (-not $updated) {
         $newContent += $line
     }
-    Set-Content -LiteralPath $ConfigPath -Value $newContent -Encoding UTF8
+    Write-PostgresConfigLines -Path $ConfigPath -Lines $newContent
 }
 
 function Set-PostgresHbaHostAuth {
@@ -1645,7 +1764,7 @@ function Set-PostgresHbaHostAuth {
         "::1/128" = "host all all ::1/128 scram-sha-256"
     }
     $seen = @{}
-    $content = Get-Content -LiteralPath $HbaPath -Encoding UTF8
+    $content = Read-PostgresConfigLines -Path $HbaPath
     $newContent = @()
 
     foreach ($line in $content) {
@@ -1672,7 +1791,40 @@ function Set-PostgresHbaHostAuth {
         }
     }
 
-    Set-Content -LiteralPath $HbaPath -Value $newContent -Encoding UTF8
+    Write-PostgresConfigLines -Path $HbaPath -Lines $newContent
+}
+
+function Assert-PostgresConfiguredFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$HbaPath,
+        [Parameter(Mandatory = $true)][string]$DbPort
+    )
+
+    Test-PostgresConfigEncoding -Path $ConfigPath
+    Test-PostgresConfigEncoding -Path $HbaPath
+
+    $configText = [System.IO.File]::ReadAllText($ConfigPath, (Get-Utf8NoBomEncoding))
+    if ([string]::IsNullOrWhiteSpace($configText)) {
+        throw "postgresql.conf quedo vacio: $ConfigPath"
+    }
+    foreach ($required in @("listen_addresses = '127.0.0.1'", "port = $DbPort")) {
+        if (-not $configText.Contains($required)) {
+            throw "postgresql.conf no contiene configuracion requerida: $required"
+        }
+    }
+
+    $hbaText = [System.IO.File]::ReadAllText($HbaPath, (Get-Utf8NoBomEncoding))
+    foreach ($required in @(
+        "host all all 127.0.0.1/32 scram-sha-256",
+        "host all all ::1/128 scram-sha-256"
+    )) {
+        if (-not $hbaText.Contains($required)) {
+            throw "pg_hba.conf no contiene configuracion requerida: $required"
+        }
+    }
+
+    Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_REQUIRED_VALUES_OK postgresql.conf pg_hba.conf"
 }
 
 function Configure-PostgresDataDirectory {
@@ -1688,6 +1840,7 @@ function Configure-PostgresDataDirectory {
     Set-PostgresConfigValue -ConfigPath $config -Key "timezone" -Value "'America/El_Salvador'"
     Set-PostgresConfigValue -ConfigPath $config -Key "logging_collector" -Value "off"
     Set-PostgresHbaHostAuth -HbaPath $hba
+    Assert-PostgresConfiguredFiles -ConfigPath $config -HbaPath $hba -DbPort $dbPort
     Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_CONFIGURED port=$dbPort listen_addresses=127.0.0.1 timezone=America/El_Salvador logging_collector=off hba=scram-loopback"
 }
 
@@ -1742,6 +1895,8 @@ function Test-PostgresForegroundStartup {
     $postgresBin = Join-Path $Script:ProgramFilesDir "postgres\bin"
     $postgres = Join-Path $postgresBin "postgres.exe"
     $dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
+    $config = Join-Path $dataDir "postgresql.conf"
+    $hba = Join-Path $dataDir "pg_hba.conf"
     $stdout = Get-NativeLogPath "postgres-foreground-test.out.log"
     $stderr = Get-NativeLogPath "postgres-foreground-test.err.log"
     $waitSeconds = 10
@@ -1752,6 +1907,9 @@ function Test-PostgresForegroundStartup {
     if (-not (Test-Path -LiteralPath (Join-Path $dataDir "PG_VERSION") -PathType Leaf)) {
         throw "No existe PG_VERSION en directorio de datos PostgreSQL: $dataDir"
     }
+    Test-PostgresConfigEncoding -Path $config
+    Test-PostgresConfigEncoding -Path $hba
+    Write-InstallLog -LogName "postgres-config-validation.log" -Message "POSTGRES_CONFIG_PRE_FOREGROUND_OK postgresql.conf pg_hba.conf"
 
     Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
     Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_FOREGROUND_TEST_BEGIN seconds=$waitSeconds"
@@ -2073,7 +2231,7 @@ function Invoke-InstallMain {
     $Script:LastInstallStep = "archive-existing-logs"
     Stop-ExistingServicesForLogArchive
     Archive-ExistingNativeLogs
-    Write-InstallLog "INSTALL_SERVICES_BEGIN ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
+    Write-InstallLog "INSTALL_SERVICES_BEGIN Version=$(Get-InstalledVersionForInstallLog) ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
 
     Invoke-InstallStep -Name "assert-admin" -ScriptBlock {
         Assert-Admin

@@ -286,6 +286,37 @@ def validate_native_installer_contract() -> None:
     for token in ["SERVICE_FILES_READY", "Assert-WinSWServiceFilesForAll", "CADDYFILE_RENDERED"]:
         if token not in install:
             fail(f"install-services.ps1 missing service/Caddyfile readiness marker: {token}")
+    for unsafe in [
+        "Set-Content -LiteralPath $ConfigPath",
+        "Set-Content -LiteralPath $HbaPath",
+        "Out-File -LiteralPath $ConfigPath",
+        "Out-File -LiteralPath $HbaPath",
+    ]:
+        if unsafe in install:
+            fail(f"install-services.ps1 writes PostgreSQL config with unsafe encoding path: {unsafe}")
+    if re.search(r"(?i)(Set-Content|Out-File)[^\r\n]*(postgresql\.conf|pg_hba\.conf)", install):
+        fail("install-services.ps1 must not write postgresql.conf or pg_hba.conf through Set-Content/Out-File")
+    for token in [
+        "Write-PostgresConfigText",
+        "Write-PostgresConfigLines",
+        "Test-PostgresConfigEncoding",
+        "bytes NUL",
+        "UTF8Encoding]::new($false)",
+        "postgres-config-validation.log",
+        "POSTGRES_CONFIG_ENCODING_OK",
+        "POSTGRES_CONFIG_PRE_FOREGROUND_OK",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing PostgreSQL config encoding guard: {token}")
+    foreground_start = install.find("function Test-PostgresForegroundStartup")
+    foreground_end = install.find("function Wait-PostgresReady", foreground_start)
+    if foreground_start < 0 or foreground_end < 0:
+        fail("install-services.ps1 missing Test-PostgresForegroundStartup body")
+    foreground_body = install[foreground_start:foreground_end]
+    precheck_index = foreground_body.find("POSTGRES_CONFIG_PRE_FOREGROUND_OK")
+    run_index = foreground_body.find("Invoke-AsPicoServiceAccount")
+    if precheck_index < 0 or run_index < 0 or precheck_index > run_index:
+        fail("install-services.ps1 must validate PostgreSQL config encoding before foreground startup")
     if "POSTGRES_FOREGROUND_TEST_RUN_AS" not in install:
         fail("install-services.ps1 must log the foreground PostgreSQL account")
     if re.search(r"PICO_SERVICE_ACCOUNT_PASSWORD\s*=\s*[^{}\s][^\r\n]*", install):
