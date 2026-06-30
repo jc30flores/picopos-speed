@@ -31,6 +31,40 @@ function Get-HttpStatus {
     }
 }
 
+function Get-InstalledVersion {
+    $versionPath = Join-Path $Script:ProgramFilesDir "version.json"
+    if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+        return "missing"
+    }
+    try {
+        $json = Get-Content -LiteralPath $versionPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($json.version) {
+            return [string]$json.version
+        }
+    } catch {
+        return "error"
+    }
+    return "unknown"
+}
+
+function Get-PicoServiceAccountStatus {
+    $accountName = $Script:PicoServiceAccountName
+    if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+        try {
+            $user = Get-LocalUser -Name $accountName -ErrorAction Stop
+            return "exists Enabled=$($user.Enabled)"
+        } catch {
+        }
+    }
+    try {
+        $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $accountName)
+        $null = $user.Name
+        return "exists"
+    } catch {
+        return "missing"
+    }
+}
+
 function Get-PostgresXmlMode {
     $xmlPath = Join-Path (Join-Path $Script:ProgramFilesDir "services") "PicoDeGallo-PostgreSQL.xml"
     if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf)) {
@@ -105,6 +139,8 @@ $dbHost = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_HOST"])) { "127.0.0
 $dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } else { [int]$envs["DB_PORT"] }
 
 Write-SafeHost "URL: $appUrl"
+Write-SafeHost "VERSION=$(Get-InstalledVersion)"
+Write-SafeHost "PICO_SERVICE_ACCOUNT=$(Get-PicoServiceAccountStatus)"
 Write-SafeHost "POSTGRES_XML_EXECUTABLE=$(Get-PostgresXmlMode)"
 Write-SafeHost "POSTGRES_XML_SERVICEACCOUNT=$(Get-PostgresXmlServiceAccountStatus)"
 Write-SafeHost "POSTGRES_FOREGROUND_TEST_RUN_AS=$(Get-PostgresForegroundRunAs)"

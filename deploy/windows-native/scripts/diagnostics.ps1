@@ -27,6 +27,25 @@ $serviceLines = foreach ($svc in $Script:Services) {
 Save-Diagnostic "services.txt" ($serviceLines -join "`n")
 Save-Diagnostic "status.txt" ((& "$PSScriptRoot\status.ps1" 2>&1 | ForEach-Object { [string]$_ }) -join "`n")
 
+function Get-PicoServiceAccountDiagnostic {
+    $accountName = $Script:PicoServiceAccountName
+    if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+        try {
+            $user = Get-LocalUser -Name $accountName -ErrorAction Stop
+            return "exists Enabled=$($user.Enabled) SID=$($user.SID.Value)"
+        } catch {
+        }
+    }
+    try {
+        $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $accountName)
+        $null = $user.Name
+        return "exists provider=ADSI"
+    } catch {
+        return "missing"
+    }
+}
+Save-Diagnostic "service-account.txt" (Get-PicoServiceAccountDiagnostic)
+
 $postgresXml = Join-Path (Join-Path $Script:ProgramFilesDir "services") "PicoDeGallo-PostgreSQL.xml"
 if (Test-Path -LiteralPath $postgresXml -PathType Leaf) {
     $postgresXmlContent = Get-Content -LiteralPath $postgresXml -Raw -ErrorAction SilentlyContinue
@@ -36,6 +55,35 @@ if (Test-Path -LiteralPath $postgresXml -PathType Leaf) {
         "pico_user=$(if ($postgresXmlContent -match [regex]::Escape($Script:PicoServiceAccountName)) { 'present' } else { 'absent' })"
     )
     Save-Diagnostic "postgres-serviceaccount.txt" ($postgresXmlFacts -join "`n")
+}
+
+$serviceDir = Join-Path $Script:ProgramFilesDir "services"
+foreach ($svc in $Script:Services) {
+    $xml = Join-Path $serviceDir "$svc.xml"
+    if (Test-Path -LiteralPath $xml -PathType Leaf) {
+        Save-Diagnostic "service-xml-$svc.txt" (Get-Content -LiteralPath $xml -Raw -ErrorAction SilentlyContinue)
+    }
+}
+
+$icacls = Join-Path $env:SystemRoot "System32\icacls.exe"
+if (Test-Path -LiteralPath $icacls -PathType Leaf) {
+    $aclTargets = @(
+        (Join-Path $Script:ProgramDataDir "postgres"),
+        (Join-Path $Script:ProgramDataDir "postgres\data"),
+        (Join-Path $Script:ProgramDataDir "logs"),
+        (Join-Path $Script:ProgramFilesDir "postgres"),
+        (Join-Path $Script:ProgramFilesDir "services")
+    )
+    $aclLines = foreach ($target in $aclTargets) {
+        if (Test-Path -LiteralPath $target) {
+            "ACL_BEGIN $target"
+            & $icacls $target 2>&1 | ForEach-Object { [string]$_ }
+            "ACL_END $target"
+        } else {
+            "ACL_MISSING $target"
+        }
+    }
+    Save-Diagnostic "acls.txt" ($aclLines -join "`n")
 }
 
 $envs = Read-NativeEnv

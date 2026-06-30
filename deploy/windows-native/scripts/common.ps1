@@ -44,12 +44,14 @@ function Protect-Text {
         "(?i)(DB_PASSWORD\s*[=:]\s*)[^\s;]+",
         "(?i)(DJANGO_SECRET_KEY\s*[=:]\s*)[^\s;]+",
         "(?i)(DTE_API_TOKEN\s*[=:]\s*)[^\s;]+",
+        "(?i)(PICO_BOOTSTRAP_ADMIN_PASSWORD\s*[=:]\s*)[^\s;]+",
         "(Authorization:\s*Bearer\s+)[^\s]+",
         "(Bearer\s+)[A-Za-z0-9._~+/-]+"
     )
     foreach ($pattern in $patterns) {
         $out = [regex]::Replace($out, $pattern, '$1***REDACTED***')
     }
+    $out = [regex]::Replace($out, "(?is)(<password>).*?(</password>)", '$1***REDACTED***$2')
     return $out
 }
 

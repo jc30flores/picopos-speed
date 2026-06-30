@@ -1,10 +1,12 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\common.ps1"
 
-Assert-Admin
-if ($Script:PicoServiceAccountName -ne "PicoDeGalloSvc") {
-    throw "Cuenta de servicio PostgreSQL inesperada: $Script:PicoServiceAccountName"
-}
+New-DirectorySafe (Get-LogsDir)
+$Script:InstallPhase = "bootstrap"
+$Script:LastInstallStep = "bootstrap"
+$Script:InstallTranscriptStarted = $false
+$Script:BuiltinAdminGroupSid = "S-1-5-32-544"
+$Script:BuiltinStandardGroupSid = "S-1-5-32-545"
 
 function Get-RequiredEnvValue {
     param(
@@ -34,6 +36,80 @@ function Write-InstallLog {
 
     $line = "[{0}] {1}" -f (Get-Date -Format o), (Protect-Text $Message)
     Add-Content -LiteralPath (Get-NativeLogPath $LogName) -Value $line -Encoding UTF8
+}
+
+function Start-InstallTranscriptSafe {
+    $path = Get-NativeLogPath "install-services-transcript.log"
+    try {
+        Start-Transcript -Path $path -Append -Force -ErrorAction Stop | Out-Null
+        $Script:InstallTranscriptStarted = $true
+        Write-InstallLog "TRANSCRIPT_STARTED path=$path"
+    } catch {
+        Write-InstallLog "TRANSCRIPT_SKIPPED reason=$($_.Exception.Message)"
+    }
+}
+
+function Stop-InstallTranscriptSafe {
+    if (-not $Script:InstallTranscriptStarted) {
+        return
+    }
+    try {
+        Stop-Transcript | Out-Null
+    } catch {
+    }
+    $Script:InstallTranscriptStarted = $false
+}
+
+function Write-InstallException {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    $invocation = $ErrorRecord.InvocationInfo
+    $lines = @(
+        "INSTALL_SERVICES_FAILED",
+        "phase=$Script:InstallPhase",
+        "lastStep=$Script:LastInstallStep",
+        ("exceptionType={0}" -f $exception.GetType().FullName),
+        ("message={0}" -f $exception.Message)
+    )
+    if ($invocation) {
+        $lines += ("scriptName={0}" -f $invocation.ScriptName)
+        $lines += ("line={0}" -f $invocation.ScriptLineNumber)
+        $lines += ("offset={0}" -f $invocation.OffsetInLine)
+        if (-not [string]::IsNullOrWhiteSpace([string]$invocation.PositionMessage)) {
+            $lines += "positionMessage_BEGIN"
+            $lines += [string]$invocation.PositionMessage
+            $lines += "positionMessage_END"
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$ErrorRecord.ScriptStackTrace)) {
+        $lines += "scriptStackTrace_BEGIN"
+        $lines += [string]$ErrorRecord.ScriptStackTrace
+        $lines += "scriptStackTrace_END"
+    }
+
+    $message = ($lines -join "`n")
+    Write-InstallLog -LogName "install-services.log" -Message $message
+    Write-InstallLog -LogName "install-services-error.log" -Message $message
+}
+
+function Invoke-InstallStep {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock
+    )
+
+    $Script:InstallPhase = $Name
+    $Script:LastInstallStep = $Name
+    Write-InstallLog "STEP_BEGIN $Name"
+    try {
+        & $ScriptBlock
+        Write-InstallLog "STEP_SUCCESS $Name"
+    } catch {
+        Write-InstallLog -LogName "install-services.log" -Message ("STEP_ERROR $Name " + $_.Exception.Message)
+        Write-InstallLog -LogName "install-services-error.log" -Message ("STEP_ERROR $Name " + $_.Exception.Message)
+        throw
+    }
 }
 
 function Format-CommandForLog {
@@ -226,28 +302,171 @@ function ConvertTo-PicoSecureString {
     return (ConvertTo-SecureString -String $PlainText -AsPlainText -Force)
 }
 
-function Get-BuiltinGroupName {
-    param(
-        [Parameter(Mandatory = $true)][string]$Sid,
-        [Parameter(Mandatory = $true)][string]$Fallback
-    )
-
-    try {
-        $sidObject = [System.Security.Principal.SecurityIdentifier]::new($Sid)
-        $account = $sidObject.Translate([System.Security.Principal.NTAccount]).Value
-        return (($account -split "\\")[-1])
-    } catch {
-        return $Fallback
-    }
+function New-SecurityIdentifier {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+    return (New-Object -TypeName System.Security.Principal.SecurityIdentifier -ArgumentList $Sid)
 }
 
-function Test-LocalAccountsCmdletsAvailable {
-    foreach ($name in @("Get-LocalUser", "New-LocalUser", "Set-LocalUser", "Enable-LocalUser", "Get-LocalGroupMember", "Add-LocalGroupMember", "Remove-LocalGroupMember")) {
+function Get-LocalizedBuiltinGroupNameBySid {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+
+    $sidObject = New-SecurityIdentifier -Sid $Sid
+    $account = $sidObject.Translate([System.Security.Principal.NTAccount]).Value
+    if ([string]::IsNullOrWhiteSpace($account)) {
+        throw "No se pudo resolver grupo builtin por SID $Sid."
+    }
+    return (($account -split "\\")[-1])
+}
+
+function Test-LocalUserCmdletsAvailable {
+    foreach ($name in @("Get-LocalUser", "New-LocalUser", "Set-LocalUser", "Enable-LocalUser")) {
         if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
             return $false
         }
     }
     return $true
+}
+
+function Test-LocalGroupCmdletsAvailable {
+    foreach ($name in @("Get-LocalGroup", "Get-LocalGroupMember", "Add-LocalGroupMember", "Remove-LocalGroupMember")) {
+        if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-LocalGroupObjectBySid {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+
+    if (-not (Get-Command "Get-LocalGroup" -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+    try {
+        return (Get-LocalGroup -SID (New-SecurityIdentifier -Sid $Sid) -ErrorAction Stop)
+    } catch {
+        Write-InstallLog "LOCAL_GROUP_BY_SID_FAILED sid=$Sid reason=$($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Convert-LocalAccountNameToSid {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    try {
+        $account = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList @($env:COMPUTERNAME, $AccountName)
+        return $account.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } catch {
+        try {
+            $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $AccountName)
+            $sidBytes = [byte[]]$user.ObjectSid.Value
+            $sidObject = New-Object -TypeName System.Security.Principal.SecurityIdentifier -ArgumentList @($sidBytes, 0)
+            return $sidObject.Value
+        } catch {
+            throw "No se pudo resolver SID de la cuenta local $AccountName."
+        }
+    }
+}
+
+function Test-AdsiGroupMemberBySid {
+    param(
+        [Parameter(Mandatory = $true)][string]$GroupSid,
+        [Parameter(Mandatory = $true)][string]$AccountName,
+        [Parameter(Mandatory = $true)][string]$AccountSid
+    )
+
+    $groupName = Get-LocalizedBuiltinGroupNameBySid -Sid $GroupSid
+    try {
+        $group = [ADSI]("WinNT://{0}/{1},group" -f $env:COMPUTERNAME, $groupName)
+        foreach ($member in @($group.psbase.Invoke("Members"))) {
+            $memberName = [string]$member.GetType().InvokeMember("Name", "GetProperty", $null, $member, $null)
+            if ($memberName -ieq $AccountName) {
+                return $true
+            }
+            try {
+                $memberSidBytes = [byte[]]$member.GetType().InvokeMember("objectSid", "GetProperty", $null, $member, $null)
+                $memberSidObject = New-Object -TypeName System.Security.Principal.SecurityIdentifier -ArgumentList @($memberSidBytes, 0)
+                $memberSid = $memberSidObject.Value
+                if ($memberSid -eq $AccountSid) {
+                    return $true
+                }
+            } catch {
+            }
+        }
+    } catch {
+        Write-InstallLog "ADSI_GROUP_MEMBER_CHECK_FAILED sid=$GroupSid account=$AccountName reason=$($_.Exception.Message)"
+    }
+    return $false
+}
+
+function Test-LocalAccountInGroupSid {
+    param(
+        [Parameter(Mandatory = $true)][string]$GroupSid,
+        [Parameter(Mandatory = $true)][string]$AccountName,
+        [Parameter(Mandatory = $true)][string]$AccountSid
+    )
+
+    if (Test-LocalGroupCmdletsAvailable) {
+        $group = Get-LocalGroupObjectBySid -Sid $GroupSid
+        if ($group) {
+            try {
+                foreach ($member in @(Get-LocalGroupMember -Group $group -ErrorAction Stop)) {
+                    $memberSid = ""
+                    if ($member.SID) { $memberSid = [string]$member.SID.Value }
+                    if ($memberSid -eq $AccountSid) {
+                        return $true
+                    }
+                }
+                return $false
+            } catch {
+                Write-InstallLog "LOCAL_GROUP_MEMBER_CHECK_FAILED sid=$GroupSid account=$AccountName reason=$($_.Exception.Message)"
+            }
+        }
+    }
+
+    return (Test-AdsiGroupMemberBySid -GroupSid $GroupSid -AccountName $AccountName -AccountSid $AccountSid)
+}
+
+function Invoke-NetUserSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$AccountName,
+        [Parameter(Mandatory = $true)][string]$Password,
+        [switch]$Create
+    )
+
+    $netExe = Join-Path $env:SystemRoot "System32\net.exe"
+    $stdout = Join-Path (Get-LogsDir) ("net-user-" + [Guid]::NewGuid().ToString("N") + ".out")
+    $stderr = Join-Path (Get-LogsDir) ("net-user-" + [Guid]::NewGuid().ToString("N") + ".err")
+    $args = if ($Create) {
+        @("user", $AccountName, $Password, "/add", "/y")
+    } else {
+        @("user", $AccountName, $Password)
+    }
+    $safeAction = if ($Create) { "create" } else { "reset-password" }
+    Write-InstallLog "RUN net.exe user $AccountName ***REDACTED*** action=$safeAction"
+    try {
+        & $netExe @args > $stdout 2> $stderr
+        $exitCode = $LASTEXITCODE
+        if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+            Add-Content -LiteralPath (Get-NativeLogPath "install-services.log") -Value (Protect-Text (Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue)) -Encoding UTF8
+        }
+        if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+            Add-Content -LiteralPath (Get-NativeLogPath "install-services.log") -Value (Protect-Text (Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)) -Encoding UTF8
+        }
+        Write-InstallLog "EXIT_CODE net.exe user action=$safeAction code=$exitCode"
+        if ($exitCode -ne 0) {
+            throw "net.exe user fallo con codigo $exitCode."
+        }
+
+        & $netExe user $AccountName /active:yes /expires:never /passwordchg:no > $stdout 2> $stderr
+        $exitCode = $LASTEXITCODE
+        Write-InstallLog "EXIT_CODE net.exe user flags code=$exitCode"
+        if ($exitCode -ne 0) {
+            throw "net.exe user flags fallo con codigo $exitCode."
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Set-PicoAdsiUserPasswordAndFlags {
@@ -279,74 +498,58 @@ function Set-PicoAdsiUserPasswordAndFlags {
     $user.SetInfo()
 }
 
-function Test-PicoAdsiGroupMember {
+function Invoke-LocalGroupMemberChange {
     param(
-        [Parameter(Mandatory = $true)][string]$GroupName,
-        [Parameter(Mandatory = $true)][string]$AccountName
+        [Parameter(Mandatory = $true)][string]$GroupSid,
+        [Parameter(Mandatory = $true)][string]$AccountName,
+        [Parameter(Mandatory = $true)][string]$Action
     )
 
-    try {
-        $group = [ADSI]("WinNT://{0}/{1},group" -f $env:COMPUTERNAME, $GroupName)
-        foreach ($member in @($group.psbase.Invoke("Members"))) {
-            $memberName = [string]$member.GetType().InvokeMember("Name", "GetProperty", $null, $member, $null)
-            if ($memberName -ieq $AccountName) {
-                return $true
+    $localAccount = "{0}\{1}" -f $env:COMPUTERNAME, $AccountName
+    $group = Get-LocalGroupObjectBySid -Sid $GroupSid
+    if ($group -and (Test-LocalGroupCmdletsAvailable)) {
+        try {
+            if ($Action -eq "add") {
+                Add-LocalGroupMember -Group $group -Member $localAccount -ErrorAction Stop
+            } elseif ($Action -eq "remove") {
+                Remove-LocalGroupMember -Group $group -Member $localAccount -ErrorAction Stop
+            } else {
+                throw "Accion de grupo no soportada: $Action"
             }
+            Write-InstallLog "LOCAL_GROUP_MEMBER_CHANGE_OK sid=$GroupSid account=$AccountName action=$Action provider=LocalAccounts"
+            return
+        } catch {
+            Write-InstallLog "LOCAL_GROUP_MEMBER_CHANGE_LOCALACCOUNTS_FAILED sid=$GroupSid account=$AccountName action=$Action reason=$($_.Exception.Message)"
         }
-    } catch {
     }
-    return $false
+
+    $groupName = Get-LocalizedBuiltinGroupNameBySid -Sid $GroupSid
+    $netExe = Join-Path $env:SystemRoot "System32\net.exe"
+    $netAction = if ($Action -eq "add") { "/add" } elseif ($Action -eq "remove") { "/delete" } else { throw "Accion de grupo no soportada: $Action" }
+    Invoke-LoggedCommand `
+        -FilePath $netExe `
+        -ArgumentList @("localgroup", $groupName, $localAccount, $netAction) `
+        -LogName "permissions.log"
+    Write-InstallLog "LOCAL_GROUP_MEMBER_CHANGE_OK sid=$GroupSid account=$AccountName action=$Action provider=net"
 }
 
 function Ensure-PicoServiceAccountGroups {
     param([Parameter(Mandatory = $true)][string]$AccountName)
 
-    $adminGroup = Get-BuiltinGroupName -Sid "S-1-5-32-544" -Fallback "Administrators"
-    $usersGroup = Get-BuiltinGroupName -Sid "S-1-5-32-545" -Fallback "Users"
-    $localAccount = "{0}\{1}" -f $env:COMPUTERNAME, $AccountName
-
-    if (Test-LocalAccountsCmdletsAvailable) {
-        $sid = $null
-        try {
-            $sid = ([System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, $AccountName)).Translate([System.Security.Principal.SecurityIdentifier]).Value
-        } catch {
-        }
-
-        foreach ($member in @(Get-LocalGroupMember -Group $adminGroup -ErrorAction SilentlyContinue)) {
-            $memberSid = ""
-            if ($member.SID) { $memberSid = [string]$member.SID.Value }
-            if (($sid -and $memberSid -eq $sid) -or ([string]$member.Name -ieq $localAccount) -or ([string]$member.Name -ieq ".\$AccountName")) {
-                Remove-LocalGroupMember -Group $adminGroup -Member $member.Name -ErrorAction Stop
-                Write-InstallLog "PICO_SERVICE_ACCOUNT_REMOVED_FROM_ADMINISTRATORS name=$AccountName"
-            }
-        }
-
-        try {
-            Add-LocalGroupMember -Group $usersGroup -Member $AccountName -ErrorAction Stop
-        } catch {
-            if (-not (Test-PicoAdsiGroupMember -GroupName $usersGroup -AccountName $AccountName)) {
-                Write-InstallLog "PICO_SERVICE_ACCOUNT_USERS_GROUP_SKIPPED name=$AccountName reason=$($_.Exception.Message)"
-            }
-        }
-    } else {
-        $userPath = "WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $AccountName
-        if (Test-PicoAdsiGroupMember -GroupName $adminGroup -AccountName $AccountName) {
-            $group = [ADSI]("WinNT://{0}/{1},group" -f $env:COMPUTERNAME, $adminGroup)
-            $group.Remove($userPath)
-            Write-InstallLog "PICO_SERVICE_ACCOUNT_REMOVED_FROM_ADMINISTRATORS name=$AccountName"
-        }
-        if (-not (Test-PicoAdsiGroupMember -GroupName $usersGroup -AccountName $AccountName)) {
-            try {
-                $group = [ADSI]("WinNT://{0}/{1},group" -f $env:COMPUTERNAME, $usersGroup)
-                $group.Add($userPath)
-            } catch {
-                Write-InstallLog "PICO_SERVICE_ACCOUNT_USERS_GROUP_SKIPPED name=$AccountName reason=$($_.Exception.Message)"
-            }
-        }
+    $accountSid = Convert-LocalAccountNameToSid -AccountName $AccountName
+    if (Test-LocalAccountInGroupSid -GroupSid $Script:BuiltinAdminGroupSid -AccountName $AccountName -AccountSid $accountSid) {
+        Invoke-LocalGroupMemberChange -GroupSid $Script:BuiltinAdminGroupSid -AccountName $AccountName -Action "remove"
+    }
+    if (Test-LocalAccountInGroupSid -GroupSid $Script:BuiltinAdminGroupSid -AccountName $AccountName -AccountSid $accountSid) {
+        throw "La cuenta $AccountName pertenece a un grupo administrativo. PostgreSQL no puede ejecutarse asi."
     }
 
-    if (Test-PicoAdsiGroupMember -GroupName $adminGroup -AccountName $AccountName) {
-        throw "La cuenta $AccountName pertenece al grupo Administrators. PostgreSQL no puede ejecutarse asi."
+    if (-not (Test-LocalAccountInGroupSid -GroupSid $Script:BuiltinStandardGroupSid -AccountName $AccountName -AccountSid $accountSid)) {
+        try {
+            Invoke-LocalGroupMemberChange -GroupSid $Script:BuiltinStandardGroupSid -AccountName $AccountName -Action "add"
+        } catch {
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_STANDARD_GROUP_SKIPPED name=$AccountName sid=$Script:BuiltinStandardGroupSid reason=$($_.Exception.Message)"
+        }
     }
 }
 
@@ -357,56 +560,84 @@ function Ensure-PicoServiceAccount {
     $securePassword = ConvertTo-PicoSecureString -PlainText $password
     $provider = "ADSI"
 
-    if (Test-LocalAccountsCmdletsAvailable) {
+    if (Test-LocalUserCmdletsAvailable) {
         $provider = "LocalAccounts"
-        $existing = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
-        if ($existing) {
-            $setParams = @{
-                Name = $accountName
-                Password = $securePassword
-                Description = $description
-            }
-            $setCommand = Get-Command Set-LocalUser
-            if ($setCommand.Parameters.ContainsKey("PasswordNeverExpires")) {
-                $setParams["PasswordNeverExpires"] = $true
-            }
-            Set-LocalUser @setParams -ErrorAction Stop
-            if ($setCommand.Parameters.ContainsKey("UserMayChangePassword")) {
-                try {
-                    Set-LocalUser -Name $accountName -UserMayChangePassword $false -ErrorAction Stop
-                } catch {
-                    Write-InstallLog "PICO_SERVICE_ACCOUNT_USER_MAY_CHANGE_PASSWORD_SKIPPED name=$accountName"
+        try {
+            $existing = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
+            if ($existing) {
+                Set-LocalUser -Name $accountName -Password $securePassword -Description $description -ErrorAction Stop
+                try { Set-LocalUser -Name $accountName -PasswordNeverExpires $true -ErrorAction Stop } catch { Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_SKIPPED name=$accountName" }
+                try { Set-LocalUser -Name $accountName -UserMayChangePassword $false -ErrorAction Stop } catch { Write-InstallLog "PICO_SERVICE_ACCOUNT_USER_MAY_CHANGE_PASSWORD_SKIPPED name=$accountName" }
+                if (-not $existing.Enabled) {
+                    Enable-LocalUser -Name $accountName -ErrorAction Stop
                 }
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_RESET name=$accountName provider=LocalAccounts"
+            } else {
+                $newParams = @{
+                    Name = $accountName
+                    Password = $securePassword
+                    Description = $description
+                    PasswordNeverExpires = $true
+                }
+                $newCommand = Get-Command New-LocalUser
+                if ($newCommand.Parameters.ContainsKey("UserMayNotChangePassword")) {
+                    $newParams["UserMayNotChangePassword"] = $true
+                }
+                if ($newCommand.Parameters.ContainsKey("AccountNeverExpires")) {
+                    $newParams["AccountNeverExpires"] = $true
+                }
+                New-LocalUser @newParams -ErrorAction Stop | Out-Null
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_CREATED name=$accountName provider=LocalAccounts"
             }
-            if (-not $existing.Enabled) {
-                Enable-LocalUser -Name $accountName -ErrorAction Stop
+        } catch {
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_LOCALACCOUNTS_FAILED name=$accountName reason=$($_.Exception.Message)"
+            $provider = "ADSI"
+            try {
+                Set-PicoAdsiUserPasswordAndFlags -AccountName $accountName -Password $password -Description $description
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_ADSI name=$accountName"
+            } catch {
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_FAILED name=$accountName reason=$($_.Exception.Message)"
+                $provider = "net"
+                $exists = $false
+                try {
+                    $null = Convert-LocalAccountNameToSid -AccountName $accountName
+                    $exists = $true
+                } catch {
+                }
+                Invoke-NetUserSafe -AccountName $accountName -Password $password -Create:([bool](-not $exists))
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_NET name=$accountName"
             }
-            Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_RESET name=$accountName"
-        } else {
-            $newParams = @{
-                Name = $accountName
-                Password = $securePassword
-                Description = $description
-                PasswordNeverExpires = $true
-            }
-            $newCommand = Get-Command New-LocalUser
-            if ($newCommand.Parameters.ContainsKey("UserMayNotChangePassword")) {
-                $newParams["UserMayNotChangePassword"] = $true
-            }
-            if ($newCommand.Parameters.ContainsKey("AccountNeverExpires")) {
-                $newParams["AccountNeverExpires"] = $true
-            }
-            New-LocalUser @newParams -ErrorAction Stop | Out-Null
-            Write-InstallLog "PICO_SERVICE_ACCOUNT_CREATED name=$accountName"
         }
     } else {
-        Set-PicoAdsiUserPasswordAndFlags -AccountName $accountName -Password $password -Description $description
-        Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_ADSI name=$accountName"
+        try {
+            Set-PicoAdsiUserPasswordAndFlags -AccountName $accountName -Password $password -Description $description
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_ADSI name=$accountName"
+        } catch {
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_FAILED name=$accountName reason=$($_.Exception.Message)"
+            $provider = "net"
+            $exists = $false
+            try {
+                $null = Convert-LocalAccountNameToSid -AccountName $accountName
+                $exists = $true
+            } catch {
+            }
+            Invoke-NetUserSafe -AccountName $accountName -Password $password -Create:([bool](-not $exists))
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_NET name=$accountName"
+        }
     }
 
     Ensure-PicoServiceAccountGroups -AccountName $accountName
-    Write-InstallLog "PICO_SERVICE_ACCOUNT_READY name=$accountName provider=$provider non_admin=true"
-    return [System.Management.Automation.PSCredential]::new(".\$accountName", $securePassword)
+    $accountSid = Convert-LocalAccountNameToSid -AccountName $accountName
+    $credential = [System.Management.Automation.PSCredential]::new(".\$accountName", $securePassword)
+    Write-InstallLog "PICO_SERVICE_ACCOUNT_READY name=$accountName sid=$accountSid provider=$provider non_admin=true"
+    return [pscustomobject]@{
+        Username = $accountName
+        Domain = "."
+        LocalAccount = ("{0}\{1}" -f $env:COMPUTERNAME, $accountName)
+        Sid = $accountSid
+        PlainPassword = $password
+        Credential = $credential
+    }
 }
 
 function Invoke-IcaclsGrant {
@@ -429,12 +660,9 @@ function Invoke-IcaclsGrant {
 }
 
 function Grant-PicoServiceAccountPermissions {
-    param([Parameter(Mandatory = $true)][System.Management.Automation.PSCredential]$Credential)
+    param([Parameter(Mandatory = $true)]$Account)
 
-    $accountName = $Credential.UserName
-    if ($accountName.StartsWith(".\")) {
-        $accountName = "{0}\{1}" -f $env:COMPUTERNAME, $accountName.Substring(2)
-    }
+    $accountName = [string]$Account.LocalAccount
 
     Invoke-IcaclsGrant -Path (Join-Path $Script:ProgramDataDir "postgres") -Account $accountName -Rights "F"
     Invoke-IcaclsGrant -Path (Join-Path $Script:ProgramDataDir "logs") -Account $accountName -Rights "M"
@@ -588,11 +816,11 @@ function Install-WinSWServiceWithAccount {
         [Parameter(Mandatory = $true)][string]$TargetXml,
         [Parameter(Mandatory = $true)][string]$TargetExe,
         [Parameter(Mandatory = $true)][string]$WinSWSource,
-        [Parameter(Mandatory = $true)][System.Management.Automation.PSCredential]$Credential,
+        [Parameter(Mandatory = $true)]$PicoServiceAccount,
         [Parameter(Mandatory = $true)][string]$ServiceId
     )
 
-    $password = $Credential.GetNetworkCredential().Password
+    $password = [string]$PicoServiceAccount.PlainPassword
     $installTokens = $Tokens.Clone()
     $installTokens["PICO_SERVICE_ACCOUNT_XML"] = New-WinSWServiceAccountXml -Password $password
     $finalTokens = $Tokens.Clone()
@@ -849,11 +1077,50 @@ function Assert-AllServicesRunning {
     }
 }
 
+function Assert-ServiceTemplatesAvailable {
+    $templateDir = Join-Path (Join-Path $Script:ProgramFilesDir "services") "templates"
+    if (-not (Test-Path -LiteralPath $templateDir -PathType Container)) {
+        throw "No existen templates de servicios en $templateDir"
+    }
+    foreach ($serviceId in $Script:Services) {
+        $template = Join-Path $templateDir "$serviceId.xml"
+        if (-not (Test-Path -LiteralPath $template -PathType Leaf)) {
+            throw "Falta template WinSW para $serviceId en $template"
+        }
+    }
+}
+
+function Assert-WinSWServiceFiles {
+    param([Parameter(Mandatory = $true)][string]$ServiceId)
+
+    $serviceDir = Join-Path $Script:ProgramFilesDir "services"
+    $targetXml = Join-Path $serviceDir "$ServiceId.xml"
+    $targetExe = Join-Path $serviceDir "$ServiceId.exe"
+    if (-not (Test-Path -LiteralPath $targetExe -PathType Leaf)) {
+        throw "No se genero wrapper WinSW final para $ServiceId: $targetExe"
+    }
+    if (-not (Test-Path -LiteralPath $targetXml -PathType Leaf)) {
+        throw "No se genero XML WinSW final para $ServiceId: $targetXml"
+    }
+    $xmlText = Get-Content -LiteralPath $targetXml -Raw
+    if ($xmlText.Contains("{{")) {
+        throw "XML WinSW final contiene placeholders sin resolver: $targetXml"
+    }
+}
+
+function Assert-WinSWServiceFilesForAll {
+    param([string[]]$ServiceIds = $Script:Services)
+
+    foreach ($serviceId in $ServiceIds) {
+        Assert-WinSWServiceFiles -ServiceId $serviceId
+    }
+}
+
 function Install-WinSWServices {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Tokens,
         [string[]]$ServiceIds = $Script:Services,
-        [System.Management.Automation.PSCredential]$PicoServiceCredential
+        $PicoServiceAccount
     )
 
     $serviceDir = Join-Path $Script:ProgramFilesDir "services"
@@ -914,7 +1181,7 @@ function Install-WinSWServices {
         }
 
         if ($serviceId -eq "PicoDeGallo-PostgreSQL") {
-            if (-not $PicoServiceCredential) {
+            if (-not $PicoServiceAccount) {
                 throw "PicoDeGallo-PostgreSQL requiere credencial de $Script:PicoServiceAccountName."
             }
             Install-WinSWServiceWithAccount `
@@ -923,7 +1190,7 @@ function Install-WinSWServices {
                 -TargetXml $targetXml `
                 -TargetExe $targetExe `
                 -WinSWSource $winswSource `
-                -Credential $PicoServiceCredential `
+                -PicoServiceAccount $PicoServiceAccount `
                 -ServiceId $serviceId
         } else {
             Render-Template -Source $template -Destination $targetXml -Tokens $Tokens
@@ -935,6 +1202,7 @@ function Install-WinSWServices {
             Invoke-WinSWCommand -ServiceId $serviceId -Command "install"
             Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 30
         }
+        Assert-WinSWServiceFiles -ServiceId $serviceId
         Write-SafeHost "Servicio instalado: $serviceId"
     }
 
@@ -1344,6 +1612,12 @@ function Render-Caddyfile {
         Replace("{{PROGRAM_DATA_DIR}}", $Script:ProgramDataDir.Replace("\", "/")) |
         Set-Content -LiteralPath $caddyfile -Encoding UTF8
 
+    if (-not (Test-Path -LiteralPath $caddyfile -PathType Leaf)) {
+        throw "No se genero Caddyfile final: $caddyfile"
+    }
+    if ((Get-Content -LiteralPath $caddyfile -Raw).Contains("{{")) {
+        throw "Caddyfile final contiene placeholders sin resolver: $caddyfile"
+    }
     Write-InstallLog "CADDYFILE_RENDERED $caddyfile"
 }
 
@@ -1364,7 +1638,12 @@ function Get-DjangoEnvironment {
     }
 }
 
-function Run-DjangoSetup {
+function Invoke-DjangoManage {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+        [Parameter(Mandatory = $true)][string]$LogName
+    )
+
     $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
     $backend = Join-Path $Script:ProgramFilesDir "backend"
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
@@ -1374,28 +1653,36 @@ function Run-DjangoSetup {
         throw "No existe backend Django en $backend"
     }
 
-    $djangoEnv = Get-DjangoEnvironment
-
     Invoke-LoggedCommand `
         -FilePath $python `
+        -ArgumentList $ArgumentList `
+        -WorkingDirectory $backend `
+        -Environment (Get-DjangoEnvironment) `
+        -LogName $LogName
+}
+
+function Run-DjangoCheckRuntime {
+    Invoke-DjangoManage `
         -ArgumentList @("manage.py", "check_runtime_config", "--strict") `
-        -WorkingDirectory $backend `
-        -Environment $djangoEnv `
         -LogName "check-runtime-config.log"
+}
 
-    Invoke-LoggedCommand `
-        -FilePath $python `
+function Run-DjangoMigrate {
+    Invoke-DjangoManage `
         -ArgumentList @("manage.py", "migrate", "--noinput") `
-        -WorkingDirectory $backend `
-        -Environment $djangoEnv `
         -LogName "migrate.log"
+}
 
-    Invoke-LoggedCommand `
-        -FilePath $python `
+function Run-DjangoCollectstatic {
+    Invoke-DjangoManage `
         -ArgumentList @("manage.py", "collectstatic", "--noinput") `
-        -WorkingDirectory $backend `
-        -Environment $djangoEnv `
         -LogName "collectstatic.log"
+}
+
+function Run-DjangoSetup {
+    Run-DjangoCheckRuntime
+    Run-DjangoMigrate
+    Run-DjangoCollectstatic
 }
 
 function Run-InitialAdminBootstrap {
@@ -1459,64 +1746,166 @@ function Validate-PostInstall {
     Assert-AllServicesRunning
 }
 
-foreach ($dir in @("config", "media", "static", "dte_logs", "backups", "diagnostics", "logs", "postgres\data")) {
-    New-DirectorySafe (Join-Path $Script:ProgramDataDir $dir)
+function Invoke-InstallMain {
+    $Script:NativeEnvMap = $null
+    $Script:PicoServiceAccount = $null
+    $Script:WinSWTokens = $null
+    $Script:DatabaseHost = $null
+    $Script:DatabasePort = 0
+
+    $Script:InstallPhase = "prepare-directories"
+    $Script:LastInstallStep = "prepare-directories"
+    foreach ($dir in @("config", "media", "static", "dte_logs", "backups", "diagnostics", "logs", "postgres\data")) {
+        New-DirectorySafe (Join-Path $Script:ProgramDataDir $dir)
+    }
+
+    $Script:InstallPhase = "archive-existing-logs"
+    $Script:LastInstallStep = "archive-existing-logs"
+    Stop-ExistingServicesForLogArchive
+    Archive-ExistingNativeLogs
+    Write-InstallLog "INSTALL_SERVICES_BEGIN ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
+
+    Invoke-InstallStep -Name "assert-admin" -ScriptBlock {
+        Assert-Admin
+        if ($Script:PicoServiceAccountName -ne "PicoDeGalloSvc") {
+            throw "Cuenta de servicio PostgreSQL inesperada: $Script:PicoServiceAccountName"
+        }
+    }
+
+    Invoke-InstallStep -Name "start-transcript" -ScriptBlock {
+        Start-InstallTranscriptSafe
+    }
+
+    Invoke-InstallStep -Name "init-env" -ScriptBlock {
+        if (-not (Test-Path -LiteralPath (Get-EnvPath) -PathType Leaf)) {
+            & "$PSScriptRoot\init-env.ps1"
+        } else {
+            Write-InstallLog "INIT_ENV_ALREADY_EXISTS target=$(Get-EnvPath)"
+        }
+    }
+
+    Invoke-InstallStep -Name "read-env-and-validate-dte" -ScriptBlock {
+        $Script:NativeEnvMap = Read-NativeEnv
+        Test-DteEnv | Out-Null
+    }
+
+    Invoke-InstallStep -Name "ensure-service-account" -ScriptBlock {
+        $Script:PicoServiceAccount = Ensure-PicoServiceAccount
+    }
+
+    Invoke-InstallStep -Name "permissions" -ScriptBlock {
+        Grant-PicoServiceAccountPermissions -Account $Script:PicoServiceAccount
+    }
+
+    Invoke-InstallStep -Name "render-services-precheck" -ScriptBlock {
+        Assert-ServiceTemplatesAvailable
+        $Script:WinSWTokens = @{
+            PROGRAM_FILES_DIR = $Script:ProgramFilesDir
+            PROGRAM_DATA_DIR = $Script:ProgramDataDir
+            POSTGRES_BIN_DIR = (Join-Path $Script:ProgramFilesDir "postgres\bin")
+            POSTGRES_DATA_DIR = (Join-Path $Script:ProgramDataDir "postgres\data")
+            PICO_SERVICE_ACCOUNT_XML = New-WinSWServiceAccountXml
+            PYTHON_EXE = (Join-Path $Script:ProgramFilesDir "python\python.exe")
+            BACKEND_DIR = (Join-Path $Script:ProgramFilesDir "backend")
+            ENV_FILE = (Get-EnvPath)
+            CADDY_EXE = (Join-Path $Script:ProgramFilesDir "caddy\caddy.exe")
+            APP_HTTP_PORT = if ([string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["APP_HTTP_PORT"])) { "9282" } else { [string]$Script:NativeEnvMap["APP_HTTP_PORT"] }
+            APP_BIND_ADDRESS = if ([string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["APP_BIND_ADDRESS"])) { "127.0.0.1" } else { [string]$Script:NativeEnvMap["APP_BIND_ADDRESS"] }
+        }
+    }
+
+    Invoke-InstallStep -Name "validate-python-runtime" -ScriptBlock {
+        Validate-EmbeddedPythonImports
+    }
+
+    Invoke-InstallStep -Name "validate-postgres-runtime" -ScriptBlock {
+        Assert-PostgresRuntimeTools
+        Invoke-PostgresRuntimeVersionChecks
+    }
+
+    Invoke-InstallStep -Name "initdb" -ScriptBlock {
+        Initialize-PostgresDataDirectory -EnvMap $Script:NativeEnvMap -Credential ($Script:PicoServiceAccount.Credential)
+    }
+
+    Invoke-InstallStep -Name "configure-postgres" -ScriptBlock {
+        Configure-PostgresDataDirectory -EnvMap $Script:NativeEnvMap
+        Grant-PicoServiceAccountPermissions -Account $Script:PicoServiceAccount
+    }
+
+    Invoke-InstallStep -Name "postgres-foreground-test" -ScriptBlock {
+        Test-PostgresForegroundStartup -Credential ($Script:PicoServiceAccount.Credential)
+    }
+
+    Invoke-InstallStep -Name "install-postgres-service" -ScriptBlock {
+        Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-PostgreSQL") -PicoServiceAccount $Script:PicoServiceAccount
+        Assert-WinSWServiceFilesForAll -ServiceIds @("PicoDeGallo-PostgreSQL")
+    }
+
+    Invoke-InstallStep -Name "start-postgres" -ScriptBlock {
+        Start-WinSWService -ServiceId "PicoDeGallo-PostgreSQL"
+        $Script:DatabaseHost = Get-RequiredEnvValue -Map $Script:NativeEnvMap -Name "DB_HOST"
+        $Script:DatabasePort = [int](Get-RequiredEnvValue -Map $Script:NativeEnvMap -Name "DB_PORT")
+        Wait-TcpPort -HostName $Script:DatabaseHost -Port $Script:DatabasePort -TimeoutSeconds 60 -ServiceId "PicoDeGallo-PostgreSQL"
+        Wait-PostgresReady -EnvMap $Script:NativeEnvMap
+    }
+
+    Invoke-InstallStep -Name "setup-database" -ScriptBlock {
+        Ensure-ApplicationDatabase -EnvMap $Script:NativeEnvMap
+    }
+
+    Invoke-InstallStep -Name "check-runtime-config" -ScriptBlock {
+        Run-DjangoCheckRuntime
+    }
+
+    Invoke-InstallStep -Name "migrate" -ScriptBlock {
+        Run-DjangoMigrate
+    }
+
+    Invoke-InstallStep -Name "collectstatic" -ScriptBlock {
+        Run-DjangoCollectstatic
+    }
+
+    Invoke-InstallStep -Name "bootstrap-admin" -ScriptBlock {
+        Run-InitialAdminBootstrap
+    }
+
+    Invoke-InstallStep -Name "install-backend" -ScriptBlock {
+        Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-Backend")
+        Start-BackendService
+    }
+
+    Invoke-InstallStep -Name "install-dte-services" -ScriptBlock {
+        Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-DTE-Worker", "PicoDeGallo-DTE-Monitor")
+        Start-DteServices
+    }
+
+    Invoke-InstallStep -Name "render-caddyfile" -ScriptBlock {
+        Render-Caddyfile -EnvMap $Script:NativeEnvMap
+    }
+
+    Invoke-InstallStep -Name "install-caddy" -ScriptBlock {
+        Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-Caddy")
+        Start-CaddyService
+    }
+
+    Invoke-InstallStep -Name "healthcheck" -ScriptBlock {
+        Assert-WinSWServiceFilesForAll
+        Validate-PostInstall
+    }
+
+    foreach ($svc in $Script:Services) {
+        Write-SafeHost "Servicio listo: $svc"
+    }
+
+    Write-InstallLog "INSTALL_SERVICES_SUCCESS"
 }
 
-Stop-ExistingServicesForLogArchive
-Archive-ExistingNativeLogs
-Write-InstallLog "INSTALL_SERVICES_BEGIN ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
-
-if (-not (Test-Path -LiteralPath (Get-EnvPath) -PathType Leaf)) {
-    & "$PSScriptRoot\init-env.ps1"
+try {
+    Invoke-InstallMain
+} catch {
+    Write-InstallException -ErrorRecord $_
+    Write-SafeHost ("Instalacion de servicios fallo en paso {0}: {1}" -f $Script:LastInstallStep, $_.Exception.Message)
+    exit 1
+} finally {
+    Stop-InstallTranscriptSafe
 }
-
-$envs = Read-NativeEnv
-Test-DteEnv | Out-Null
-$picoServiceCredential = Ensure-PicoServiceAccount
-Grant-PicoServiceAccountPermissions -Credential $picoServiceCredential
-
-$tokens = @{
-    PROGRAM_FILES_DIR = $Script:ProgramFilesDir
-    PROGRAM_DATA_DIR = $Script:ProgramDataDir
-    POSTGRES_BIN_DIR = (Join-Path $Script:ProgramFilesDir "postgres\bin")
-    POSTGRES_DATA_DIR = (Join-Path $Script:ProgramDataDir "postgres\data")
-    PICO_SERVICE_ACCOUNT_XML = New-WinSWServiceAccountXml
-    PYTHON_EXE = (Join-Path $Script:ProgramFilesDir "python\python.exe")
-    BACKEND_DIR = (Join-Path $Script:ProgramFilesDir "backend")
-    ENV_FILE = (Get-EnvPath)
-    CADDY_EXE = (Join-Path $Script:ProgramFilesDir "caddy\caddy.exe")
-    APP_HTTP_PORT = if ([string]::IsNullOrWhiteSpace([string]$envs["APP_HTTP_PORT"])) { "9282" } else { [string]$envs["APP_HTTP_PORT"] }
-    APP_BIND_ADDRESS = if ([string]::IsNullOrWhiteSpace([string]$envs["APP_BIND_ADDRESS"])) { "127.0.0.1" } else { [string]$envs["APP_BIND_ADDRESS"] }
-}
-
-Validate-EmbeddedPythonImports
-Assert-PostgresRuntimeTools
-Invoke-PostgresRuntimeVersionChecks
-Initialize-PostgresDataDirectory -EnvMap $envs -Credential $picoServiceCredential
-Configure-PostgresDataDirectory -EnvMap $envs
-Grant-PicoServiceAccountPermissions -Credential $picoServiceCredential
-Test-PostgresForegroundStartup -Credential $picoServiceCredential
-Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-PostgreSQL") -PicoServiceCredential $picoServiceCredential
-Start-WinSWService -ServiceId "PicoDeGallo-PostgreSQL"
-$dbHost = Get-RequiredEnvValue -Map $envs -Name "DB_HOST"
-$dbPort = [int](Get-RequiredEnvValue -Map $envs -Name "DB_PORT")
-Wait-TcpPort -HostName $dbHost -Port $dbPort -TimeoutSeconds 60 -ServiceId "PicoDeGallo-PostgreSQL"
-Wait-PostgresReady -EnvMap $envs
-Ensure-ApplicationDatabase -EnvMap $envs
-Run-DjangoSetup
-Run-InitialAdminBootstrap
-Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-Backend")
-Start-BackendService
-Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-DTE-Worker", "PicoDeGallo-DTE-Monitor")
-Start-DteServices
-Render-Caddyfile -EnvMap $envs
-Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-Caddy")
-Start-CaddyService
-Validate-PostInstall
-
-foreach ($svc in $Script:Services) {
-    Write-SafeHost "Servicio listo: $svc"
-}
-
-Write-InstallLog "INSTALL_SERVICES_SUCCESS"

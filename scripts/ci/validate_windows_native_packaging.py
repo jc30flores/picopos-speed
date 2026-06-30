@@ -225,21 +225,66 @@ def validate_native_installer_contract() -> None:
     if "stderr" not in install.lower():
         fail("install-services.ps1 must capture/read stderr for PostgreSQL diagnostics")
     for token in [
+        "Invoke-InstallStep",
+        "Write-InstallException",
+        "INSTALL_SERVICES_FAILED",
+        "install-services-error.log",
+        "STEP_BEGIN",
+        "STEP_SUCCESS",
+        "STEP_ERROR",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing top-level logging token: {token}")
+    if not re.search(r"try\s*\{[\s\S]*Invoke-InstallMain[\s\S]*\}\s*catch\s*\{", install):
+        fail("install-services.ps1 must wrap Invoke-InstallMain in a top-level try/catch")
+    for token in [
         "PicoDeGalloSvc",
         "New-SecureRandomPassword",
         "Ensure-PicoServiceAccount",
         "Grant-PicoServiceAccountPermissions",
         "Invoke-AsPicoServiceAccount",
         "Install-WinSWServiceWithAccount",
+        "S-1-5-32-544",
+        "S-1-5-32-545",
+        "Get-LocalizedBuiltinGroupNameBySid",
     ]:
         if token not in install:
             fail(f"install-services.ps1 missing PostgreSQL service-account token: {token}")
+    for forbidden in ["Admin" + "istrators", "Us" + "ers"]:
+        if forbidden in install:
+            fail(f"install-services.ps1 must not depend on English builtin group name: {forbidden}")
     if not re.search(r"Start-Process\s+@startParams", install) or "Credential = $Credential" not in install:
         fail("install-services.ps1 must start PostgreSQL commands with a PSCredential")
     if "POSTGRES_FOREGROUND_TEST_RUN_AS" not in install:
         fail("install-services.ps1 must log the foreground PostgreSQL account")
     if re.search(r"PICO_SERVICE_ACCOUNT_PASSWORD\s*=\s*[^{}\s][^\r\n]*", install):
         fail("install-services.ps1 contains a literal PICO service account password assignment")
+    for token in [
+        'Join-Path $serviceDir "$ServiceId.exe"',
+        'Join-Path $serviceDir "$ServiceId.xml"',
+        "Copy-Item -LiteralPath $winswSource -Destination $targetExe",
+        "Render-Template -Source $template -Destination $targetXml",
+        "Assert-WinSWServiceFiles",
+        'Command "install"',
+        "No se genero Caddyfile final",
+        "Caddyfile final contiene placeholders",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing service rendering/install guard: {token}")
+
+    status = read_text_safe(NATIVE / "scripts" / "status.ps1")
+    for token in ["VERSION=", "PICO_SERVICE_ACCOUNT=", "StartName=", "POSTGRES_XML_SERVICEACCOUNT"]:
+        if token not in status:
+            fail(f"status.ps1 missing diagnostic token: {token}")
+
+    diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
+    for token in ["service-account.txt", "service-xml-", "acls.txt", "install-services-error.log"]:
+        if token == "install-services-error.log":
+            if token not in install and token not in diagnostics:
+                fail(f"diagnostics coverage missing token: {token}")
+            continue
+        if token not in diagnostics:
+            fail(f"diagnostics.ps1 missing diagnostic token: {token}")
 
     package = read_text_safe(NATIVE / "package-release.ps1")
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:

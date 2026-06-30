@@ -68,7 +68,7 @@ begin
     RaiseException(Description + ' no pudo ejecutarse.');
   end;
   if ResultCode <> 0 then begin
-    MsgBox(Description + ' fallo con codigo ' + IntToStr(ResultCode) + '. Revise C:\ProgramData\PicoDeGallo\logs.', mbError, MB_OK);
+    MsgBox(Description + ' fallo con codigo ' + IntToStr(ResultCode) + '. Revise C:\ProgramData\PicoDeGallo\logs\install-services-error.log y install-services.log.', mbError, MB_OK);
     RaiseException(Description + ' fallo con codigo ' + IntToStr(ResultCode) + '.');
   end;
 end;
