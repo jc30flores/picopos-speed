@@ -144,7 +144,8 @@ function Assert-PostgresRuntime {
 function Invoke-PostgresRuntimeVersionChecks {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $postgresBin = Join-Path $Path "bin"
+    $postgresRoot = (Resolve-Path -LiteralPath $Path).Path
+    $postgresBin = Join-Path $postgresRoot "bin"
     $checks = @(
         @{ Tool = "postgres.exe"; Command = "postgres.exe --version" },
         @{ Tool = "initdb.exe"; Command = "initdb.exe --version" },
@@ -158,6 +159,7 @@ function Invoke-PostgresRuntimeVersionChecks {
         if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             Fail "PostgreSQL runtime no contiene bin\$tool."
         }
+        $exe = (Resolve-Path -LiteralPath $exe).Path
 
         $stdout = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-pg-version-" + [Guid]::NewGuid().ToString("N") + ".out")
         $stderr = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-pg-version-" + [Guid]::NewGuid().ToString("N") + ".err")
