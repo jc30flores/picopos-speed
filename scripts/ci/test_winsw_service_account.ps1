@@ -31,6 +31,9 @@ if ($errors.Count -gt 0) {
 }
 
 $functionNames = @(
+    "Format-CommandForLog",
+    "ConvertTo-StartProcessArgumentString",
+    "Invoke-LoggedSecretCommand",
     "Get-ServiceLogonNativeApi",
     "Get-PicoServiceAccountLogonName",
     "Test-PostgresServiceAccountStartName",
@@ -53,6 +56,8 @@ foreach ($name in $functionNames) {
 
 $Script:PicoServiceAccountName = "PicoDeGalloSvcTest"
 $Script:WinSWAccountTestLog = @()
+$Script:WinSWAccountTestLogDir = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-winsw-account-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $Script:WinSWAccountTestLogDir -Force | Out-Null
 
 function Write-InstallLog {
     param(
@@ -60,6 +65,21 @@ function Write-InstallLog {
         [string]$LogName = "test.log"
     )
     $Script:WinSWAccountTestLog += "$LogName $Message"
+}
+
+function Get-LogsDir {
+    return $Script:WinSWAccountTestLogDir
+}
+
+function Get-NativeLogPath {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    return (Join-Path $Script:WinSWAccountTestLogDir $Name)
+}
+
+function Protect-Text {
+    param([string]$Text)
+    if ($null -eq $Text) { return "" }
+    return $Text
 }
 
 function Get-ServiceStartNameSafe {
@@ -159,4 +179,5 @@ try {
 } finally {
     Remove-TestService -Name $serviceName
     Remove-TestUser -Name $testUser
+    Remove-Item -LiteralPath $Script:WinSWAccountTestLogDir -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -238,6 +238,64 @@ function Invoke-WinSWCommand {
         -LogName "service-install.log"
 }
 
+function Invoke-LoggedSecretCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string[]]$SafeArgumentList = @(),
+        [string[]]$SecretValues = @(),
+        [Parameter(Mandatory = $true)][string]$LogName,
+        [string]$WorkingDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        throw "No existe ejecutable requerido: $FilePath"
+    }
+    if ($SafeArgumentList.Count -eq 0) {
+        throw "Invoke-LoggedSecretCommand requiere SafeArgumentList."
+    }
+
+    $logPath = Get-NativeLogPath $LogName
+    $stdout = Join-Path (Get-LogsDir) ("{0}.stdout.tmp" -f ([Guid]::NewGuid().ToString("N")))
+    $stderr = Join-Path (Get-LogsDir) ("{0}.stderr.tmp" -f ([Guid]::NewGuid().ToString("N")))
+    Write-InstallLog -LogName $LogName -Message ("RUN_SECRET " + (Format-CommandForLog -FilePath $FilePath -ArgumentList $SafeArgumentList))
+
+    $startParams = @{
+        FilePath = $FilePath
+        ArgumentList = (ConvertTo-StartProcessArgumentString -ArgumentList $ArgumentList)
+        Wait = $true
+        PassThru = $true
+        RedirectStandardOutput = $stdout
+        RedirectStandardError = $stderr
+        WindowStyle = "Hidden"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $startParams.WorkingDirectory = $WorkingDirectory
+    }
+
+    $process = Start-Process @startParams
+    $exitCode = [int]$process.ExitCode
+    foreach ($path in @($stdout, $stderr)) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $text = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+            foreach ($secret in $SecretValues) {
+                if (-not [string]::IsNullOrEmpty($secret)) {
+                    $text = $text.Replace($secret, "***REDACTED***")
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                Add-Content -LiteralPath $logPath -Value (Protect-Text $text) -Encoding UTF8
+            }
+        }
+    }
+    Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+
+    Write-InstallLog -LogName $LogName -Message ("EXIT_CODE " + $exitCode)
+    if ($exitCode -ne 0) {
+        throw "Comando secreto fallo con codigo $exitCode. Revise $logPath"
+    }
+}
+
 function New-SecureRandomPassword {
     param([int]$Length = 32)
 
@@ -1172,9 +1230,38 @@ function Set-WindowsServiceLogonAccountSafe {
     }
 
     Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_BEGIN service=$ServiceId account=$AccountName"
+    $cimChanged = $false
+    try {
+        $escaped = $ServiceId.Replace("'", "''")
+        $service = Get-CimInstance Win32_Service -Filter "Name='$escaped'" -ErrorAction Stop
+        if (-not $service) {
+            throw "Servicio no encontrado: $ServiceId"
+        }
+        $result = Invoke-CimMethod `
+            -InputObject $service `
+            -MethodName Change `
+            -Arguments @{ StartName = $AccountName; StartPassword = $Password } `
+            -ErrorAction Stop
+        $returnValue = [int]$result.ReturnValue
+        if ($returnValue -ne 0) {
+            throw "Win32_Service.Change ReturnValue=$returnValue"
+        }
+        $cimChanged = $true
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_CIM_OK service=$ServiceId account=$AccountName"
+    } catch {
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_CIM_WARN service=$ServiceId account=$AccountName message=$($_.Exception.Message)"
+    }
+
+    if ($cimChanged) {
+        $startName = Get-ServiceStartNameSafe -Name $ServiceId
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_OK service=$ServiceId startName=$startName method=cim"
+        return
+    }
+
     $api = Get-ServiceLogonNativeApi
     $scm = [IntPtr]::Zero
     $svc = [IntPtr]::Zero
+    $nativeChanged = $false
     try {
         $machineName = [string]$env:COMPUTERNAME
         if ([string]::IsNullOrWhiteSpace($machineName)) {
@@ -1207,9 +1294,10 @@ function Set-WindowsServiceLogonAccountSafe {
         if (-not $ok) {
             throw $api::LastError()
         }
+        $nativeChanged = $true
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_NATIVE_OK service=$ServiceId account=$AccountName"
     } catch {
-        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_ERROR service=$ServiceId account=$AccountName message=$($_.Exception.Message)"
-        throw
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_NATIVE_WARN service=$ServiceId account=$AccountName message=$($_.Exception.Message)"
     } finally {
         if ($svc -ne [IntPtr]::Zero) {
             [void]$api::CloseServiceHandle($svc)
@@ -1219,8 +1307,21 @@ function Set-WindowsServiceLogonAccountSafe {
         }
     }
 
+    if ($nativeChanged) {
+        $startName = Get-ServiceStartNameSafe -Name $ServiceId
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_OK service=$ServiceId startName=$startName method=native"
+        return
+    }
+
+    $scExe = Join-Path $env:SystemRoot "System32\sc.exe"
+    Invoke-LoggedSecretCommand `
+        -FilePath $scExe `
+        -ArgumentList @("config", $ServiceId, "obj=", $AccountName, "password=", $Password) `
+        -SafeArgumentList @("config", $ServiceId, "obj=", $AccountName, "password=", "***REDACTED***") `
+        -SecretValues @($Password) `
+        -LogName $LogName
     $startName = Get-ServiceStartNameSafe -Name $ServiceId
-    Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_OK service=$ServiceId startName=$startName"
+    Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_OK service=$ServiceId startName=$startName method=sc.exe"
 }
 
 function Assert-PostgresServiceAccount {
