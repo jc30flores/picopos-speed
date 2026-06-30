@@ -30,7 +30,13 @@ function Import-FunctionsFromFile {
         if (-not $match) {
             throw "[$Label] Missing function: $name"
         }
-        Invoke-Expression $match.Extent.Text
+        $scopedFunction = [regex]::Replace(
+            $match.Extent.Text,
+            "^\s*function\s+([^\s{]+)",
+            "function script:$name",
+            1
+        )
+        Invoke-Expression $scopedFunction
     }
 }
 
