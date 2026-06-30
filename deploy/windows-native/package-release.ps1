@@ -315,12 +315,14 @@ function Enable-EmbeddedPythonSitePackages {
 
     foreach ($line in $rawLines) {
         $trimmed = $line.Trim()
+        if ($trimmed -eq "..\backend") { continue }
         if ($trimmed -eq "Lib\site-packages") { continue }
         if ($trimmed -eq "import site") { continue }
         if ($trimmed -eq "#import site") { continue }
         $cleanLines += $line
     }
 
+    $cleanLines += "..\backend"
     $cleanLines += "Lib\site-packages"
     $cleanLines += "import site"
     Set-Content -LiteralPath $pthFile.FullName -Value $cleanLines -Encoding ASCII
@@ -379,8 +381,8 @@ function Install-EmbeddedPythonDependencies {
 
         $pthFile = Get-ChildItem -LiteralPath $PythonRoot -Filter "python*._pth" -File | Select-Object -First 1
         $pthLines = @(Get-Content -LiteralPath $pthFile.FullName | ForEach-Object { ([string]$_).Trim() })
-        if (($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
-            Fail "python*._pth no habilita Lib\site-packages e import site."
+        if (($pthLines -notcontains "..\backend") -or ($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
+            Fail "python*._pth no habilita ..\backend, Lib\site-packages e import site."
         }
 
         & $pythonExe -c "import django, waitress, psycopg2, requests; print('Python runtime OK')"
@@ -447,8 +449,8 @@ function Test-ReleasePayloadSafety {
         Fail "Runtime Python embebido no contiene python*._pth."
     }
     $pthLines = @(Get-Content -LiteralPath $pthFile.FullName | ForEach-Object { ([string]$_).Trim() })
-    if (($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
-        Fail "Runtime Python embebido no habilita Lib\site-packages e import site."
+    if (($pthLines -notcontains "..\backend") -or ($pthLines -notcontains "Lib\site-packages") -or ($pthLines -notcontains "import site")) {
+        Fail "Runtime Python embebido no habilita ..\backend, Lib\site-packages e import site."
     }
     foreach ($module in @("django", "waitress", "psycopg2", "requests")) {
         if (-not (Test-Path -LiteralPath (Join-Path $sitePackages $module))) {

@@ -436,7 +436,7 @@ def validate_native_installer_contract() -> None:
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:
         if token not in package:
             fail(f"package-release.ps1 missing PostgreSQL runtime validation token: {token}")
-    for token in ["Invoke-BackendRuntimeImportCheck", "config\\settings.py", "config\\wsgi.py", "check_runtime_config.py", "DJANGO_SETTINGS_IMPORT_OK"]:
+    for token in ["Invoke-BackendRuntimeImportCheck", "..\\backend", "config\\settings.py", "config\\wsgi.py", "check_runtime_config.py", "DJANGO_SETTINGS_IMPORT_OK"]:
         if token not in package:
             fail(f"package-release.ps1 missing backend payload validation token: {token}")
 
