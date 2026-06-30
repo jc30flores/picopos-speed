@@ -1034,7 +1034,8 @@ function New-WinSWServiceAccountXml {
 
     $lines = @(
         "  <serviceaccount>",
-        ("    <username>.\{0}</username>" -f (Escape-XmlText $Script:PicoServiceAccountName))
+        "    <domain>.</domain>",
+        ("    <user>{0}</user>" -f (Escape-XmlText $Script:PicoServiceAccountName))
     )
     if (-not [string]::IsNullOrEmpty($Password)) {
         $lines += ("    <password>{0}</password>" -f (Escape-XmlText $Password))
@@ -1066,15 +1067,169 @@ function Assert-SecretAbsentFromFiles {
     }
 }
 
+function Get-ServiceLogonNativeApi {
+    if (-not ("PicoDeGallo.Native.ServiceLogon" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace PicoDeGallo.Native {
+    public static class ServiceLogon {
+        public const UInt32 SC_MANAGER_CONNECT = 0x0001;
+        public const UInt32 SERVICE_QUERY_CONFIG = 0x0001;
+        public const UInt32 SERVICE_CHANGE_CONFIG = 0x0002;
+        public const UInt32 SERVICE_NO_CHANGE = 0xFFFFFFFF;
+
+        [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+        public static extern IntPtr OpenSCManager(string machineName, string databaseName, UInt32 desiredAccess);
+
+        [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+        public static extern IntPtr OpenService(IntPtr scmHandle, string serviceName, UInt32 desiredAccess);
+
+        [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+        public static extern bool ChangeServiceConfig(
+            IntPtr serviceHandle,
+            UInt32 serviceType,
+            UInt32 startType,
+            UInt32 errorControl,
+            string binaryPathName,
+            string loadOrderGroup,
+            IntPtr tagId,
+            string dependencies,
+            string serviceStartName,
+            string password,
+            string displayName);
+
+        [DllImport("advapi32.dll", SetLastError=true)]
+        public static extern bool CloseServiceHandle(IntPtr handle);
+
+        public static Win32Exception LastError() {
+            return new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+}
+"@
+    }
+    return [PicoDeGallo.Native.ServiceLogon]
+}
+
+function Get-PicoServiceAccountLogonName {
+    $computer = [string]$env:COMPUTERNAME
+    if (-not [string]::IsNullOrWhiteSpace($computer)) {
+        return ("{0}\{1}" -f $computer, $Script:PicoServiceAccountName)
+    }
+    return (".\{0}" -f $Script:PicoServiceAccountName)
+}
+
+function Test-PostgresServiceAccountStartName {
+    param([string]$StartName)
+
+    if ([string]::IsNullOrWhiteSpace($StartName) -or $StartName -eq "unknown") {
+        return $false
+    }
+
+    $trimmed = $StartName.Trim()
+    $blocked = @(
+        "LocalSystem",
+        "NT AUTHORITY\SYSTEM",
+        "LocalService",
+        "NT AUTHORITY\LocalService",
+        "NetworkService",
+        "NT AUTHORITY\NetworkService",
+        "Administrador",
+        "Administrator",
+        "CAJA"
+    )
+    foreach ($name in $blocked) {
+        if ($trimmed -ieq $name) {
+            return $false
+        }
+    }
+
+    if ($trimmed -ieq (Get-PicoServiceAccountLogonName)) {
+        return $true
+    }
+
+    $computer = [string]$env:COMPUTERNAME
+    if (-not [string]::IsNullOrWhiteSpace($computer) -and $trimmed -ieq ("{0}\{1}" -f $computer, $Script:PicoServiceAccountName)) {
+        return $true
+    }
+
+    return $false
+}
+
+function Set-WindowsServiceLogonAccountSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceId,
+        [Parameter(Mandatory = $true)][string]$AccountName,
+        [Parameter(Mandatory = $true)][string]$Password,
+        [string]$LogName = "service-install.log"
+    )
+
+    if ([string]::IsNullOrEmpty($Password)) {
+        throw "No se puede configurar cuenta de servicio $ServiceId sin password en memoria."
+    }
+
+    Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_BEGIN service=$ServiceId account=$AccountName"
+    $api = Get-ServiceLogonNativeApi
+    $scm = [IntPtr]::Zero
+    $svc = [IntPtr]::Zero
+    try {
+        $machineName = [string]$env:COMPUTERNAME
+        if ([string]::IsNullOrWhiteSpace($machineName)) {
+            $machineName = $null
+        }
+        $scm = $api::OpenSCManager($machineName, "ServicesActive", [uint32]$api::SC_MANAGER_CONNECT)
+        if ($scm -eq [IntPtr]::Zero) {
+            throw $api::LastError()
+        }
+
+        $access = [uint32]($api::SERVICE_CHANGE_CONFIG -bor $api::SERVICE_QUERY_CONFIG)
+        $svc = $api::OpenService($scm, $ServiceId, $access)
+        if ($svc -eq [IntPtr]::Zero) {
+            throw $api::LastError()
+        }
+
+        $noChange = [uint32]$api::SERVICE_NO_CHANGE
+        $ok = $api::ChangeServiceConfig(
+            $svc,
+            $noChange,
+            $noChange,
+            $noChange,
+            $null,
+            $null,
+            [IntPtr]::Zero,
+            $null,
+            $AccountName,
+            $Password,
+            $null)
+        if (-not $ok) {
+            throw $api::LastError()
+        }
+    } catch {
+        Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_ERROR service=$ServiceId account=$AccountName message=$($_.Exception.Message)"
+        throw
+    } finally {
+        if ($svc -ne [IntPtr]::Zero) {
+            [void]$api::CloseServiceHandle($svc)
+        }
+        if ($scm -ne [IntPtr]::Zero) {
+            [void]$api::CloseServiceHandle($scm)
+        }
+    }
+
+    $startName = Get-ServiceStartNameSafe -Name $ServiceId
+    Write-InstallLog -LogName $LogName -Message "SERVICE_ACCOUNT_FIX_OK service=$ServiceId startName=$startName"
+}
+
 function Assert-PostgresServiceAccount {
     $startName = Get-ServiceStartNameSafe -Name "PicoDeGallo-PostgreSQL"
-    Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_SERVICE_START_NAME $startName"
-    if ($startName -notmatch [regex]::Escape($Script:PicoServiceAccountName)) {
-        throw "PicoDeGallo-PostgreSQL quedo configurado como $startName; debe ejecutar como .\$Script:PicoServiceAccountName."
-    }
-    $privilegedPattern = ("Local" + "System") + "|" + ("NT AUTHORITY" + "\\SYSTEM") + "|Administrador|CAJA"
-    if ($startName -match $privilegedPattern) {
-        throw "PicoDeGallo-PostgreSQL no puede ejecutar como cuenta administrativa: $startName"
+    $ok = Test-PostgresServiceAccountStartName -StartName $startName
+    Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_SERVICE_START_NAME actual=$startName expected=$Script:PicoServiceAccountName ok=$ok"
+    Write-InstallLog -LogName "service-install.log" -Message "POSTGRES_SERVICE_START_NAME actual=$startName expected=$Script:PicoServiceAccountName ok=$ok"
+    if (-not $ok) {
+        throw "PicoDeGallo-PostgreSQL quedo configurado como $startName; debe ejecutar como $(Get-PicoServiceAccountLogonName)."
     }
 }
 
@@ -1102,6 +1257,14 @@ function Install-WinSWServiceWithAccount {
         }
         Copy-Item -LiteralPath $WinSWSource -Destination $TargetExe -Force
         Invoke-WinSWCommand -ServiceId $ServiceId -Command "install"
+        $startName = Get-ServiceStartNameSafe -Name $ServiceId
+        if (-not (Test-PostgresServiceAccountStartName -StartName $startName)) {
+            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_ACCOUNT_FIX_REQUIRED service=$ServiceId actual=$startName expected=$(Get-PicoServiceAccountLogonName)"
+            Set-WindowsServiceLogonAccountSafe `
+                -ServiceId $ServiceId `
+                -AccountName (Get-PicoServiceAccountLogonName) `
+                -Password $password
+        }
     } finally {
         Render-Template -Source $Template -Destination $TargetXml -Tokens $finalTokens
         Assert-SecretAbsentFromFiles -Secret $password -Paths @($TargetXml)
@@ -1110,7 +1273,8 @@ function Install-WinSWServiceWithAccount {
     Assert-SecretAbsentFromFiles -Secret $password -Paths @(
         (Get-NativeLogPath "service-install.log"),
         (Get-NativeLogPath "install-services.log"),
-        (Get-NativeLogPath "postgres-service.log")
+        (Get-NativeLogPath "postgres-service.log"),
+        (Get-NativeLogPath "install-services-transcript.log")
     )
     Wait-ServiceStatus -ServiceId $ServiceId -DesiredStatus "Stopped" -TimeoutSeconds 30
     Assert-PostgresServiceAccount
@@ -1249,6 +1413,20 @@ function Write-ServiceFailureDiagnostics {
     )) {
         Write-LogTail -LogName $logName -TargetLogName "service-install.log"
     }
+
+    if ($ServiceId -eq "PicoDeGallo-PostgreSQL") {
+        $combinedTail = ""
+        foreach ($logName in @("$ServiceId.wrapper.log", "$ServiceId.err.log", "postgres-service.log")) {
+            $path = Join-Path (Get-LogsDir) $logName
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                $combinedTail += "`n" + ((Get-Content -LiteralPath $path -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ }) -join "`n")
+            }
+        }
+        if ($combinedTail -match "Execution of PostgreSQL by a user with administrative permissions is not permitted" -or
+            $combinedTail -match "No se permite ejecuci.n del servidor PostgreSQL por un usuario con privilegios administrativos") {
+            Write-InstallLog -LogName "service-install.log" -Message "POSTGRES_PRIVILEGED_SERVICE_ACCOUNT_ERROR El servicio PostgreSQL fue instalado con una cuenta privilegiada; debe corregirse la cuenta de servicio, no la configuracion PostgreSQL."
+        }
+    }
 }
 
 function Wait-TcpPort {
@@ -1322,6 +1500,9 @@ function Start-WinSWService {
     $service = Get-ServiceSafe $ServiceId
     if (-not $service) {
         throw "Servicio requerido no instalado: $ServiceId"
+    }
+    if ($ServiceId -eq "PicoDeGallo-PostgreSQL") {
+        Assert-PostgresServiceAccount
     }
     if ($service.Status -eq "Running") {
         Write-InstallLog "SERVICE_ALREADY_RUNNING $ServiceId"
@@ -1462,7 +1643,21 @@ function Install-WinSWServices {
                     -ArgumentList @("delete", $serviceId) `
                     -LogName "service-install.log"
             }
-            Wait-ServiceRemoved -ServiceId $serviceId -TimeoutSeconds 90
+            try {
+                Wait-ServiceRemoved -ServiceId $serviceId -TimeoutSeconds 90
+            } catch {
+                if (Get-ServiceSafe $serviceId) {
+                    Write-InstallLog -LogName "service-install.log" -Message ("SERVICE_REMOVE_WAIT_FALLBACK_SC $serviceId " + $_.Exception.Message)
+                    $scExe = Join-Path $env:SystemRoot "System32\sc.exe"
+                    Invoke-LoggedCommand `
+                        -FilePath $scExe `
+                        -ArgumentList @("delete", $serviceId) `
+                        -LogName "service-install.log"
+                    Wait-ServiceRemoved -ServiceId $serviceId -TimeoutSeconds 90
+                } else {
+                    throw
+                }
+            }
         }
 
         if ($serviceId -eq "PicoDeGallo-PostgreSQL") {
@@ -2105,6 +2300,17 @@ function Render-Caddyfile {
         throw "Caddyfile final contiene placeholders sin resolver: $caddyfile"
     }
     Write-InstallLog "CADDYFILE_RENDERED $caddyfile"
+
+    $caddy = Join-Path $Script:ProgramFilesDir "caddy\caddy.exe"
+    if (-not (Test-Path -LiteralPath $caddy -PathType Leaf)) {
+        throw "No existe caddy.exe en runtime nativo."
+    }
+    Invoke-LoggedCommand `
+        -FilePath $caddy `
+        -ArgumentList @("validate", "--config", $caddyfile) `
+        -WorkingDirectory (Join-Path $Script:ProgramFilesDir "caddy") `
+        -LogName "caddy-validate.log"
+    Write-InstallLog -LogName "caddy-validate.log" -Message "CADDYFILE_VALIDATE_OK $caddyfile"
 }
 
 function Validate-EmbeddedPythonImports {
@@ -2145,6 +2351,58 @@ function Invoke-DjangoManage {
         -WorkingDirectory $backend `
         -Environment (Get-DjangoEnvironment) `
         -LogName $LogName
+}
+
+function Assert-DjangoRuntimePayload {
+    $backend = Join-Path $Script:ProgramFilesDir "backend"
+    $requiredPaths = @(
+        "manage.py",
+        "config\__init__.py",
+        "config\settings.py",
+        "config\wsgi.py",
+        "config\asgi.py",
+        "apps\core\management\commands\check_runtime_config.py",
+        "apps\users\management\commands\bootstrap_initial_admin.py",
+        "apps\dte\management\commands\dte_outbox_worker.py",
+        "apps\dte\management\commands\dte_monitor.py"
+    )
+
+    foreach ($relative in $requiredPaths) {
+        $path = Join-Path $backend $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Backend runtime incompleto: falta $path"
+        }
+    }
+    Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_RUNTIME_PAYLOAD_OK backend=$backend"
+}
+
+function Validate-DjangoRuntime {
+    Assert-DjangoRuntimePayload
+    $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
+    $backend = Join-Path $Script:ProgramFilesDir "backend"
+    $script = @"
+import importlib
+import os
+
+module = os.environ.get("DJANGO_SETTINGS_MODULE") or "config.settings"
+print("DJANGO_SETTINGS_MODULE=" + module)
+importlib.import_module(module)
+importlib.import_module("config.wsgi")
+print("DJANGO_SETTINGS_IMPORT_OK")
+"@
+
+    Invoke-LoggedCommand `
+        -FilePath $python `
+        -ArgumentList @("-c", $script) `
+        -WorkingDirectory $backend `
+        -Environment (Get-DjangoEnvironment) `
+        -LogName "backend-runtime.log"
+
+    Invoke-DjangoManage `
+        -ArgumentList @("manage.py", "help", "check_runtime_config") `
+        -LogName "backend-runtime.log"
+
+    Write-InstallLog -LogName "backend-runtime.log" -Message "DJANGO_MANAGEMENT_COMMAND_OK check_runtime_config"
 }
 
 function Run-DjangoCheckRuntime {
@@ -2337,6 +2595,10 @@ function Invoke-InstallMain {
 
     Invoke-InstallStep -Name "setup-database" -ScriptBlock {
         Ensure-ApplicationDatabase -EnvMap $Script:NativeEnvMap
+    }
+
+    Invoke-InstallStep -Name "validate-backend-runtime" -ScriptBlock {
+        Validate-DjangoRuntime
     }
 
     Invoke-InstallStep -Name "check-runtime-config" -ScriptBlock {

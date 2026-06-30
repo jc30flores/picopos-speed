@@ -190,6 +190,10 @@ jobs:
         shell: pwsh
         run: ./scripts/ci/test_postgres_config_lines.ps1
 
+      - name: Test Windows service account helper
+        shell: pwsh
+        run: ./scripts/ci/test_winsw_service_account.ps1
+
       - name: Validate service XML templates
         shell: pwsh
         run: |

@@ -198,6 +198,89 @@ function Invoke-PostgresRuntimeVersionChecks {
     }
 }
 
+function Invoke-BackendRuntimeImportCheck {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $pythonExe = Join-Path $Root "ProgramFiles\PicoDeGallo\python\python.exe"
+    $backend = Join-Path $Root "ProgramFiles\PicoDeGallo\backend"
+    Assert-RequiredPath -Name "backend manage.py" -Path (Join-Path $backend "manage.py") -PathType Leaf
+    foreach ($relative in @(
+        "config\__init__.py",
+        "config\settings.py",
+        "config\wsgi.py",
+        "config\asgi.py",
+        "apps\core\management\commands\check_runtime_config.py",
+        "apps\users\management\commands\bootstrap_initial_admin.py",
+        "apps\dte\management\commands\dte_outbox_worker.py",
+        "apps\dte\management\commands\dte_monitor.py"
+    )) {
+        Assert-RequiredPath -Name "backend $relative" -Path (Join-Path $backend $relative) -PathType Leaf
+    }
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-backend-runtime-" + [Guid]::NewGuid().ToString("N"))
+    New-DirectorySafe $tempDir
+    $envFile = Join-Path $tempDir ".env"
+    $envLines = @(
+        "DJANGO_CONFIG_MODE=strict",
+        "DOTENV_OVERRIDE=false",
+        "DJANGO_DEBUG=false",
+        "DJANGO_SECRET_KEY=placeholder-django-secret-key-for-packaging-validation",
+        "DB_HOST=127.0.0.1",
+        "DB_PORT=5432",
+        "DB_NAME=picopos",
+        "DB_USER=picopos",
+        "DB_PASSWORD=placeholder-db-password",
+        "ALLOWED_HOSTS=localhost,127.0.0.1",
+        "CORS_ALLOWED_ORIGINS=http://127.0.0.1:9282",
+        "CSRF_TRUSTED_ORIGINS=http://127.0.0.1:9282",
+        ("DJANGO_MEDIA_ROOT={0}" -f (Join-Path $tempDir "media").Replace("\", "/")),
+        ("DJANGO_STATIC_ROOT={0}" -f (Join-Path $tempDir "static").Replace("\", "/")),
+        ("DTE_LOG_DIR={0}" -f (Join-Path $tempDir "dte_logs").Replace("\", "/")),
+        "DTE_BACKGROUND_MODE=external",
+        "DTE_BASE_URL=replace-with-dte-api-base-url",
+        "DTE_API_TOKEN=replace-with-dte-api-token",
+        "DTE_API_AUTH_HEADER=Authorization",
+        "DTE_API_AUTH_PREFIX=Bearer",
+        "DTE_MONITOR_ENABLED=true",
+        "DTE_OUTBOX_WORKER_ENABLED=true"
+    )
+    [System.IO.File]::WriteAllLines($envFile, $envLines, [System.Text.UTF8Encoding]::new($false))
+
+    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED")
+    $oldEnv = @{}
+    foreach ($name in $envNames) {
+        $oldEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+
+    try {
+        [Environment]::SetEnvironmentVariable("DJANGO_ENV_FILE", $envFile, "Process")
+        [Environment]::SetEnvironmentVariable("DOTENV_OVERRIDE", "false", "Process")
+        [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "config.settings", "Process")
+        [Environment]::SetEnvironmentVariable("PYTHONUNBUFFERED", "1", "Process")
+
+        Push-Location $backend
+        try {
+            & $pythonExe -c "import importlib, os; module=os.environ.get('DJANGO_SETTINGS_MODULE') or 'config.settings'; print('DJANGO_SETTINGS_MODULE=' + module); importlib.import_module(module); importlib.import_module('config.wsgi'); print('DJANGO_SETTINGS_IMPORT_OK')"
+            if ($LASTEXITCODE -ne 0) {
+                Fail "Backend empaquetado no puede importar config.settings/config.wsgi."
+            }
+            & $pythonExe manage.py help check_runtime_config | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Fail "Backend empaquetado no expone management command check_runtime_config."
+            }
+        } finally {
+            Pop-Location
+        }
+    } finally {
+        foreach ($name in $envNames) {
+            [Environment]::SetEnvironmentVariable($name, $oldEnv[$name], "Process")
+        }
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Backend runtime import OK."
+}
+
 function Assert-PythonRuntime {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -326,6 +409,14 @@ function Test-ReleasePayloadSafety {
     $yarnStateName = ".yarn" + "-state.yml"
     $requiredPaths = @(
         "ProgramFiles\PicoDeGallo\backend\manage.py",
+        "ProgramFiles\PicoDeGallo\backend\config\__init__.py",
+        "ProgramFiles\PicoDeGallo\backend\config\settings.py",
+        "ProgramFiles\PicoDeGallo\backend\config\wsgi.py",
+        "ProgramFiles\PicoDeGallo\backend\config\asgi.py",
+        "ProgramFiles\PicoDeGallo\backend\apps\core\management\commands\check_runtime_config.py",
+        "ProgramFiles\PicoDeGallo\backend\apps\users\management\commands\bootstrap_initial_admin.py",
+        "ProgramFiles\PicoDeGallo\backend\apps\dte\management\commands\dte_outbox_worker.py",
+        "ProgramFiles\PicoDeGallo\backend\apps\dte\management\commands\dte_monitor.py",
         "ProgramFiles\PicoDeGallo\frontend",
         "ProgramFiles\PicoDeGallo\python\python.exe",
         "ProgramFiles\PicoDeGallo\python\Lib\site-packages",
@@ -415,6 +506,7 @@ function Test-ReleasePayloadSafety {
 
     Assert-PostgresRuntime -Path (Join-Path $Root "ProgramFiles\PicoDeGallo\postgres")
     Invoke-PostgresRuntimeVersionChecks -Path (Join-Path $Root "ProgramFiles\PicoDeGallo\postgres")
+    Invoke-BackendRuntimeImportCheck -Root $Root
     Write-Host "Release payload safety OK."
 }
 

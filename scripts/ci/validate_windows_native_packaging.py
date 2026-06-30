@@ -244,12 +244,46 @@ def validate_native_installer_contract() -> None:
         "Grant-PicoServiceAccountPermissions",
         "Invoke-AsPicoServiceAccount",
         "Install-WinSWServiceWithAccount",
+        "Set-WindowsServiceLogonAccountSafe",
+        "Get-ServiceLogonNativeApi",
+        "ChangeServiceConfig",
+        "SERVICE_ACCOUNT_FIX_BEGIN",
+        "SERVICE_ACCOUNT_FIX_OK",
+        "SERVICE_ACCOUNT_FIX_REQUIRED",
+        "Test-PostgresServiceAccountStartName",
+        "POSTGRES_SERVICE_START_NAME actual=",
         "S-1-5-32-544",
         "S-1-5-32-545",
         "Get-LocalizedBuiltinGroupNameBySid",
     ]:
         if token not in install:
             fail(f"install-services.ps1 missing PostgreSQL service-account token: {token}")
+    if "LocalSystem" not in install or "NetworkService" not in install or "NT AUTHORITY\\SYSTEM" not in install:
+        fail("install-services.ps1 must explicitly reject privileged PostgreSQL service accounts")
+    if re.search(r"Invoke-LoggedCommand[\s\S]{0,240}(--password|--pass|password=)", install, re.I):
+        fail("Invoke-LoggedCommand must not be used for commands containing service-account passwords")
+    winsw_account_start = install.find("function Install-WinSWServiceWithAccount")
+    winsw_account_end = install.find("function Stop-ExistingServicesForLogArchive", winsw_account_start)
+    if winsw_account_start < 0 or winsw_account_end < 0:
+        fail("install-services.ps1 missing Install-WinSWServiceWithAccount body")
+    winsw_account_body = install[winsw_account_start:winsw_account_end]
+    for token in [
+        "New-WinSWServiceAccountXml -Password $password",
+        "Set-WindowsServiceLogonAccountSafe",
+        "Assert-SecretAbsentFromFiles",
+        "install-services-transcript.log",
+        "Assert-PostgresServiceAccount",
+    ]:
+        if token not in winsw_account_body:
+            fail(f"PostgreSQL WinSW account install path missing token: {token}")
+    account_xml_start = install.find("function New-WinSWServiceAccountXml")
+    account_xml_end = install.find("function Assert-SecretAbsentFromFiles", account_xml_start)
+    if account_xml_start < 0 or account_xml_end < 0:
+        fail("install-services.ps1 missing New-WinSWServiceAccountXml body")
+    account_xml_body = install[account_xml_start:account_xml_end]
+    for token in ["<domain>.</domain>", "<user>", "<password>", "<allowservicelogon>true</allowservicelogon>"]:
+        if token not in account_xml_body:
+            fail(f"WinSW serviceaccount XML missing token: {token}")
     for forbidden in ["Admin" + "istrators", "Us" + "ers"]:
         if forbidden in install:
             fail(f"install-services.ps1 must not depend on English builtin group name: {forbidden}")
@@ -373,15 +407,38 @@ def validate_native_installer_contract() -> None:
     workflow = read_text_safe(REPO / ".github" / "workflows" / "windows-native-installer.yml")
     if "scripts/ci/test_postgres_config_lines.ps1" not in workflow:
         fail("windows-native-installer workflow must run PostgreSQL config blank-line fixture")
+    if "scripts/ci/test_winsw_service_account.ps1" not in workflow:
+        fail("windows-native-installer workflow must run or explicitly skip WinSW service account fixture")
     postgres_config_test = read_text_safe(REPO / "scripts" / "ci" / "test_postgres_config_lines.ps1")
     for token in ["Blank lines were not preserved", "UTF-8 BOM detected", "NUL byte detected", "PostgreSQL config blank-line fixture OK"]:
         if token not in postgres_config_test:
             fail(f"PostgreSQL config fixture missing token: {token}")
+    winsw_account_test = read_text_safe(REPO / "scripts" / "ci" / "test_winsw_service_account.ps1")
+    for token in ["PicoDeGallo-WinSW-Account-Test", "PicoDeGalloSvcTest", "Set-WindowsServiceLogonAccountSafe", "Service stayed LocalSystem", "WinSW service account fixture OK"]:
+        if token not in winsw_account_test:
+            fail(f"WinSW service account fixture missing token: {token}")
+
+    for token in [
+        "Validate-DjangoRuntime",
+        "DJANGO_SETTINGS_IMPORT_OK",
+        "DJANGO_MANAGEMENT_COMMAND_OK check_runtime_config",
+        'manage.py", "help", "check_runtime_config"',
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing backend runtime preflight token: {token}")
 
     package = read_text_safe(NATIVE / "package-release.ps1")
     for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:
         if token not in package:
             fail(f"package-release.ps1 missing PostgreSQL runtime validation token: {token}")
+    for token in ["Invoke-BackendRuntimeImportCheck", "config\\settings.py", "config\\wsgi.py", "check_runtime_config.py", "DJANGO_SETTINGS_IMPORT_OK"]:
+        if token not in package:
+            fail(f"package-release.ps1 missing backend payload validation token: {token}")
+
+    diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
+    for token in ["backend-runtime.txt", "DJANGO_SETTINGS_MODULE", "DJANGO_SETTINGS_IMPORT_OK", "check_runtime_config_help_exit"]:
+        if token not in diagnostics:
+            fail(f"diagnostics.ps1 missing backend runtime diagnostic token: {token}")
 
     inno = read_text_safe(NATIVE / "installer" / "PicoDeGallo.iss")
     for token in ["install-services.ps1", "open-kiosk.ps1", "{autodesktop}\\Pico de Gallo.url", "InternetShortcut", "ExecOrFail"]:

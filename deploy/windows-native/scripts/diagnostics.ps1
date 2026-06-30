@@ -83,6 +83,53 @@ Save-Diagnostic "service-files.txt" ($serviceFileFacts -join "`n")
 $caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
 Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { 'present' } else { 'missing' })")
 
+function Get-BackendRuntimeDiagnostic {
+    $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
+    $backend = Join-Path $Script:ProgramFilesDir "backend"
+    $facts = @(
+        "python=$(if (Test-Path -LiteralPath $python -PathType Leaf) { 'present' } else { 'missing' })",
+        "manage.py=$(if (Test-Path -LiteralPath (Join-Path $backend 'manage.py') -PathType Leaf) { 'present' } else { 'missing' })",
+        "config.settings=$(if (Test-Path -LiteralPath (Join-Path $backend 'config\settings.py') -PathType Leaf) { 'present' } else { 'missing' })",
+        "config.wsgi=$(if (Test-Path -LiteralPath (Join-Path $backend 'config\wsgi.py') -PathType Leaf) { 'present' } else { 'missing' })",
+        "check_runtime_config=$(if (Test-Path -LiteralPath (Join-Path $backend 'apps\core\management\commands\check_runtime_config.py') -PathType Leaf) { 'present' } else { 'missing' })"
+    )
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $backend "manage.py") -PathType Leaf)) {
+        return ($facts -join "`n")
+    }
+
+    $envNames = @("DJANGO_ENV_FILE", "DOTENV_OVERRIDE", "DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED")
+    $oldEnv = @{}
+    foreach ($name in $envNames) {
+        $oldEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+    try {
+        [Environment]::SetEnvironmentVariable("DJANGO_ENV_FILE", (Get-EnvPath), "Process")
+        [Environment]::SetEnvironmentVariable("DOTENV_OVERRIDE", "false", "Process")
+        [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "config.settings", "Process")
+        [Environment]::SetEnvironmentVariable("PYTHONUNBUFFERED", "1", "Process")
+        Push-Location $backend
+        try {
+            $output = & $python -c "import importlib, os; module=os.environ.get('DJANGO_SETTINGS_MODULE') or 'config.settings'; print('DJANGO_SETTINGS_MODULE=' + module); importlib.import_module(module); importlib.import_module('config.wsgi'); print('DJANGO_SETTINGS_IMPORT_OK')" 2>&1
+            $facts += "settings_import_exit=$LASTEXITCODE"
+            $facts += ($output | ForEach-Object { [string]$_ })
+            $helpOutput = & $python manage.py help check_runtime_config 2>&1
+            $facts += "check_runtime_config_help_exit=$LASTEXITCODE"
+            $facts += ($helpOutput | Select-Object -First 40 | ForEach-Object { [string]$_ })
+        } finally {
+            Pop-Location
+        }
+    } catch {
+        $facts += "backend_runtime_exception=$($_.Exception.Message)"
+    } finally {
+        foreach ($name in $envNames) {
+            [Environment]::SetEnvironmentVariable($name, $oldEnv[$name], "Process")
+        }
+    }
+    return ($facts -join "`n")
+}
+Save-Diagnostic "backend-runtime.txt" (Get-BackendRuntimeDiagnostic)
+
 $runAsDir = Join-Path (Get-LogsDir) "runas"
 if (Test-Path -LiteralPath $runAsDir -PathType Container) {
     $runAsFiles = Get-ChildItem -LiteralPath $runAsDir -File -ErrorAction SilentlyContinue |
