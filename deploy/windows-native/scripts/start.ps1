@@ -19,11 +19,45 @@ function Start-NativeService {
     Write-SafeHost "Iniciado $Name"
 }
 
-Start-NativeService "PicoDeGallo-PostgreSQL"
+function Show-NativeLogTail {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogName,
+        [int]$Lines = 80
+    )
+
+    $path = Join-Path (Get-LogsDir) $LogName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return
+    }
+    Write-SafeHost "----- $LogName -----"
+    Get-Content -LiteralPath $path -Tail $Lines -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-SafeHost ([string]$_) }
+}
+
+function Show-PostgresStartupDiagnostics {
+    foreach ($logName in @(
+        "postgres-foreground-test.err.log",
+        "postgres-foreground-test.out.log",
+        "PicoDeGallo-PostgreSQL.err.log",
+        "PicoDeGallo-PostgreSQL.wrapper.log",
+        "postgres-service.log"
+    )) {
+        Show-NativeLogTail -LogName $logName -Lines 80
+    }
+}
+
+try {
+    Start-NativeService "PicoDeGallo-PostgreSQL"
+} catch {
+    Show-PostgresStartupDiagnostics
+    throw
+}
+
 $envs = Read-NativeEnv
 $dbHost = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_HOST"])) { "127.0.0.1" } else { [string]$envs["DB_HOST"] }
 $dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } else { [int]$envs["DB_PORT"] }
 if (-not (Wait-TcpPort -HostName $dbHost -Port $dbPort -TimeoutSeconds 60)) {
+    Show-PostgresStartupDiagnostics
     throw "PostgreSQL no quedo escuchando en $dbHost`:$dbPort"
 }
 Start-NativeService "PicoDeGallo-Backend"

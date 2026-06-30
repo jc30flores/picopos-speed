@@ -141,6 +141,55 @@ function Assert-PostgresRuntime {
     Test-NoForbiddenRuntimeContent -Path $Path
 }
 
+function Invoke-PostgresRuntimeVersionChecks {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $postgresBin = Join-Path $Path "bin"
+    $checks = @(
+        @{ Tool = "postgres.exe"; Command = "postgres.exe --version" },
+        @{ Tool = "initdb.exe"; Command = "initdb.exe --version" },
+        @{ Tool = "psql.exe"; Command = "psql.exe --version" }
+    )
+
+    foreach ($check in $checks) {
+        $tool = [string]$check.Tool
+        $command = [string]$check.Command
+        $exe = Join-Path $postgresBin $tool
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            Fail "PostgreSQL runtime no contiene bin\$tool."
+        }
+
+        $stdout = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-pg-version-" + [Guid]::NewGuid().ToString("N") + ".out")
+        $stderr = Join-Path ([System.IO.Path]::GetTempPath()) ("picopos-pg-version-" + [Guid]::NewGuid().ToString("N") + ".err")
+        $exitCode = 0
+        try {
+            Push-Location $postgresBin
+            try {
+                & $exe --version > $stdout 2> $stderr
+                $exitCode = $LASTEXITCODE
+            } finally {
+                Pop-Location
+            }
+
+            $stdoutText = ""
+            $stderrText = ""
+            if (Test-Path -LiteralPath $stdout -PathType Leaf) {
+                $stdoutText = ([string](Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue)).Trim()
+            }
+            if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+                $stderrText = ([string](Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)).Trim()
+            }
+
+            if ($exitCode -ne 0) {
+                Fail "PostgreSQL runtime fallo al ejecutar $command. ExitCode=$exitCode Stdout=$stdoutText Stderr=$stderrText"
+            }
+            Write-Host "PostgreSQL runtime OK: $command -> $stdoutText"
+        } finally {
+            Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Assert-PythonRuntime {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -357,6 +406,7 @@ function Test-ReleasePayloadSafety {
     }
 
     Assert-PostgresRuntime -Path (Join-Path $Root "ProgramFiles\PicoDeGallo\postgres")
+    Invoke-PostgresRuntimeVersionChecks -Path (Join-Path $Root "ProgramFiles\PicoDeGallo\postgres")
     Write-Host "Release payload safety OK."
 }
 
@@ -367,6 +417,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "backend\manage.py") -Path
 
 Assert-PythonRuntime -Path $PythonRuntimePath
 Assert-PostgresRuntime -Path $PostgresRuntimePath
+Invoke-PostgresRuntimeVersionChecks -Path $PostgresRuntimePath
 Assert-RequiredPath -Name "caddy" -Path $CaddyPath -PathType Leaf
 Assert-RequiredPath -Name "winsw" -Path $WinSWPath -PathType Leaf
 

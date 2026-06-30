@@ -212,9 +212,23 @@ def validate_native_installer_contract() -> None:
         "bootstrap_initial_admin",
         "/api/health/live/",
         "/api/health/ready/",
+        "postgres-foreground-test",
+        "POSTGRES_FOREGROUND_STDERR_TAIL",
+        "postgres.exe --version",
+        "initdb.exe --version",
+        "psql.exe --version",
     ]:
         if token not in install:
             fail(f"install-services.ps1 missing required token: {token}")
+    if "postgres.exe" not in install:
+        fail("install-services.ps1 must reference postgres.exe")
+    if "stderr" not in install.lower():
+        fail("install-services.ps1 must capture/read stderr for PostgreSQL diagnostics")
+
+    package = read_text_safe(NATIVE / "package-release.ps1")
+    for token in ["postgres.exe --version", "initdb.exe --version", "psql.exe --version"]:
+        if token not in package:
+            fail(f"package-release.ps1 missing PostgreSQL runtime validation token: {token}")
 
     inno = read_text_safe(NATIVE / "installer" / "PicoDeGallo.iss")
     for token in ["install-services.ps1", "open-kiosk.ps1", "{autodesktop}\\Pico de Gallo.url", "InternetShortcut", "ExecOrFail"]:
@@ -275,12 +289,12 @@ def validate_forbidden_references() -> None:
         re.compile(r"git clone.*cliente", re.I),
         re.compile(r"Docker Desktop es obligatorio", re.I),
         re.compile(r"requiere Docker Desktop para clientes", re.I),
-        re.compile(r"APP_OPERATING_MODE"),
-        re.compile(r"modo interno", re.I),
-        re.compile(r"POS interno", re.I),
-        re.compile(r"Ticket interno", re.I),
-        re.compile(r"Comprobante interno", re.I),
-        re.compile(r"DTE_ENABLED=false", re.I),
+        re.compile("APP_" + "OPERATING_MODE"),
+        re.compile("modo " + "interno", re.I),
+        re.compile("POS " + "interno", re.I),
+        re.compile("Ticket " + "interno", re.I),
+        re.compile("Comprobante " + "interno", re.I),
+        re.compile("DTE_" + "ENABLED=false", re.I),
     ]
     roots = ["deploy", "docs", "backend", "frontend", ".github"]
     offenders: list[str] = []

@@ -159,6 +159,50 @@ function Invoke-WinSWCommand {
         -LogName "service-install.log"
 }
 
+function Stop-ExistingServicesForLogArchive {
+    $serviceIds = @($Script:Services)
+    [array]::Reverse($serviceIds)
+
+    foreach ($serviceId in $serviceIds) {
+        $service = Get-ServiceSafe $serviceId
+        if ($service -and $service.Status -eq "Running") {
+            Write-SafeHost "Deteniendo servicio existente antes de archivar logs: $serviceId"
+            Stop-Service -Name $serviceId -ErrorAction Stop
+            $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(90))
+        }
+    }
+}
+
+function Archive-ExistingNativeLogs {
+    $logsDir = Get-LogsDir
+    if (-not (Test-Path -LiteralPath $logsDir -PathType Container)) {
+        return
+    }
+
+    $items = @(Get-ChildItem -LiteralPath $logsDir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "archive" })
+    if ($items.Count -eq 0) {
+        return
+    }
+
+    $archiveRoot = Join-Path $logsDir "archive"
+    New-DirectorySafe $archiveRoot
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $archiveDir = Join-Path $archiveRoot $stamp
+    $suffix = 0
+    while (Test-Path -LiteralPath $archiveDir) {
+        $suffix++
+        $archiveDir = Join-Path $archiveRoot ("{0}-{1}" -f $stamp, $suffix)
+    }
+    New-DirectorySafe $archiveDir
+
+    foreach ($item in $items) {
+        Move-Item -LiteralPath $item.FullName -Destination $archiveDir -Force -ErrorAction Stop
+    }
+
+    Write-SafeHost "Logs anteriores archivados en $archiveDir"
+}
+
 function Test-TcpPort {
     param(
         [string]$HostName = "127.0.0.1",
@@ -222,6 +266,11 @@ function Write-ServiceFailureDiagnostics {
         "$ServiceId.wrapper.log",
         "$ServiceId.err.log",
         "$ServiceId.out.log",
+        "postgres-foreground-test.err.log",
+        "postgres-foreground-test.out.log",
+        "postgres-version.log",
+        "initdb-version.log",
+        "psql-version.log",
         "postgres-init.log",
         "postgres-service.log"
     )) {
@@ -274,6 +323,24 @@ function Wait-ServiceStatus {
     $status = if ($current) { [string]$current.Status } else { "not-installed" }
     Write-ServiceFailureDiagnostics -ServiceId $ServiceId
     throw "Servicio $ServiceId no llego a estado $DesiredStatus. Estado actual: $status"
+}
+
+function Wait-ServiceRemoved {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceId,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (-not (Get-ServiceSafe $ServiceId)) {
+            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_REMOVED $ServiceId"
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Servicio $ServiceId no fue eliminado completamente despues de uninstall."
 }
 
 function Start-WinSWService {
@@ -349,10 +416,40 @@ function Install-WinSWServices {
         $targetExe = Get-ServiceWrapperPath -ServiceId $serviceId
         $existingService = Get-ServiceSafe $serviceId
 
-        if ($existingService -and $existingService.Status -eq "Running") {
-            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_STOP_FOR_UPDATE $serviceId"
-            Stop-Service -Name $serviceId -ErrorAction Stop
-            Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 90
+        if ($existingService) {
+            if ($existingService.Status -eq "Running") {
+                Write-InstallLog -LogName "service-install.log" -Message "SERVICE_STOP_FOR_UPDATE $serviceId"
+                Stop-Service -Name $serviceId -ErrorAction Stop
+                Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 90
+            }
+
+            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_UNINSTALL_FOR_UPDATE $serviceId"
+            if (Test-Path -LiteralPath $targetExe -PathType Leaf) {
+                try {
+                    Invoke-LoggedCommand `
+                        -FilePath $targetExe `
+                        -ArgumentList @("uninstall") `
+                        -LogName "service-install.log"
+                } catch {
+                    if (Get-ServiceSafe $serviceId) {
+                        Write-InstallLog -LogName "service-install.log" -Message ("SERVICE_UNINSTALL_FALLBACK_SC $serviceId " + $_.Exception.Message)
+                        $scExe = Join-Path $env:SystemRoot "System32\sc.exe"
+                        Invoke-LoggedCommand `
+                            -FilePath $scExe `
+                            -ArgumentList @("delete", $serviceId) `
+                            -LogName "service-install.log"
+                    } else {
+                        Write-InstallLog -LogName "service-install.log" -Message "SERVICE_UNINSTALL_EXIT_IGNORED $serviceId service_already_removed"
+                    }
+                }
+            } else {
+                $scExe = Join-Path $env:SystemRoot "System32\sc.exe"
+                Invoke-LoggedCommand `
+                    -FilePath $scExe `
+                    -ArgumentList @("delete", $serviceId) `
+                    -LogName "service-install.log"
+            }
+            Wait-ServiceRemoved -ServiceId $serviceId -TimeoutSeconds 90
         }
 
         Render-Template -Source $template -Destination $targetXml -Tokens $Tokens
@@ -361,15 +458,9 @@ function Install-WinSWServices {
         }
         Copy-Item -LiteralPath $winswSource -Destination $targetExe -Force
 
-        if (Get-ServiceSafe $serviceId) {
-            Write-InstallLog "SERVICE_ALREADY_INSTALLED $serviceId"
-            Write-InstallLog -LogName "service-install.log" -Message "SERVICE_XML_UPDATED $serviceId"
-            Write-SafeHost "Servicio ya instalado: $serviceId"
-        } else {
-            Invoke-WinSWCommand -ServiceId $serviceId -Command "install"
-            Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 30
-            Write-SafeHost "Servicio instalado: $serviceId"
-        }
+        Invoke-WinSWCommand -ServiceId $serviceId -Command "install"
+        Wait-ServiceStatus -ServiceId $serviceId -DesiredStatus "Stopped" -TimeoutSeconds 30
+        Write-SafeHost "Servicio instalado: $serviceId"
     }
 
     foreach ($serviceId in $ServiceIds) {
@@ -434,6 +525,26 @@ function Assert-PostgresRuntimeTools {
     }
 }
 
+function Invoke-PostgresRuntimeVersionChecks {
+    $postgresBin = Join-Path $Script:ProgramFilesDir "postgres\bin"
+    $checks = @(
+        @{ Tool = "postgres.exe"; Command = "postgres.exe --version"; LogName = "postgres-version.log" },
+        @{ Tool = "initdb.exe"; Command = "initdb.exe --version"; LogName = "initdb-version.log" },
+        @{ Tool = "psql.exe"; Command = "psql.exe --version"; LogName = "psql-version.log" }
+    )
+
+    foreach ($check in $checks) {
+        $tool = [string]$check.Tool
+        $exe = Join-Path $postgresBin $tool
+        Invoke-LoggedCommand `
+            -FilePath $exe `
+            -ArgumentList @("--version") `
+            -WorkingDirectory $postgresBin `
+            -LogName ([string]$check.LogName)
+        Write-InstallLog -LogName "postgres-service.log" -Message ("POSTGRES_RUNTIME_VERSION_OK " + [string]$check.Command)
+    }
+}
+
 function Set-PostgresConfigValue {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath,
@@ -463,16 +574,160 @@ function Set-PostgresConfigValue {
     Set-Content -LiteralPath $ConfigPath -Value $newContent -Encoding UTF8
 }
 
+function Set-PostgresHbaHostAuth {
+    param([Parameter(Mandatory = $true)][string]$HbaPath)
+
+    if (-not (Test-Path -LiteralPath $HbaPath -PathType Leaf)) {
+        throw "No existe archivo pg_hba.conf: $HbaPath"
+    }
+
+    $desired = [ordered]@{
+        "127.0.0.1/32" = "host all all 127.0.0.1/32 scram-sha-256"
+        "::1/128" = "host all all ::1/128 scram-sha-256"
+    }
+    $seen = @{}
+    $content = Get-Content -LiteralPath $HbaPath -Encoding UTF8
+    $newContent = @()
+
+    foreach ($line in $content) {
+        $matched = $false
+        foreach ($address in $desired.Keys) {
+            $escapedAddress = [regex]::Escape([string]$address)
+            if ($line -match "^\s*host\s+all\s+all\s+$escapedAddress\s+") {
+                if (-not $seen.ContainsKey($address)) {
+                    $newContent += [string]$desired[$address]
+                    $seen[$address] = $true
+                }
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) {
+            $newContent += $line
+        }
+    }
+
+    foreach ($address in $desired.Keys) {
+        if (-not $seen.ContainsKey($address)) {
+            $newContent += [string]$desired[$address]
+        }
+    }
+
+    Set-Content -LiteralPath $HbaPath -Value $newContent -Encoding UTF8
+}
+
 function Configure-PostgresDataDirectory {
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap)
 
     $dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
     $config = Join-Path $dataDir "postgresql.conf"
+    $hba = Join-Path $dataDir "pg_hba.conf"
     $dbPort = Get-RequiredEnvValue -Map $EnvMap -Name "DB_PORT"
 
     Set-PostgresConfigValue -ConfigPath $config -Key "port" -Value $dbPort
     Set-PostgresConfigValue -ConfigPath $config -Key "listen_addresses" -Value "'127.0.0.1'"
-    Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_CONFIGURED port=$dbPort listen_addresses=127.0.0.1"
+    Set-PostgresConfigValue -ConfigPath $config -Key "timezone" -Value "'America/El_Salvador'"
+    Set-PostgresConfigValue -ConfigPath $config -Key "logging_collector" -Value "off"
+    Set-PostgresHbaHostAuth -HbaPath $hba
+    Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_CONFIGURED port=$dbPort listen_addresses=127.0.0.1 timezone=America/El_Salvador logging_collector=off hba=scram-loopback"
+}
+
+function Get-LogTailText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$Lines = 80
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ""
+    }
+    $tail = Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue
+    if (-not $tail) {
+        return ""
+    }
+    return (($tail | ForEach-Object { [string]$_ }) -join "`n")
+}
+
+function Stop-PostgresForegroundTest {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [Parameter(Mandatory = $true)][string]$PostgresBin
+    )
+
+    $pgCtl = Join-Path $PostgresBin "pg_ctl.exe"
+    if (Test-Path -LiteralPath $pgCtl -PathType Leaf) {
+        try {
+            Invoke-LoggedCommand `
+                -FilePath $pgCtl `
+                -ArgumentList @("-D", $DataDir, "-m", "fast", "-w", "stop") `
+                -WorkingDirectory $PostgresBin `
+                -LogName "postgres-foreground-test.stop.log"
+        } catch {
+            Write-InstallLog -LogName "postgres-foreground-test.stop.log" -Message ("PG_CTL_STOP_FAILED " + $_.Exception.Message)
+        }
+    }
+
+    $Process.Refresh()
+    if (-not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $Process.Id -Timeout 20 -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-PostgresForegroundStartup {
+    $postgresBin = Join-Path $Script:ProgramFilesDir "postgres\bin"
+    $postgres = Join-Path $postgresBin "postgres.exe"
+    $dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
+    $stdout = Get-NativeLogPath "postgres-foreground-test.out.log"
+    $stderr = Get-NativeLogPath "postgres-foreground-test.err.log"
+    $waitSeconds = 10
+
+    if (-not (Test-Path -LiteralPath $postgres -PathType Leaf)) {
+        throw "No existe postgres.exe en runtime PostgreSQL nativo."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dataDir "PG_VERSION") -PathType Leaf)) {
+        throw "No existe PG_VERSION en directorio de datos PostgreSQL: $dataDir"
+    }
+
+    Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_FOREGROUND_TEST_BEGIN seconds=$waitSeconds"
+    Write-InstallLog -LogName "install-services.log" -Message "POSTGRES_FOREGROUND_TEST_BEGIN stdout=$stdout stderr=$stderr"
+
+    $arguments = '-D "{0}"' -f $dataDir.Replace('"', '\"')
+    $process = Start-Process `
+        -FilePath $postgres `
+        -ArgumentList $arguments `
+        -WorkingDirectory $postgresBin `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr `
+        -WindowStyle Hidden `
+        -PassThru
+
+    Start-Sleep -Seconds $waitSeconds
+    $process.Refresh()
+    if (-not $process.HasExited) {
+        Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_FOREGROUND_TEST_OK pid=$($process.Id)"
+        Stop-PostgresForegroundTest -Process $process -DataDir $dataDir -PostgresBin $postgresBin
+        return
+    }
+
+    $exitCode = $process.ExitCode
+    $stdoutTail = Get-LogTailText -Path $stdout -Lines 80
+    $stderrTail = Get-LogTailText -Path $stderr -Lines 80
+    Write-InstallLog -LogName "postgres-service.log" -Message "POSTGRES_FOREGROUND_TEST_FAILED exitCode=$exitCode"
+    Write-InstallLog -LogName "service-install.log" -Message "POSTGRES_FOREGROUND_TEST_FAILED exitCode=$exitCode"
+    if (-not [string]::IsNullOrWhiteSpace($stdoutTail)) {
+        Write-InstallLog -LogName "service-install.log" -Message ("POSTGRES_FOREGROUND_STDOUT_TAIL`n" + $stdoutTail)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
+        Write-InstallLog -LogName "service-install.log" -Message ("POSTGRES_FOREGROUND_STDERR_TAIL`n" + $stderrTail)
+    }
+    Write-SafeHost "PostgreSQL foreground test fallo con codigo $exitCode."
+    if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
+        Write-SafeHost $stderrTail
+    }
+    throw "PostgreSQL foreground test fallo con codigo $exitCode. Revise $stderr"
 }
 
 function Wait-PostgresReady {
@@ -703,6 +958,8 @@ foreach ($dir in @("config", "media", "static", "dte_logs", "backups", "diagnost
     New-DirectorySafe (Join-Path $Script:ProgramDataDir $dir)
 }
 
+Stop-ExistingServicesForLogArchive
+Archive-ExistingNativeLogs
 Write-InstallLog "INSTALL_SERVICES_BEGIN ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
 
 if (-not (Test-Path -LiteralPath (Get-EnvPath) -PathType Leaf)) {
@@ -727,8 +984,10 @@ $tokens = @{
 
 Validate-EmbeddedPythonImports
 Assert-PostgresRuntimeTools
+Invoke-PostgresRuntimeVersionChecks
 Initialize-PostgresDataDirectory -EnvMap $envs
 Configure-PostgresDataDirectory -EnvMap $envs
+Test-PostgresForegroundStartup
 Install-WinSWServices -Tokens $tokens -ServiceIds @("PicoDeGallo-PostgreSQL")
 Start-WinSWService -ServiceId "PicoDeGallo-PostgreSQL"
 $dbHost = Get-RequiredEnvValue -Map $envs -Name "DB_HOST"
