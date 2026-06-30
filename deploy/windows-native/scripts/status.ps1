@@ -52,17 +52,56 @@ function Get-PicoServiceAccountStatus {
     if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
         try {
             $user = Get-LocalUser -Name $accountName -ErrorAction Stop
-            return "exists Enabled=$($user.Enabled)"
+            $expires = if ($null -eq $user.PasswordExpires) { "never" } else { [string]$user.PasswordExpires }
+            $never = if ($null -eq $user.PasswordExpires) { "true" } else { "false" }
+            return "exists Enabled=$($user.Enabled) PasswordExpires=$expires PasswordNeverExpires=$never"
         } catch {
         }
     }
     try {
         $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $accountName)
         $null = $user.Name
-        return "exists"
+        $flags = [int]$user.UserFlags.Value
+        $never = (($flags -band 0x10000) -ne 0)
+        return "exists PasswordNeverExpires=$never provider=ADSI"
     } catch {
         return "missing"
     }
+}
+
+function Get-PostgresDataStatus {
+    $dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
+    $facts = foreach ($fileName in @("PG_VERSION", "postgresql.conf", "pg_hba.conf")) {
+        "$fileName=$(if (Test-Path -LiteralPath (Join-Path $dataDir $fileName) -PathType Leaf) { 'present' } else { 'missing' })"
+    }
+    return ($facts -join " ")
+}
+
+function Get-ServiceFileStatus {
+    $serviceDir = Join-Path $Script:ProgramFilesDir "services"
+    $facts = foreach ($svc in $Script:Services) {
+        $xml = Join-Path $serviceDir "$svc.xml"
+        $exe = Join-Path $serviceDir "$svc.exe"
+        "$svc.xml=$(if (Test-Path -LiteralPath $xml -PathType Leaf) { 'present' } else { 'missing' }) $svc.exe=$(if (Test-Path -LiteralPath $exe -PathType Leaf) { 'present' } else { 'missing' })"
+    }
+    return ($facts -join "; ")
+}
+
+function Get-CaddyfileStatus {
+    $caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
+    return $(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { "present" } else { "missing" })
+}
+
+function Get-LastRunAsExitCode {
+    $runAsDir = Join-Path (Get-LogsDir) "runas"
+    $latest = Get-ChildItem -LiteralPath $runAsDir -Filter "*.exitcode" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $latest) {
+        return "none"
+    }
+    $value = (Get-Content -LiteralPath $latest.FullName -Raw -ErrorAction SilentlyContinue).Trim()
+    return "$value path=$($latest.FullName)"
 }
 
 function Get-PostgresXmlMode {
@@ -141,6 +180,10 @@ $dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } e
 Write-SafeHost "URL: $appUrl"
 Write-SafeHost "VERSION=$(Get-InstalledVersion)"
 Write-SafeHost "PICO_SERVICE_ACCOUNT=$(Get-PicoServiceAccountStatus)"
+Write-SafeHost "POSTGRES_DATA=$(Get-PostgresDataStatus)"
+Write-SafeHost "SERVICE_FILES=$(Get-ServiceFileStatus)"
+Write-SafeHost "CADDYFILE=$(Get-CaddyfileStatus)"
+Write-SafeHost "RUNAS_LAST_EXITCODE=$(Get-LastRunAsExitCode)"
 Write-SafeHost "POSTGRES_XML_EXECUTABLE=$(Get-PostgresXmlMode)"
 Write-SafeHost "POSTGRES_XML_SERVICEACCOUNT=$(Get-PostgresXmlServiceAccountStatus)"
 Write-SafeHost "POSTGRES_FOREGROUND_TEST_RUN_AS=$(Get-PostgresForegroundRunAs)"
@@ -167,3 +210,10 @@ Write-SafeHost "DTE_API_TOKEN=$(if ($envs['DTE_API_TOKEN'] -like 'replace-with-*
 Write-SafeHost "BOOTSTRAP_ADMIN_ENABLED=$(if ($envs['PICO_BOOTSTRAP_ADMIN_ENABLED'] -eq 'true') { 'yes' } else { 'no' })"
 Write-SafeHost "BOOTSTRAP_ADMIN_USERNAME=$(if ([string]::IsNullOrWhiteSpace([string]$envs['PICO_BOOTSTRAP_ADMIN_USERNAME'])) { 'not-configured' } else { 'configured' })"
 Show-PostgresErrorTail
+$installErrorLog = Join-Path (Get-LogsDir) "install-services-error.log"
+if (Test-Path -LiteralPath $installErrorLog -PathType Leaf) {
+    Write-SafeHost "INSTALL_SERVICES_ERROR_TAIL_BEGIN"
+    Get-Content -LiteralPath $installErrorLog -Tail 80 -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-SafeHost ([string]$_) }
+    Write-SafeHost "INSTALL_SERVICES_ERROR_TAIL_END"
+}

@@ -469,6 +469,35 @@ function Invoke-NetUserSafe {
     }
 }
 
+function Invoke-WmicPasswordNeverExpires {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    $wmic = Join-Path $env:SystemRoot "System32\wbem\wmic.exe"
+    if (-not (Test-Path -LiteralPath $wmic -PathType Leaf)) {
+        Write-InstallLog "PICO_SERVICE_ACCOUNT_WMIC_PASSWORD_EXPIRES_SKIPPED name=$AccountName reason=wmic-missing"
+        return $false
+    }
+
+    $stdout = Join-Path (Get-LogsDir) ("wmic-user-" + [Guid]::NewGuid().ToString("N") + ".out")
+    $stderr = Join-Path (Get-LogsDir) ("wmic-user-" + [Guid]::NewGuid().ToString("N") + ".err")
+    try {
+        & $wmic UserAccount where "Name='$AccountName' and LocalAccount=True" set PasswordExpires=False > $stdout 2> $stderr
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $tail = ""
+            if (Test-Path -LiteralPath $stderr -PathType Leaf) {
+                $tail = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
+            }
+            Write-InstallLog ("PICO_SERVICE_ACCOUNT_WMIC_PASSWORD_EXPIRES_FAILED name={0} code={1} {2}" -f $AccountName, $exitCode, $tail)
+            return $false
+        }
+        Write-InstallLog "PICO_SERVICE_ACCOUNT_WMIC_PASSWORD_EXPIRES_OK name=$AccountName"
+        return $true
+    } finally {
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-PicoAdsiUserPasswordAndFlags {
     param(
         [Parameter(Mandatory = $true)][string]$AccountName,
@@ -496,6 +525,104 @@ function Set-PicoAdsiUserPasswordAndFlags {
     }
     $user.Put("UserFlags", $flags)
     $user.SetInfo()
+}
+
+function Set-PicoAdsiPasswordNeverExpiresFlag {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    try {
+        $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $AccountName)
+        $null = $user.Name
+        $currentFlags = 0
+        try {
+            $currentFlags = [int]$user.UserFlags.Value
+        } catch {
+            $currentFlags = 0x0200
+        }
+        $user.Put("UserFlags", ($currentFlags -bor 0x10000 -bor 0x0200))
+        $user.SetInfo()
+        Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_PASSWORD_NEVER_EXPIRES_OK name=$AccountName"
+        return $true
+    } catch {
+        Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_PASSWORD_NEVER_EXPIRES_WARN name=$AccountName reason=$($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Test-PicoServiceAccountPasswordNeverExpires {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    if (Test-LocalUserCmdletsAvailable) {
+        try {
+            $user = Get-LocalUser -Name $AccountName -ErrorAction Stop
+            return ($null -eq $user.PasswordExpires)
+        } catch {
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_EXPIRES_LOCALACCOUNTS_WARN name=$AccountName reason=$($_.Exception.Message)"
+        }
+    }
+
+    try {
+        $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $AccountName)
+        $null = $user.Name
+        $flags = [int]$user.UserFlags.Value
+        return (($flags -band 0x10000) -ne 0)
+    } catch {
+        Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_EXPIRES_ADSI_WARN name=$AccountName reason=$($_.Exception.Message)"
+    }
+
+    return $false
+}
+
+function Get-PicoServiceAccountPasswordExpirySummary {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    if (Test-LocalUserCmdletsAvailable) {
+        try {
+            $user = Get-LocalUser -Name $AccountName -ErrorAction Stop
+            $expires = if ($null -eq $user.PasswordExpires) { "never" } else { [string]$user.PasswordExpires }
+            return "PasswordExpires=$expires PasswordNeverExpires=$(if ($null -eq $user.PasswordExpires) { 'true' } else { 'false' })"
+        } catch {
+        }
+    }
+
+    try {
+        $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $AccountName)
+        $null = $user.Name
+        $flags = [int]$user.UserFlags.Value
+        $never = (($flags -band 0x10000) -ne 0)
+        return "PasswordNeverExpires=$never provider=ADSI"
+    } catch {
+    }
+
+    return "PasswordNeverExpires=unknown"
+}
+
+function Ensure-PicoServiceAccountPasswordNeverExpires {
+    param([Parameter(Mandatory = $true)][string]$AccountName)
+
+    $configured = $false
+    if (Test-LocalUserCmdletsAvailable) {
+        try {
+            Set-LocalUser -Name $AccountName -PasswordNeverExpires $true -ErrorAction Stop
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_SET name=$AccountName provider=LocalAccounts"
+            $configured = $true
+        } catch {
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_WARN name=$AccountName provider=LocalAccounts reason=$($_.Exception.Message)"
+        }
+    }
+
+    if (Set-PicoAdsiPasswordNeverExpiresFlag -AccountName $AccountName) {
+        $configured = $true
+    }
+    if (Invoke-WmicPasswordNeverExpires -AccountName $AccountName) {
+        $configured = $true
+    }
+
+    if (-not $configured -or -not (Test-PicoServiceAccountPasswordNeverExpires -AccountName $AccountName)) {
+        throw "No se pudo garantizar que la contrasena de $AccountName no expire. PostgreSQL no debe depender de una contrasena expirable."
+    }
+
+    Write-InstallLog ("PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_OK name={0} {1}" -f $AccountName, (Get-PicoServiceAccountPasswordExpirySummary -AccountName $AccountName))
 }
 
 function Invoke-LocalGroupMemberChange {
@@ -555,7 +682,7 @@ function Ensure-PicoServiceAccountGroups {
 
 function Ensure-PicoServiceAccount {
     $accountName = $Script:PicoServiceAccountName
-    $description = "Servicio local no administrador para Pico de Gallo"
+    $description = "Servicio local Pico de Gallo"
     $password = New-SecureRandomPassword
     $securePassword = ConvertTo-PicoSecureString -PlainText $password
     $provider = "ADSI"
@@ -566,7 +693,6 @@ function Ensure-PicoServiceAccount {
             $existing = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
             if ($existing) {
                 Set-LocalUser -Name $accountName -Password $securePassword -Description $description -ErrorAction Stop
-                try { Set-LocalUser -Name $accountName -PasswordNeverExpires $true -ErrorAction Stop } catch { Write-InstallLog "PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_SKIPPED name=$accountName" }
                 try { Set-LocalUser -Name $accountName -UserMayChangePassword $false -ErrorAction Stop } catch { Write-InstallLog "PICO_SERVICE_ACCOUNT_USER_MAY_CHANGE_PASSWORD_SKIPPED name=$accountName" }
                 if (-not $existing.Enabled) {
                     Enable-LocalUser -Name $accountName -ErrorAction Stop
@@ -596,7 +722,7 @@ function Ensure-PicoServiceAccount {
                 Set-PicoAdsiUserPasswordAndFlags -AccountName $accountName -Password $password -Description $description
                 Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_ADSI name=$accountName"
             } catch {
-                Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_FAILED name=$accountName reason=$($_.Exception.Message)"
+                Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_WARN name=$accountName reason=$($_.Exception.Message)"
                 $provider = "net"
                 $exists = $false
                 try {
@@ -613,7 +739,7 @@ function Ensure-PicoServiceAccount {
             Set-PicoAdsiUserPasswordAndFlags -AccountName $accountName -Password $password -Description $description
             Write-InstallLog "PICO_SERVICE_ACCOUNT_READY_ADSI name=$accountName"
         } catch {
-            Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_FAILED name=$accountName reason=$($_.Exception.Message)"
+            Write-InstallLog "PICO_SERVICE_ACCOUNT_ADSI_WARN name=$accountName reason=$($_.Exception.Message)"
             $provider = "net"
             $exists = $false
             try {
@@ -626,10 +752,11 @@ function Ensure-PicoServiceAccount {
         }
     }
 
+    Ensure-PicoServiceAccountPasswordNeverExpires -AccountName $accountName
     Ensure-PicoServiceAccountGroups -AccountName $accountName
     $accountSid = Convert-LocalAccountNameToSid -AccountName $accountName
     $credential = [System.Management.Automation.PSCredential]::new(".\$accountName", $securePassword)
-    Write-InstallLog "PICO_SERVICE_ACCOUNT_READY name=$accountName sid=$accountSid provider=$provider non_admin=true"
+    Write-InstallLog ("PICO_SERVICE_ACCOUNT_READY name={0} sid={1} provider={2} non_admin=true {3}" -f $accountName, $accountSid, $provider, (Get-PicoServiceAccountPasswordExpirySummary -AccountName $accountName))
     return [pscustomobject]@{
         Username = $accountName
         Domain = "."
@@ -684,6 +811,12 @@ function ConvertTo-StartProcessArgumentString {
     return ($escaped -join " ")
 }
 
+function ConvertTo-PowerShellSingleQuotedString {
+    param([string]$Text)
+
+    return "'" + $Text.Replace("'", "''") + "'"
+}
+
 function Invoke-AsPicoServiceAccount {
     param(
         [Parameter(Mandatory = $true)][System.Management.Automation.PSCredential]$Credential,
@@ -701,35 +834,138 @@ function Invoke-AsPicoServiceAccount {
         throw "No existe ejecutable requerido: $FilePath"
     }
 
+    $createdDefaultStdout = $false
+    $createdDefaultStderr = $false
     if ([string]::IsNullOrWhiteSpace($StdoutPath)) {
         $StdoutPath = Join-Path (Get-LogsDir) ("{0}.stdout.tmp" -f ([Guid]::NewGuid().ToString("N")))
+        $createdDefaultStdout = $true
     }
     if ([string]::IsNullOrWhiteSpace($StderrPath)) {
         $StderrPath = Join-Path (Get-LogsDir) ("{0}.stderr.tmp" -f ([Guid]::NewGuid().ToString("N")))
+        $createdDefaultStderr = $true
     }
 
     $argumentString = ConvertTo-StartProcessArgumentString -ArgumentList $ArgumentList
-    Write-InstallLog -LogName $LogName -Message ("RUN_AS {0} {1}" -f $Script:PicoServiceAccountName, (Format-CommandForLog -FilePath $FilePath -ArgumentList $ArgumentList))
+    $safeCommand = Format-CommandForLog -FilePath $FilePath -ArgumentList $ArgumentList
+    Write-InstallLog -LogName $LogName -Message ("RUN_AS_BEGIN account={0} command={1} stdout={2} stderr={3} noWait={4}" -f $Script:PicoServiceAccountName, $safeCommand, $StdoutPath, $StderrPath, [bool]$NoWait)
 
-    $startParams = @{
-        FilePath = $FilePath
-        ArgumentList = $argumentString
-        Credential = $Credential
-        RedirectStandardOutput = $StdoutPath
-        RedirectStandardError = $StderrPath
-        WindowStyle = "Hidden"
-        PassThru = $true
-    }
-    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-        $startParams["WorkingDirectory"] = $WorkingDirectory
-    }
-
-    $process = Start-Process @startParams
     if ($NoWait) {
+        $startParams = @{
+            FilePath = $FilePath
+            ArgumentList = $argumentString
+            Credential = $Credential
+            RedirectStandardOutput = $StdoutPath
+            RedirectStandardError = $StderrPath
+            WindowStyle = "Hidden"
+            PassThru = $true
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $startParams["WorkingDirectory"] = $WorkingDirectory
+        }
+
+        $process = Start-Process @startParams
+        Write-InstallLog -LogName $LogName -Message ("RUN_AS_STARTED account={0} pid={1}" -f $Script:PicoServiceAccountName, $process.Id)
         return $process
     }
 
-    $process.WaitForExit()
+    $runAsDir = Join-Path (Get-LogsDir) "runas"
+    New-DirectorySafe $runAsDir
+    $runId = [Guid]::NewGuid().ToString("N")
+    $wrapperPath = Join-Path $runAsDir "runas-$runId.ps1"
+    $configPath = Join-Path $runAsDir "runas-$runId.json"
+    $exitCodePath = Join-Path $runAsDir "runas-$runId.exitcode"
+    $donePath = Join-Path $runAsDir "runas-$runId.done"
+    $wrapperLogPath = Join-Path $runAsDir "runas-$runId.wrapper.log"
+    $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
+        $powershellExe = "powershell.exe"
+    }
+
+    $runConfig = [pscustomobject]@{
+        FilePath = $FilePath
+        ArgumentList = @($ArgumentList)
+        WorkingDirectory = $WorkingDirectory
+        StdoutPath = $StdoutPath
+        StderrPath = $StderrPath
+    }
+    $runConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+    $wrapper = @"
+`$ErrorActionPreference = "Stop"
+`$configPath = $(ConvertTo-PowerShellSingleQuotedString -Text $configPath)
+`$exitCodePath = $(ConvertTo-PowerShellSingleQuotedString -Text $exitCodePath)
+`$donePath = $(ConvertTo-PowerShellSingleQuotedString -Text $donePath)
+`$wrapperLogPath = $(ConvertTo-PowerShellSingleQuotedString -Text $wrapperLogPath)
+`$stdoutPath = ""
+`$stderrPath = ""
+`$code = 1
+try {
+    `$config = Get-Content -LiteralPath `$configPath -Raw | ConvertFrom-Json
+    `$stdoutPath = [string]`$config.StdoutPath
+    `$stderrPath = [string]`$config.StderrPath
+    foreach (`$path in @(`$stdoutPath, `$stderrPath, `$wrapperLogPath, `$exitCodePath, `$donePath)) {
+        if (-not [string]::IsNullOrWhiteSpace(`$path)) {
+            `$dir = Split-Path -Path `$path -Parent
+            if (-not [string]::IsNullOrWhiteSpace(`$dir) -and -not (Test-Path -LiteralPath `$dir)) {
+                New-Item -ItemType Directory -Path `$dir -Force | Out-Null
+            }
+        }
+    }
+    `$argsList = @()
+    if (`$null -ne `$config.ArgumentList) {
+        foreach (`$arg in @(`$config.ArgumentList)) {
+            `$argsList += [string]`$arg
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]`$config.WorkingDirectory)) {
+        Set-Location -LiteralPath ([string]`$config.WorkingDirectory)
+    }
+    & ([string]`$config.FilePath) @argsList > `$stdoutPath 2> `$stderrPath
+    `$code = `$LASTEXITCODE
+    if (`$null -eq `$code) {
+        `$code = 0
+    }
+} catch {
+    `$code = 1
+    try {
+        Add-Content -LiteralPath `$wrapperLogPath -Value ("WRAPPER_EXCEPTION " + `$_.Exception.GetType().FullName + " " + `$_.Exception.Message) -Encoding UTF8
+    } catch {
+    }
+    if (-not [string]::IsNullOrWhiteSpace(`$stderrPath)) {
+        try {
+            Add-Content -LiteralPath `$stderrPath -Value ("WRAPPER_EXCEPTION " + `$_.Exception.Message) -Encoding UTF8
+        } catch {
+        }
+    }
+}
+try {
+    Set-Content -LiteralPath `$exitCodePath -Value ([string][int]`$code) -Encoding ASCII
+} finally {
+    Set-Content -LiteralPath `$donePath -Value "done" -Encoding ASCII
+}
+exit ([int]`$code)
+"@
+    Set-Content -LiteralPath $wrapperPath -Value $wrapper -Encoding UTF8
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $startParams = @{
+        FilePath = $powershellExe
+        ArgumentList = (ConvertTo-StartProcessArgumentString -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wrapperPath))
+        Credential = $Credential
+        WindowStyle = "Hidden"
+        PassThru = $true
+    }
+    Write-InstallLog -LogName $LogName -Message ("RUN_AS_WRAPPER_BEGIN account={0} wrapper={1} exitcode={2}" -f $Script:PicoServiceAccountName, $wrapperPath, $exitCodePath)
+    $wrapperProcess = Start-Process @startParams
+    $wrapperProcess.WaitForExit()
+    for ($i = 0; $i -lt 50; $i++) {
+        if ((Test-Path -LiteralPath $donePath -PathType Leaf) -and (Test-Path -LiteralPath $exitCodePath -PathType Leaf)) {
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    $stopwatch.Stop()
+
     $stdoutText = ""
     $stderrText = ""
     if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
@@ -744,11 +980,44 @@ function Invoke-AsPicoServiceAccount {
             Add-Content -LiteralPath (Get-NativeLogPath $LogName) -Value (Protect-Text $stderrText) -Encoding UTF8
         }
     }
-    Remove-Item -LiteralPath $StdoutPath, $StderrPath -Force -ErrorAction SilentlyContinue
 
-    Write-InstallLog -LogName $LogName -Message ("EXIT_CODE " + $process.ExitCode)
-    if ($process.ExitCode -ne 0) {
-        throw "Comando como $Script:PicoServiceAccountName fallo con codigo $($process.ExitCode). Revise $(Get-NativeLogPath $LogName)"
+    if (-not (Test-Path -LiteralPath $exitCodePath -PathType Leaf)) {
+        $wrapperTail = Get-LogTailText -Path $wrapperLogPath -Lines 80
+        Write-InstallLog -LogName $LogName -Message ("RUN_AS_ERROR account={0} reason=missing-exitcode wrapper={1} stdout={2} stderr={3} durationMs={4}" -f $Script:PicoServiceAccountName, $wrapperPath, $StdoutPath, $StderrPath, $stopwatch.ElapsedMilliseconds)
+        if (-not [string]::IsNullOrWhiteSpace($wrapperTail)) {
+            Write-InstallLog -LogName $LogName -Message ("RUN_AS_WRAPPER_TAIL`n" + $wrapperTail)
+        }
+        throw "No se pudo capturar exit code de proceso ejecutado como $Script:PicoServiceAccountName. Revise $(Get-NativeLogPath $LogName) y $wrapperLogPath"
+    }
+
+    $exitText = (Get-Content -LiteralPath $exitCodePath -Raw -ErrorAction Stop).Trim()
+    $exitCode = 0
+    if (-not [int]::TryParse($exitText, [ref]$exitCode)) {
+        Write-InstallLog -LogName $LogName -Message ("RUN_AS_ERROR account={0} reason=invalid-exitcode value={1} wrapper={2}" -f $Script:PicoServiceAccountName, $exitText, $wrapperPath)
+        throw "Exit code invalido capturado para proceso ejecutado como $Script:PicoServiceAccountName: $exitText"
+    }
+
+    Write-InstallLog -LogName $LogName -Message ("RUN_AS_DONE account={0} exitcode={1} stdout={2} stderr={3} durationMs={4}" -f $Script:PicoServiceAccountName, $exitCode, $StdoutPath, $StderrPath, $stopwatch.ElapsedMilliseconds)
+    Write-InstallLog -LogName $LogName -Message ("EXIT_CODE_SENTINEL " + $exitCode)
+    if ($exitCode -ne 0) {
+        $stdoutTail = Get-LogTailText -Path $StdoutPath -Lines 80
+        $stderrTail = Get-LogTailText -Path $StderrPath -Lines 80
+        Write-InstallLog -LogName $LogName -Message ("RUN_AS_ERROR account={0} exitcode={1} stdout={2} stderr={3}" -f $Script:PicoServiceAccountName, $exitCode, $StdoutPath, $StderrPath)
+        if (-not [string]::IsNullOrWhiteSpace($stdoutTail)) {
+            Write-InstallLog -LogName $LogName -Message ("RUN_AS_STDOUT_TAIL`n" + $stdoutTail)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
+            Write-InstallLog -LogName $LogName -Message ("RUN_AS_STDERR_TAIL`n" + $stderrTail)
+        }
+        throw "Comando como $Script:PicoServiceAccountName fallo con codigo $exitCode. Revise $(Get-NativeLogPath $LogName)"
+    }
+
+    Remove-Item -LiteralPath $wrapperPath, $configPath, $exitCodePath, $donePath, $wrapperLogPath -Force -ErrorAction SilentlyContinue
+    if ($createdDefaultStdout) {
+        Remove-Item -LiteralPath $StdoutPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($createdDefaultStderr) {
+        Remove-Item -LiteralPath $StderrPath -Force -ErrorAction SilentlyContinue
     }
     if ($ReturnStdout) {
         return $stdoutText
@@ -1206,6 +1475,9 @@ function Install-WinSWServices {
         Write-SafeHost "Servicio instalado: $serviceId"
     }
 
+    Assert-WinSWServiceFilesForAll -ServiceIds $ServiceIds
+    Write-InstallLog -LogName "service-install.log" -Message ("SERVICE_FILES_READY " + ($ServiceIds -join ","))
+
     foreach ($serviceId in $ServiceIds) {
         if (-not (Get-ServiceSafe $serviceId)) {
             throw "Servicio requerido no instalado: $serviceId"
@@ -1223,6 +1495,31 @@ function Quote-PostgresLiteral {
     return ("'" + $Value.Replace("'", "''") + "'")
 }
 
+function Test-PostgresDataDirectoryInitialized {
+    param([Parameter(Mandatory = $true)][string]$DataDir)
+
+    foreach ($fileName in @("PG_VERSION", "postgresql.conf", "pg_hba.conf")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $DataDir $fileName) -PathType Leaf)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Assert-PostgresDataDirectoryInitialized {
+    param([Parameter(Mandatory = $true)][string]$DataDir)
+
+    $missing = @()
+    foreach ($fileName in @("PG_VERSION", "postgresql.conf", "pg_hba.conf")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $DataDir $fileName) -PathType Leaf)) {
+            $missing += $fileName
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw ("Directorio de datos PostgreSQL incompleto en {0}. Faltan: {1}. No se repara automaticamente; en VM/prueba limpia borre C:\ProgramData\PicoDeGallo antes de reinstalar." -f $DataDir, ($missing -join ", "))
+    }
+}
+
 function Initialize-PostgresDataDirectory {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap,
@@ -1236,14 +1533,17 @@ function Initialize-PostgresDataDirectory {
     if (-not (Test-Path -LiteralPath $initdb -PathType Leaf)) {
         throw "No existe initdb.exe en runtime PostgreSQL nativo."
     }
-    if (Test-Path -LiteralPath (Join-Path $dataDir "PG_VERSION") -PathType Leaf) {
-        Write-InstallLog "POSTGRES_DATA_EXISTS $dataDir"
+    if (Test-PostgresDataDirectoryInitialized -DataDir $dataDir) {
+        Write-InstallLog "POSTGRES_DATA_EXISTS $dataDir PG_VERSION=present postgresql.conf=present pg_hba.conf=present"
         return
+    }
+    if (Test-Path -LiteralPath (Join-Path $dataDir "PG_VERSION") -PathType Leaf) {
+        Assert-PostgresDataDirectoryInitialized -DataDir $dataDir
     }
 
     $existing = Get-ChildItem -LiteralPath $dataDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($existing) {
-        throw "El directorio de datos PostgreSQL existe pero no contiene PG_VERSION: $dataDir"
+        throw "El directorio de datos PostgreSQL existe pero no esta inicializado completamente: $dataDir. No se repara automaticamente; en VM/prueba limpia borre C:\ProgramData\PicoDeGallo antes de reinstalar."
     }
 
     $dbUser = Get-RequiredEnvValue -Map $EnvMap -Name "DB_USER"
@@ -1252,13 +1552,23 @@ function Initialize-PostgresDataDirectory {
 
     try {
         Set-Content -LiteralPath $pwFile -Value $dbPassword -Encoding ASCII
-        Invoke-AsPicoServiceAccount `
-            -Credential $Credential `
-            -FilePath $initdb `
-            -ArgumentList @("-D", $dataDir, "-E", "UTF8", "--locale=C", "--username=$dbUser", "--pwfile=$pwFile", "--auth=scram-sha-256") `
-            -WorkingDirectory $postgresBin `
-            -LogName "postgres-init.log"
+        try {
+            Invoke-AsPicoServiceAccount `
+                -Credential $Credential `
+                -FilePath $initdb `
+                -ArgumentList @("-D", $dataDir, "-E", "UTF8", "--locale=C", "--username=$dbUser", "--pwfile=$pwFile", "--auth=scram-sha-256") `
+                -WorkingDirectory $postgresBin `
+                -LogName "postgres-init.log"
+        } catch {
+            if (Test-PostgresDataDirectoryInitialized -DataDir $dataDir) {
+                Write-InstallLog -LogName "postgres-init.log" -Message ("POSTGRES_INITDB_EXITCODE_WARNING_BUT_DATA_READY " + $_.Exception.Message)
+                return
+            }
+            throw
+        }
+        Assert-PostgresDataDirectoryInitialized -DataDir $dataDir
         Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_INITDB_RUN_AS $Script:PicoServiceAccountName"
+        Write-InstallLog -LogName "postgres-init.log" -Message "POSTGRES_DATA_INITIALIZED $dataDir PG_VERSION=present"
     } finally {
         Remove-Item -LiteralPath $pwFile -Force -ErrorAction SilentlyContinue
     }

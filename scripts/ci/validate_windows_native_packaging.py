@@ -255,6 +255,37 @@ def validate_native_installer_contract() -> None:
             fail(f"install-services.ps1 must not depend on English builtin group name: {forbidden}")
     if not re.search(r"Start-Process\s+@startParams", install) or "Credential = $Credential" not in install:
         fail("install-services.ps1 must start PostgreSQL commands with a PSCredential")
+    invoke_start = install.find("function Invoke-AsPicoServiceAccount")
+    invoke_end = install.find("function Escape-XmlText", invoke_start)
+    if invoke_start < 0 or invoke_end < 0:
+        fail("install-services.ps1 missing Invoke-AsPicoServiceAccount body")
+    invoke_body = install[invoke_start:invoke_end]
+    for token in [
+        ".exitcode",
+        "EXIT_CODE_SENTINEL",
+        "RUN_AS_BEGIN",
+        "RUN_AS_DONE",
+        "RUN_AS_ERROR",
+        "Set-Content -LiteralPath `$exitCodePath",
+    ]:
+        if token not in invoke_body:
+            fail(f"Invoke-AsPicoServiceAccount missing robust exit-code sentinel token: {token}")
+    if "$process.ExitCode" in invoke_body:
+        fail("Invoke-AsPicoServiceAccount must not depend on Start-Process -Credential process.ExitCode")
+    for token in ["PasswordNeverExpires", "PasswordExpires=False", "PICO_SERVICE_ACCOUNT_PASSWORD_NEVER_EXPIRES_OK"]:
+        if token not in install:
+            fail(f"install-services.ps1 missing service account password-expiry guard: {token}")
+    description_match = re.search(r'\$description\s*=\s*"([^"]+)"', install)
+    if not description_match:
+        fail("install-services.ps1 must set PicoDeGalloSvc description explicitly")
+    if len(description_match.group(1)) > 48:
+        fail("PicoDeGalloSvc description must be 48 characters or shorter")
+    for token in ["PG_VERSION", "postgresql.conf", "pg_hba.conf", "Test-PostgresDataDirectoryInitialized"]:
+        if token not in install:
+            fail(f"install-services.ps1 missing PostgreSQL data-dir idempotency guard: {token}")
+    for token in ["SERVICE_FILES_READY", "Assert-WinSWServiceFilesForAll", "CADDYFILE_RENDERED"]:
+        if token not in install:
+            fail(f"install-services.ps1 missing service/Caddyfile readiness marker: {token}")
     if "POSTGRES_FOREGROUND_TEST_RUN_AS" not in install:
         fail("install-services.ps1 must log the foreground PostgreSQL account")
     if re.search(r"PICO_SERVICE_ACCOUNT_PASSWORD\s*=\s*[^{}\s][^\r\n]*", install):
@@ -273,12 +304,12 @@ def validate_native_installer_contract() -> None:
             fail(f"install-services.ps1 missing service rendering/install guard: {token}")
 
     status = read_text_safe(NATIVE / "scripts" / "status.ps1")
-    for token in ["VERSION=", "PICO_SERVICE_ACCOUNT=", "StartName=", "POSTGRES_XML_SERVICEACCOUNT"]:
+    for token in ["VERSION=", "PICO_SERVICE_ACCOUNT=", "PasswordExpires", "POSTGRES_DATA=", "SERVICE_FILES=", "CADDYFILE=", "RUNAS_LAST_EXITCODE=", "StartName=", "POSTGRES_XML_SERVICEACCOUNT"]:
         if token not in status:
             fail(f"status.ps1 missing diagnostic token: {token}")
 
     diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
-    for token in ["service-account.txt", "service-xml-", "acls.txt", "install-services-error.log"]:
+    for token in ["service-account.txt", "PasswordExpires", "postgres-data.txt", "service-files.txt", "caddyfile.txt", "runas-files.txt", "runas-last-exitcode.txt", "service-xml-", "acls.txt", "install-services-error.log"]:
         if token == "install-services-error.log":
             if token not in install and token not in diagnostics:
                 fail(f"diagnostics coverage missing token: {token}")

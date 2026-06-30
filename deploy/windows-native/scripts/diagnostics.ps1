@@ -32,19 +32,29 @@ function Get-PicoServiceAccountDiagnostic {
     if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
         try {
             $user = Get-LocalUser -Name $accountName -ErrorAction Stop
-            return "exists Enabled=$($user.Enabled) SID=$($user.SID.Value)"
+            $expires = if ($null -eq $user.PasswordExpires) { "never" } else { [string]$user.PasswordExpires }
+            $never = if ($null -eq $user.PasswordExpires) { "true" } else { "false" }
+            return "exists Enabled=$($user.Enabled) SID=$($user.SID.Value) PasswordExpires=$expires PasswordNeverExpires=$never"
         } catch {
         }
     }
     try {
         $user = [ADSI]("WinNT://{0}/{1},user" -f $env:COMPUTERNAME, $accountName)
         $null = $user.Name
-        return "exists provider=ADSI"
+        $flags = [int]$user.UserFlags.Value
+        $never = (($flags -band 0x10000) -ne 0)
+        return "exists provider=ADSI PasswordNeverExpires=$never"
     } catch {
         return "missing"
     }
 }
 Save-Diagnostic "service-account.txt" (Get-PicoServiceAccountDiagnostic)
+
+$dataDir = Join-Path $Script:ProgramDataDir "postgres\data"
+$postgresDataFacts = foreach ($fileName in @("PG_VERSION", "postgresql.conf", "pg_hba.conf")) {
+    "$fileName=$(if (Test-Path -LiteralPath (Join-Path $dataDir $fileName) -PathType Leaf) { 'present' } else { 'missing' })"
+}
+Save-Diagnostic "postgres-data.txt" ($postgresDataFacts -join "`n")
 
 $postgresXml = Join-Path (Join-Path $Script:ProgramFilesDir "services") "PicoDeGallo-PostgreSQL.xml"
 if (Test-Path -LiteralPath $postgresXml -PathType Leaf) {
@@ -58,11 +68,42 @@ if (Test-Path -LiteralPath $postgresXml -PathType Leaf) {
 }
 
 $serviceDir = Join-Path $Script:ProgramFilesDir "services"
+$serviceFileFacts = @()
 foreach ($svc in $Script:Services) {
     $xml = Join-Path $serviceDir "$svc.xml"
+    $exe = Join-Path $serviceDir "$svc.exe"
+    $serviceFileFacts += "$svc.xml=$(if (Test-Path -LiteralPath $xml -PathType Leaf) { 'present' } else { 'missing' })"
+    $serviceFileFacts += "$svc.exe=$(if (Test-Path -LiteralPath $exe -PathType Leaf) { 'present' } else { 'missing' })"
     if (Test-Path -LiteralPath $xml -PathType Leaf) {
         Save-Diagnostic "service-xml-$svc.txt" (Get-Content -LiteralPath $xml -Raw -ErrorAction SilentlyContinue)
     }
+}
+Save-Diagnostic "service-files.txt" ($serviceFileFacts -join "`n")
+
+$caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
+Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { 'present' } else { 'missing' })")
+
+$runAsDir = Join-Path (Get-LogsDir) "runas"
+if (Test-Path -LiteralPath $runAsDir -PathType Container) {
+    $runAsFiles = Get-ChildItem -LiteralPath $runAsDir -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 40
+    $runAsLines = foreach ($file in $runAsFiles) {
+        "$($file.Name) LastWriteTime=$($file.LastWriteTime.ToString('o')) Size=$($file.Length)"
+    }
+    Save-Diagnostic "runas-files.txt" ($runAsLines -join "`n")
+    $latestExit = $runAsFiles | Where-Object { $_.Name -like "*.exitcode" } | Select-Object -First 1
+    if ($latestExit) {
+        Save-Diagnostic "runas-last-exitcode.txt" (Get-Content -LiteralPath $latestExit.FullName -Raw -ErrorAction SilentlyContinue)
+    }
+    foreach ($file in ($runAsFiles | Where-Object { $_.Extension -in @(".log", ".exitcode", ".done") } | Select-Object -First 12)) {
+        Save-Diagnostic "runas-$($file.Name).txt" ((Get-Content -LiteralPath $file.FullName -Tail 120 -ErrorAction SilentlyContinue) -join "`n")
+    }
+}
+
+$installServicesError = Join-Path (Get-LogsDir) "install-services-error.log"
+if (Test-Path -LiteralPath $installServicesError -PathType Leaf) {
+    Save-Diagnostic "install-services-error-tail.txt" ((Get-Content -LiteralPath $installServicesError -Tail 200 -ErrorAction SilentlyContinue) -join "`n")
 }
 
 $icacls = Join-Path $env:SystemRoot "System32\icacls.exe"
