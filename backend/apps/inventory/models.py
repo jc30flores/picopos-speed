@@ -19,7 +19,11 @@ class InventorySupplier(models.Model):
 
     class Meta:
         ordering = ["name", "id"]
-        indexes = [models.Index(fields=["name"]), models.Index(fields=["code"]), models.Index(fields=["is_active"])]
+        indexes = [
+            models.Index(fields=["name"], name="inventory_i_name_0e4ce0_idx"),
+            models.Index(fields=["code"], name="inventory_i_code_95e515_idx"),
+            models.Index(fields=["is_active"], name="inventory_i_is_acti_37e599_idx"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -44,7 +48,10 @@ class InventoryItem(models.Model):
 
     class Meta:
         ordering = ["name", "id"]
-        indexes = [models.Index(fields=["name"]), models.Index(fields=["sku"])]
+        indexes = [
+            models.Index(fields=["name"], name="inventory_in_name_6ab43c_idx"),
+            models.Index(fields=["sku"], name="inventory_in_sku_30780b_idx"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -127,9 +134,9 @@ class InventoryMovement(models.Model):
     class Meta:
         ordering = ["-created_at", "-id"]
         indexes = [
-            models.Index(fields=["movement_type", "created_at"]),
-            models.Index(fields=["reference_type", "reference_id"]),
-            models.Index(fields=["inventory_item", "created_at"]),
+            models.Index(fields=["movement_type", "created_at"], name="inventory_i_movemen_7bd8e8_idx"),
+            models.Index(fields=["reference_type", "reference_id"], name="inventory_i_referen_0d8590_idx"),
+            models.Index(fields=["inventory_item", "created_at"], name="inventory_i_invento_04b724_idx"),
         ]
 
 
@@ -180,7 +187,11 @@ class PurchaseOrder(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
-        indexes = [models.Index(fields=["status", "created_at"]), models.Index(fields=["supplier", "status"]), models.Index(fields=["code"])]
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="inventory_p_status_70d9db_idx"),
+            models.Index(fields=["supplier", "status"], name="inventory_p_supplie_f5ac2d_idx"),
+            models.Index(fields=["code"], name="inventory_p_code_2d8792_idx"),
+        ]
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -216,7 +227,7 @@ class PurchaseOrderLine(models.Model):
 
     class Meta:
         ordering = ["id"]
-        indexes = [models.Index(fields=["purchase_order", "inventory_item"])]
+        indexes = [models.Index(fields=["purchase_order", "inventory_item"], name="inventory_p_purcha_d2fc76_idx")]
 
     @property
     def pending_quantity(self):
@@ -307,9 +318,9 @@ class InventoryCountSession(models.Model):
     class Meta:
         ordering = ["-created_at", "-id"]
         indexes = [
-            models.Index(fields=["status", "created_at"]),
-            models.Index(fields=["count_type", "created_at"]),
-            models.Index(fields=["code"]),
+            models.Index(fields=["status", "created_at"], name="inventory_i_status_fecf3b_idx"),
+            models.Index(fields=["count_type", "created_at"], name="inventory_i_count_t_11a07a_idx"),
+            models.Index(fields=["code"], name="inventory_i_code_2e9c5b_idx"),
         ]
 
     def save(self, *args, **kwargs):
@@ -349,7 +360,7 @@ class InventoryCountLine(models.Model):
     class Meta:
         ordering = ["inventory_item__name", "id"]
         unique_together = (("session", "inventory_item"),)
-        indexes = [models.Index(fields=["session", "inventory_item"])]
+        indexes = [models.Index(fields=["session", "inventory_item"], name="inventory_i_session_0c2cf0_idx")]
 
     def recalculate_difference(self):
         self.difference = 0 if self.counted_stock is None else self.counted_stock - self.system_stock

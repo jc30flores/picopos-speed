@@ -1,0 +1,22 @@
+services:
+  web:
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_HTTP_PORT:-9282}:8080"
+
+  backend:
+    environment:
+      DTE_BACKGROUND_MODE: external
+
+  bootstrap:
+    environment:
+      DTE_BACKGROUND_MODE: external
+
+  dte-worker:
+    environment:
+      DTE_BACKGROUND_MODE: external
+    restart: unless-stopped
+
+  dte-monitor:
+    environment:
+      DTE_BACKGROUND_MODE: external
+    restart: unless-stopped

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "notes": "Ejemplo seguro: reemplace url/sha256 por versiones públicas fijas o por rutas configuradas en GitHub Actions. No use latest ni URLs sin HTTPS.",
+  "runtimes": {
+    "python": {
+      "version": "3.12.x",
+      "url": "https://example.invalid/python-windows-runtime.zip",
+      "sha256": "replace-with-expected-sha256",
+      "archiveType": "zip",
+      "extractTo": "python",
+      "releaseArgument": "PythonRuntimePath",
+      "licenseNote": "Revisar licencia y notices oficiales de Python antes de distribuir. No versionar binarios en Git."
+    },
+    "postgres": {
+      "version": "16.x",
+      "url": "https://example.invalid/postgresql-windows-runtime.zip",
+      "sha256": "replace-with-expected-sha256",
+      "archiveType": "zip",
+      "extractTo": "postgres",
+      "releaseArgument": "PostgresRuntimePath",
+      "licenseNote": "Revisar licencia/notices oficiales de PostgreSQL antes de distribuir."
+    },
+    "caddy": {
+      "version": "2.x",
+      "url": "https://example.invalid/caddy-windows-amd64.zip",
+      "sha256": "replace-with-expected-sha256",
+      "archiveType": "zip",
+      "extractTo": "caddy",
+      "releaseArgument": "CaddyPath",
+      "expectedExecutable": "caddy.exe",
+      "licenseNote": "Revisar licencia/notices oficiales de Caddy antes de distribuir."
+    },
+    "winsw": {
+      "version": "x.y.z",
+      "url": "https://example.invalid/winsw-x64.exe",
+      "sha256": "replace-with-expected-sha256",
+      "archiveType": "file",
+      "extractTo": "winsw.exe",
+      "releaseArgument": "WinSWPath",
+      "licenseNote": "Revisar licencia/notices oficiales de WinSW antes de distribuir."
+    },
+    "innoSetup": {
+      "version": "6.x",
+      "url": "https://example.invalid/innosetup.exe",
+      "sha256": "replace-with-expected-sha256",
+      "archiveType": "installer",
+      "extractTo": "inno",
+      "licenseNote": "Revisar licencia/notices oficiales de Inno Setup antes de usar en CI."
+    }
+  }
+}

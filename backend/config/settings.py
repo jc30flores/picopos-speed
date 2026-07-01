@@ -1,38 +1,10 @@
 from pathlib import Path
 import logging
 import os
-try:
-    from dotenv import load_dotenv
-except Exception:  # pragma: no cover - fallback for minimal runtime envs
-    load_dotenv = None
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-env_path = BASE_DIR / ".env"
-if load_dotenv is not None:
-    load_dotenv(dotenv_path=env_path, override=True)
-elif env_path.exists():
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ[key.strip()] = value.strip()
-print("ENV LOADED FROM:", env_path)
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int | None = None) -> int | None:
-    value = os.environ.get(name)
-    if value is None or value == "":
-        return default
-    try:
-        return int(value, 0)
-    except ValueError:
-        return default
+from .env import bool_value as _env_bool, int_value as _env_int, list_value as _env_list, optional_str as _env_str, load_env_file
+from .runtime import build_runtime
+from apps.dte.config import get_dte_config_status
 
 
 def _env_float(name: str, default: float) -> float:
@@ -44,25 +16,20 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         return default
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-def _env_list(name: str, default: list[str] | None = None) -> list[str]:
-    value = os.environ.get(name, "")
-    if not value:
-        return list(default or [])
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-def _env_str(name: str, default: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip() or default
-
-
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
-DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
-
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "centro-pdg.cuskatech.com"]
-
+DOTENV_OVERRIDE = _env_bool("DOTENV_OVERRIDE", default=False)
+ENV_PATH = BASE_DIR / ".env"
+DJANGO_ENV_FILE = os.environ.get("DJANGO_ENV_FILE", "").strip()
+EXTERNAL_ENV_PATH = Path(DJANGO_ENV_FILE) if DJANGO_ENV_FILE else None
+DOTENV_FOUND = load_env_file(EXTERNAL_ENV_PATH or ENV_PATH, override=DOTENV_OVERRIDE)
+if EXTERNAL_ENV_PATH and not DOTENV_FOUND:
+    DOTENV_FOUND = load_env_file(ENV_PATH, override=DOTENV_OVERRIDE)
+RUNTIME_CONFIG = build_runtime(BASE_DIR)
+DJANGO_CONFIG_MODE = RUNTIME_CONFIG["mode"]
+SECRET_KEY = RUNTIME_CONFIG["SECRET_KEY"]
+DEBUG = RUNTIME_CONFIG["DEBUG"]
+ALLOWED_HOSTS = RUNTIME_CONFIG["ALLOWED_HOSTS"]
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -123,11 +90,7 @@ ASGI_APPLICATION = "config.asgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "HOST": os.environ.get("DB_HOST", "localhost"),
-        "USER": os.environ.get("DB_USER", "jarvis"),
-        "PASSWORD": os.environ.get("DB_PASSWORD", "diez2030"),
-        "NAME": os.environ.get("DB_NAME", "gallo_db"),
-        "PORT": os.environ.get("DB_PORT", "5432"),
+        **RUNTIME_CONFIG["DATABASE"],
         "OPTIONS": {
             "options": "-c timezone=America/El_Salvador",
         },
@@ -155,10 +118,10 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "static"
+STATIC_ROOT = RUNTIME_CONFIG["STATIC_ROOT"]
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = RUNTIME_CONFIG["MEDIA_ROOT"]
 MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
 MENU_IMAGE_ROOT = MEDIA_ROOT / "menu_image"
@@ -177,34 +140,11 @@ REST_FRAMEWORK = {
     ],
 }
 
-_default_cors_allowed_origins = [
-    "http://localhost:8182",
-    "http://127.0.0.1:8182",
-    "https://centro-pdg.cuskatech.com",
-]
-CORS_ALLOWED_ORIGINS = list(
-    dict.fromkeys(
-        _default_cors_allowed_origins
-        + _env_list("CORS_ALLOWED_ORIGINS")
-        + _env_list("CORS_ALLOWED_ORIGINS_EXTRA")
-    )
-)
+CORS_ALLOWED_ORIGINS = RUNTIME_CONFIG["CORS_ALLOWED_ORIGINS"]
 
 CORS_ALLOW_CREDENTIALS = True
 
-_default_csrf_trusted_origins = [
-    "http://localhost:8182",
-    "http://127.0.0.1:8182",
-    "http://localhost:9102",
-    "https://centro-pdg.cuskatech.com",
-]
-CSRF_TRUSTED_ORIGINS = list(
-    dict.fromkeys(
-        _default_csrf_trusted_origins
-        + _env_list("CSRF_TRUSTED_ORIGINS")
-        + _env_list("CSRF_TRUSTED_ORIGINS_EXTRA")
-    )
-)
+CSRF_TRUSTED_ORIGINS = RUNTIME_CONFIG["CSRF_TRUSTED_ORIGINS"]
 
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -250,6 +190,7 @@ PRINTER_SIZE = _env_float("PRINTER_SIZE", 80.0)
 PRINTER_SIZE_MM = _env_float("PRINTER_SIZE_MM", PRINTER_SIZE)
 
 MH_AMBIENTE = os.environ.get("MH_AMBIENTE", "00").strip() or "00"
+DTE_BACKGROUND_MODE = os.environ.get("DTE_BACKGROUND_MODE", "legacy").strip().lower() or "legacy"
 DTE_BASE_URL = os.environ.get("DTE_BASE_URL", "").strip()
 DTE_API_TOKEN = os.environ.get("DTE_API_TOKEN", "").strip()
 DTE_API_AUTH_HEADER = os.environ.get("DTE_API_AUTH_HEADER", "Authorization").strip() or "Authorization"
@@ -267,6 +208,7 @@ DEFAULT_BRANCH_ID = _env_int("DEFAULT_BRANCH_ID")
 ACTIVE_BRANCH_CODE = os.environ.get("ACTIVE_BRANCH_CODE", "").strip()
 DTE_MONITOR_INTERVAL_SECONDS = _env_int("DTE_MONITOR_INTERVAL_SECONDS", 10) or 10
 DTE_MONITOR_MAX_BACKOFF_SECONDS = _env_int("DTE_MONITOR_MAX_BACKOFF_SECONDS", 30) or 30
+DTE_CONFIG_PENDING_BACKOFF_SECONDS = _env_int("DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60
 DTE_MONITOR_ENABLED = _env_bool("DTE_MONITOR_ENABLED", default=True)
 DTE_OUTBOX_WORKER_ENABLED = _env_bool("DTE_OUTBOX_WORKER_ENABLED", default=True)
 DTE_MAX_RETRIES = _env_int("DTE_MAX_RETRIES", 5) or 5
@@ -290,11 +232,14 @@ DTE_LOG_VERBOSE = _env_bool("DTE_LOG_VERBOSE", default=False)
 DTE_LOG_LEVEL = (os.environ.get("DTE_LOG_LEVEL", "INFO") or "INFO").upper()
 DTE_LOG_RESPONSE_FULL = _env_bool("DTE_LOG_RESPONSE_FULL", default=False)
 DTE_LOG_TO_FILE = _env_bool("DTE_LOG_TO_FILE", default=DTE_LOG_PAYLOAD_FULL)
-DTE_LOG_DIR = os.environ.get("DTE_LOG_DIR", DTE_LOG_PAYLOAD_DIR).strip() or DTE_LOG_PAYLOAD_DIR
+DTE_LOG_DIR = RUNTIME_CONFIG["DTE_LOG_DIR"]
 DTE_LOG_TRUNCATE_CHARS = _env_int("DTE_LOG_TRUNCATE_CHARS", 0) or 0
 DTE_LOG_INCLUDE_SIGNED_DOCUMENT = _env_bool("DTE_LOG_INCLUDE_SIGNED_DOCUMENT", default=False)
 DTE_EMISOR_NIT = os.environ.get("DTE_EMISOR_NIT", "").strip()
 CODE_CHANGE_PRICE = os.environ.get("CODE_CHANGE_PRICE", "").strip()
+DTE_CONFIG_STATUS = get_dte_config_status(DTE_BASE_URL, DTE_API_TOKEN)
+DTE_CONFIG_READY = DTE_CONFIG_STATUS.configured
+DTE_CONFIG_REASON = DTE_CONFIG_STATUS.reason
 
 logging.getLogger(__name__).info(
     "[DTE CONFIG] base_url=%r mh_ambiente=%r",

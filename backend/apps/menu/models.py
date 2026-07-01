@@ -302,6 +302,6 @@ class PriceChangeAudit(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["product", "created_at"]),
-            models.Index(fields=["created_at"]),
+            models.Index(fields=["product", "created_at"], name="menu_pricec_product_560d2b_idx"),
+            models.Index(fields=["created_at"], name="menu_pricec_created_1f8c6a_idx"),
         ]

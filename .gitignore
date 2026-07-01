@@ -27,3 +27,19 @@ backend/venv/
 backend/**/__pycache__/
 *.pyc
 backend/media/receipts/*.pdf
+
+# Docker local runtime env files
+.env.docker
+.env.docker.local
+.env.docker.test
+# Windows Docker operation generated artifacts
+deploy/windows/runtime/
+deploy/windows/backups/
+deploy/windows/diagnostics/
+*.diagnostic.zip
+# Native Windows packaging generated artifacts
+.env.windows
+deploy/windows-native/release/
+release/runtime-cache/
+release/windows-native/
+release/installers/

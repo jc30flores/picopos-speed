@@ -1,0 +1,18 @@
+<service>
+  <id>PicoDeGallo-DTE-Monitor</id>
+  <name>Pico de Gallo DTE Monitor</name>
+  <description>Runs DTE monitor/sentinel as a native Windows service.</description>
+  <executable>{{PYTHON_EXE}}</executable>
+  <arguments>manage.py dte_monitor</arguments>
+  <workingdirectory>{{BACKEND_DIR}}</workingdirectory>
+  <startmode>Automatic</startmode>
+  <depend>PicoDeGallo-PostgreSQL</depend>
+  <env name="DJANGO_SETTINGS_MODULE" value="config.settings" />
+  <env name="DOTENV_OVERRIDE" value="false" />
+  <env name="DJANGO_ENV_FILE" value="{{ENV_FILE}}" />
+  <env name="PYTHONUNBUFFERED" value="1" />
+  <env name="PYTHONDONTWRITEBYTECODE" value="1" />
+  <onfailure action="restart" delay="10 sec" />
+  <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
+  <log mode="roll-by-size" />
+</service>

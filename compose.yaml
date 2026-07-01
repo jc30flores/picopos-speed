@@ -1,0 +1,161 @@
+name: ${COMPOSE_PROJECT_NAME:-picopos_docker}
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-bookworm}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      TZ: ${TZ:-America/El_Salvador}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - picopos_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  bootstrap:
+    image: ${BACKEND_IMAGE:-picopos-backend:dev}
+    environment: &backend_env
+      DJANGO_CONFIG_MODE: strict
+      DOTENV_OVERRIDE: "false"
+      DJANGO_DEBUG: "false"
+      DTE_BACKGROUND_MODE: ${DTE_BACKGROUND_MODE:-external}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      DB_HOST: db
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:?DB_NAME is required}
+      DB_USER: ${DB_USER:?DB_USER is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:?CSRF_TRUSTED_ORIGINS is required}
+      DJANGO_MEDIA_ROOT: ${DJANGO_MEDIA_ROOT:-/app/var/media}
+      DJANGO_STATIC_ROOT: ${DJANGO_STATIC_ROOT:-/app/var/static}
+      DTE_LOG_DIR: ${DTE_LOG_DIR:-/app/var/dte_logs}
+      TZ: ${TZ:-America/El_Salvador}
+      DTE_MONITOR_ENABLED: ${DTE_MONITOR_ENABLED:-true}
+      DTE_OUTBOX_WORKER_ENABLED: ${DTE_OUTBOX_WORKER_ENABLED:-true}
+      DTE_SENTINEL_ENABLED: ${DTE_SENTINEL_ENABLED:-true}
+      DTE_MAX_RETRIES: ${DTE_MAX_RETRIES:-5}
+      DTE_PENDING_BATCH_SIZE: ${DTE_PENDING_BATCH_SIZE:-25}
+      DTE_API_TOKEN: ${DTE_API_TOKEN:?DTE_API_TOKEN is required}
+      DTE_BASE_URL: ${DTE_BASE_URL:?DTE_BASE_URL is required}
+      DTE_API_AUTH_HEADER: ${DTE_API_AUTH_HEADER:-Authorization}
+      DTE_API_AUTH_PREFIX: ${DTE_API_AUTH_PREFIX:-Bearer}
+      DELIVER_EMAIL_API_BASE_URL: ""
+      DELIVER_EMAIL_API_KEY: ""
+      WHATSAPP_DTE_API_BASE: ""
+      WHATSAPP_DTE_API_KEY: ""
+      PRINTER_ENABLED: "false"
+      PRINTER_MODE: mock
+      RECEIPT_PRINTER_MODE: mock
+      CASH_DRAWER_ENABLED: "false"
+      CASH_DRAWER_MODE: mock
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+    volumes:
+      - media_data:/app/var/media
+      - static_data:/app/var/static
+      - dte_logs:/app/var/dte_logs
+    networks:
+      - picopos_internal
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c "python manage.py check_runtime_config --strict &&
+             python manage.py check &&
+             python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput"
+
+  backend:
+    image: ${BACKEND_IMAGE:-picopos-backend:dev}
+    environment:
+      <<: *backend_env
+    volumes:
+      - media_data:/app/var/media
+      - static_data:/app/var/static
+      - dte_logs:/app/var/dte_logs
+    networks:
+      - picopos_internal
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import json, urllib.request; r=urllib.request.urlopen(\"http://127.0.0.1:8000/api/health/ready/\", timeout=5); body=json.loads(r.read().decode()); raise SystemExit(0 if r.status == 200 and body.get(\"database\") == \"ok\" else 1)"']
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 20s
+
+  dte-worker:
+    image: ${BACKEND_IMAGE:-picopos-backend:dev}
+    environment:
+      <<: *backend_env
+    volumes:
+      - media_data:/app/var/media
+      - dte_logs:/app/var/dte_logs
+    networks:
+      - picopos_internal
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: python manage.py dte_outbox_worker
+
+  dte-monitor:
+    image: ${BACKEND_IMAGE:-picopos-backend:dev}
+    environment:
+      <<: *backend_env
+    volumes:
+      - dte_logs:/app/var/dte_logs
+    networks:
+      - picopos_internal
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: python manage.py dte_monitor
+
+  web:
+    image: ${WEB_IMAGE:-picopos-web:dev}
+    ports:
+      - "127.0.0.1:${APP_HTTP_PORT:-9282}:8080"
+    volumes:
+      - static_data:/srv/static/static:ro
+      - media_data:/srv/media/media:ro
+    networks:
+      - picopos_internal
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health/live/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+networks:
+  picopos_internal:
+    driver: bridge
+    internal: false
+
+volumes:
+  postgres_data:
+  media_data:
+  static_data:
+  dte_logs:

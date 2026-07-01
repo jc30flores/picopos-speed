@@ -1,0 +1,508 @@
+name: Build native Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, for example 0.1.0-test"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark GitHub Release as prerelease"
+        required: false
+        default: false
+        type: boolean
+      skip_signing:
+        description: "Skip Authenticode signing when code-signing secrets are unavailable"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  migration-postgres:
+    name: Validate Django migrations on PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+
+      - name: Test clean PostgreSQL migrations
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_ADMIN_DB: postgres
+          POSTGRES_ADMIN_USER: postgres
+          POSTGRES_ADMIN_PASSWORD: postgres
+          MIGRATION_TEST_LOG_DIR: artifacts/django-migrations-postgres
+        run: python scripts/ci/test_django_migrations_postgres.py
+
+      - name: Upload migration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: django-migrations-postgres
+          path: artifacts/django-migrations-postgres
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build-installer:
+    name: Build and publish installer
+    runs-on: windows-latest
+    needs: migration-postgres
+    env:
+      RUNTIME_MANIFEST_PATH: deploy/windows-native/vendor/runtime-manifest.json
+      INSTALLER_OUTPUT_DIR: release/installers
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup build Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging validation dependencies
+        shell: pwsh
+        run: pip install --disable-pip-version-check PyYAML
+
+      - name: Validate Windows-safe git paths
+        shell: pwsh
+        run: python scripts/ci/validate_windows_paths.py
+
+      - name: Validate native packaging static contract
+        shell: pwsh
+        run: python scripts/ci/validate_windows_native_packaging.py
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = '${{ github.event.inputs.version }}'
+          if ([string]::IsNullOrWhiteSpace($version)) { $version = '${{ github.ref_name }}' }
+          if ([string]::IsNullOrWhiteSpace($version)) { throw '[RUNTIME_MANIFEST] No se pudo resolver la version.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "release_name=Pico de Gallo $version" >> $env:GITHUB_OUTPUT
+
+      - name: Materialize runtime manifest
+        shell: pwsh
+        env:
+          WINDOWS_RUNTIME_MANIFEST_JSON_VAR: ${{ vars.WINDOWS_RUNTIME_MANIFEST_JSON }}
+          WINDOWS_RUNTIME_MANIFEST_JSON_SECRET: ${{ secrets.WINDOWS_RUNTIME_MANIFEST_JSON }}
+        run: |
+          if (-not (Test-Path -LiteralPath $env:RUNTIME_MANIFEST_PATH)) {
+            $manifestJson = $env:WINDOWS_RUNTIME_MANIFEST_JSON_VAR
+            if ([string]::IsNullOrWhiteSpace($manifestJson)) { $manifestJson = $env:WINDOWS_RUNTIME_MANIFEST_JSON_SECRET }
+            if ([string]::IsNullOrWhiteSpace($manifestJson)) {
+              throw "[RUNTIME_MANIFEST] Falta deploy/windows-native/vendor/runtime-manifest.json o WINDOWS_RUNTIME_MANIFEST_JSON con URLs HTTPS y SHA256 reales."
+            }
+            New-Item -ItemType Directory -Force -Path (Split-Path $env:RUNTIME_MANIFEST_PATH -Parent) | Out-Null
+            [System.IO.File]::WriteAllText(
+              $env:RUNTIME_MANIFEST_PATH,
+              $manifestJson,
+              [System.Text.UTF8Encoding]::new($false)
+            )
+          }
+          Write-Host "Manifest de runtimes materializado."
+
+      - name: Validate runtime manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath $env:RUNTIME_MANIFEST_PATH -Raw | ConvertFrom-Json
+          $runtimeContainer = if ($manifest.PSObject.Properties.Name -contains 'runtimes') { $manifest.runtimes } else { $manifest }
+          $required = @('python','postgres','caddy','winsw','innoSetup')
+          $blockedHosts = @('example.com','www.example.com','example.invalid','bit.ly','tinyurl.com','goo.gl','t.co','ow.ly','is.gd','buff.ly','rebrand.ly','cutt.ly','tiny.cc')
+          foreach ($key in $required) {
+            if (-not ($runtimeContainer.PSObject.Properties.Name -contains $key)) {
+              throw "[RUNTIME_MANIFEST] Manifest no contiene runtime requerido: $key"
+            }
+            $item = $runtimeContainer.$key
+            $version = [string]$item.version
+            $url = [string]$item.url
+            $sha256 = [string]$item.sha256
+            $archiveType = [string]($item.archiveType ?? $item.extract_strategy ?? $item.archive_type ?? $item.strategy)
+            if ([string]::IsNullOrWhiteSpace($version) -or $version -match '(?i)latest|replace-with|example') { throw "[RUNTIME_MANIFEST] Version invalida para $key" }
+            if ([string]::IsNullOrWhiteSpace($archiveType)) { throw "[RUNTIME_MANIFEST] archiveType faltante para $key" }
+            $uri = $null
+            if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri)) { throw "[RUNTIME_MANIFEST] URL invalida para $key" }
+            if ($uri.Scheme -ne 'https') { throw "[RUNTIME_MANIFEST] URL no HTTPS para $key" }
+            if ($blockedHosts -contains $uri.Host.ToLowerInvariant()) { throw "[RUNTIME_MANIFEST] URL insegura para $key" }
+            if ($url -match '(?i)(^|[/?=&._-])latest([/?=&._-]|$)|replace-with|example\.') { throw "[RUNTIME_MANIFEST] URL no versionada para $key" }
+            if ($sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw "[RUNTIME_MANIFEST] SHA256 invalido para $key" }
+            Write-Host "Manifest OK: $key $version"
+          }
+
+      - name: Summarize build plan
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath $env:RUNTIME_MANIFEST_PATH -Raw | ConvertFrom-Json
+          $runtimeContainer = if ($manifest.PSObject.Properties.Name -contains 'runtimes') { $manifest.runtimes } else { $manifest }
+          Write-Host "Version resuelta: ${{ steps.version.outputs.version }}"
+          Write-Host "Runtimes esperados:"
+          $runtimeContainer.PSObject.Properties | ForEach-Object { Write-Host "- $($_.Name) $($_.Value.version)" }
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            Write-Host "Publicacion: workflow_dispatch; prerelease=${{ github.event.inputs.prerelease }}."
+          } else {
+            Write-Host "Publicacion: tag ${{ github.ref_name }}."
+          }
+          if ('${{ github.event.inputs.skip_signing }}' -eq 'false') {
+            Write-Host 'Firma solicitada; se usara certificado solo si los secrets estan configurados.'
+          } else {
+            Write-Host 'Firma omitida por configuracion; puede aparecer advertencia SmartScreen.'
+          }
+
+      - name: Fetch and verify Windows runtimes
+        shell: pwsh
+        run: |
+          deploy/windows-native/vendor/fetch-runtimes.ps1 `
+            -ManifestPath $env:RUNTIME_MANIFEST_PATH `
+            -OutputDir release/runtime-cache
+
+      - name: Validate resolved runtimes
+        shell: pwsh
+        run: |
+          $resolvedPath = 'release/runtime-cache/resolved-runtimes.json'
+          if (-not (Test-Path -LiteralPath $resolvedPath)) { throw '[RUNTIME_RESOLVE] No existe resolved-runtimes.json.' }
+          $resolved = Get-Content -LiteralPath $resolvedPath -Raw | ConvertFrom-Json
+          $required = @('python','postgres','caddy','winsw','innoSetup')
+          foreach ($key in $required) {
+            $value = [string]$resolved.$key
+            if ([string]::IsNullOrWhiteSpace($value)) { throw "[RUNTIME_RESOLVE] resolved-runtimes.json no contiene ruta para $key" }
+            if (-not [System.IO.Path]::IsPathRooted($value)) { throw "[RUNTIME_RESOLVE] Ruta no absoluta para ${key}: $value" }
+            if (-not (Test-Path -LiteralPath $value)) { throw "[RUNTIME_RESOLVE] Runtime resuelto no existe para ${key}: $value" }
+            Write-Host "Runtime resuelto OK: $key -> $value"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $resolved.python 'python.exe'))) { throw '[RUNTIME_RESOLVE] Python runtime no contiene python.exe.' }
+          $postgresBin = Join-Path $resolved.postgres 'bin'
+          foreach ($tool in @('postgres.exe','pg_ctl.exe','initdb.exe','psql.exe','pg_dump.exe','pg_restore.exe','createdb.exe')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $postgresBin $tool))) { throw "[RUNTIME_RESOLVE] PostgreSQL runtime minimo no contiene $tool" }
+          }
+          $nodeModulesName = 'node' + '_modules'
+          $pgGuiName = 'pg' + 'Admin'
+          $stackBuilderName = 'Stack' + 'Builder'
+          $badPgDir = Get-ChildItem -LiteralPath $resolved.postgres -Recurse -Force -Directory | Where-Object { $_.Name -in @($nodeModulesName,$pgGuiName,$stackBuilderName) } | Select-Object -First 1
+          if ($badPgDir) { throw "[POSTGRES_RUNTIME_BLOAT] PostgreSQL runtime contiene carpeta prohibida: $($badPgDir.FullName)" }
+          if ((Get-Item -LiteralPath $resolved.caddy).Name -ne 'caddy.exe') { throw '[RUNTIME_RESOLVE] Caddy debe resolver a caddy.exe.' }
+          foreach ($key in @('winsw','innoSetup')) {
+            if ((Get-Item -LiteralPath $resolved.$key).Extension.ToLowerInvariant() -ne '.exe') { throw "[RUNTIME_RESOLVE] $key debe resolver a .exe." }
+          }
+
+      - name: Test Caddyfile Windows path quoting
+        shell: pwsh
+        run: ./scripts/ci/test_caddyfile_windows_paths.ps1
+
+      - name: Test Caddyfile local HTTP
+        shell: pwsh
+        run: ./scripts/ci/test_caddyfile_windows_http_local.ps1
+
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem deploy/windows-native -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) > $null
+            if ($errors.Count -gt 0) {
+              $details = ($errors | ForEach-Object { "$($_.Extent.StartLineNumber):$($_.Extent.StartColumnNumber) $($_.Message)" }) -join '; '
+              throw "[POWERSHELL_PARSE] Parse failed: $($_.FullName) :: $details"
+            }
+            Write-Host "Parsed $($_.Name)"
+          }
+
+      - name: Test PostgreSQL config helpers
+        shell: pwsh
+        run: ./scripts/ci/test_postgres_config_lines.ps1
+
+      - name: Test Windows service account helper
+        shell: pwsh
+        run: ./scripts/ci/test_winsw_service_account.ps1
+
+      - name: Test native command runner
+        shell: pwsh
+        run: ./scripts/ci/test_native_command_runner.ps1
+
+      - name: Validate service XML templates
+        shell: pwsh
+        run: |
+          Get-ChildItem deploy/windows-native/service-templates/*.xml | ForEach-Object {
+            [xml](Get-Content -LiteralPath $_.FullName -Raw) > $null
+            Write-Host "Parsed $($_.Name)"
+          }
+
+      - name: Validate Inno Setup script
+        shell: pwsh
+        run: |
+          $issPath = 'deploy/windows-native/installer/PicoDeGallo.iss'
+          $content = Get-Content -LiteralPath $issPath -Raw
+          $badEscape = '\' + '"'
+          if ($content.Contains($badEscape)) {
+            throw '[INNO_BUILD] PicoDeGallo.iss usa comillas escapadas con backslash; Inno Setup requiere comillas dobles duplicadas.'
+          }
+          Write-Host "Inno script linted: $issPath"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        shell: pwsh
+        run: npm ci
+
+      - name: Build native release payload
+        shell: pwsh
+        run: |
+          $resolved = Get-Content release/runtime-cache/resolved-runtimes.json -Raw | ConvertFrom-Json
+          deploy/windows-native/package-release.ps1 `
+            -Version '${{ steps.version.outputs.version }}' `
+            -OutputDir 'release/windows-native' `
+            -PythonRuntimePath $resolved.python `
+            -PostgresRuntimePath $resolved.postgres `
+            -CaddyPath $resolved.caddy `
+            -WinSWPath $resolved.winsw
+
+      - name: Validate release payload safety
+        shell: pwsh
+        run: |
+          $root = (Resolve-Path -LiteralPath 'release/windows-native').Path
+          $nodeModulesName = 'node' + '_modules'
+          $pgGuiName = 'pg' + 'Admin'
+          $stackBuilderName = 'Stack' + 'Builder'
+          $yarnStateName = '.yarn' + '-state.yml'
+          $badDir = Get-ChildItem -LiteralPath $root -Recurse -Force -Directory | Where-Object {
+            $_.Name -in @($nodeModulesName,$pgGuiName,$stackBuilderName,'.git','.github')
+          } | Select-Object -First 1
+          if ($badDir) { throw "[RELEASE_PAYLOAD_SAFETY] Release contiene carpeta prohibida: $($badDir.FullName)" }
+          $files = @(Get-ChildItem -LiteralPath $root -Recurse -Force -File)
+          $badFile = $files | Where-Object {
+            $relative = $_.FullName.Substring($root.Length).TrimStart('\','/')
+            $sqlAllowed = $relative -match '(?i)(^|[\\/])ProgramFiles[\\/]PicoDeGallo[\\/]postgres[\\/]share[\\/]'
+            $_.Name -in @('.env','.env.windows','.env.docker',$yarnStateName) -or
+            $relative -match '(?i)(^|[\\/])backend[\\/]\.env$' -or
+            $relative -match '(?i)(^|[\\/])ProgramData[\\/]PicoDeGallo[\\/](media|backups|diagnostics|dumps)[\\/]' -or
+            $relative -match "[\\/]$([regex]::Escape($nodeModulesName))[\\/]" -or
+            $_.Name -match '(?i)\.(dump|pyc|pyo)$' -or
+            ($_.Name -match '(?i)\.sql$' -and -not $sqlAllowed) -or
+            ($_.Name -eq 'package-lock.json' -and $relative -match '(?i)(^|[\\/])ProgramFiles[\\/]PicoDeGallo[\\/](python|postgres|caddy|services)[\\/]')
+          } | Select-Object -First 1
+          if ($badFile) { throw "[RELEASE_PAYLOAD_SAFETY] Release contiene archivo prohibido: $($badFile.FullName)" }
+          $textFiles = $files | Where-Object { $_.Length -lt 1048576 -and $_.Extension.ToLowerInvariant() -in @('.env','.example','.json','.txt','.config','.xml','.ps1','.cmd','.bat','.ini','.yml','.yaml') }
+          $patterns = @(
+            '(?im)^\s*DB_PASSWORD\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{8,}$',
+            '(?im)^\s*DTE_API_TOKEN\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{12,}$',
+            '(?im)^\s*DJANGO_SECRET_KEY\s*=\s*(?!replace-with|placeholder|example|changeme|\s*$).{20,}$',
+            '(?i)Bearer[ \t]+[A-Za-z0-9._~+/=-]{24,}'
+          )
+          foreach ($file in $textFiles) {
+            $content = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue
+            foreach ($pattern in $patterns) {
+              if ($content -match $pattern) { throw "[RELEASE_PAYLOAD_SAFETY] Posible secreto en release: $($file.FullName)" }
+            }
+          }
+          $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+          Write-Host ("Release payload safety OK. Files={0} SizeMB={1:N2}" -f $files.Count, ($bytes / 1MB))
+
+      - name: Install Inno Setup
+        id: inno
+        shell: pwsh
+        run: |
+          $resolved = Get-Content release/runtime-cache/resolved-runtimes.json -Raw | ConvertFrom-Json
+          $innoInstaller = [string]$resolved.innoSetup
+          if ([string]::IsNullOrWhiteSpace($innoInstaller)) {
+            $keys = ($resolved.PSObject.Properties.Name -join ', ')
+            throw "[INNO_INSTALL] resolved-runtimes.json no contiene innoSetup. Keys: $keys"
+          }
+          if (-not (Test-Path -LiteralPath $innoInstaller -PathType Leaf)) {
+            throw "[INNO_INSTALL] No existe instalador Inno Setup resuelto: $innoInstaller"
+          }
+          if ((Get-Item -LiteralPath $innoInstaller).Extension.ToLowerInvariant() -ne '.exe') {
+            throw "[INNO_INSTALL] innoSetup debe apuntar a .exe."
+          }
+          $cacheRoot = (Resolve-Path -LiteralPath 'release/runtime-cache').Path
+          $innoFull = (Resolve-Path -LiteralPath $innoInstaller).Path
+          if (-not $innoFull.StartsWith($cacheRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "[INNO_INSTALL] innoSetup resuelto fuera de runtime-cache verificado."
+          }
+          Write-Host 'Instalando Inno Setup desde runtime verificado.'
+          Start-Process -FilePath $innoFull -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe'
+          )
+          $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($iscc)) { throw '[INNO_INSTALL] ISCC.exe no quedo instalado en rutas comunes.' }
+          "iscc=$iscc" >> $env:GITHUB_OUTPUT
+          Write-Host "ISCC resuelto: $iscc"
+
+      - name: Prepare code signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERT_PASSWORD }}
+        run: |
+          $skipInput = '${{ github.event.inputs.skip_signing }}'
+          $skip = $true
+          if ($skipInput -eq 'false') { $skip = $false }
+          if ([string]::IsNullOrWhiteSpace($env:CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)) { $skip = $true }
+          if ($skip) {
+            "skip=true" >> $env:GITHUB_OUTPUT
+            Write-Host 'Firma omitida; Windows SmartScreen puede advertir en instaladores no firmados.'
+          } else {
+            $certPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+            [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_BASE64))
+            "skip=false" >> $env:GITHUB_OUTPUT
+            "cert=$certPath" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $isccPath = '${{ steps.inno.outputs.iscc }}'
+          if ([string]::IsNullOrWhiteSpace($isccPath)) { throw '[INNO_BUILD] ISCC.exe no fue resuelto por el paso Install Inno Setup.' }
+          $buildParams = @{
+            Version = '${{ steps.version.outputs.version }}'
+            ReleaseDir = 'release/windows-native'
+            OutputDir = $env:INSTALLER_OUTPUT_DIR
+            ISCCPath = $isccPath
+          }
+          if ('${{ steps.signing.outputs.skip }}' -eq 'true') {
+            $buildParams.SkipSigning = $true
+          } else {
+            $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+            $buildParams.SignToolPath = $signtool
+            $buildParams.CodeSigningCertPath = '${{ steps.signing.outputs.cert }}'
+            $buildParams.CodeSigningTimestampUrl = '${{ secrets.WINDOWS_CODESIGN_TIMESTAMP_URL }}'
+          }
+          & deploy/windows-native/installer/build-installer.ps1 @buildParams
+
+      - name: Validate installer output
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $exePath = Join-Path $env:INSTALLER_OUTPUT_DIR "PicoDeGallo-Setup-$version.exe"
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { throw '[INNO_BUILD] No se genero instalador .exe.' }
+          $shaPath = "$exePath.sha256"
+          if (-not (Test-Path -LiteralPath $shaPath -PathType Leaf)) { throw '[INNO_BUILD] No se genero .sha256.' }
+          $manifest = Join-Path $env:INSTALLER_OUTPUT_DIR 'manifest.json'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw '[INNO_BUILD] No se genero manifest.json.' }
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $exePath).Hash
+          $expected = (Get-Content -LiteralPath $shaPath -Raw).Trim()
+          if ($actual -ne $expected) { throw '[INNO_BUILD] SHA256 del instalador no coincide.' }
+          if (Select-String -Path $manifest -Pattern 'DTE_API_TOKEN|DB_PASSWORD|DJANGO_SECRET_KEY' -Quiet) { throw '[INNO_BUILD] Manifest contiene referencia sensible.' }
+          $installer = Get-Item -LiteralPath $exePath
+          Write-Host ("Installer OK: {0} SizeMB={1:N2}" -f $installer.Name, ($installer.Length / 1MB))
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PicoDeGallo-Installer-${{ steps.version.outputs.version }}
+          path: |
+            release/installers/PicoDeGallo-Setup-${{ steps.version.outputs.version }}.exe
+            release/installers/PicoDeGallo-Setup-${{ steps.version.outputs.version }}.exe.sha256
+            release/installers/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $exePath = Join-Path $env:INSTALLER_OUTPUT_DIR "PicoDeGallo-Setup-$version.exe"
+          $sha = (Get-Content "$exePath.sha256" -Raw).Trim()
+          @"
+          # Pico de Gallo $version
+
+          - Fecha: $(Get-Date -Format o)
+          - Commit: $env:GITHUB_SHA
+          - SHA256: $sha
+          - DTE sigue activo; configure credenciales reales antes de operar fiscalmente.
+          - El build no envia DTE reales, no contacta Hacienda y no usa tokens reales.
+          - No requiere Docker Desktop.
+          - No requiere WSL2.
+          - No requiere Python, Node.js, PostgreSQL, Caddy ni Inno Setup instalados por el cliente.
+          - La validacion final en VM Windows limpia sigue siendo obligatoria antes de entrega a clientes.
+          "@ | Set-Content -Path release-notes.md -Encoding UTF8
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $pre = '${{ github.event.inputs.prerelease }}'
+          $args = @('release','create',$version,'--target',$env:GITHUB_SHA,'--title',"Pico de Gallo $version",'--notes-file','release-notes.md')
+          if ($pre -eq 'true') { $args += '--prerelease' }
+          gh @args
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Release existente o tag ya publicado; se actualizaran assets con --clobber.'
+          }
+          gh release upload $version `
+            "release/installers/PicoDeGallo-Setup-$version.exe" `
+            "release/installers/PicoDeGallo-Setup-$version.exe.sha256" `
+            "release/installers/manifest.json" `
+            --clobber
+
+      - name: Safe failure diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host 'Diagnostico seguro de fallo.'
+          if (Test-Path -LiteralPath 'release/runtime-cache/resolved-runtimes.json') {
+            $resolved = Get-Content -LiteralPath 'release/runtime-cache/resolved-runtimes.json' -Raw | ConvertFrom-Json
+            Write-Host "resolved-runtimes keys: $(($resolved.PSObject.Properties.Name) -join ', ')"
+            $resolved.PSObject.Properties | ForEach-Object { Write-Host "resolved $($_.Name): $($_.Value)" }
+          } else {
+            Write-Host 'resolved-runtimes.json no existe.'
+          }
+          if (Test-Path -LiteralPath 'release/windows-native') {
+            $root = (Resolve-Path -LiteralPath 'release/windows-native').Path
+            $files = @(Get-ChildItem -LiteralPath $root -Recurse -Force -File)
+            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+            Write-Host ("release/windows-native Files={0} SizeMB={1:N2}" -f $files.Count, ($bytes / 1MB))
+            $nodeModulesName = 'node' + '_modules'
+            $pgGuiName = 'pg' + 'Admin'
+            $stackBuilderName = 'Stack' + 'Builder'
+            $forbidden = Get-ChildItem -LiteralPath $root -Recurse -Force | Where-Object {
+              $_.Name -in @($nodeModulesName,$pgGuiName,$stackBuilderName,'.git','.github')
+            } | Select-Object -First 20
+            if ($forbidden) { $forbidden | ForEach-Object { Write-Host "forbidden candidate: $($_.FullName)" } }
+          } else {
+            Write-Host 'release/windows-native no existe.'
+          }
+          if (Test-Path -LiteralPath $env:INSTALLER_OUTPUT_DIR) {
+            Get-ChildItem -LiteralPath $env:INSTALLER_OUTPUT_DIR -Force | ForEach-Object {
+              Write-Host ("installer output: {0} SizeMB={1:N2}" -f $_.Name, ($_.Length / 1MB))
+            }
+          } else {
+            Write-Host 'release/installers no existe.'
+          }

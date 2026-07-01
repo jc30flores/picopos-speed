@@ -26,14 +26,47 @@ class Migration(migrations.Migration):
             model_name='discountruletarget',
             name='discount_rule_target_product_or_category',
         ),
-        migrations.RemoveIndex(
-            model_name='discount',
-            name='menu_discou_active_b4fadc_idx',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="DROP INDEX IF EXISTS public.menu_discou_active_b4fadc_idx;",
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.RemoveIndex(
+                    model_name='discount',
+                    name='menu_discou_active_b4fadc_idx',
+                ),
+            ],
         ),
-        migrations.RenameIndex(
-            model_name='discount',
-            new_name='menu_discou_is_acti_673081_idx',
-            old_name='menu_discount_is_active_2b2d8b_idx',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                    DO $$
+                    BEGIN
+                        IF to_regclass('public.menu_discount_is_active_2b2d8b_idx') IS NOT NULL
+                           AND to_regclass('public.menu_discou_is_acti_673081_idx') IS NULL THEN
+                            ALTER INDEX public.menu_discount_is_active_2b2d8b_idx
+                            RENAME TO menu_discou_is_acti_673081_idx;
+                        ELSIF to_regclass('public.menu_discount_is_active_2b2d8b_idx') IS NULL
+                              AND to_regclass('public.menu_discou_is_acti_673081_idx') IS NULL THEN
+                            CREATE INDEX menu_discou_is_acti_673081_idx
+                            ON public.menu_discount (is_active, type);
+                        END IF;
+                    END $$;
+                    """,
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name='discount',
+                    new_name='menu_discou_is_acti_673081_idx',
+                    old_name='menu_discount_is_active_2b2d8b_idx',
+                ),
+            ],
         ),
         migrations.AddConstraint(
             model_name='discountruletarget',
