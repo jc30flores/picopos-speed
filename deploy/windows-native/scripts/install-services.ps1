@@ -203,6 +203,10 @@ function Invoke-InstallStep {
     try {
         & $ScriptBlock
         Update-InstallState -Phase $Name -LastSuccessfulStep $Name
+        if ($Script:InstallState) {
+            $Script:InstallState["failedStep"] = ""
+            Save-InstallState
+        }
         Write-InstallLog "STEP_SUCCESS $Name"
     } catch {
         Update-InstallState -Phase $Name -FailedStep $Name
@@ -2708,12 +2712,24 @@ function Render-Caddyfile {
     $backendPort = [string]$EnvMap["BACKEND_HTTP_PORT"]
     if ([string]::IsNullOrWhiteSpace($backendPort)) { $backendPort = "8000" }
 
+    $staticRoot = Quote-CaddyPath -Path (Join-Path $Script:ProgramDataDir "static")
+    $mediaRoot = Quote-CaddyPath -Path (Join-Path $Script:ProgramDataDir "media")
+    $frontendRoot = Quote-CaddyPath -Path (Join-Path $Script:ProgramFilesDir "frontend")
+    $programFilesRoot = ConvertTo-CaddyPath -Path $Script:ProgramFilesDir
+    $programDataRoot = ConvertTo-CaddyPath -Path $Script:ProgramDataDir
+
     $content = (Get-Content -LiteralPath $template -Raw).
         Replace("{{APP_BIND_ADDRESS}}", $bind).
         Replace("{{APP_HTTP_PORT}}", $port).
         Replace("{{BACKEND_HTTP_PORT}}", $backendPort).
-        Replace("{{PROGRAM_FILES_DIR}}", $Script:ProgramFilesDir.Replace("\", "/")).
-        Replace("{{PROGRAM_DATA_DIR}}", $Script:ProgramDataDir.Replace("\", "/"))
+        Replace("{{PROGRAM_DATA_DIR}}/static", $staticRoot).
+        Replace("{{PROGRAM_DATA_DIR}}/media", $mediaRoot).
+        Replace("{{PROGRAM_FILES_DIR}}/frontend", $frontendRoot).
+        Replace("{{STATIC_ROOT_DIR}}", $staticRoot).
+        Replace("{{MEDIA_ROOT_DIR}}", $mediaRoot).
+        Replace("{{FRONTEND_ROOT_DIR}}", $frontendRoot).
+        Replace("{{PROGRAM_FILES_DIR}}", $programFilesRoot).
+        Replace("{{PROGRAM_DATA_DIR}}", $programDataRoot)
     [System.IO.File]::WriteAllText($caddyfile, $content, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
 
     if (-not (Test-Path -LiteralPath $caddyfile -PathType Leaf)) {
@@ -3178,6 +3194,10 @@ function Invoke-InstallMain {
         Run-InitialAdminBootstrap
     }
 
+    Invoke-InstallStep -Name "render-caddyfile" -ScriptBlock {
+        Render-Caddyfile -EnvMap $Script:NativeEnvMap
+    }
+
     Invoke-InstallStep -Name "install-backend" -ScriptBlock {
         Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-Backend")
         Start-BackendService
@@ -3186,10 +3206,6 @@ function Invoke-InstallMain {
     Invoke-InstallStep -Name "install-dte-services" -ScriptBlock {
         Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-DTE-Worker", "PicoDeGallo-DTE-Monitor")
         Start-DteServices
-    }
-
-    Invoke-InstallStep -Name "render-caddyfile" -ScriptBlock {
-        Render-Caddyfile -EnvMap $Script:NativeEnvMap
     }
 
     Invoke-InstallStep -Name "install-caddy" -ScriptBlock {
@@ -3203,6 +3219,8 @@ function Invoke-InstallMain {
         Validate-PostInstall
         Update-InstallState -HealthOk $true
     }
+
+    Update-InstallState -Phase "complete" -LastSuccessfulStep "install-complete" -ServicesInstalled $true -HealthOk $true
 
     foreach ($svc in $Script:Services) {
         Write-SafeHost "Servicio listo: $svc"

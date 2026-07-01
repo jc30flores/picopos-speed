@@ -539,6 +539,9 @@ def validate_native_installer_contract() -> None:
     caddy_template = read_text_safe(NATIVE / "caddy" / "Caddyfile.template")
     if "{{BACKEND_HTTP_PORT}}" not in caddy_template:
         fail("Caddyfile template must use selected backend port")
+    for token in ["{{STATIC_ROOT_DIR}}", "{{MEDIA_ROOT_DIR}}", "{{FRONTEND_ROOT_DIR}}"]:
+        if token not in caddy_template:
+            fail(f"Caddyfile template must use quoted root token {token}")
     postgres_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-PostgreSQL.xml")
     if "pg_ctl" in postgres_template or "runservice" in postgres_template:
         fail("PostgreSQL service template must not use pg_ctl runservice under WinSW")
@@ -601,9 +604,59 @@ def validate_windows_hardening_static() -> None:
         fail("menu 0014 must drop legacy discount index defensively")
 
     common = read_text_safe(NATIVE / "scripts" / "common.ps1")
-    for token in ["ConvertTo-WindowsCommandLineArgument", "Join-WindowsCommandLineArguments", "Get-WindowsInstallProfile", "Is64BitOperatingSystem", "CurrentUICulture", "OemCodePage"]:
+    for token in [
+        "ConvertTo-WindowsCommandLineArgument",
+        "Join-WindowsCommandLineArguments",
+        "ConvertTo-CaddyPath",
+        "ConvertTo-CaddyfileLiteral",
+        "Quote-CaddyPath",
+        "Get-WindowsInstallProfile",
+        "Is64BitOperatingSystem",
+        "CurrentUICulture",
+        "OemCodePage",
+    ]:
         if token not in common:
             fail(f"common.ps1 missing Windows profile/runner token: {token}")
+
+    install = read_text_safe(NATIVE / "scripts" / "install-services.ps1")
+    for token in ["Quote-CaddyPath -Path", "FRONTEND_ROOT_DIR", "CADDYFILE_VALIDATE_OK"]:
+        if token not in install:
+            fail(f"install-services.ps1 missing Caddy path quoting token: {token}")
+
+    caddy_test = REPO / "scripts" / "ci" / "test_caddyfile_windows_paths.ps1"
+    if not caddy_test.exists():
+        fail("scripts/ci/test_caddyfile_windows_paths.ps1 is required")
+    caddy_test_text = read_text_safe(caddy_test)
+    for token in [
+        'root * "C:/Program Files/PicoDeGallo/frontend"',
+        "caddy validate",
+        "Quote-CaddyPath",
+    ]:
+        if token not in caddy_test_text:
+            fail(f"test_caddyfile_windows_paths.ps1 missing token: {token}")
+
+    workflow = read_text_safe(REPO / ".github" / "workflows" / "windows-native-installer.yml")
+    if "test_caddyfile_windows_paths.ps1" not in workflow:
+        fail("windows-native-installer.yml must run test_caddyfile_windows_paths.ps1")
+
+    for rel in git_ls_files("deploy", "scripts"):
+        if not should_scan_text(rel):
+            continue
+        text = read_text_safe(REPO / rel)
+        if re.search(r"(?m)^\s*root\s+\*\s+C:/Program Files", text) or re.search(r"(?m)^\s*root\s+\*\s+C:\\Program Files", text):
+            fail(f"{rel} contains unquoted Caddy Program Files root")
+
+    for rel, tokens in {
+        "backend/apps/dte/config.py": ["get_dte_config_status", "validate_dte_base_url", "placeholder_base_url"],
+        "backend/apps/dte/monitor.py": ["CONFIG_PENDING", "not_contacting_external_api", "get_dte_config_status"],
+        "backend/apps/dte/management/commands/dte_outbox_worker.py": ["DTE_CONFIG_PENDING_BACKOFF_SECONDS", "CONFIG_PENDING", "not_contacting_external_api"],
+        "backend/apps/core/management/commands/check_runtime_config.py": ["DTE_BASE_URL pendiente de configuracion real", "PICO_INSTALLER_PREFLIGHT", "dte_config_ready"],
+        "backend/apps/dte/tests/test_monitor_resilience.py": ["test_dte_worker_does_not_call_invalid_placeholder_url", "test_dte_monitor_command_does_not_call_invalid_placeholder_url"],
+    }.items():
+        text = read_text_safe(REPO / rel)
+        for token in tokens:
+            if token not in text:
+                fail(f"{rel} missing DTE placeholder hardening token: {token}")
 
     print("Windows/PowerShell hardening static checks OK")
 

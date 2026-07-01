@@ -4,6 +4,7 @@ import os
 
 from .env import bool_value as _env_bool, int_value as _env_int, list_value as _env_list, optional_str as _env_str, load_env_file
 from .runtime import build_runtime
+from apps.dte.config import get_dte_config_status
 
 
 def _env_float(name: str, default: float) -> float:
@@ -207,6 +208,7 @@ DEFAULT_BRANCH_ID = _env_int("DEFAULT_BRANCH_ID")
 ACTIVE_BRANCH_CODE = os.environ.get("ACTIVE_BRANCH_CODE", "").strip()
 DTE_MONITOR_INTERVAL_SECONDS = _env_int("DTE_MONITOR_INTERVAL_SECONDS", 10) or 10
 DTE_MONITOR_MAX_BACKOFF_SECONDS = _env_int("DTE_MONITOR_MAX_BACKOFF_SECONDS", 30) or 30
+DTE_CONFIG_PENDING_BACKOFF_SECONDS = _env_int("DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60
 DTE_MONITOR_ENABLED = _env_bool("DTE_MONITOR_ENABLED", default=True)
 DTE_OUTBOX_WORKER_ENABLED = _env_bool("DTE_OUTBOX_WORKER_ENABLED", default=True)
 DTE_MAX_RETRIES = _env_int("DTE_MAX_RETRIES", 5) or 5
@@ -235,6 +237,9 @@ DTE_LOG_TRUNCATE_CHARS = _env_int("DTE_LOG_TRUNCATE_CHARS", 0) or 0
 DTE_LOG_INCLUDE_SIGNED_DOCUMENT = _env_bool("DTE_LOG_INCLUDE_SIGNED_DOCUMENT", default=False)
 DTE_EMISOR_NIT = os.environ.get("DTE_EMISOR_NIT", "").strip()
 CODE_CHANGE_PRICE = os.environ.get("CODE_CHANGE_PRICE", "").strip()
+DTE_CONFIG_STATUS = get_dte_config_status(DTE_BASE_URL, DTE_API_TOKEN)
+DTE_CONFIG_READY = DTE_CONFIG_STATUS.configured
+DTE_CONFIG_REASON = DTE_CONFIG_STATUS.reason
 
 logging.getLogger(__name__).info(
     "[DTE CONFIG] base_url=%r mh_ambiente=%r",

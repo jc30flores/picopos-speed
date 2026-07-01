@@ -93,6 +93,15 @@ Save-Diagnostic "service-files.txt" ($serviceFileFacts -join "`n")
 
 $caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
 Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { 'present' } else { 'missing' })")
+if (Test-Path -LiteralPath $caddyfile -PathType Leaf) {
+    $numbered = @()
+    $lineNo = 0
+    foreach ($line in @(Get-Content -LiteralPath $caddyfile -ErrorAction SilentlyContinue)) {
+        $lineNo += 1
+        $numbered += ("{0,4}: {1}" -f $lineNo, [string]$line)
+    }
+    Save-Diagnostic "caddyfile-numbered.txt" ($numbered -join "`n")
+}
 
 function ConvertTo-DiagnosticArgumentString {
     param([string[]]$ArgumentList = @())
@@ -166,6 +175,74 @@ function Invoke-DiagnosticProcess {
         }
     }
     return $lines
+}
+
+function Invoke-DiagnosticProcessCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$WorkingDirectory,
+        [hashtable]$Environment = @{}
+    )
+
+    $stdoutText = ""
+    $stderrText = ""
+    $exitCode = 1
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $FilePath
+        $psi.Arguments = ConvertTo-DiagnosticArgumentString -ArgumentList $ArgumentList
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $psi.WorkingDirectory = $WorkingDirectory
+        }
+        foreach ($name in @($Environment.Keys | Sort-Object)) {
+            $psi.EnvironmentVariables[[string]$name] = [string]$Environment[$name]
+        }
+        $process.StartInfo = $psi
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdoutTask.Wait()
+        $stderrTask.Wait()
+        $exitCode = [int]$process.ExitCode
+        $stdoutText = [string]$stdoutTask.Result
+        $stderrText = [string]$stderrTask.Result
+    } catch {
+        $stderrText = "COMMAND_LAUNCH_FAILED exceptionType=$($_.Exception.GetType().FullName)`n$($_.Exception.ToString())"
+    } finally {
+        if ($process) {
+            $process.Dispose()
+        }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Stdout = $stdoutText
+        Stderr = $stderrText
+    }
+}
+
+$caddyExe = Join-Path $Script:ProgramFilesDir "caddy\caddy.exe"
+if ((Test-Path -LiteralPath $caddyExe -PathType Leaf) -and (Test-Path -LiteralPath $caddyfile -PathType Leaf)) {
+    $caddyValidate = Invoke-DiagnosticProcessCapture `
+        -FilePath $caddyExe `
+        -ArgumentList @("validate", "--config", $caddyfile) `
+        -WorkingDirectory (Join-Path $Script:ProgramFilesDir "caddy")
+    Save-Diagnostic "caddy-validate-exit.txt" ("EXIT_CODE {0}" -f $caddyValidate.ExitCode)
+    Save-Diagnostic "caddy-validate-stdout.txt" ([string]$caddyValidate.Stdout)
+    Save-Diagnostic "caddy-validate-stderr.txt" ([string]$caddyValidate.Stderr)
+}
+
+$netstatExe = Join-Path $env:SystemRoot "System32\netstat.exe"
+if (Test-Path -LiteralPath $netstatExe -PathType Leaf) {
+    $netstatLines = & $netstatExe -ano 2>&1 | Where-Object { [string]$_ -match ":9282\s" } | ForEach-Object { [string]$_ }
+    Save-Diagnostic "netstat-9282.txt" ($netstatLines -join "`n")
 }
 
 function Get-BackendRuntimeDiagnostic {
@@ -319,6 +396,20 @@ if (Test-Path -LiteralPath $icacls -PathType Leaf) {
 
 $envs = Read-NativeEnv
 $dteTokenName = "DTE_" + "API_TOKEN"
+$dteBaseUrl = [string]$envs["DTE_BASE_URL"]
+$dteToken = [string]$envs[$dteTokenName]
+$dteBaseUrlLooksReady = $false
+$dteBaseUri = $null
+if (-not [string]::IsNullOrWhiteSpace($dteBaseUrl) -and [Uri]::TryCreate($dteBaseUrl, [UriKind]::Absolute, [ref]$dteBaseUri)) {
+    $host = if ($dteBaseUri.Host) { $dteBaseUri.Host.ToLowerInvariant() } else { "" }
+    $dteBaseUrlLooksReady = ($dteBaseUri.Scheme -in @("http", "https")) -and
+        -not [string]::IsNullOrWhiteSpace($host) -and
+        $host -notin @("example.com", "www.example.com", "localhost", "127.0.0.1") -and
+        -not $host.EndsWith(".invalid") -and
+        $dteBaseUrl -notmatch "(?i)replace-with|placeholder|changeme|example"
+}
+$dteTokenLooksReady = -not [string]::IsNullOrWhiteSpace($dteToken) -and $dteToken -notmatch "(?i)replace-with|placeholder|changeme|example"
+$dteConfigReady = $dteBaseUrlLooksReady -and $dteTokenLooksReady
 $safe = [ordered]@{
     PICO_PORT_MODE = $envs["PICO_PORT_MODE"]
     DB_PORT = $envs["DB_PORT"]
@@ -328,12 +419,19 @@ $safe = [ordered]@{
     DTE_BACKGROUND_MODE = $envs["DTE_BACKGROUND_MODE"]
     DTE_MONITOR_ENABLED = $envs["DTE_MONITOR_ENABLED"]
     DTE_OUTBOX_WORKER_ENABLED = $envs["DTE_OUTBOX_WORKER_ENABLED"]
-    DTE_BASE_URL = $(if ($envs["DTE_BASE_URL"] -like "replace-with-*") { "placeholder" } else { "configured" })
-    DTE_TOKEN_STATUS = $(if ($envs[$dteTokenName] -like "replace-with-*") { "placeholder" } else { "configured" })
+    DTE_BASE_URL = $(if ($dteBaseUrlLooksReady) { "configured" } else { "placeholder-or-invalid" })
+    DTE_TOKEN_STATUS = $(if ($dteTokenLooksReady) { "configured" } else { "placeholder-or-invalid" })
+    DTE_CONFIG_READY = [string]$dteConfigReady
+    DTE_CONFIG_PENDING = [string](-not $dteConfigReady)
     PICO_BOOTSTRAP_ADMIN_ENABLED = $envs["PICO_BOOTSTRAP_ADMIN_ENABLED"]
     PICO_BOOTSTRAP_ADMIN_USERNAME = $(if ([string]::IsNullOrWhiteSpace([string]$envs["PICO_BOOTSTRAP_ADMIN_USERNAME"])) { "not-configured" } else { "configured" })
 }
 Save-Diagnostic "config-safe.json" ($safe | ConvertTo-Json -Depth 3)
+Save-Diagnostic "dte-config-readiness.txt" ((@(
+    "DTE_CONFIG_READY=$dteConfigReady",
+    "DTE_BASE_URL_STATUS=$(if ($dteBaseUrlLooksReady) { 'configured' } else { 'placeholder-or-invalid' })",
+    "DTE_TOKEN_STATUS=$(if ($dteTokenLooksReady) { 'configured' } else { 'placeholder-or-invalid' })"
+) -join "`n"))
 
 $appUrl = Get-AppUrl
 $backendPort = if ([string]::IsNullOrWhiteSpace([string]$envs["BACKEND_HTTP_PORT"])) { "8000" } else { [string]$envs["BACKEND_HTTP_PORT"] }
@@ -360,6 +458,13 @@ Save-Diagnostic "health.txt" ((@(
 
 foreach ($log in Get-ChildItem (Get-LogsDir) -Filter "*.log" -ErrorAction SilentlyContinue) {
     Save-Diagnostic "log-$($log.Name).txt" ((Get-Content -LiteralPath $log.FullName -Tail 300) -join "`n")
+}
+
+$caddyLogs = Get-ChildItem (Get-LogsDir) -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "*Caddy*" -or $_.Name -like "*caddy*" } |
+    Sort-Object LastWriteTime -Descending
+foreach ($log in $caddyLogs) {
+    Save-Diagnostic "caddy-wrapper-$($log.Name).txt" ((Get-Content -LiteralPath $log.FullName -Tail 300 -ErrorAction SilentlyContinue) -join "`n")
 }
 
 $zip = Join-Path (Get-DiagnosticsDir) "PicoDeGallo-Native-Diagnostico-$stamp.zip"

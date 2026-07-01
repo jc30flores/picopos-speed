@@ -3,6 +3,8 @@ import os
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.dte.config import get_dte_config_status
+
 SECRET_NAMES = {"DJANGO_SECRET_KEY", "DB_PASSWORD", "DTE_API_TOKEN"}
 
 class Command(BaseCommand):
@@ -33,20 +35,41 @@ class Command(BaseCommand):
         add("TIME_ZONE", bool(settings.TIME_ZONE))
         add("MEDIA_ROOT", bool(settings.MEDIA_ROOT))
         add("STATIC_ROOT", bool(settings.STATIC_ROOT))
+        dte_config = get_dte_config_status(getattr(settings, "DTE_BASE_URL", ""), getattr(settings, "DTE_API_TOKEN", ""))
+        installer_preflight = os.environ.get("PICO_INSTALLER_PREFLIGHT") == "1"
         if strict:
-            add("DTE_BASE_URL configurado", bool(getattr(settings, "DTE_BASE_URL", "")), message="Falta DTE_BASE_URL")
-            add("DTE_API_TOKEN configurado", bool(getattr(settings, "DTE_API_TOKEN", "")), message="Falta DTE_API_TOKEN")
+            if dte_config.base_url_ok:
+                add("DTE_BASE_URL configurado", True)
+            elif installer_preflight:
+                add("DTE_BASE_URL pendiente de configuracion real", True, level="WARNING", message=dte_config.base_url_state)
+            else:
+                add("DTE_BASE_URL configurado", False, message=dte_config.base_url_state)
+            if dte_config.token_ok:
+                add("DTE_API_TOKEN configurado", True)
+            elif installer_preflight:
+                add("DTE_API_TOKEN pendiente de configuracion real", True, level="WARNING", message=dte_config.token_state)
+            else:
+                add("DTE_API_TOKEN configurado", False, message=dte_config.token_state)
             add("DTE_API_AUTH_HEADER", bool(getattr(settings, "DTE_API_AUTH_HEADER", "")))
             add("DTE_API_AUTH_PREFIX", bool(getattr(settings, "DTE_API_AUTH_PREFIX", "")))
             add("DTE_LOG_DIR", bool(getattr(settings, "DTE_LOG_DIR", "")))
             add("DTE_MONITOR_ENABLED", isinstance(getattr(settings, "DTE_MONITOR_ENABLED", True), bool))
             add("DTE_OUTBOX_WORKER_ENABLED", isinstance(getattr(settings, "DTE_OUTBOX_WORKER_ENABLED", True), bool))
             add("DTE_MAX_RETRIES", isinstance(getattr(settings, "DTE_MAX_RETRIES", 0), int))
+        elif not dte_config.configured:
+            add("DTE_BASE_URL pendiente de configuracion real", True, level="WARNING", message=dte_config.reason)
         if getattr(settings, "DJANGO_CONFIG_MODE", "legacy") == "legacy":
             checks.append({"name":"LEGACY_FALLBACKS", "level":"WARNING", "ok": True, "message":"Se está usando fallback legacy"})
         failed = [c for c in checks if not c["ok"]]
         if options["as_json"]:
-            self.stdout.write(json.dumps({"ok": not failed, "strict": strict, "dte_background_mode": dte_background_mode, "checks": checks}, ensure_ascii=False))
+            self.stdout.write(json.dumps({
+                "ok": not failed,
+                "strict": strict,
+                "dte_background_mode": dte_background_mode,
+                "dte_config_ready": dte_config.configured,
+                "dte_config_reason": dte_config.reason,
+                "checks": checks,
+            }, ensure_ascii=False))
         else:
             for c in checks:
                 msg = f" {c['message']}" if c.get("message") else ""

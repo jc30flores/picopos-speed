@@ -119,6 +119,26 @@ function Join-WindowsCommandLineArguments {
     return ($escaped -join " ")
 }
 
+function ConvertTo-CaddyPath {
+    param([AllowEmptyString()][string]$Path)
+
+    return ([string]$Path).Replace("\", "/")
+}
+
+function ConvertTo-CaddyfileLiteral {
+    param([AllowEmptyString()][string]$Text)
+
+    $value = [string]$Text
+    $value = $value.Replace("\", "\\").Replace('"', '\"')
+    return '"' + $value + '"'
+}
+
+function Quote-CaddyPath {
+    param([AllowEmptyString()][string]$Path)
+
+    return (ConvertTo-CaddyfileLiteral -Text (ConvertTo-CaddyPath -Path $Path))
+}
+
 function Get-SafeInstallProfileValue {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,

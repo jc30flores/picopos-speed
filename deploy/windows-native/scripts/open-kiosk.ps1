@@ -33,8 +33,12 @@ if (-not (Wait-HttpOk -Uri $readyUrl -Name "open-kiosk-ready" -LogName "open-kio
 $edge = Get-EdgePath
 if (-not [string]::IsNullOrWhiteSpace($edge)) {
     if ($AppMode) {
-        Write-KioskLog "OPEN_EDGE_APP path=$edge"
-        Start-Process -FilePath $edge -ArgumentList @("--app=$appUrl") | Out-Null
+        try {
+            Write-KioskLog "OPEN_EDGE_APP path=$edge"
+            Start-Process -FilePath $edge -ArgumentList @("--app=$appUrl") | Out-Null
+        } catch {
+            Write-KioskLog "OPEN_EDGE_APP_FAILED $($_.Exception.Message)"
+        }
         exit 0
     }
 
@@ -44,11 +48,20 @@ if (-not [string]::IsNullOrWhiteSpace($edge)) {
         exit 0
     } catch {
         Write-KioskLog "OPEN_EDGE_KIOSK_FAILED $($_.Exception.Message)"
-        Write-KioskLog "OPEN_EDGE_APP path=$edge"
-        Start-Process -FilePath $edge -ArgumentList @("--app=$appUrl") | Out-Null
+        try {
+            Write-KioskLog "OPEN_EDGE_APP path=$edge"
+            Start-Process -FilePath $edge -ArgumentList @("--app=$appUrl") | Out-Null
+        } catch {
+            Write-KioskLog "OPEN_EDGE_APP_FAILED $($_.Exception.Message)"
+        }
         exit 0
     }
 }
 
 Write-KioskLog "OPEN_DEFAULT_BROWSER url=$appUrl"
-Start-Process $appUrl | Out-Null
+try {
+    Start-Process $appUrl | Out-Null
+} catch {
+    Write-KioskLog "OPEN_DEFAULT_BROWSER_FAILED $($_.Exception.Message)"
+}
+exit 0

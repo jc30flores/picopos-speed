@@ -11,6 +11,8 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
+from apps.dte.config import get_dte_config_status
+
 DTE_LOGGER = logging.getLogger("apps.dte")
 
 CACHE_HEALTH_IS_UP = "dte:health:is_up"
@@ -116,6 +118,16 @@ class DTEHealthMonitor:
             state = STATE_DOWN
             self._save_snapshot(state=state, health_status_code=None, health_body=error_text, factura_code=None, factura_body="")
             DTE_LOGGER.info("[DTE MONITOR] STATE=%s health=%s factura=%s error=%s", state, None, None, error_text)
+            return self.get_cached_snapshot()
+
+        config_status = get_dte_config_status(self.base_url, getattr(settings, "DTE_API_TOKEN", ""))
+        if not config_status.configured:
+            error_text = f"CONFIG_PENDING reason={config_status.reason} action=not_contacting_external_api"
+            state = STATE_DOWN
+            self._save_snapshot(state=state, health_status_code=None, health_body=error_text, factura_code=None, factura_body="")
+            changed = previous.state != state or previous.health_body != error_text
+            if changed or force_log:
+                DTE_LOGGER.info("[DTE] CONFIG_PENDING reason=%s action=not_contacting_external_api", config_status.reason)
             return self.get_cached_snapshot()
 
         reason = ""

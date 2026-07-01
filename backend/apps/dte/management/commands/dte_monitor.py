@@ -2,6 +2,7 @@ import time
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
+from apps.dte.config import get_dte_config_status
 from apps.dte.monitor import check_health_now
 
 
@@ -20,13 +21,23 @@ class Command(BaseCommand):
             return
         iterations = 1 if options["once"] else int(options["max_iterations"] or 0)
         cycle = 0
+        last_pending_log = 0.0
         while True:
             cycle += 1
+            sleep_seconds = float(options["sleep_seconds"])
+            config_status = get_dte_config_status()
             if options["no_network"]:
                 self.stdout.write("DTE monitor no-network check skipped")
+            elif not config_status.configured:
+                now = time.time()
+                cooldown = float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30)
+                if cycle == 1 or now - last_pending_log >= cooldown:
+                    self.stdout.write(f"[DTE] CONFIG_PENDING reason={config_status.reason} action=not_contacting_external_api")
+                    last_pending_log = now
+                sleep_seconds = max(sleep_seconds, float(getattr(settings, "DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60))
             else:
                 snapshot = check_health_now(force_log=True)
                 self.stdout.write(f"DTE monitor state={snapshot.state} health={snapshot.health_status_code} factura={snapshot.factura_code}")
             if options["once"] or (iterations and cycle >= iterations):
                 return
-            time.sleep(float(options["sleep_seconds"]))
+            time.sleep(sleep_seconds)

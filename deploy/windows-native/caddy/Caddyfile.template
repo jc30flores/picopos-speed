@@ -21,15 +21,15 @@
         reverse_proxy 127.0.0.1:{{BACKEND_HTTP_PORT}}
     }
     handle /static/* {
-        root * {{PROGRAM_DATA_DIR}}/static
+        root * {{STATIC_ROOT_DIR}}
         file_server
     }
     handle /media/* {
-        root * {{PROGRAM_DATA_DIR}}/media
+        root * {{MEDIA_ROOT_DIR}}
         file_server
     }
     handle {
-        root * {{PROGRAM_FILES_DIR}}/frontend
+        root * {{FRONTEND_ROOT_DIR}}
         try_files {path} /index.html
         file_server
     }

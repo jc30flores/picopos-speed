@@ -588,7 +588,9 @@ def process_pending_outbox(limit: int = 50) -> int:
     circuit_open, open_until = _is_circuit_open()
 
     if health.state != STATE_UP:
-        DTE_LOGGER.info(
+        _log_throttled(
+            "info",
+            "http",
             "[DTE] process_pending_outbox skipped reason=health_%s health_code=%s factura_code=%s health_body_preview=%s",
             health.state.lower(),
             health.health_status_code,

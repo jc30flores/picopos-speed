@@ -44,7 +44,7 @@ class DTEBackgroundModeTests(SimpleTestCase):
         monitor.assert_called_once()
         outbox.assert_called_once()
 
-    @override_settings(DTE_BACKGROUND_MODE="external", DTE_BASE_URL="https://dte.example.test", DTE_API_TOKEN="placeholder", DTE_API_AUTH_HEADER="Authorization", DTE_API_AUTH_PREFIX="Bearer", DTE_LOG_DIR="/tmp/dte", DTE_MONITOR_ENABLED=True, DTE_OUTBOX_WORKER_ENABLED=True, DTE_MAX_RETRIES=5)
+    @override_settings(DTE_BACKGROUND_MODE="external", DTE_BASE_URL="https://dte.picodegallo.com", DTE_API_TOKEN="real-token-value-123456", DTE_API_AUTH_HEADER="Authorization", DTE_API_AUTH_PREFIX="Bearer", DTE_LOG_DIR="/tmp/dte", DTE_MONITOR_ENABLED=True, DTE_OUTBOX_WORKER_ENABLED=True, DTE_MAX_RETRIES=5)
     def test_check_runtime_config_reports_background_mode_json(self):
         out = StringIO()
         call_command("check_runtime_config", "--json", stdout=out)

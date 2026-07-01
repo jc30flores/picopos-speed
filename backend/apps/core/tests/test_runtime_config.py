@@ -86,3 +86,37 @@ class RuntimeCommandTests(SimpleTestCase):
     def test_strict_fails(self):
         with self.assertRaises(Exception):
             call_command("check_runtime_config", "--strict", stdout=StringIO())
+
+    @override_settings(
+        DATABASES={"default":{"PASSWORD":"test-db-password", "HOST":"127.0.0.1", "PORT":"5432", "NAME":"picopos_test", "USER":"picopos_test"}},
+        SECRET_KEY="test-secret-key-not-dev",
+        DTE_BASE_URL="replace-with-dte-api-base-url",
+        DTE_API_TOKEN="replace-with-dte-api-token",
+        DTE_API_AUTH_HEADER="Authorization",
+        DTE_API_AUTH_PREFIX="Bearer",
+        DTE_LOG_DIR="/tmp/dte",
+        DTE_MONITOR_ENABLED=True,
+        DTE_OUTBOX_WORKER_ENABLED=True,
+        DTE_MAX_RETRIES=5,
+    )
+    @mock.patch.dict(os.environ, {"PICO_INSTALLER_PREFLIGHT": "1"})
+    def test_check_runtime_config_placeholder_dte_warns_in_installer_preflight(self):
+        out = StringIO()
+        call_command("check_runtime_config", "--strict", stdout=out)
+        text = out.getvalue()
+        self.assertIn("[WARNING] DTE_BASE_URL pendiente de configuracion real", text)
+        self.assertIn("[WARNING] DTE_API_TOKEN pendiente de configuracion real", text)
+
+    @override_settings(
+        DTE_BASE_URL="replace-with-dte-api-base-url",
+        DTE_API_TOKEN="replace-with-dte-api-token",
+        DTE_API_AUTH_HEADER="Authorization",
+        DTE_API_AUTH_PREFIX="Bearer",
+        DTE_LOG_DIR="/tmp/dte",
+        DTE_MONITOR_ENABLED=True,
+        DTE_OUTBOX_WORKER_ENABLED=True,
+        DTE_MAX_RETRIES=5,
+    )
+    def test_check_runtime_config_placeholder_dte_fails_strict_without_preflight(self):
+        with self.assertRaises(Exception):
+            call_command("check_runtime_config", "--strict", stdout=StringIO())

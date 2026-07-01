@@ -219,6 +219,10 @@ jobs:
             if ((Get-Item -LiteralPath $resolved.$key).Extension.ToLowerInvariant() -ne '.exe') { throw "[RUNTIME_RESOLVE] $key debe resolver a .exe." }
           }
 
+      - name: Test Caddyfile Windows path quoting
+        shell: pwsh
+        run: ./scripts/ci/test_caddyfile_windows_paths.ps1
+
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
