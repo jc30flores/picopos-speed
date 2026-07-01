@@ -539,9 +539,17 @@ def validate_native_installer_contract() -> None:
     caddy_template = read_text_safe(NATIVE / "caddy" / "Caddyfile.template")
     if "{{BACKEND_HTTP_PORT}}" not in caddy_template:
         fail("Caddyfile template must use selected backend port")
+    for token in ["auto_https off", "http://{{APP_BIND_ADDRESS}}:{{APP_HTTP_PORT}}", "bind {{APP_BIND_ADDRESS}}"]:
+        if token not in caddy_template:
+            fail(f"Caddyfile template missing local HTTP token: {token}")
+    if re.search(r"(?m)^\s*\{\{APP_BIND_ADDRESS\}\}:\{\{APP_HTTP_PORT\}\}\s*\{", caddy_template):
+        fail("Caddyfile template must not use a bare host:port site address")
     for token in ["{{STATIC_ROOT_DIR}}", "{{MEDIA_ROOT_DIR}}", "{{FRONTEND_ROOT_DIR}}"]:
         if token not in caddy_template:
             fail(f"Caddyfile template must use quoted root token {token}")
+    caddy_template_without_http = caddy_template.replace("http://{{APP_BIND_ADDRESS}}:{{APP_HTTP_PORT}}", "")
+    if re.search(r"(?m)^\s*127\.0\.0\.1:\d+\s*\{", caddy_template_without_http):
+        fail("Caddyfile template contains a bare local site address")
     postgres_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-PostgreSQL.xml")
     if "pg_ctl" in postgres_template or "runservice" in postgres_template:
         fail("PostgreSQL service template must not use pg_ctl runservice under WinSW")
@@ -622,6 +630,18 @@ def validate_windows_hardening_static() -> None:
     for token in ["Quote-CaddyPath -Path", "FRONTEND_ROOT_DIR", "CADDYFILE_VALIDATE_OK"]:
         if token not in install:
             fail(f"install-services.ps1 missing Caddy path quoting token: {token}")
+    for token in [
+        "Invoke-HttpCheckDetailed",
+        "StatusCode",
+        "StatusDescription",
+        "CADDY_HTTP_CHECK_FAILED_AUTOTLS",
+        "HEALTHCHECK_OK {0}",
+        "caddy-root",
+        "FRONTEND_PAYLOAD_MISSING",
+        "INSTALL_COMPLETE",
+    ]:
+        if token not in install:
+            fail(f"install-services.ps1 missing local HTTP healthcheck token: {token}")
 
     caddy_test = REPO / "scripts" / "ci" / "test_caddyfile_windows_paths.ps1"
     if not caddy_test.exists():
@@ -639,6 +659,37 @@ def validate_windows_hardening_static() -> None:
     if "test_caddyfile_windows_paths.ps1" not in workflow:
         fail("windows-native-installer.yml must run test_caddyfile_windows_paths.ps1")
 
+    caddy_http_test = REPO / "scripts" / "ci" / "test_caddyfile_windows_http_local.ps1"
+    if not caddy_http_test.exists():
+        fail("scripts/ci/test_caddyfile_windows_http_local.ps1 is required")
+    caddy_http_test_text = read_text_safe(caddy_http_test)
+    for token in [
+        "auto_https off",
+        "http://127.0.0.1",
+        "bind 127.0.0.1",
+        "automatic TLS certificate management",
+        "PICO_CADDY_HTTP_OK",
+    ]:
+        if token not in caddy_http_test_text:
+            fail(f"test_caddyfile_windows_http_local.ps1 missing token: {token}")
+    if "test_caddyfile_windows_http_local.ps1" not in workflow:
+        fail("windows-native-installer.yml must run test_caddyfile_windows_http_local.ps1")
+
+    diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
+    for token in [
+        "caddyfile-http-local.txt",
+        "auto_https_off",
+        "http_loopback_site",
+        "bind_loopback",
+        "caddy-auto-tls-evidence.txt",
+        "automatic TLS certificate management",
+        "installing root certificate",
+        "frontend-index",
+        "Get-HealthStatusDetailed",
+    ]:
+        if token not in diagnostics:
+            fail(f"diagnostics.ps1 missing Caddy local HTTP diagnostic token: {token}")
+
     for rel in git_ls_files("deploy", "scripts"):
         if not should_scan_text(rel):
             continue
@@ -651,7 +702,12 @@ def validate_windows_hardening_static() -> None:
         "backend/apps/dte/monitor.py": ["CONFIG_PENDING", "not_contacting_external_api", "get_dte_config_status"],
         "backend/apps/dte/management/commands/dte_outbox_worker.py": ["DTE_CONFIG_PENDING_BACKOFF_SECONDS", "CONFIG_PENDING", "not_contacting_external_api"],
         "backend/apps/core/management/commands/check_runtime_config.py": ["DTE_BASE_URL pendiente de configuracion real", "PICO_INSTALLER_PREFLIGHT", "dte_config_ready"],
-        "backend/apps/dte/tests/test_monitor_resilience.py": ["test_dte_worker_does_not_call_invalid_placeholder_url", "test_dte_monitor_command_does_not_call_invalid_placeholder_url"],
+        "backend/apps/dte/tests/test_monitor_resilience.py": [
+            "test_dte_worker_does_not_call_invalid_placeholder_url",
+            "test_dte_monitor_command_does_not_call_invalid_placeholder_url",
+            "test_dte_monitor_placeholder_log_uses_pending_backoff",
+            "test_dte_worker_placeholder_log_uses_pending_backoff",
+        ],
     }.items():
         text = read_text_safe(REPO / rel)
         for token in tokens:

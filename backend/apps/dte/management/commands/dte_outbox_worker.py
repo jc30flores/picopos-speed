@@ -44,12 +44,13 @@ class Command(BaseCommand):
             config_status = get_dte_config_status()
             if not config_status.configured:
                 now = time.time()
-                cooldown = float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30)
+                pending_backoff = float(getattr(settings, "DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60)
+                cooldown = max(float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30), pending_backoff)
                 if cycle == 1 or now - last_pending_log >= cooldown:
                     self.stdout.write(f"[DTE] CONFIG_PENDING reason={config_status.reason} action=not_contacting_external_api")
                     last_pending_log = now
                 processed = 0
-                sleep_seconds = max(sleep_seconds, float(getattr(settings, "DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60))
+                sleep_seconds = max(sleep_seconds, pending_backoff)
             elif not _try_lock():
                 self.stdout.write("DTE outbox worker skipped: another worker holds advisory lock")
                 processed = 0

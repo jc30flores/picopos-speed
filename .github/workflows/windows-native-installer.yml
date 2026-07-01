@@ -223,6 +223,10 @@ jobs:
         shell: pwsh
         run: ./scripts/ci/test_caddyfile_windows_paths.ps1
 
+      - name: Test Caddyfile local HTTP
+        shell: pwsh
+        run: ./scripts/ci/test_caddyfile_windows_http_local.ps1
+
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |

@@ -7,6 +7,8 @@
   <workingdirectory>{{PROGRAM_FILES_DIR}}\caddy</workingdirectory>
   <startmode>Automatic</startmode>
   <depend>PicoDeGallo-Backend</depend>
+  <env name="XDG_DATA_HOME" value="{{PROGRAM_DATA_DIR}}\caddy\data" />
+  <env name="XDG_CONFIG_HOME" value="{{PROGRAM_DATA_DIR}}\caddy\config" />
   <onfailure action="restart" delay="10 sec" />
   <logpath>{{PROGRAM_DATA_DIR}}\logs</logpath>
   <log mode="roll-by-size" />

@@ -94,6 +94,7 @@ Save-Diagnostic "service-files.txt" ($serviceFileFacts -join "`n")
 $caddyfile = Join-Path $Script:ProgramFilesDir "caddy\Caddyfile"
 Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyfile -PathType Leaf) { 'present' } else { 'missing' })")
 if (Test-Path -LiteralPath $caddyfile -PathType Leaf) {
+    $caddyContent = Get-Content -LiteralPath $caddyfile -Raw -ErrorAction SilentlyContinue
     $numbered = @()
     $lineNo = 0
     foreach ($line in @(Get-Content -LiteralPath $caddyfile -ErrorAction SilentlyContinue)) {
@@ -101,7 +102,23 @@ if (Test-Path -LiteralPath $caddyfile -PathType Leaf) {
         $numbered += ("{0,4}: {1}" -f $lineNo, [string]$line)
     }
     Save-Diagnostic "caddyfile-numbered.txt" ($numbered -join "`n")
+    $caddyFacts = @(
+        "auto_https_off=$(if ($caddyContent -match '(?m)^\s*auto_https\s+off\s*$') { 'true' } else { 'false' })",
+        "http_loopback_site=$(if ($caddyContent -match '(?m)^\s*http://127\.0\.0\.1:\d+\s*\{') { 'true' } else { 'false' })",
+        "bind_loopback=$(if ($caddyContent -match '(?m)^\s*bind\s+127\.0\.0\.1\s*$') { 'true' } else { 'false' })",
+        "bare_loopback_site=$(if ($caddyContent -match '(?m)^\s*127\.0\.0\.1:\d+\s*\{') { 'true' } else { 'false' })",
+        "quoted_program_files_root=$(if ($caddyContent -match 'root\s+\*\s+"C:/Program Files/') { 'true' } else { 'false' })",
+        "quoted_programdata_root=$(if ($caddyContent -match 'root\s+\*\s+"C:/ProgramData/') { 'true' } else { 'false' })"
+    )
+    Save-Diagnostic "caddyfile-http-local.txt" ($caddyFacts -join "`n")
 }
+
+$frontendDir = Join-Path $Script:ProgramFilesDir "frontend"
+$frontendIndex = Join-Path $frontendDir "index.html"
+Save-Diagnostic "frontend-payload.txt" ((@(
+    "frontend_dir=$(if (Test-Path -LiteralPath $frontendDir -PathType Container) { 'present' } else { 'missing' })",
+    "frontend-index=$(if (Test-Path -LiteralPath $frontendIndex -PathType Leaf) { 'present' } else { 'missing' })"
+) -join "`n"))
 
 function ConvertTo-DiagnosticArgumentString {
     param([string[]]$ArgumentList = @())
@@ -241,8 +258,16 @@ if ((Test-Path -LiteralPath $caddyExe -PathType Leaf) -and (Test-Path -LiteralPa
 
 $netstatExe = Join-Path $env:SystemRoot "System32\netstat.exe"
 if (Test-Path -LiteralPath $netstatExe -PathType Leaf) {
-    $netstatLines = & $netstatExe -ano 2>&1 | Where-Object { [string]$_ -match ":9282\s" } | ForEach-Object { [string]$_ }
-    Save-Diagnostic "netstat-9282.txt" ($netstatLines -join "`n")
+    $netstatAll = & $netstatExe -ano 2>&1 | ForEach-Object { [string]$_ }
+    foreach ($port in @("5432", "8000", "9282")) {
+        $netstatLines = $netstatAll | Where-Object { [string]$_ -match ":$port\s" } | ForEach-Object { [string]$_ }
+        Save-Diagnostic "netstat-$port.txt" ($netstatLines -join "`n")
+    }
+    $caddyNetstat = $netstatAll | Where-Object { [string]$_ -match ":9282\s" } | ForEach-Object { [string]$_ }
+    Save-Diagnostic "netstat-9282-bind.txt" ((@(
+        "listens_0_0_0_0=$(if (($caddyNetstat -join "`n") -match '0\.0\.0\.0:9282') { 'true' } else { 'false' })",
+        "listens_127_0_0_1=$(if (($caddyNetstat -join "`n") -match '127\.0\.0\.1:9282') { 'true' } else { 'false' })"
+    ) -join "`n"))
 }
 
 function Get-BackendRuntimeDiagnostic {
@@ -435,25 +460,104 @@ Save-Diagnostic "dte-config-readiness.txt" ((@(
 
 $appUrl = Get-AppUrl
 $backendPort = if ([string]::IsNullOrWhiteSpace([string]$envs["BACKEND_HTTP_PORT"])) { "8000" } else { [string]$envs["BACKEND_HTTP_PORT"] }
-function Get-HealthStatus {
-    param([Parameter(Mandatory = $true)][string]$Uri)
-    try {
-        return [string](Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5).StatusCode
-    } catch {
-        return "error"
+function Read-DiagnosticHttpBody {
+    param($Response)
+    if ($null -eq $Response) {
+        return ""
     }
+    try {
+        if ($Response.PSObject.Properties.Name -contains "Content") {
+            return [string]$Response.Content
+        }
+    } catch {
+    }
+    try {
+        $stream = $Response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object System.IO.StreamReader($stream)
+            try {
+                return [string]$reader.ReadToEnd()
+            } finally {
+                $reader.Dispose()
+            }
+        }
+    } catch {
+    }
+    return ""
 }
-$rootHealth = Get-HealthStatus -Uri $appUrl
-$liveHealth = Get-HealthStatus -Uri ($appUrl + "/api/health/live/")
-$readyHealth = Get-HealthStatus -Uri ($appUrl + "/api/health/ready/")
-$backendLiveHealth = Get-HealthStatus -Uri "http://127.0.0.1:$backendPort/api/health/live/"
-$backendReadyHealth = Get-HealthStatus -Uri "http://127.0.0.1:$backendPort/api/health/ready/"
+function Convert-DiagnosticHeaders {
+    param($Headers)
+    if ($null -eq $Headers) {
+        return ""
+    }
+    $lines = @()
+    try {
+        if ($Headers -is [System.Net.WebHeaderCollection]) {
+            foreach ($key in @($Headers.AllKeys)) {
+                $lines += ("{0}={1}" -f $key, [string]$Headers[$key])
+            }
+        } elseif ($Headers -is [System.Collections.IDictionary]) {
+            foreach ($key in @($Headers.Keys)) {
+                $lines += ("{0}={1}" -f $key, [string]$Headers[$key])
+            }
+        }
+    } catch {
+    }
+    return ($lines -join "; ")
+}
+function Get-HealthStatusDetailed {
+    param([Parameter(Mandatory = $true)][string]$Uri)
+    $status = "error"
+    $description = ""
+    $headers = ""
+    $body = ""
+    $errorText = ""
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5
+        $status = [string]$response.StatusCode
+        $description = [string]$response.StatusDescription
+        $headers = Convert-DiagnosticHeaders -Headers $response.Headers
+        $body = Read-DiagnosticHttpBody -Response $response
+    } catch {
+        $errorText = [string]$_.Exception.Message
+        $response = $_.Exception.Response
+        if ($response) {
+            try { $status = [string][int]$response.StatusCode } catch { }
+            try { $description = [string]$response.StatusDescription } catch { }
+            $headers = Convert-DiagnosticHeaders -Headers $response.Headers
+            $body = Read-DiagnosticHttpBody -Response $response
+        }
+    }
+    return ((@(
+        "url=$Uri",
+        "status=$status",
+        "description=$description",
+        "headers=$headers",
+        "body=$body",
+        "error=$errorText"
+    ) -join "`n"))
+}
+$rootHealth = Get-HealthStatusDetailed -Uri $appUrl
+$liveHealth = Get-HealthStatusDetailed -Uri ($appUrl + "/api/health/live/")
+$readyHealth = Get-HealthStatusDetailed -Uri ($appUrl + "/api/health/ready/")
+$backendLiveHealth = Get-HealthStatusDetailed -Uri "http://127.0.0.1:$backendPort/api/health/live/"
+$backendReadyHealth = Get-HealthStatusDetailed -Uri "http://127.0.0.1:$backendPort/api/health/ready/"
 Save-Diagnostic "health.txt" ((@(
-    "root=$rootHealth",
-    "live=$liveHealth",
-    "ready=$readyHealth",
-    "backend_live=$backendLiveHealth",
-    "backend_ready=$backendReadyHealth"
+    "ROOT_BEGIN",
+    $rootHealth,
+    "ROOT_END",
+    "CADDY_LIVE_BEGIN",
+    $liveHealth,
+    "CADDY_LIVE_END",
+    "CADDY_READY_BEGIN",
+    $readyHealth,
+    "CADDY_READY_END",
+    "BACKEND_LIVE_BEGIN",
+    $backendLiveHealth,
+    "BACKEND_LIVE_END",
+    "BACKEND_READY_BEGIN",
+    $backendReadyHealth,
+    "BACKEND_READY_END"
 ) -join "`n"))
 
 foreach ($log in Get-ChildItem (Get-LogsDir) -Filter "*.log" -ErrorAction SilentlyContinue) {
@@ -466,6 +570,29 @@ $caddyLogs = Get-ChildItem (Get-LogsDir) -File -ErrorAction SilentlyContinue |
 foreach ($log in $caddyLogs) {
     Save-Diagnostic "caddy-wrapper-$($log.Name).txt" ((Get-Content -LiteralPath $log.FullName -Tail 300 -ErrorAction SilentlyContinue) -join "`n")
 }
+
+$autoTlsNeedles = @(
+    "automatic TLS certificate management",
+    "installing root certificate",
+    "failed to install root certificate",
+    "automatic HTTP->HTTPS redirects",
+    "enabling automatic HTTP->HTTPS redirects",
+    "HTTP/2 skipped because it requires TLS",
+    "HTTP/3 listener"
+)
+$autoTlsFindings = @()
+foreach ($log in $caddyLogs) {
+    $tail = ((Get-Content -LiteralPath $log.FullName -Tail 500 -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ }) -join "`n")
+    foreach ($needle in $autoTlsNeedles) {
+        if ($tail -match [regex]::Escape($needle)) {
+            $autoTlsFindings += ("{0}:{1}" -f $log.Name, $needle)
+        }
+    }
+}
+Save-Diagnostic "caddy-auto-tls-evidence.txt" ((@(
+    "automatic_tls_or_root_cert_logs=$(if ($autoTlsFindings.Count -gt 0) { 'present' } else { 'absent' })",
+    (($autoTlsFindings | Select-Object -Unique) -join "`n")
+) -join "`n"))
 
 $zip = Join-Path (Get-DiagnosticsDir) "PicoDeGallo-Native-Diagnostico-$stamp.zip"
 Compress-Archive -Path (Join-Path $root "*") -DestinationPath $zip -Force

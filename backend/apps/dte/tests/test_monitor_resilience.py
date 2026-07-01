@@ -39,6 +39,7 @@ class DTEHealthMonitorResilienceTests(SimpleTestCase):
     DTE_API_TOKEN="replace-with-dte-api-token",
     DTE_HEALTH_ENDPOINT="/health",
     DTE_CONFIG_PENDING_BACKOFF_SECONDS=60,
+    DTE_ERROR_LOG_COOLDOWN_SECONDS=30,
 )
 class DTEPlaceholderConfigTests(SimpleTestCase):
     @patch("apps.dte.monitor.requests.post")
@@ -64,3 +65,25 @@ class DTEPlaceholderConfigTests(SimpleTestCase):
         call_command("dte_outbox_worker", "--once", stdout=out)
         self.assertIn("CONFIG_PENDING", out.getvalue())
         mock_process.assert_not_called()
+
+    @patch("apps.dte.management.commands.dte_monitor.time.sleep")
+    @patch("apps.dte.management.commands.dte_monitor.time.time", side_effect=[1000.0, 1030.0])
+    @patch("apps.dte.management.commands.dte_monitor.check_health_now")
+    def test_dte_monitor_placeholder_log_uses_pending_backoff(self, mock_check, mock_time, mock_sleep):
+        out = StringIO()
+        call_command("dte_monitor", "--sleep-seconds", "0", "--max-iterations", "2", stdout=out)
+        self.assertEqual(out.getvalue().count("CONFIG_PENDING"), 1)
+        mock_sleep.assert_called_once_with(60.0)
+        mock_check.assert_not_called()
+        self.assertEqual(mock_time.call_count, 2)
+
+    @patch("apps.dte.management.commands.dte_outbox_worker.time.sleep")
+    @patch("apps.dte.management.commands.dte_outbox_worker.time.time", side_effect=[1000.0, 1030.0])
+    @patch("apps.dte.management.commands.dte_outbox_worker.process_pending_outbox")
+    def test_dte_worker_placeholder_log_uses_pending_backoff(self, mock_process, mock_time, mock_sleep):
+        out = StringIO()
+        call_command("dte_outbox_worker", "--sleep-seconds", "0", "--max-iterations", "2", stdout=out)
+        self.assertEqual(out.getvalue().count("CONFIG_PENDING"), 1)
+        mock_sleep.assert_called_once_with(60.0)
+        mock_process.assert_not_called()
+        self.assertEqual(mock_time.call_count, 2)

@@ -30,11 +30,12 @@ class Command(BaseCommand):
                 self.stdout.write("DTE monitor no-network check skipped")
             elif not config_status.configured:
                 now = time.time()
-                cooldown = float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30)
+                pending_backoff = float(getattr(settings, "DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60)
+                cooldown = max(float(getattr(settings, "DTE_ERROR_LOG_COOLDOWN_SECONDS", 30) or 30), pending_backoff)
                 if cycle == 1 or now - last_pending_log >= cooldown:
                     self.stdout.write(f"[DTE] CONFIG_PENDING reason={config_status.reason} action=not_contacting_external_api")
                     last_pending_log = now
-                sleep_seconds = max(sleep_seconds, float(getattr(settings, "DTE_CONFIG_PENDING_BACKOFF_SECONDS", 60) or 60))
+                sleep_seconds = max(sleep_seconds, pending_backoff)
             else:
                 snapshot = check_health_now(force_log=True)
                 self.stdout.write(f"DTE monitor state={snapshot.state} health={snapshot.health_status_code} factura={snapshot.factura_code}")

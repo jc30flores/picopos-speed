@@ -2696,6 +2696,22 @@ function Resolve-InstallPorts {
     return $EnvMap
 }
 
+function Assert-FrontendPayload {
+    $frontendDir = Join-Path $Script:ProgramFilesDir "frontend"
+    $indexPath = Join-Path $frontendDir "index.html"
+    if (-not (Test-Path -LiteralPath $frontendDir -PathType Container)) {
+        Write-InstallLog -LogName "caddy-validate.log" -Message "FRONTEND_PAYLOAD_MISSING path=$frontendDir reason=missing_directory"
+        throw "FRONTEND_PAYLOAD_MISSING path=$frontendDir"
+    }
+    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
+        Write-InstallLog -LogName "caddy-validate.log" -Message "FRONTEND_PAYLOAD_MISSING path=$indexPath reason=missing_index"
+        throw "FRONTEND_PAYLOAD_MISSING path=$indexPath"
+    }
+    $assetDir = Join-Path $frontendDir "assets"
+    $assetStatus = if (Test-Path -LiteralPath $assetDir -PathType Container) { "present" } else { "missing" }
+    Write-InstallLog -LogName "caddy-validate.log" -Message "FRONTEND_PAYLOAD_OK index=$indexPath assets=$assetStatus"
+}
+
 function Render-Caddyfile {
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap)
 
@@ -2707,10 +2723,15 @@ function Render-Caddyfile {
 
     $bind = [string]$EnvMap["APP_BIND_ADDRESS"]
     if ([string]::IsNullOrWhiteSpace($bind)) { $bind = "127.0.0.1" }
+    if ($bind -ne "127.0.0.1") {
+        throw "APP_BIND_ADDRESS no soportado para Caddy local: $bind. Use 127.0.0.1."
+    }
     $port = [string]$EnvMap["APP_HTTP_PORT"]
     if ([string]::IsNullOrWhiteSpace($port)) { $port = "9282" }
     $backendPort = [string]$EnvMap["BACKEND_HTTP_PORT"]
     if ([string]::IsNullOrWhiteSpace($backendPort)) { $backendPort = "8000" }
+
+    Assert-FrontendPayload
 
     $staticRoot = Quote-CaddyPath -Path (Join-Path $Script:ProgramDataDir "static")
     $mediaRoot = Quote-CaddyPath -Path (Join-Path $Script:ProgramDataDir "media")
@@ -2737,6 +2758,19 @@ function Render-Caddyfile {
     }
     if ((Get-Content -LiteralPath $caddyfile -Raw).Contains("{{")) {
         throw "Caddyfile final contiene placeholders sin resolver: $caddyfile"
+    }
+    $rendered = Get-Content -LiteralPath $caddyfile -Raw
+    if ($rendered -notmatch "(?m)^\s*auto_https\s+off\s*$") {
+        throw "Caddyfile final debe desactivar auto_https para HTTP local."
+    }
+    if ($rendered -notmatch "(?m)^\s*http://127\.0\.0\.1:$([regex]::Escape($port))\s*\{") {
+        throw "Caddyfile final debe usar HTTP explicito en loopback para el puerto $port."
+    }
+    if ($rendered -notmatch "(?m)^\s*bind\s+127\.0\.0\.1\s*$") {
+        throw "Caddyfile final debe incluir bind 127.0.0.1."
+    }
+    if ($rendered -match "(?m)^\s*127\.0\.0\.1:\d+\s*\{") {
+        throw "Caddyfile final usa direccion local sin esquema HTTP explicito."
     }
     Write-InstallLog "CADDYFILE_RENDERED $caddyfile"
 
@@ -2995,6 +3029,148 @@ function Run-InitialAdminBootstrap {
         -LogName "bootstrap-admin.log"
 }
 
+function Read-HttpResponseBody {
+    param($Response)
+
+    if ($null -eq $Response) {
+        return ""
+    }
+    try {
+        if ($Response.PSObject.Properties.Name -contains "Content") {
+            return [string]$Response.Content
+        }
+    } catch {
+    }
+    try {
+        $stream = $Response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object System.IO.StreamReader($stream)
+            try {
+                return [string]$reader.ReadToEnd()
+            } finally {
+                $reader.Dispose()
+            }
+        }
+    } catch {
+    }
+    return ""
+}
+
+function Convert-HttpHeadersToText {
+    param($Headers)
+
+    if ($null -eq $Headers) {
+        return ""
+    }
+    $lines = @()
+    try {
+        if ($Headers -is [System.Net.WebHeaderCollection]) {
+            foreach ($key in @($Headers.AllKeys)) {
+                $lines += ("{0}={1}" -f $key, [string]$Headers[$key])
+            }
+        } elseif ($Headers -is [System.Collections.IDictionary]) {
+            foreach ($key in @($Headers.Keys)) {
+                $lines += ("{0}={1}" -f $key, [string]$Headers[$key])
+            }
+        }
+    } catch {
+        return ""
+    }
+    return ($lines -join "; ")
+}
+
+function Invoke-HttpCheckDetailed {
+    param([Parameter(Mandatory = $true)][string]$Uri)
+
+    $result = [ordered]@{
+        Ok = $false
+        StatusCode = 0
+        StatusDescription = ""
+        Headers = ""
+        Body = ""
+        Error = ""
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5
+        $status = [int]$response.StatusCode
+        $result["StatusCode"] = $status
+        $result["StatusDescription"] = [string]$response.StatusDescription
+        $result["Headers"] = Convert-HttpHeadersToText -Headers $response.Headers
+        $result["Body"] = Read-HttpResponseBody -Response $response
+        $result["Ok"] = ($status -ge 200 -and $status -lt 300)
+    } catch {
+        $result["Error"] = [string]$_.Exception.Message
+        $webResponse = $_.Exception.Response
+        if ($webResponse) {
+            try { $result["StatusCode"] = [int]$webResponse.StatusCode } catch { }
+            try { $result["StatusDescription"] = [string]$webResponse.StatusDescription } catch { }
+            $result["Headers"] = Convert-HttpHeadersToText -Headers $webResponse.Headers
+            $result["Body"] = Read-HttpResponseBody -Response $webResponse
+        }
+    }
+
+    return [pscustomobject]$result
+}
+
+function Format-HttpCheckResultForLog {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $body = Get-TextTail -Text ([string]$Result.Body) -Lines 16
+    $body = $body.Replace("`r", "\r").Replace("`n", "\n")
+    $headers = ([string]$Result.Headers).Replace("`r", " ").Replace("`n", " ")
+    $errorText = ([string]$Result.Error).Replace("`r", " ").Replace("`n", " ")
+    return ("status={0} description={1} headers={2} body={3} error={4}" -f [int]$Result.StatusCode, [string]$Result.StatusDescription, $headers, $body, $errorText)
+}
+
+function Get-CaddyAutoTlsEvidence {
+    $logsDir = Get-LogsDir
+    if (-not (Test-Path -LiteralPath $logsDir -PathType Container)) {
+        return ""
+    }
+    $needles = @(
+        "automatic TLS certificate management",
+        "installing root certificate",
+        "failed to install root certificate",
+        "automatic HTTP->HTTPS redirects",
+        "enabling automatic HTTP->HTTPS redirects",
+        "certificate obtained successfully"
+    )
+    $matches = @()
+    $logs = Get-ChildItem -LiteralPath $logsDir -Filter "*.log" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*Caddy*" -or $_.Name -like "*caddy*" }
+    foreach ($log in @($logs)) {
+        $text = ((Get-Content -LiteralPath $log.FullName -Tail 240 -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ }) -join "`n")
+        foreach ($needle in $needles) {
+            if ($text -match [regex]::Escape($needle)) {
+                $matches += ("{0}:{1}" -f $log.Name, $needle)
+            }
+        }
+    }
+    return (($matches | Select-Object -Unique) -join "; ")
+}
+
+function Get-CaddyLogTailText {
+    $logsDir = Get-LogsDir
+    if (-not (Test-Path -LiteralPath $logsDir -PathType Container)) {
+        return ""
+    }
+    $lines = @()
+    $logs = Get-ChildItem -LiteralPath $logsDir -Filter "*.log" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*Caddy*" -or $_.Name -like "*caddy*" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 4
+    foreach ($log in @($logs)) {
+        $lines += "CADDY_LOG_TAIL_BEGIN $($log.Name)"
+        $tail = Get-Content -LiteralPath $log.FullName -Tail 80 -ErrorAction SilentlyContinue
+        if ($tail) {
+            $lines += ($tail | ForEach-Object { [string]$_ })
+        }
+        $lines += "CADDY_LOG_TAIL_END $($log.Name)"
+    }
+    return ($lines -join "`n")
+}
+
 function Wait-HttpOk {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -3003,24 +3179,38 @@ function Wait-HttpOk {
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $lastError = ""
+    $maxAttempts = [Math]::Max(1, [int][Math]::Ceiling($TimeoutSeconds / 2.0))
+    $attempt = 0
+    $lastSummary = ""
+    $lastResult = $null
     do {
-        try {
-            $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 5
-            $status = [int]$response.StatusCode
-            if ($status -ge 200 -and $status -lt 300) {
-                Write-InstallLog -LogName "healthcheck.log" -Message "HTTP_OK $Name $Uri status=$status"
-                return
-            }
-            $lastError = "status=$status"
-        } catch {
-            $lastError = $_.Exception.Message
+        $attempt += 1
+        $lastResult = Invoke-HttpCheckDetailed -Uri $Uri
+        if ($lastResult.Ok) {
+            Write-InstallLog -LogName "healthcheck.log" -Message ("HEALTHCHECK_OK {0} url={1} status={2}" -f $Name, $Uri, [int]$lastResult.StatusCode)
+            return
+        }
+        $summary = Format-HttpCheckResultForLog -Result $lastResult
+        if ($attempt -eq 1 -or $summary -ne $lastSummary -or ($attempt % 5) -eq 0) {
+            Write-InstallLog -LogName "healthcheck.log" -Message ("HEALTHCHECK_ATTEMPT {0} url={1} attempt={2}/{3} {4}" -f $Name, $Uri, $attempt, $maxAttempts, $summary)
+            $lastSummary = $summary
         }
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
 
-    Write-InstallLog -LogName "healthcheck.log" -Message "HTTP_FAILED $Name $Uri $lastError"
-    throw "Validacion HTTP fallo para $Name ($Uri): $lastError"
+    $finalSummary = if ($lastResult) { Format-HttpCheckResultForLog -Result $lastResult } else { "no_result" }
+    Write-InstallLog -LogName "healthcheck.log" -Message ("HEALTHCHECK_FAILED {0} url={1} attempts={2}/{3} {4}" -f $Name, $Uri, $attempt, $maxAttempts, $finalSummary)
+    if ($Name -like "caddy*") {
+        $evidence = Get-CaddyAutoTlsEvidence
+        if (-not [string]::IsNullOrWhiteSpace($evidence)) {
+            Write-InstallLog -LogName "healthcheck.log" -Message ("CADDY_HTTP_CHECK_FAILED_AUTOTLS url={0} reason=caddy_auto_https_enabled evidence={1}" -f $Uri, $evidence)
+        }
+        $tail = Get-CaddyLogTailText
+        if (-not [string]::IsNullOrWhiteSpace($tail)) {
+            Write-InstallLog -LogName "healthcheck.log" -Message $tail
+        }
+    }
+    throw "Validacion HTTP fallo para $Name ($Uri): $finalSummary"
 }
 
 function Start-BackendService {
@@ -3044,9 +3234,15 @@ function Start-CaddyService {
 
 function Validate-PostInstall {
     $appUrl = Get-AppUrl
+    $backendPort = "8000"
+    if ($Script:NativeEnvMap -and -not [string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"])) {
+        $backendPort = [string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"]
+    }
+    Wait-HttpOk -Name "backend-live" -Uri "http://127.0.0.1:$backendPort/api/health/live/" -TimeoutSeconds 120
+    Wait-HttpOk -Name "backend-ready" -Uri "http://127.0.0.1:$backendPort/api/health/ready/" -TimeoutSeconds 120
     Wait-HttpOk -Name "caddy-root" -Uri $appUrl -TimeoutSeconds 120
-    Wait-HttpOk -Name "health-live" -Uri "$appUrl/api/health/live/" -TimeoutSeconds 120
-    Wait-HttpOk -Name "health-ready" -Uri "$appUrl/api/health/ready/" -TimeoutSeconds 120
+    Wait-HttpOk -Name "caddy-live" -Uri "$appUrl/api/health/live/" -TimeoutSeconds 120
+    Wait-HttpOk -Name "caddy-ready" -Uri "$appUrl/api/health/ready/" -TimeoutSeconds 120
     Assert-AllServicesRunning
 }
 
@@ -3060,7 +3256,7 @@ function Invoke-InstallMain {
 
     $Script:InstallPhase = "prepare-directories"
     $Script:LastInstallStep = "prepare-directories"
-    foreach ($dir in @("config", "media", "static", "dte_logs", "backups", "diagnostics", "logs", "postgres\data")) {
+    foreach ($dir in @("config", "media", "static", "dte_logs", "backups", "diagnostics", "logs", "postgres\data", "caddy\data", "caddy\config")) {
         New-DirectorySafe (Join-Path $Script:ProgramDataDir $dir)
     }
 
@@ -3226,6 +3422,7 @@ function Invoke-InstallMain {
         Write-SafeHost "Servicio listo: $svc"
     }
 
+    Write-InstallLog "INSTALL_COMPLETE"
     Write-InstallLog "INSTALL_SERVICES_SUCCESS"
 }
 

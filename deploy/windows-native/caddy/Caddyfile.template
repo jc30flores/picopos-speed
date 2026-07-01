@@ -1,8 +1,10 @@
 {
     admin off
+    auto_https off
 }
 
-{{APP_BIND_ADDRESS}}:{{APP_HTTP_PORT}} {
+http://{{APP_BIND_ADDRESS}}:{{APP_HTTP_PORT}} {
+    bind {{APP_BIND_ADDRESS}}
     encode zstd gzip
 
     @blocked path */.* /.* *.env* /backups* /diagnostics* /logs* *.dump *.sql
