@@ -3,6 +3,60 @@
 from django.db import migrations
 
 
+def repair_legacy_index_names(apps, schema_editor):
+    if schema_editor.connection.vendor != "postgresql":
+        return
+
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            DO $$
+            BEGIN
+                IF to_regclass('public.menu_discount_active__c4f9aa_idx') IS NOT NULL
+                   AND to_regclass('public.menu_discou_active_b4fadc_idx') IS NULL THEN
+                    ALTER INDEX public.menu_discount_active__c4f9aa_idx
+                    RENAME TO menu_discou_active_b4fadc_idx;
+                ELSIF to_regclass('public.menu_discount_active__c4f9aa_idx') IS NULL
+                      AND to_regclass('public.menu_discou_active_b4fadc_idx') IS NULL
+                      AND EXISTS (
+                          SELECT 1
+                          FROM information_schema.columns
+                          WHERE table_schema = 'public'
+                            AND table_name = 'menu_discount'
+                            AND column_name = 'active'
+                      ) THEN
+                    CREATE INDEX menu_discou_active_b4fadc_idx
+                    ON public.menu_discount (active, type);
+                END IF;
+
+                IF to_regclass('public.menu_product_category_38490c_idx') IS NOT NULL
+                   AND to_regclass('public.menu_produc_categor_2de784_idx') IS NULL THEN
+                    ALTER INDEX public.menu_product_category_38490c_idx
+                    RENAME TO menu_produc_categor_2de784_idx;
+                ELSIF to_regclass('public.menu_product_category_38490c_idx') IS NULL
+                      AND to_regclass('public.menu_produc_categor_2de784_idx') IS NULL
+                      AND EXISTS (
+                          SELECT 1
+                          FROM information_schema.columns
+                          WHERE table_schema = 'public'
+                            AND table_name = 'menu_product'
+                            AND column_name = 'category_id'
+                      )
+                      AND EXISTS (
+                          SELECT 1
+                          FROM information_schema.columns
+                          WHERE table_schema = 'public'
+                            AND table_name = 'menu_product'
+                            AND column_name = 'available'
+                      ) THEN
+                    CREATE INDEX menu_produc_categor_2de784_idx
+                    ON public.menu_product (category_id, available);
+                END IF;
+            END $$;
+            """
+        )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,14 +64,21 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RenameIndex(
-            model_name='discount',
-            new_name='menu_discou_active_b4fadc_idx',
-            old_name='menu_discount_active__c4f9aa_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='product',
-            new_name='menu_produc_categor_2de784_idx',
-            old_name='menu_product_category_38490c_idx',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(repair_legacy_index_names, reverse_code=migrations.RunPython.noop),
+            ],
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name='discount',
+                    new_name='menu_discou_active_b4fadc_idx',
+                    old_name='menu_discount_active__c4f9aa_idx',
+                ),
+                migrations.RenameIndex(
+                    model_name='product',
+                    new_name='menu_produc_categor_2de784_idx',
+                    old_name='menu_product_category_38490c_idx',
+                ),
+            ],
         ),
     ]

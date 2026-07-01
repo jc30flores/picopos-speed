@@ -3,7 +3,7 @@
   <name>Pico de Gallo Backend</name>
   <description>Django backend served by Waitress for native Windows.</description>
   <executable>{{PYTHON_EXE}}</executable>
-  <arguments>-m waitress --listen=127.0.0.1:8000 config.wsgi:application</arguments>
+  <arguments>-m waitress --listen=127.0.0.1:{{BACKEND_HTTP_PORT}} config.wsgi:application</arguments>
   <workingdirectory>{{BACKEND_DIR}}</workingdirectory>
   <startmode>Automatic</startmode>
   <depend>PicoDeGallo-PostgreSQL</depend>

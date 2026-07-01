@@ -42,7 +42,11 @@ function Import-FunctionsFromFile {
 
 Import-FunctionsFromFile `
     -Path $commonScript `
-    -FunctionNames @("Protect-Text") `
+    -FunctionNames @(
+        "Protect-Text",
+        "ConvertTo-WindowsCommandLineArgument",
+        "Join-WindowsCommandLineArguments"
+    ) `
     -Label "NATIVE_RUNNER_TEST"
 
 Import-FunctionsFromFile `
@@ -53,6 +57,7 @@ Import-FunctionsFromFile `
         "Get-CommandFailureArtifactPath",
         "Save-CommandFailureArtifact",
         "ConvertTo-StartProcessArgumentString",
+        "Invoke-NativeCommandLogged",
         "Invoke-LoggedCommand"
     ) `
     -Label "NATIVE_RUNNER_TEST"
@@ -206,6 +211,27 @@ try {
         -Environment @{ EXPECTED_CWD = $cwdWithSpace } `
         -LogName "runner.log"
     Assert-LogContains -Needle "cwd-ok" -Message "working directory with spaces was not honored"
+
+    $argProbe = Join-Path $Script:NativeRunnerLogDir "arg probe.ps1"
+    @'
+param([string]$Value)
+if ($Value -ne 'value with "quotes" and spaces') {
+    [Console]::Error.WriteLine("arg mismatch: " + $Value)
+    exit 8
+}
+Write-Output "quoted-args-ok"
+exit 0
+'@ | Set-Content -LiteralPath $argProbe -Encoding UTF8
+    $argProbeArgs = @("-NoProfile")
+    if ($PSVersionTable.PSEdition -eq "Desktop") {
+        $argProbeArgs += @("-ExecutionPolicy", "Bypass")
+    }
+    $argProbeArgs += @("-File", $argProbe, 'value with "quotes" and spaces')
+    Invoke-LoggedCommand `
+        -FilePath $shell `
+        -ArgumentList $argProbeArgs `
+        -LogName "runner.log"
+    Assert-LogContains -Needle "quoted-args-ok" -Message "arguments with spaces and quotes were not preserved"
 
     Invoke-LoggedCommand `
         -FilePath $shell `

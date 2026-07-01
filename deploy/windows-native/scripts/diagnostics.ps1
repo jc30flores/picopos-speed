@@ -10,11 +10,22 @@ function Save-Diagnostic {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Text
     )
-    Set-Content -LiteralPath (Join-Path $root $Name) -Value (Protect-Text $Text) -Encoding UTF8
+    [System.IO.File]::WriteAllText((Join-Path $root $Name), (Protect-Text $Text), (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
 }
 
 Save-Diagnostic "windows.txt" ([Environment]::OSVersion.VersionString)
 Save-Diagnostic "powershell.txt" ($PSVersionTable | Out-String)
+$installProfile = Get-WindowsInstallProfile
+$installProfileLines = foreach ($key in @($installProfile.Keys)) {
+    "INSTALL_PROFILE {0}={1}" -f $key, [string]$installProfile[$key]
+}
+Save-Diagnostic "install-profile.txt" ($installProfileLines -join "`n")
+if (Test-Path -LiteralPath (Get-InstallStatePath) -PathType Leaf) {
+    Save-Diagnostic "install-state.json" (Get-Content -LiteralPath (Get-InstallStatePath) -Raw -ErrorAction SilentlyContinue)
+}
+if (Test-Path -LiteralPath (Get-RuntimePortsPath) -PathType Leaf) {
+    Save-Diagnostic "runtime-ports.json" (Get-Content -LiteralPath (Get-RuntimePortsPath) -Raw -ErrorAction SilentlyContinue)
+}
 
 $serviceLines = foreach ($svc in $Script:Services) {
     $service = Get-ServiceSafe $svc
@@ -86,42 +97,7 @@ Save-Diagnostic "caddyfile.txt" ("Caddyfile=$(if (Test-Path -LiteralPath $caddyf
 function ConvertTo-DiagnosticArgumentString {
     param([string[]]$ArgumentList = @())
 
-    $escaped = foreach ($arg in $ArgumentList) {
-        $text = [string]$arg
-        if ($text.Length -gt 0 -and $text -notmatch '[\s"]') {
-            $text
-            continue
-        }
-
-        $builder = New-Object System.Text.StringBuilder
-        [void]$builder.Append('"')
-        $backslashes = 0
-        foreach ($char in $text.ToCharArray()) {
-            if ($char -eq '\') {
-                $backslashes += 1
-                continue
-            }
-            if ($char -eq '"') {
-                if ($backslashes -gt 0) {
-                    [void]$builder.Append("\" * ($backslashes * 2))
-                    $backslashes = 0
-                }
-                [void]$builder.Append('\"')
-                continue
-            }
-            if ($backslashes -gt 0) {
-                [void]$builder.Append("\" * $backslashes)
-                $backslashes = 0
-            }
-            [void]$builder.Append($char)
-        }
-        if ($backslashes -gt 0) {
-            [void]$builder.Append("\" * ($backslashes * 2))
-        }
-        [void]$builder.Append('"')
-        $builder.ToString()
-    }
-    return ($escaped -join " ")
+    return (Join-WindowsCommandLineArguments -ArgumentList $ArgumentList)
 }
 
 function Invoke-DiagnosticProcess {
@@ -306,6 +282,13 @@ foreach ($file in $failedCommandFiles) {
     Save-Diagnostic "failed-$($file.Name).txt" (Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue)
 }
 
+foreach ($snapshotName in @("migration-plan.log", "django-migrations-snapshot.log", "pg-indexes-snapshot.log", "migration-diagnostics.log")) {
+    $snapshotPath = Join-Path (Get-LogsDir) $snapshotName
+    if (Test-Path -LiteralPath $snapshotPath -PathType Leaf) {
+        Save-Diagnostic $snapshotName (Get-Content -LiteralPath $snapshotPath -Raw -ErrorAction SilentlyContinue)
+    }
+}
+
 $tmpFiles = Get-ChildItem -LiteralPath (Get-LogsDir) -File -Filter "*.tmp" -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending
 $tmpLines = foreach ($file in $tmpFiles) {
@@ -337,6 +320,9 @@ if (Test-Path -LiteralPath $icacls -PathType Leaf) {
 $envs = Read-NativeEnv
 $dteTokenName = "DTE_" + "API_TOKEN"
 $safe = [ordered]@{
+    PICO_PORT_MODE = $envs["PICO_PORT_MODE"]
+    DB_PORT = $envs["DB_PORT"]
+    BACKEND_HTTP_PORT = $envs["BACKEND_HTTP_PORT"]
     APP_HTTP_PORT = $envs["APP_HTTP_PORT"]
     APP_BIND_ADDRESS = $envs["APP_BIND_ADDRESS"]
     DTE_BACKGROUND_MODE = $envs["DTE_BACKGROUND_MODE"]
@@ -350,6 +336,7 @@ $safe = [ordered]@{
 Save-Diagnostic "config-safe.json" ($safe | ConvertTo-Json -Depth 3)
 
 $appUrl = Get-AppUrl
+$backendPort = if ([string]::IsNullOrWhiteSpace([string]$envs["BACKEND_HTTP_PORT"])) { "8000" } else { [string]$envs["BACKEND_HTTP_PORT"] }
 function Get-HealthStatus {
     param([Parameter(Mandatory = $true)][string]$Uri)
     try {
@@ -361,10 +348,14 @@ function Get-HealthStatus {
 $rootHealth = Get-HealthStatus -Uri $appUrl
 $liveHealth = Get-HealthStatus -Uri ($appUrl + "/api/health/live/")
 $readyHealth = Get-HealthStatus -Uri ($appUrl + "/api/health/ready/")
+$backendLiveHealth = Get-HealthStatus -Uri "http://127.0.0.1:$backendPort/api/health/live/"
+$backendReadyHealth = Get-HealthStatus -Uri "http://127.0.0.1:$backendPort/api/health/ready/"
 Save-Diagnostic "health.txt" ((@(
     "root=$rootHealth",
     "live=$liveHealth",
-    "ready=$readyHealth"
+    "ready=$readyHealth",
+    "backend_live=$backendLiveHealth",
+    "backend_ready=$backendReadyHealth"
 ) -join "`n"))
 
 foreach ($log in Get-ChildItem (Get-LogsDir) -Filter "*.log" -ErrorAction SilentlyContinue) {

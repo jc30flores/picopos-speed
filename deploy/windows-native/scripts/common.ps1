@@ -24,6 +24,8 @@ function Get-EnvPath { Join-Path $Script:ProgramDataDir "config\.env" }
 function Get-LogsDir { Join-Path $Script:ProgramDataDir "logs" }
 function Get-BackupsDir { Join-Path $Script:ProgramDataDir "backups" }
 function Get-DiagnosticsDir { Join-Path $Script:ProgramDataDir "diagnostics" }
+function Get-InstallStatePath { Join-Path $Script:ProgramDataDir "install-state.json" }
+function Get-RuntimePortsPath { Join-Path $Script:ProgramDataDir "config\runtime-ports.json" }
 
 function New-DirectorySafe {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -69,6 +71,180 @@ function Write-NativeLog {
     New-DirectorySafe (Get-LogsDir)
     $line = "[{0}] {1}" -f (Get-Date -Format o), (Protect-Text $Message)
     Add-Content -LiteralPath (Join-Path (Get-LogsDir) $LogName) -Value $line -Encoding UTF8
+}
+
+function ConvertTo-WindowsCommandLineArgument {
+    param([AllowEmptyString()][string]$Argument)
+
+    $text = [string]$Argument
+    if ($text.Length -gt 0 -and $text -notmatch '[\s"]') {
+        return $text
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($char in $text.ToCharArray()) {
+        if ($char -eq '\') {
+            $backslashes += 1
+            continue
+        }
+        if ($char -eq '"') {
+            if ($backslashes -gt 0) {
+                [void]$builder.Append("\" * ($backslashes * 2))
+                $backslashes = 0
+            }
+            [void]$builder.Append('\"')
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append("\" * $backslashes)
+            $backslashes = 0
+        }
+        [void]$builder.Append($char)
+    }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append("\" * ($backslashes * 2))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-WindowsCommandLineArguments {
+    param([string[]]$ArgumentList = @())
+
+    $escaped = foreach ($arg in $ArgumentList) {
+        ConvertTo-WindowsCommandLineArgument -Argument ([string]$arg)
+    }
+    return ($escaped -join " ")
+}
+
+function Get-SafeInstallProfileValue {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [string]$Fallback = "unknown"
+    )
+
+    try {
+        $value = & $ScriptBlock
+        if ($null -eq $value) {
+            return $Fallback
+        }
+        $text = [string]$value
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            return $Fallback
+        }
+        return $text
+    } catch {
+        return $Fallback
+    }
+}
+
+function Test-CommandAvailableForProfile {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if (Get-Command $Name -ErrorAction SilentlyContinue) {
+        return "true"
+    }
+    return "false"
+}
+
+function Test-ExecutableRunsForProfile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$ArgumentList = @("--version")
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return "missing"
+    }
+
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Path
+        $psi.Arguments = Join-WindowsCommandLineArguments -ArgumentList $ArgumentList
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $process.StartInfo = $psi
+        [void]$process.Start()
+        if (-not $process.WaitForExit(5000)) {
+            try { $process.Kill() } catch { }
+            return "timeout"
+        }
+        return ("exitCode={0}" -f [int]$process.ExitCode)
+    } catch {
+        return ("error={0}" -f $_.Exception.GetType().Name)
+    } finally {
+        if ($process) {
+            $process.Dispose()
+        }
+    }
+}
+
+function Get-WindowsInstallProfile {
+    $os = $null
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    } catch {
+    }
+
+    $profile = [ordered]@{}
+    $profile["WindowsCaption"] = Get-SafeInstallProfileValue { if ($os) { $os.Caption } else { [Environment]::OSVersion.VersionString } }
+    $profile["WindowsVersion"] = Get-SafeInstallProfileValue { if ($os) { $os.Version } else { [Environment]::OSVersion.Version.ToString() } }
+    $profile["BuildNumber"] = Get-SafeInstallProfileValue { if ($os) { $os.BuildNumber } else { [Environment]::OSVersion.Version.Build } }
+    $profile["EditionID"] = Get-SafeInstallProfileValue { (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction Stop).EditionID }
+    $profile["OSArchitecture"] = Get-SafeInstallProfileValue { if ($os) { $os.OSArchitecture } else { "" } }
+    $profile["Is64BitOperatingSystem"] = [string][Environment]::Is64BitOperatingSystem
+    $profile["Is64BitProcess"] = [string][Environment]::Is64BitProcess
+    $profile["PowerShellVersion"] = Get-SafeInstallProfileValue { $PSVersionTable.PSVersion.ToString() }
+    $profile["PowerShellEdition"] = Get-SafeInstallProfileValue {
+        if ($PSVersionTable.ContainsKey("PSEdition")) { $PSVersionTable.PSEdition } else { "Desktop" }
+    }
+    $profile["ClrVersion"] = Get-SafeInstallProfileValue { [Environment]::Version.ToString() }
+    $profile["CurrentCulture"] = Get-SafeInstallProfileValue { [System.Globalization.CultureInfo]::CurrentCulture.Name }
+    $profile["CurrentUICulture"] = Get-SafeInstallProfileValue { [System.Globalization.CultureInfo]::CurrentUICulture.Name }
+    $profile["SystemLocale"] = Get-SafeInstallProfileValue {
+        if (Get-Command Get-WinSystemLocale -ErrorAction SilentlyContinue) {
+            (Get-WinSystemLocale).Name
+        } else {
+            [System.Globalization.CultureInfo]::InstalledUICulture.Name
+        }
+    }
+    $profile["UILanguage"] = Get-SafeInstallProfileValue {
+        if (Get-Command Get-WinUILanguageOverride -ErrorAction SilentlyContinue) {
+            $lang = Get-WinUILanguageOverride
+            if ($lang) { $lang.Name } else { [System.Globalization.CultureInfo]::CurrentUICulture.Name }
+        } else {
+            [System.Globalization.CultureInfo]::CurrentUICulture.Name
+        }
+    }
+    $profile["ConsoleCodePage"] = Get-SafeInstallProfileValue { [Console]::OutputEncoding.CodePage }
+    $profile["AnsiCodePage"] = Get-SafeInstallProfileValue { (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" -ErrorAction Stop).ACP }
+    $profile["OemCodePage"] = Get-SafeInstallProfileValue { (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" -ErrorAction Stop).OEMCP }
+    $profile["COMPUTERNAME"] = Get-SafeInstallProfileValue { $env:COMPUTERNAME }
+    $profile["USERDOMAIN"] = Get-SafeInstallProfileValue { $env:USERDOMAIN }
+    $profile["CurrentUser"] = Get-SafeInstallProfileValue { [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+    $profile["IsAdmin"] = Get-SafeInstallProfileValue {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = [Security.Principal.WindowsPrincipal]::new($id)
+        [string]$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    $profile["ProgramFiles"] = Get-SafeInstallProfileValue { $env:ProgramFiles }
+    $profile["ProgramFilesX86"] = Get-SafeInstallProfileValue { ${env:ProgramFiles(x86)} }
+    $profile["ProgramData"] = Get-SafeInstallProfileValue { $env:ProgramData }
+    $profile["TEMP"] = Get-SafeInstallProfileValue { $env:TEMP }
+    $profile["GetLocalUserAvailable"] = Test-CommandAvailableForProfile -Name "Get-LocalUser"
+    $profile["seceditAvailable"] = Test-CommandAvailableForProfile -Name "secedit.exe"
+    $profile["scAvailable"] = Test-CommandAvailableForProfile -Name "sc.exe"
+    $profile["icaclsAvailable"] = Test-CommandAvailableForProfile -Name "icacls.exe"
+    $profile["netAvailable"] = Test-CommandAvailableForProfile -Name "net.exe"
+    $profile["WinSWExecutes"] = Test-ExecutableRunsForProfile -Path (Join-Path (Join-Path $Script:ProgramFilesDir "services") "winsw.exe") -ArgumentList @("--version")
+    $profile["CaddyExecutes"] = Test-ExecutableRunsForProfile -Path (Join-Path $Script:ProgramFilesDir "caddy\caddy.exe") -ArgumentList @("version")
+    $profile["PythonExecutes"] = Test-ExecutableRunsForProfile -Path (Join-Path $Script:ProgramFilesDir "python\python.exe") -ArgumentList @("--version")
+    $profile["PostgreSQLExecutes"] = Test-ExecutableRunsForProfile -Path (Join-Path $Script:ProgramFilesDir "postgres\bin\postgres.exe") -ArgumentList @("--version")
+    return $profile
 }
 
 function Read-NativeEnv {

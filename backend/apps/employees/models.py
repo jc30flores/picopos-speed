@@ -36,7 +36,7 @@ class Employee(models.Model):
 
     class Meta:
         ordering = ["full_name"]
-        indexes = [models.Index(fields=["branch", "status"])]
+        indexes = [models.Index(fields=["branch", "status"], name="employees_e_branch__045d1b_idx")]
 
     def __str__(self) -> str:
         return self.full_name
@@ -56,14 +56,14 @@ class AttendanceRecord(models.Model):
     minutes_late = models.IntegerField(default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True)
 
     class Meta:
         ordering = ["-date"]
         constraints = [
             models.UniqueConstraint(fields=["employee", "date"], name="unique_attendance_employee_date")
         ]
-        indexes = [models.Index(fields=["employee", "date"])]
+        indexes = [models.Index(fields=["employee", "date"], name="employees_a_employe_db3be2_idx")]
 
     def __str__(self) -> str:
         return f"{self.employee.full_name} {self.date}"
@@ -88,7 +88,7 @@ class AttendanceCycle(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["attendance_record", "sequence"], name="unique_attendance_cycle_sequence")
         ]
-        indexes = [models.Index(fields=["attendance_record", "sequence"])]
+        indexes = [models.Index(fields=["attendance_record", "sequence"], name="employees_a_attenda_73f16a_idx")]
 
     def __str__(self) -> str:
         return f"{self.attendance_record.employee.full_name} {self.attendance_record.date} ciclo {self.sequence}"
@@ -140,7 +140,7 @@ class Schedule(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["employee", "day_of_week"])]
+        indexes = [models.Index(fields=["employee", "day_of_week"], name="employees_s_employe_ed7b9e_idx")]
 
     def __str__(self) -> str:
         return f"{self.employee.full_name} - {self.day_of_week}"

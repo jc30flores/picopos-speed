@@ -217,6 +217,15 @@ def validate_native_installer_contract() -> None:
         "postgres.exe --version",
         "initdb.exe --version",
         "psql.exe --version",
+        "Get-WindowsInstallProfile",
+        "INSTALL_PROFILE_BEGIN",
+        "INSTALL_PROFILE {0}={1}",
+        "Get-InstallStatePath",
+        "Get-RuntimePortsPath",
+        "Resolve-InstallPorts",
+        "PICO_PORT_MODE",
+        "BACKEND_HTTP_PORT",
+        "PORT_DECISION port=",
     ]:
         if token not in install:
             fail(f"install-services.ps1 missing required token: {token}")
@@ -292,6 +301,8 @@ def validate_native_installer_contract() -> None:
     ]:
         if token not in invoke_logged_body:
             fail(f"Invoke-LoggedCommand missing robust native runner token: {token}")
+    if "Join-WindowsCommandLineArguments" not in install or "Invoke-NativeCommandLogged" not in install:
+        fail("install-services.ps1 missing PS5-compatible native command helper names")
     if "failed-{0}-{1}.log" not in install:
         fail("install-services.ps1 missing clear failed command artifact naming")
     winsw_account_start = install.find("function Install-WinSWServiceWithAccount")
@@ -423,12 +434,12 @@ def validate_native_installer_contract() -> None:
             fail(f"install-services.ps1 missing service rendering/install guard: {token}")
 
     status = read_text_safe(NATIVE / "scripts" / "status.ps1")
-    for token in ["VERSION=", "PICO_SERVICE_ACCOUNT=", "PasswordExpires", "POSTGRES_DATA=", "SERVICE_FILES=", "CADDYFILE=", "RUNAS_LAST_EXITCODE=", "StartName=", "POSTGRES_XML_SERVICEACCOUNT"]:
+    for token in ["VERSION=", "PICO_SERVICE_ACCOUNT=", "PasswordExpires", "POSTGRES_DATA=", "SERVICE_FILES=", "CADDYFILE=", "RUNAS_LAST_EXITCODE=", "StartName=", "POSTGRES_XML_SERVICEACCOUNT", "BACKEND_HTTP_PORT"]:
         if token not in status:
             fail(f"status.ps1 missing diagnostic token: {token}")
 
     diagnostics = read_text_safe(NATIVE / "scripts" / "diagnostics.ps1")
-    for token in ["service-account.txt", "PasswordExpires", "postgres-data.txt", "service-files.txt", "caddyfile.txt", "runas-files.txt", "runas-last-exitcode.txt", "service-xml-", "acls.txt", "install-services-error.log"]:
+    for token in ["service-account.txt", "PasswordExpires", "postgres-data.txt", "service-files.txt", "caddyfile.txt", "runas-files.txt", "runas-last-exitcode.txt", "service-xml-", "acls.txt", "install-services-error.log", "install-profile.txt", "migration-plan.log", "django-migrations-snapshot.log", "pg-indexes-snapshot.log", "runtime-ports.json"]:
         if token == "install-services-error.log":
             if token not in install and token not in diagnostics:
                 fail(f"diagnostics coverage missing token: {token}")
@@ -443,6 +454,22 @@ def validate_native_installer_contract() -> None:
         fail("windows-native-installer workflow must run or explicitly skip WinSW service account fixture")
     if "scripts/ci/test_native_command_runner.ps1" not in workflow:
         fail("windows-native-installer workflow must run native command runner fixture")
+    if "scripts/ci/test_django_migrations_postgres.py" not in workflow:
+        fail("windows-native-installer workflow must run clean PostgreSQL migration fixture")
+    migration_fixture = REPO / "scripts" / "ci" / "test_django_migrations_postgres.py"
+    if not migration_fixture.exists():
+        fail("scripts/ci/test_django_migrations_postgres.py missing")
+    migration_fixture_text = read_text_safe(migration_fixture)
+    for token in ["migrate-1", "migrate-2-idempotent", "makemigrations", "pg_indexes", "menu_discount_active__c4f9aa_idx", "PICO_INSTALLER_PREFLIGHT"]:
+        if token not in migration_fixture_text:
+            fail(f"PostgreSQL migration fixture missing token: {token}")
+    smoke_fixture = REPO / "scripts" / "ci" / "test_windows_installer_smoke.ps1"
+    if not smoke_fixture.exists():
+        fail("scripts/ci/test_windows_installer_smoke.ps1 missing")
+    smoke_text = read_text_safe(smoke_fixture)
+    for token in ["RUN_WINDOWS_INSTALLER_SMOKE", "Administrator", "install-state.json", "runtime-ports.json", "diagnostics.ps1"]:
+        if token not in smoke_text:
+            fail(f"Windows installer smoke fixture missing token: {token}")
     postgres_config_test = read_text_safe(REPO / "scripts" / "ci" / "test_postgres_config_lines.ps1")
     for token in ["Blank lines were not preserved", "UTF-8 BOM detected", "NUL byte detected", "PostgreSQL config blank-line fixture OK"]:
         if token not in postgres_config_test:
@@ -463,6 +490,7 @@ def validate_native_installer_contract() -> None:
         "TEST_SECRET_VALUE",
         "***REDACTED***",
         "cwd with space",
+        "quoted-args-ok",
         "ErrorActionPreference=Stop",
     ]:
         if token not in native_runner_test:
@@ -506,8 +534,11 @@ def validate_native_installer_contract() -> None:
         if "runserver" in text:
             fail(f"service template uses runserver: {path.relative_to(REPO)}")
     backend_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-Backend.xml")
-    if "-m waitress --listen=127.0.0.1:8000 config.wsgi:application" not in backend_template:
+    if "-m waitress --listen=127.0.0.1:{{BACKEND_HTTP_PORT}} config.wsgi:application" not in backend_template:
         fail("backend service template does not use python -m waitress")
+    caddy_template = read_text_safe(NATIVE / "caddy" / "Caddyfile.template")
+    if "{{BACKEND_HTTP_PORT}}" not in caddy_template:
+        fail("Caddyfile template must use selected backend port")
     postgres_template = read_text_safe(NATIVE / "service-templates" / "PicoDeGallo-PostgreSQL.xml")
     if "pg_ctl" in postgres_template or "runservice" in postgres_template:
         fail("PostgreSQL service template must not use pg_ctl runservice under WinSW")
@@ -525,6 +556,56 @@ def validate_native_installer_contract() -> None:
         fail("PostgreSQL service template contains a literal service account password")
 
     print("native installer contract OK")
+
+
+def validate_windows_hardening_static() -> None:
+    powershell_files = [
+        REPO / rel
+        for rel in git_ls_files("deploy/windows-native/scripts", "scripts/ci")
+        if rel.suffix.lower() == ".ps1"
+    ]
+    localized_names = [
+        "Admin" + "istrators",
+        "Admin" + "istradores",
+        "Us" + "ers",
+        "Us" + "uarios",
+        "Every" + "one",
+        "To" + "dos",
+    ]
+    localized_pattern = re.compile(r"\b(" + "|".join(re.escape(name) for name in localized_names) + r")\b")
+    argument_list_pattern = re.compile(
+        "ProcessStartInfo" + r"\s*\.\s*" + "Argument" + "List|" + r"\." + "Argument" + "List" + r"\.Add"
+    )
+    ps7_and = "&" + "&"
+    ps7_or = "|" + "|"
+    ps7_chain_pattern = re.compile(r"(?<![|&])" + re.escape(ps7_and) + "|" + re.escape(ps7_or))
+    for path in powershell_files:
+        text = read_text_safe(path)
+        rel = path.relative_to(REPO)
+        if argument_list_pattern.search(text):
+            fail(f"{rel} uses the ProcessStartInfo argument-list API, which is not PS5.1-safe")
+        if ps7_chain_pattern.search(text):
+            fail(f"{rel} uses PowerShell 7-only chain operators")
+        if localized_pattern.search(text):
+            fail(f"{rel} contains localized builtin group names for critical scripts")
+        if re.search(r"(?i)(Set-Content|Out-File)[^\r\n]*(postgresql\.conf|pg_hba\.conf|\.env|\.xml)", text):
+            fail(f"{rel} may write critical config/env/XML with PowerShell default encoding")
+
+    menu_rename = REPO / "backend" / "apps" / "menu" / "migrations" / "0002_rename_menu_discount_active__c4f9aa_idx_menu_discou_active_b4fadc_idx_and_more.py"
+    menu_rename_text = read_text_safe(menu_rename)
+    for token in ["SeparateDatabaseAndState", "repair_legacy_index_names", "to_regclass", "CREATE INDEX menu_produc_categor_2de784_idx"]:
+        if token not in menu_rename_text:
+            fail(f"menu legacy rename migration missing defensive token: {token}")
+    menu_0014 = read_text_safe(REPO / "backend" / "apps" / "menu" / "migrations" / "0014_alter_category_options_alter_modifier_options_and_more.py")
+    if "DROP INDEX IF EXISTS public.menu_discou_active_b4fadc_idx" not in menu_0014:
+        fail("menu 0014 must drop legacy discount index defensively")
+
+    common = read_text_safe(NATIVE / "scripts" / "common.ps1")
+    for token in ["ConvertTo-WindowsCommandLineArgument", "Join-WindowsCommandLineArguments", "Get-WindowsInstallProfile", "Is64BitOperatingSystem", "CurrentUICulture", "OemCodePage"]:
+        if token not in common:
+            fail(f"common.ps1 missing Windows profile/runner token: {token}")
+
+    print("Windows/PowerShell hardening static checks OK")
 
 
 def should_scan_text(path: Path) -> bool:
@@ -616,6 +697,7 @@ def main() -> int:
         validate_no_versioned_node_dirs_in_native_scope,
         validate_dte_examples,
         validate_native_installer_contract,
+        validate_windows_hardening_static,
         validate_forbidden_references,
         validate_local_release_if_present,
     ]

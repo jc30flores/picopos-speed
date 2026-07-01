@@ -25,9 +25,56 @@ permissions:
   contents: write
 
 jobs:
+  migration-postgres:
+    name: Validate Django migrations on PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+
+      - name: Test clean PostgreSQL migrations
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_ADMIN_DB: postgres
+          POSTGRES_ADMIN_USER: postgres
+          POSTGRES_ADMIN_PASSWORD: postgres
+          MIGRATION_TEST_LOG_DIR: artifacts/django-migrations-postgres
+        run: python scripts/ci/test_django_migrations_postgres.py
+
+      - name: Upload migration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: django-migrations-postgres
+          path: artifacts/django-migrations-postgres
+          if-no-files-found: ignore
+          retention-days: 14
+
   build-installer:
     name: Build and publish installer
     runs-on: windows-latest
+    needs: migration-postgres
     env:
       RUNTIME_MANIFEST_PATH: deploy/windows-native/vendor/runtime-manifest.json
       INSTALLER_OUTPUT_DIR: release/installers

@@ -176,6 +176,7 @@ if ($envs.Contains("APP_HTTP_PORT") -and -not [string]::IsNullOrWhiteSpace([stri
 }
 $dbHost = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_HOST"])) { "127.0.0.1" } else { [string]$envs["DB_HOST"] }
 $dbPort = if ([string]::IsNullOrWhiteSpace([string]$envs["DB_PORT"])) { 5432 } else { [int]$envs["DB_PORT"] }
+$backendPort = if ([string]::IsNullOrWhiteSpace([string]$envs["BACKEND_HTTP_PORT"])) { 8000 } else { [int]$envs["BACKEND_HTTP_PORT"] }
 
 Write-SafeHost "URL: $appUrl"
 Write-SafeHost "VERSION=$(Get-InstalledVersion)"
@@ -198,10 +199,11 @@ foreach ($svc in $Script:Services) {
 
 $liveUrl = $appUrl + "/api/health/live/"
 $readyUrl = $appUrl + "/api/health/ready/"
+$backendReadyUrl = "http://127.0.0.1:$backendPort/api/health/ready/"
 Write-SafeHost "PORT_$dbPort=$(if (Test-TcpPort -HostName $dbHost -Port ([int]$dbPort)) { 'listening' } else { 'closed' })"
-Write-SafeHost "PORT_8000=$(if (Test-TcpPort -Port 8000) { 'listening' } else { 'closed' })"
+Write-SafeHost "PORT_$backendPort=$(if (Test-TcpPort -Port ([int]$backendPort)) { 'listening' } else { 'closed' })"
 Write-SafeHost "PORT_$port=$(if (Test-TcpPort -Port ([int]$port)) { 'listening' } else { 'closed' })"
-Write-SafeHost "BACKEND_HEALTH_READY=$(Get-HttpStatus -Uri 'http://127.0.0.1:8000/api/health/ready/')"
+Write-SafeHost "BACKEND_HEALTH_READY=$(Get-HttpStatus -Uri $backendReadyUrl)"
 Write-SafeHost "HEALTH_LIVE=$(Get-HttpStatus -Uri $liveUrl)"
 Write-SafeHost "HEALTH_READY=$(Get-HttpStatus -Uri $readyUrl)"
 Write-SafeHost "DTE_BACKGROUND_MODE=$($envs['DTE_BACKGROUND_MODE'])"

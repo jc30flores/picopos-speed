@@ -38,6 +38,103 @@ function Write-InstallLog {
     Add-Content -LiteralPath (Get-NativeLogPath $LogName) -Value $line -Encoding UTF8
 }
 
+function Save-InstallState {
+    if (-not $Script:InstallState) {
+        return
+    }
+    New-DirectorySafe (Split-Path (Get-InstallStatePath) -Parent)
+    $json = $Script:InstallState | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText((Get-InstallStatePath), $json, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
+}
+
+function Initialize-InstallState {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$OsProfile,
+        [string]$Version = "unknown"
+    )
+
+    $Script:InstallState = [ordered]@{
+        version = $Version
+        phase = "bootstrap"
+        startedAt = (Get-Date -Format o)
+        updatedAt = (Get-Date -Format o)
+        lastSuccessfulStep = ""
+        failedStep = ""
+        selectedPorts = [ordered]@{}
+        osProfile = $OsProfile
+        dbInitialized = $false
+        postgresServiceOk = $false
+        migrationsOk = $false
+        servicesInstalled = $false
+        healthOk = $false
+    }
+    Save-InstallState
+}
+
+function Update-InstallState {
+    param(
+        [string]$Phase,
+        [string]$LastSuccessfulStep,
+        [string]$FailedStep,
+        [System.Collections.IDictionary]$SelectedPorts,
+        [object]$DbInitialized,
+        [object]$PostgresServiceOk,
+        [object]$MigrationsOk,
+        [object]$ServicesInstalled,
+        [object]$HealthOk
+    )
+
+    if (-not $Script:InstallState) {
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Phase)) { $Script:InstallState["phase"] = $Phase }
+    if (-not [string]::IsNullOrWhiteSpace($LastSuccessfulStep)) { $Script:InstallState["lastSuccessfulStep"] = $LastSuccessfulStep }
+    if (-not [string]::IsNullOrWhiteSpace($FailedStep)) { $Script:InstallState["failedStep"] = $FailedStep }
+    if ($SelectedPorts) { $Script:InstallState["selectedPorts"] = $SelectedPorts }
+    if ($PSBoundParameters.ContainsKey("DbInitialized")) { $Script:InstallState["dbInitialized"] = [bool]$DbInitialized }
+    if ($PSBoundParameters.ContainsKey("PostgresServiceOk")) { $Script:InstallState["postgresServiceOk"] = [bool]$PostgresServiceOk }
+    if ($PSBoundParameters.ContainsKey("MigrationsOk")) { $Script:InstallState["migrationsOk"] = [bool]$MigrationsOk }
+    if ($PSBoundParameters.ContainsKey("ServicesInstalled")) { $Script:InstallState["servicesInstalled"] = [bool]$ServicesInstalled }
+    if ($PSBoundParameters.ContainsKey("HealthOk")) { $Script:InstallState["healthOk"] = [bool]$HealthOk }
+    $Script:InstallState["updatedAt"] = (Get-Date -Format o)
+    Save-InstallState
+}
+
+function Write-InstallProfileLog {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Profile)
+
+    Write-InstallLog "INSTALL_PROFILE_BEGIN"
+    foreach ($key in @($Profile.Keys)) {
+        Write-InstallLog ("INSTALL_PROFILE {0}={1}" -f $key, [string]$Profile[$key])
+    }
+    Write-InstallLog "INSTALL_PROFILE_END"
+}
+
+function Assert-WindowsInstallProfileSupported {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Profile)
+
+    if ([string]$Profile["Is64BitOperatingSystem"] -ne "True") {
+        throw "Sistema operativo no soportado: se requiere Windows 10/11 x64."
+    }
+    if ([string]$Profile["Is64BitProcess"] -ne "True") {
+        throw "Proceso no soportado: ejecuta el instalador/PowerShell en modo x64."
+    }
+    $build = 0
+    if ([int]::TryParse([string]$Profile["BuildNumber"], [ref]$build)) {
+        if ($build -lt 10240) {
+            throw "Windows no soportado: build $build. Se requiere Windows 10/11 x64."
+        }
+    }
+    $psMajor = 0
+    $psVersion = [string]$Profile["PowerShellVersion"]
+    $first = ($psVersion.Split(".") | Select-Object -First 1)
+    if ([int]::TryParse($first, [ref]$psMajor)) {
+        if ($psMajor -lt 5) {
+            throw "PowerShell no soportado: $psVersion. Se requiere Windows PowerShell 5.1 o superior."
+        }
+    }
+}
+
 function Start-InstallTranscriptSafe {
     $path = Get-NativeLogPath "install-services-transcript.log"
     try {
@@ -101,11 +198,14 @@ function Invoke-InstallStep {
 
     $Script:InstallPhase = $Name
     $Script:LastInstallStep = $Name
+    Update-InstallState -Phase $Name
     Write-InstallLog "STEP_BEGIN $Name"
     try {
         & $ScriptBlock
+        Update-InstallState -Phase $Name -LastSuccessfulStep $Name
         Write-InstallLog "STEP_SUCCESS $Name"
     } catch {
+        Update-InstallState -Phase $Name -FailedStep $Name
         Write-InstallLog -LogName "install-services.log" -Message ("STEP_ERROR $Name " + $_.Exception.Message)
         Write-InstallLog -LogName "install-services-error.log" -Message ("STEP_ERROR $Name " + $_.Exception.Message)
         throw
@@ -274,6 +374,19 @@ function Invoke-LoggedCommand {
     }
 }
 
+function Invoke-NativeCommandLogged {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [Parameter(Mandatory = $true)][string]$LogName,
+        [string]$WorkingDirectory,
+        [hashtable]$Environment = @{},
+        [switch]$ReturnStdout
+    )
+
+    Invoke-LoggedCommand @PSBoundParameters
+}
+
 function Render-Template {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
@@ -285,7 +398,7 @@ function Render-Template {
     foreach ($key in $Tokens.Keys) {
         $content = $content.Replace("{{$key}}", [string]$Tokens[$key])
     }
-    Set-Content -LiteralPath $Destination -Value $content -Encoding UTF8
+    [System.IO.File]::WriteAllText($Destination, $content, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
 }
 
 function Get-ServiceWrapperPath {
@@ -926,42 +1039,7 @@ function Grant-PicoServiceAccountPermissions {
 function ConvertTo-StartProcessArgumentString {
     param([string[]]$ArgumentList = @())
 
-    $escaped = foreach ($arg in $ArgumentList) {
-        $text = [string]$arg
-        if ($text.Length -gt 0 -and $text -notmatch '[\s"]') {
-            $text
-            continue
-        }
-
-        $builder = New-Object System.Text.StringBuilder
-        [void]$builder.Append('"')
-        $backslashes = 0
-        foreach ($char in $text.ToCharArray()) {
-            if ($char -eq '\') {
-                $backslashes += 1
-                continue
-            }
-            if ($char -eq '"') {
-                if ($backslashes -gt 0) {
-                    [void]$builder.Append("\" * ($backslashes * 2))
-                    $backslashes = 0
-                }
-                [void]$builder.Append('\"')
-                continue
-            }
-            if ($backslashes -gt 0) {
-                [void]$builder.Append("\" * $backslashes)
-                $backslashes = 0
-            }
-            [void]$builder.Append($char)
-        }
-        if ($backslashes -gt 0) {
-            [void]$builder.Append("\" * ($backslashes * 2))
-        }
-        [void]$builder.Append('"')
-        $builder.ToString()
-    }
-    return ($escaped -join " ")
+    return (Join-WindowsCommandLineArguments -ArgumentList $ArgumentList)
 }
 
 function ConvertTo-PowerShellSingleQuotedString {
@@ -2472,6 +2550,148 @@ END
     }
 }
 
+function Get-EnvPortValue {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$Default
+    )
+
+    $value = [string]$EnvMap[$Name]
+    $port = $Default
+    if (-not [string]::IsNullOrWhiteSpace($value) -and [int]::TryParse($value, [ref]$port)) {
+        return $port
+    }
+    return $Default
+}
+
+function Get-PortOccupancyStatus {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [string]$OwnServiceId
+    )
+
+    if (-not (Test-TcpPort -HostName "127.0.0.1" -Port $Port -TimeoutMilliseconds 500)) {
+        return "free"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OwnServiceId)) {
+        $service = Get-ServiceSafe $OwnServiceId
+        if ($service -and $service.Status -eq "Running") {
+            return "occupied_by_own"
+        }
+    }
+    return "occupied_by_other"
+}
+
+function Get-PortCandidates {
+    param(
+        [Parameter(Mandatory = $true)][int]$Preferred,
+        [Parameter(Mandatory = $true)][int]$FallbackStart,
+        [int]$Count = 25
+    )
+
+    $candidates = @($Preferred)
+    for ($i = 0; $i -lt $Count; $i++) {
+        $candidate = $FallbackStart + $i
+        if ($candidates -notcontains $candidate) {
+            $candidates += $candidate
+        }
+    }
+    return $candidates
+}
+
+function Select-InstallPort {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$Preferred,
+        [Parameter(Mandatory = $true)][int[]]$Candidates,
+        [string]$OwnServiceId,
+        [string]$Mode = "auto"
+    )
+
+    $status = Get-PortOccupancyStatus -Port $Preferred -OwnServiceId $OwnServiceId
+    if ($status -eq "free" -or $status -eq "occupied_by_own") {
+        Write-InstallLog -LogName "ports.log" -Message ("PORT_DECISION port={0} status={1} selected={0} name={2}" -f $Preferred, $status, $Name)
+        return $Preferred
+    }
+
+    if ($Mode -ne "auto") {
+        Write-InstallLog -LogName "ports.log" -Message ("PORT_DECISION port={0} status={1} selected=none name={2} mode={3}" -f $Preferred, $status, $Name, $Mode)
+        throw "Puerto $Preferred ocupado por otro proceso para $Name. Libera el puerto o usa PICO_PORT_MODE=auto."
+    }
+
+    foreach ($candidate in $Candidates) {
+        if ($candidate -eq $Preferred) {
+            continue
+        }
+        $candidateStatus = Get-PortOccupancyStatus -Port $candidate -OwnServiceId $OwnServiceId
+        if ($candidateStatus -eq "free") {
+            Write-InstallLog -LogName "ports.log" -Message ("PORT_DECISION port={0} status={1} selected={2} name={3}" -f $Preferred, $status, $candidate, $Name)
+            return $candidate
+        }
+    }
+
+    Write-InstallLog -LogName "ports.log" -Message ("PORT_DECISION port={0} status={1} selected=none name={2}" -f $Preferred, $status, $Name)
+    throw "No se encontro puerto local disponible para $Name."
+}
+
+function Save-RuntimePorts {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Ports,
+        [Parameter(Mandatory = $true)][string]$Mode
+    )
+
+    $payload = [ordered]@{
+        updatedAt = (Get-Date -Format o)
+        mode = $Mode
+        db = [ordered]@{ host = "127.0.0.1"; port = [int]$Ports["DB_PORT"] }
+        backend = [ordered]@{ host = "127.0.0.1"; port = [int]$Ports["BACKEND_HTTP_PORT"] }
+        app = [ordered]@{ host = "127.0.0.1"; port = [int]$Ports["APP_HTTP_PORT"] }
+    }
+    New-DirectorySafe (Split-Path (Get-RuntimePortsPath) -Parent)
+    [System.IO.File]::WriteAllText((Get-RuntimePortsPath), ($payload | ConvertTo-Json -Depth 6), (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
+}
+
+function Resolve-InstallPorts {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap)
+
+    $mode = ([string]$EnvMap["PICO_PORT_MODE"]).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($mode)) {
+        $mode = "auto"
+    }
+    if ($mode -notin @("auto", "fixed")) {
+        throw "PICO_PORT_MODE invalido: $mode. Usa auto o fixed."
+    }
+
+    $preferredDb = Get-EnvPortValue -EnvMap $EnvMap -Name "DB_PORT" -Default 5432
+    $preferredBackend = Get-EnvPortValue -EnvMap $EnvMap -Name "BACKEND_HTTP_PORT" -Default 8000
+    $preferredApp = Get-EnvPortValue -EnvMap $EnvMap -Name "APP_HTTP_PORT" -Default 9282
+
+    $dbPort = Select-InstallPort -Name "db" -Preferred $preferredDb -Candidates (Get-PortCandidates -Preferred $preferredDb -FallbackStart 55432) -OwnServiceId "PicoDeGallo-PostgreSQL" -Mode $mode
+    $backendPort = Select-InstallPort -Name "backend" -Preferred $preferredBackend -Candidates (Get-PortCandidates -Preferred $preferredBackend -FallbackStart 18000) -OwnServiceId "PicoDeGallo-Backend" -Mode $mode
+    $appPort = Select-InstallPort -Name "app" -Preferred $preferredApp -Candidates (Get-PortCandidates -Preferred $preferredApp -FallbackStart 9283) -OwnServiceId "PicoDeGallo-Caddy" -Mode $mode
+
+    $EnvMap["PICO_PORT_MODE"] = $mode
+    $EnvMap["DB_HOST"] = "127.0.0.1"
+    $EnvMap["DB_PORT"] = [string]$dbPort
+    $EnvMap["BACKEND_HTTP_PORT"] = [string]$backendPort
+    $EnvMap["APP_BIND_ADDRESS"] = "127.0.0.1"
+    $EnvMap["APP_HTTP_PORT"] = [string]$appPort
+    $EnvMap["CORS_ALLOWED_ORIGINS"] = "http://127.0.0.1:$appPort"
+    $EnvMap["CSRF_TRUSTED_ORIGINS"] = "http://127.0.0.1:$appPort"
+
+    Write-NativeEnv $EnvMap
+    $ports = [ordered]@{
+        DB_PORT = $dbPort
+        BACKEND_HTTP_PORT = $backendPort
+        APP_HTTP_PORT = $appPort
+    }
+    Save-RuntimePorts -Ports $ports -Mode $mode
+    Update-InstallState -SelectedPorts $ports
+    Write-InstallLog -LogName "ports.log" -Message ("RUNTIME_PORTS_SAVED path={0} db={1} backend={2} app={3}" -f (Get-RuntimePortsPath), $dbPort, $backendPort, $appPort)
+    return $EnvMap
+}
+
 function Render-Caddyfile {
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap)
 
@@ -2485,13 +2705,16 @@ function Render-Caddyfile {
     if ([string]::IsNullOrWhiteSpace($bind)) { $bind = "127.0.0.1" }
     $port = [string]$EnvMap["APP_HTTP_PORT"]
     if ([string]::IsNullOrWhiteSpace($port)) { $port = "9282" }
+    $backendPort = [string]$EnvMap["BACKEND_HTTP_PORT"]
+    if ([string]::IsNullOrWhiteSpace($backendPort)) { $backendPort = "8000" }
 
-    (Get-Content -LiteralPath $template -Raw).
+    $content = (Get-Content -LiteralPath $template -Raw).
         Replace("{{APP_BIND_ADDRESS}}", $bind).
         Replace("{{APP_HTTP_PORT}}", $port).
+        Replace("{{BACKEND_HTTP_PORT}}", $backendPort).
         Replace("{{PROGRAM_FILES_DIR}}", $Script:ProgramFilesDir.Replace("\", "/")).
-        Replace("{{PROGRAM_DATA_DIR}}", $Script:ProgramDataDir.Replace("\", "/")) |
-        Set-Content -LiteralPath $caddyfile -Encoding UTF8
+        Replace("{{PROGRAM_DATA_DIR}}", $Script:ProgramDataDir.Replace("\", "/"))
+    [System.IO.File]::WriteAllText($caddyfile, $content, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList @($false)))
 
     if (-not (Test-Path -LiteralPath $caddyfile -PathType Leaf)) {
         throw "No se genero Caddyfile final: $caddyfile"
@@ -2651,10 +2874,86 @@ function Run-DjangoCheckRuntime {
         -LogName "check-runtime-config.log"
 }
 
+function Save-DjangoMigrationDiagnostics {
+    $python = Join-Path $Script:ProgramFilesDir "python\python.exe"
+    $backend = Join-Path $Script:ProgramFilesDir "backend"
+
+    try {
+        Invoke-DjangoManage `
+            -ArgumentList @("manage.py", "showmigrations", "--plan") `
+            -LogName "migration-plan.log"
+    } catch {
+        Write-InstallLog -LogName "migration-diagnostics.log" -Message ("MIGRATION_PLAN_SNAPSHOT_FAILED " + $_.Exception.Message)
+    }
+
+    $migrationsScript = @"
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+import django
+django.setup()
+
+from django.db import connection
+
+with connection.cursor() as cursor:
+    cursor.execute("SELECT app, name, applied FROM django_migrations ORDER BY app, name")
+    for app, name, applied in cursor.fetchall():
+        print(f"{app}.{name} applied={applied.isoformat() if hasattr(applied, 'isoformat') else applied}")
+"@
+    try {
+        Invoke-LoggedCommand `
+            -FilePath $python `
+            -ArgumentList @("-c", $migrationsScript) `
+            -WorkingDirectory $backend `
+            -Environment (Get-DjangoEnvironment) `
+            -LogName "django-migrations-snapshot.log"
+    } catch {
+        Write-InstallLog -LogName "migration-diagnostics.log" -Message ("DJANGO_MIGRATIONS_SNAPSHOT_FAILED " + $_.Exception.Message)
+    }
+
+    $indexesScript = @"
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+import django
+django.setup()
+
+from django.db import connection
+
+with connection.cursor() as cursor:
+    cursor.execute(
+        '''
+        SELECT schemaname, tablename, indexname, indexdef
+        FROM pg_indexes
+        WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        ORDER BY schemaname, tablename, indexname
+        '''
+    )
+    for row in cursor.fetchall():
+        print(" | ".join(str(value) for value in row))
+"@
+    try {
+        Invoke-LoggedCommand `
+            -FilePath $python `
+            -ArgumentList @("-c", $indexesScript) `
+            -WorkingDirectory $backend `
+            -Environment (Get-DjangoEnvironment) `
+            -LogName "pg-indexes-snapshot.log"
+    } catch {
+        Write-InstallLog -LogName "migration-diagnostics.log" -Message ("PG_INDEXES_SNAPSHOT_FAILED " + $_.Exception.Message)
+    }
+}
+
 function Run-DjangoMigrate {
-    Invoke-DjangoManage `
-        -ArgumentList @("manage.py", "migrate", "--noinput") `
-        -LogName "migrate.log"
+    Save-DjangoMigrationDiagnostics
+    try {
+        Invoke-DjangoManage `
+            -ArgumentList @("manage.py", "migrate", "--noinput") `
+            -LogName "migrate.log"
+    } catch {
+        Save-DjangoMigrationDiagnostics
+        throw
+    }
 }
 
 function Run-DjangoCollectstatic {
@@ -2709,9 +3008,13 @@ function Wait-HttpOk {
 }
 
 function Start-BackendService {
+    $backendPort = "8000"
+    if ($Script:NativeEnvMap -and -not [string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"])) {
+        $backendPort = [string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"]
+    }
     Start-WinSWService -ServiceId "PicoDeGallo-Backend"
-    Wait-HttpOk -Name "backend-live-direct" -Uri "http://127.0.0.1:8000/api/health/live/" -TimeoutSeconds 120
-    Wait-HttpOk -Name "backend-ready-direct" -Uri "http://127.0.0.1:8000/api/health/ready/" -TimeoutSeconds 120
+    Wait-HttpOk -Name "backend-live-direct" -Uri "http://127.0.0.1:$backendPort/api/health/live/" -TimeoutSeconds 120
+    Wait-HttpOk -Name "backend-ready-direct" -Uri "http://127.0.0.1:$backendPort/api/health/ready/" -TimeoutSeconds 120
 }
 
 function Start-DteServices {
@@ -2737,6 +3040,7 @@ function Invoke-InstallMain {
     $Script:WinSWTokens = $null
     $Script:DatabaseHost = $null
     $Script:DatabasePort = 0
+    $Script:InstallProfile = $null
 
     $Script:InstallPhase = "prepare-directories"
     $Script:LastInstallStep = "prepare-directories"
@@ -2748,7 +3052,15 @@ function Invoke-InstallMain {
     $Script:LastInstallStep = "archive-existing-logs"
     Stop-ExistingServicesForLogArchive
     Archive-ExistingNativeLogs
-    Write-InstallLog "INSTALL_SERVICES_BEGIN Version=$(Get-InstalledVersionForInstallLog) ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
+    $installedVersion = Get-InstalledVersionForInstallLog
+    $Script:InstallProfile = Get-WindowsInstallProfile
+    Initialize-InstallState -OsProfile $Script:InstallProfile -Version $installedVersion
+    Write-InstallLog "INSTALL_SERVICES_BEGIN Version=$installedVersion ProgramFiles=$Script:ProgramFilesDir ProgramData=$Script:ProgramDataDir"
+
+    Invoke-InstallStep -Name "windows-profile" -ScriptBlock {
+        Write-InstallProfileLog -Profile $Script:InstallProfile
+        Assert-WindowsInstallProfileSupported -Profile $Script:InstallProfile
+    }
 
     Invoke-InstallStep -Name "assert-admin" -ScriptBlock {
         Assert-Admin
@@ -2774,6 +3086,10 @@ function Invoke-InstallMain {
         Test-DteEnv | Out-Null
     }
 
+    Invoke-InstallStep -Name "resolve-ports" -ScriptBlock {
+        $Script:NativeEnvMap = Resolve-InstallPorts -EnvMap $Script:NativeEnvMap
+    }
+
     Invoke-InstallStep -Name "ensure-service-account" -ScriptBlock {
         $Script:PicoServiceAccount = Ensure-PicoServiceAccount
     }
@@ -2794,6 +3110,7 @@ function Invoke-InstallMain {
             BACKEND_DIR = (Join-Path $Script:ProgramFilesDir "backend")
             ENV_FILE = (Get-EnvPath)
             CADDY_EXE = (Join-Path $Script:ProgramFilesDir "caddy\caddy.exe")
+            BACKEND_HTTP_PORT = if ([string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"])) { "8000" } else { [string]$Script:NativeEnvMap["BACKEND_HTTP_PORT"] }
             APP_HTTP_PORT = if ([string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["APP_HTTP_PORT"])) { "9282" } else { [string]$Script:NativeEnvMap["APP_HTTP_PORT"] }
             APP_BIND_ADDRESS = if ([string]::IsNullOrWhiteSpace([string]$Script:NativeEnvMap["APP_BIND_ADDRESS"])) { "127.0.0.1" } else { [string]$Script:NativeEnvMap["APP_BIND_ADDRESS"] }
         }
@@ -2810,6 +3127,7 @@ function Invoke-InstallMain {
 
     Invoke-InstallStep -Name "initdb" -ScriptBlock {
         Initialize-PostgresDataDirectory -EnvMap $Script:NativeEnvMap -Credential ($Script:PicoServiceAccount.Credential)
+        Update-InstallState -DbInitialized $true
     }
 
     Invoke-InstallStep -Name "configure-postgres" -ScriptBlock {
@@ -2832,6 +3150,7 @@ function Invoke-InstallMain {
         $Script:DatabasePort = [int](Get-RequiredEnvValue -Map $Script:NativeEnvMap -Name "DB_PORT")
         Wait-TcpPort -HostName $Script:DatabaseHost -Port $Script:DatabasePort -TimeoutSeconds 60 -ServiceId "PicoDeGallo-PostgreSQL"
         Wait-PostgresReady -EnvMap $Script:NativeEnvMap
+        Update-InstallState -PostgresServiceOk $true
     }
 
     Invoke-InstallStep -Name "setup-database" -ScriptBlock {
@@ -2848,6 +3167,7 @@ function Invoke-InstallMain {
 
     Invoke-InstallStep -Name "migrate" -ScriptBlock {
         Run-DjangoMigrate
+        Update-InstallState -MigrationsOk $true
     }
 
     Invoke-InstallStep -Name "collectstatic" -ScriptBlock {
@@ -2875,11 +3195,13 @@ function Invoke-InstallMain {
     Invoke-InstallStep -Name "install-caddy" -ScriptBlock {
         Install-WinSWServices -Tokens $Script:WinSWTokens -ServiceIds @("PicoDeGallo-Caddy")
         Start-CaddyService
+        Update-InstallState -ServicesInstalled $true
     }
 
     Invoke-InstallStep -Name "healthcheck" -ScriptBlock {
         Assert-WinSWServiceFilesForAll
         Validate-PostInstall
+        Update-InstallState -HealthOk $true
     }
 
     foreach ($svc in $Script:Services) {
