@@ -30,6 +30,8 @@ class OrderItemModifierSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     applied_modifiers = OrderItemModifierSerializer(many=True, read_only=True)
+    table_guest_label = serializers.SerializerMethodField()
+    table_guest_seat_number = serializers.SerializerMethodField()
     unit_price_list = serializers.SerializerMethodField()
     unit_price_special = serializers.SerializerMethodField()
     unit_price_before_discount = serializers.SerializerMethodField()
@@ -54,6 +56,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "assigned_name",
             "table_guest_id",
+            "table_guest_label",
+            "table_guest_seat_number",
             "applied_special_price_rule_id",
             "kitchen_status",
             "kitchen_sent_at",
@@ -70,6 +74,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "line_total_final",
             "pricing_metadata",
         ]
+
+    def get_table_guest_label(self, obj: OrderItem):
+        return obj.table_guest.label if obj.table_guest_id and obj.table_guest else ""
+
+    def get_table_guest_seat_number(self, obj: OrderItem):
+        return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
 
     def _modifier_total(self, obj: OrderItem) -> Decimal:
         return sum((Decimal(mod.modifier_price_snapshot or 0) for mod in obj.applied_modifiers.all()), Decimal("0.00"))
@@ -293,6 +303,7 @@ class OrderItemInputSerializer(serializers.Serializer):
     unit_price_override = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     quantity = serializers.IntegerField(min_value=1)
     assigned_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    table_guest_id = serializers.IntegerField(required=False, allow_null=True)
     modifiers = AppliedModifierInputSerializer(many=True, required=False)
 
     def validate(self, attrs):
@@ -796,7 +807,7 @@ class TableSessionSerializer(serializers.ModelSerializer):
         model = TableSession
         fields = [
             "id", "status", "guests_count", "order_mode", "primary_order", "opened_by", "opened_at", "closed_by", "closed_at",
-            "notes", "total_cached", "table_ids", "tables", "guests", "created_at", "updated_at",
+            "notes", "total_cached", "group_number", "table_ids", "tables", "guests", "created_at", "updated_at",
         ]
 
     def get_table_ids(self, obj):

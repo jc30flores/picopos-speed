@@ -96,6 +96,9 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         len(items_data),
     )
     existing_ids = set(order.items.values_list("id", flat=True))
+    table_session = order.table_sessions.prefetch_related("guests").order_by("-id").first()
+    guests_by_id = {guest.id: guest for guest in table_session.guests.all()} if table_session else {}
+    guests_by_label = {guest.label.strip().lower(): guest for guest in guests_by_id.values()}
     previous_kitchen_state = {
         item.id: {
             "kitchen_status": item.kitchen_status,
@@ -136,6 +139,16 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         product_name = str(raw.get("product_name_snapshot") or raw.get("product_name") or (product.name if product else f"Item {idx}")).strip()
         code = str(raw.get("snapshot_sku_or_code") or raw.get("custom_code") or "").strip()
         assigned_name = str(raw.get("assigned_name") or "").strip()
+        table_guest = None
+        raw_guest_id = raw.get("table_guest_id")
+        try:
+            raw_guest_id = int(raw_guest_id) if raw_guest_id not in (None, "") else None
+        except (TypeError, ValueError):
+            raw_guest_id = None
+        if raw_guest_id:
+            table_guest = guests_by_id.get(raw_guest_id)
+        if table_guest is None and assigned_name:
+            table_guest = guests_by_label.get(assigned_name.lower())
         item = OrderItem.objects.create(
             order=order,
             product=product,
@@ -145,7 +158,8 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
             snapshot_sku_or_code=code[:80],
             is_custom=is_custom,
             quantity=quantity,
-            assigned_name=assigned_name[:80],
+            assigned_name=(assigned_name or (table_guest.label if table_guest else ""))[:80],
+            table_guest=table_guest,
         )
         source_id = raw.get("source_order_item_id")
         try:

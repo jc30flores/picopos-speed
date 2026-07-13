@@ -758,6 +758,9 @@ export type OrderItem = {
   pricingMetadata?: Record<string, unknown> | null;
   unitPriceOverride?: number | null;
   assignedName?: string;
+  tableGuestId?: number | null;
+  tableGuestLabel?: string;
+  tableGuestSeatNumber?: number | null;
   kitchenStatus?: "pending" | "sent" | "ready" | "delivered";
   kitchenSentAt?: string | null;
   kitchenReadyAt?: string | null;
@@ -3329,6 +3332,9 @@ const mapOrder = (order: {
     is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
+    table_guest_id?: number | null;
+    table_guest_label?: string;
+    table_guest_seat_number?: number | null;
     unit_price_list?: string | null;
     unit_price_special?: string | null;
     unit_price_before_discount?: string;
@@ -3401,6 +3407,9 @@ const mapOrder = (order: {
       pricingMetadata: item.pricing_metadata ?? null,
       unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
+      tableGuestId: item.table_guest_id ?? null,
+      tableGuestLabel: item.table_guest_label || item.assigned_name || undefined,
+      tableGuestSeatNumber: item.table_guest_seat_number ?? null,
       kitchenStatus: item.kitchen_status ?? "pending",
       kitchenSentAt: item.kitchen_sent_at ?? null,
       kitchenReadyAt: item.kitchen_ready_at ?? null,
@@ -3484,6 +3493,7 @@ export const setOrderPending = async (
       unitPriceOverride?: number | null;
       customCode?: string;
       assignedName?: string;
+      tableGuestId?: number | null;
       modifiers: Array<{ id?: number; name: string; price: number }>;
     }>;
   }
@@ -3508,6 +3518,7 @@ export const setOrderPending = async (
         unit_price_override: item.unitPriceOverride ?? null,
         snapshot_sku_or_code: item.customCode ?? "",
         assigned_name: item.assignedName ?? "",
+        table_guest_id: item.tableGuestId ?? null,
         modifiers: (item.modifiers ?? []).map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
       })),
     }),
@@ -3540,6 +3551,7 @@ export const createOrder = async (payload: {
     customCode?: string;
     modifiers: Array<{ id?: number; name: string; price: number }>;
     assignedName?: string;
+    tableGuestId?: number | null;
   }>;
 }): Promise<Order> => {
   const orderPayload = {
@@ -3573,6 +3585,7 @@ export const createOrder = async (payload: {
       price_snapshot: item.price,
       quantity: item.quantity,
       assigned_name: item.assignedName?.trim() || "",
+      table_guest_id: item.tableGuestId ?? null,
       modifiers: item.modifiers.map((modifier) => ({
         id: modifier.id,
         name: modifier.name,
@@ -6620,7 +6633,7 @@ export const receivePurchaseOrder = async (id: number, payload: { notes?: string
 export type DiningArea = { id: number; name: string; sortOrder: number; isActive: boolean; x:number; y:number; width:number; height:number; color?:string; operationalZoom:number; operationalOffsetX:number; operationalOffsetY:number };
 export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
 export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
-export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number; sentCount?: number; detail?: string };
+export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number; groupNumber?: number | null; sentCount?: number; detail?: string };
 export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
 export type TableKitchenItem = { id: number; productName: string; quantity: number; assignedName?: string; kitchenStatus: "pending"|"sent"|"ready"|"delivered"; kitchenSentAt?: string | null; kitchenReadyAt?: string | null; kitchenDeliveredAt?: string | null; lineTotal: number };
 export type TableKitchenPerson = { label: string; items: TableKitchenItem[]; total: number };
@@ -6628,7 +6641,7 @@ export type TableKitchenSessionSummary = { sessionId: number; orderId?: number |
 type RawDiningArea = Partial<Record<"id"|"name"|"sort_order"|"is_active"|"x"|"y"|"width"|"height"|"color"|"operational_zoom"|"operational_offset_x"|"operational_offset_y", unknown>>;
 type RawRestaurantTable = Partial<Record<"id"|"area"|"area_name"|"name"|"number"|"capacity"|"shape"|"x"|"y"|"width"|"height"|"rotation"|"color"|"is_active"|"sort_order", unknown>>;
 type RawTableGuest = Partial<Record<"id"|"label"|"seat_number"|"is_active"|"is_paid", unknown>>;
-type RawTableSession = Partial<Record<"id"|"status"|"guests_count"|"guest_count"|"order_mode"|"primary_order"|"order_id"|"table_ids"|"table_id"|"guests"|"opened_at"|"total_cached", unknown>>;
+type RawTableSession = Partial<Record<"id"|"status"|"guests_count"|"guest_count"|"order_mode"|"primary_order"|"order_id"|"table_ids"|"table_id"|"guests"|"opened_at"|"total_cached"|"group_number", unknown>>;
 type RawTableKitchenItem = Partial<Record<"id"|"product_name"|"productName"|"quantity"|"assigned_name"|"kitchen_status"|"kitchen_sent_at"|"kitchen_ready_at"|"kitchen_delivered_at"|"line_total", unknown>>;
 type RawTableKitchenPerson = Partial<Record<"label"|"total"|"items", unknown>>;
 type RawTableKitchenSession = Partial<Record<"session_id"|"order_id"|"status"|"tables"|"table_label"|"guests_count"|"order_mode"|"total"|"remaining"|"items"|"people", unknown>>;
@@ -6640,7 +6653,7 @@ const normalizeKitchenStatus = (value: unknown): TableKitchenStatus => {
 };
 const mapDiningArea = (x: RawDiningArea): DiningArea => ({ id: Number(x.id), name: String(x.name ?? ""), sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active), x:Number(x.x??0), y:Number(x.y??0), width:Number(x.width??320), height:Number(x.height??220), color:String(x.color??""), operationalZoom:Number(x.operational_zoom??1), operationalOffsetX:Number(x.operational_offset_x??0), operationalOffsetY:Number(x.operational_offset_y??0) });
 const mapRestaurantTable = (x: RawRestaurantTable): RestaurantTable => ({ id: Number(x.id), area: Number(x.area), areaName: x.area_name ? String(x.area_name) : undefined, name: String(x.name ?? ""), number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape === "square" || x.shape === "rectangle" || x.shape === "booth" || x.shape === "bar" ? x.shape : "round", x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: String(x.color ?? ''), isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) });
-const mapTableSession = (x: RawTableSession): TableSession => ({ id: Number(x.id), status: String(x.status ?? ""), guestsCount: Number(x.guests_count ?? x.guest_count ?? 1), orderMode: x.order_mode === "per_person" ? "per_person" : "table", primaryOrder: typeof x.primary_order === "number" || typeof x.primary_order === "string" ? Number(x.primary_order) : typeof x.order_id === "number" || typeof x.order_id === "string" ? Number(x.order_id) : null, tableIds: Array.isArray(x.table_ids) ? x.table_ids.map(Number) : (x.table_id ? [Number(x.table_id)] : []), guests: (Array.isArray(x.guests) ? x.guests : []).map((g) => { const guest = g as RawTableGuest; return { id: Number(guest.id), label: String(guest.label ?? ""), seatNumber: Number(guest.seat_number ?? 1), isActive: Boolean(guest.is_active), isPaid: Boolean(guest.is_paid) }; }), openedAt: x.opened_at ? String(x.opened_at) : null, totalCached: Number(x.total_cached ?? 0) });
+const mapTableSession = (x: RawTableSession): TableSession => ({ id: Number(x.id), status: String(x.status ?? ""), guestsCount: Number(x.guests_count ?? x.guest_count ?? 1), orderMode: x.order_mode === "per_person" ? "per_person" : "table", primaryOrder: typeof x.primary_order === "number" || typeof x.primary_order === "string" ? Number(x.primary_order) : typeof x.order_id === "number" || typeof x.order_id === "string" ? Number(x.order_id) : null, tableIds: Array.isArray(x.table_ids) ? x.table_ids.map(Number) : (x.table_id ? [Number(x.table_id)] : []), guests: (Array.isArray(x.guests) ? x.guests : []).map((g) => { const guest = g as RawTableGuest; return { id: Number(guest.id), label: String(guest.label ?? ""), seatNumber: Number(guest.seat_number ?? 1), isActive: Boolean(guest.is_active), isPaid: Boolean(guest.is_paid) }; }), openedAt: x.opened_at ? String(x.opened_at) : null, totalCached: Number(x.total_cached ?? 0), groupNumber: x.group_number == null ? null : Number(x.group_number) });
 
 export const getDiningAreas = async (): Promise<DiningArea[]> => {
   const response = await request('/orders/tables/areas/');
