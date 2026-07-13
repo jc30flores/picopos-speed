@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import { getFeatureSettings } from "@/lib/api";
+import { getRuntimeFeatureSettings } from "@/lib/api";
 
 type Props = {
   feature: "kiosk" | "kitchen" | "customer_display";
@@ -13,7 +13,7 @@ export const FeatureRouteGuard = ({ feature, children }: Props) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    getFeatureSettings()
+    getRuntimeFeatureSettings()
       .then((settings) => {
         if (feature === "kiosk") setEnabled(settings.kioskEnabled);
         else if (feature === "kitchen") setEnabled(settings.kitchenDisplayEnabled);

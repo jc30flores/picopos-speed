@@ -15,7 +15,7 @@ import { BarChart3, Check, ClipboardCheck, Eye, FileText, Grid2X2, Pencil, Play,
 import {
   InventoryItem, InventoryMovement, InventoryCountSession, InventorySupplier, PurchaseOrder, applyInventoryCount, cancelInventoryCount,
   createInventoryAdjustment, createInventoryCount, createInventoryItem, deleteInventoryCount, downloadInventoryPdf, finalizeInventoryCount,
-  getFeatureSettings, getInventoryCount, getInventoryCounts, getInventoryItems, getInventoryMovements, getInventoryReportAdjustments,
+  getRuntimeFeatureSettings, getInventoryCount, getInventoryCounts, getInventoryItems, getInventoryMovements, getInventoryReportAdjustments,
   getInventoryReportCounts, getInventorySuppliers, getPurchaseOrders, saveInventorySupplier, deleteInventorySupplier,
   savePurchaseOrder, approvePurchaseOrder, cancelPurchaseOrder, receivePurchaseOrder, updateInventoryCountLines, updateInventoryItem,
 } from "@/lib/api";
@@ -80,7 +80,7 @@ export default function InventoryPage() {
     const [rows, logs, countRows] = await Promise.all([getInventoryItems(q), getInventoryMovements(), getInventoryCounts()]);
     setItems(rows); setMovements(logs); setCounts(countRows);
   };
-  useEffect(() => { load().catch(() => toast.error("No se pudo cargar inventario")); getFeatureSettings().then((settings) => setAdvancedEnabled(settings.inventoryAdvancedEnabled)).catch(() => setAdvancedEnabled(false)); getInventorySuppliers(undefined, true).then(setSuppliers).catch(() => setSuppliers([])); }, []);
+  useEffect(() => { load().catch(() => toast.error("No se pudo cargar inventario")); getRuntimeFeatureSettings().then((settings) => setAdvancedEnabled(settings.inventoryAdvancedEnabled)).catch(() => setAdvancedEnabled(false)); getInventorySuppliers(undefined, true).then(setSuppliers).catch(() => setSuppliers([])); }, []);
   useEffect(() => { if (!openForm) return; const t = window.setTimeout(() => nameInputRef.current?.focus(), 30); return () => window.clearTimeout(t); }, [openForm]);
 
   const resetForm = () => { setName(""); setSku(""); setUnit("unidad"); setStock(""); setMinStock(""); setMaxStock(""); setSupplierId(""); setUnitCost(""); setSupplierCode(""); setPurchaseUnit(""); setPurchaseFactor("1"); setNotes(""); setActive(true); setEditing(null); };

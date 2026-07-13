@@ -18,9 +18,6 @@ const defaultState: FeatureSettings = {
   reportsEnabled: true,
   clientsEnabled: true,
   settingsEnabled: true,
-  dteEnabled: false,
-  whatsappEnabled: true,
-  emailEnabled: true,
   cashCloseExpectedTotalsControlEnabled: true,
   cashCloseExpectedTotalsAllowedRoles: [],
   cashCloseExpectedTotalsVisibleFields: [],
@@ -46,9 +43,6 @@ type ToggleSettingKey =
   | "reportsEnabled"
   | "clientsEnabled"
   | "settingsEnabled"
-  | "dteEnabled"
-  | "whatsappEnabled"
-  | "emailEnabled"
   | "cashCloseExpectedTotalsControlEnabled";
 
 type ToggleSetting = {
@@ -99,20 +93,11 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
       { key: "settingsEnabled", title: "Configuración para admins", description: "Superadmin siempre conserva acceso para reactivar módulos." },
     ],
   },
-  {
-    title: "Fiscal y comunicación",
-    eyebrow: "DTE",
-    items: [
-      { key: "dteEnabled", title: "DTE / Hacienda", description: "Mostrar u ocultar funciones fiscales DTE." },
-      { key: "whatsappEnabled", title: "WhatsApp", description: "Mostrar acciones de entrega fiscal por WhatsApp." },
-      { key: "emailEnabled", title: "Correo", description: "Mostrar acciones de entrega fiscal por correo." },
-    ],
-  },
 ];
 
 const quickSalesModes = [
-  { value: "last_sale", title: "Última venta", description: "Un clic reimprime el ticket de la última venta y vuelve a enviar el DTE al cliente. Ideal para cajeros." },
-  { value: "history", title: "Historial", description: "Muestra ventas recientes para imprimir ticket o reenviar DTE. Solo gerente/admin." },
+  { value: "last_sale", title: "Última venta", description: "Un clic reimprime el ticket local de la última venta. Ideal para cajeros." },
+  { value: "history", title: "Historial", description: "Muestra ventas recientes para imprimir ticket local. Solo gerente/admin." },
   { value: "hidden", title: "Oculto", description: "No mostrar este botón en el POS." },
 ] as const;
 

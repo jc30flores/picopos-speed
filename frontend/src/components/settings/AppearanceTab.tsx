@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { applyAppearanceSettings } from "@/lib/theme";
 import { ApiRequestError, getAppearanceSettings, updateAppearanceSettings, type AppearanceSettings } from "@/lib/api";
 
-const safePalette = ["#1F7A4D", "#2563EB", "#0F766E", "#0284C7", "#0891B2", "#6D28D9", "#A21CAF", "#DB2777", "#BE123C", "#B45309", "#B7791F", "#374151", "#111827", "#0D9488"];
+const safePalette = ["#1F7A4D", "#2563EB", "#0F766E", "#0284C7", "#0891B2", "#6D28D9", "#A21CAF", "#C026D3", "#DB2777", "#BE185D", "#EC4899", "#E11D48", "#BE123C", "#B45309", "#B7791F", "#374151", "#111827", "#0D9488"];
 
 const hexRegex = /^#[0-9A-F]{6}$/i;
 
@@ -92,9 +92,11 @@ export const AppearanceTab = () => {
     load();
   }, []);
 
-  const isDraftHexValid = hexRegex.test(draftColor);
-  const hasChanges = draftColor.toUpperCase() !== activeColor.toUpperCase();
-  const preview = useMemo(() => settings ? buildPreviewSettings(settings, draftColor) : null, [settings, draftColor]);
+  const normalizedDraftColor = draftColor.trim().toUpperCase();
+  const normalizedActiveColor = activeColor.trim().toUpperCase();
+  const isDraftHexValid = hexRegex.test(normalizedDraftColor);
+  const hasChanges = normalizedDraftColor !== normalizedActiveColor;
+  const preview = useMemo(() => settings ? buildPreviewSettings(settings, normalizedDraftColor) : null, [settings, normalizedDraftColor]);
 
   const save = async (restoreDefault = false) => {
     if (!restoreDefault && !isDraftHexValid) {
@@ -107,7 +109,7 @@ export const AppearanceTab = () => {
     setError(null);
     setSuggestions([]);
     try {
-      const saved = await updateAppearanceSettings({ primaryColor: draftColor, restoreDefault });
+      const saved = await updateAppearanceSettings({ primaryColor: normalizedDraftColor, restoreDefault });
       setSettings(saved);
       setActiveColor(saved.primaryColor);
       setDraftColor(saved.primaryColor);
@@ -179,11 +181,12 @@ export const AppearanceTab = () => {
             <Label htmlFor="primary-color">Color personalizado</Label>
             <div className="flex gap-2">
               <Input id="primary-color" value={draftColor} onChange={(event) => setDraftColor(event.target.value.toUpperCase())} placeholder="#1F7A4D" aria-invalid={!isDraftHexValid} />
-              <Input type="color" value={isDraftHexValid ? draftColor : "#1F7A4D"} onChange={(event) => setDraftColor(event.target.value.toUpperCase())} className="h-10 w-16 p-1" />
+              <Input type="color" value={isDraftHexValid ? normalizedDraftColor : "#1F7A4D"} onChange={(event) => setDraftColor(event.target.value.toUpperCase())} className="h-10 w-16 p-1" />
             </div>
             {!isDraftHexValid ? <p className="text-xs text-destructive">Usa formato HEX completo, por ejemplo #2563EB.</p> : null}
+            {isDraftHexValid && !hasChanges ? <p className="text-xs text-muted-foreground">Este color ya está aplicado.</p> : null}
             <p className="text-xs text-muted-foreground">
-              Vista previa: {draftColor.toUpperCase()} · Aplicado: {activeColor.toUpperCase()}
+              Vista previa: {normalizedDraftColor || "—"} · Aplicado: {normalizedActiveColor}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

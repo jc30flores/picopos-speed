@@ -20,7 +20,7 @@ const Settings = () => {
     { label: "Horarios", value: "schedules" },
     ...(isSuperadmin ? [{ label: "Funciones", value: "features" }] : []),
     { label: "Apariencia", value: "appearance" },
-    { label: "Hacienda / DTE", value: "dte-settings" },
+    ...(isSuperadmin ? [{ label: "Hacienda / DTE", value: "dte-settings" }] : []),
     { label: "Tipos de Pedido", value: "order-types" },
     { label: "Métodos de Pago", value: "payment-methods" },
   ];
@@ -46,7 +46,9 @@ const Settings = () => {
         </TabsContent>
 
         <TabsContent value="features" className="mt-0">
-          {isSuperadmin ? <FeatureFlagsTab /> : null}
+          {isSuperadmin ? <FeatureFlagsTab /> : (
+            <div className="rounded-md border p-4 text-sm text-muted-foreground">No tienes permiso para esta sección.</div>
+          )}
         </TabsContent>
 
         <TabsContent value="appearance" className="mt-0">
@@ -54,7 +56,9 @@ const Settings = () => {
         </TabsContent>
 
         <TabsContent value="dte-settings" className="mt-0">
-          <DteSettingsTab />
+          {isSuperadmin ? <DteSettingsTab /> : (
+            <div className="rounded-md border p-4 text-sm text-muted-foreground">No tienes permiso para esta sección.</div>
+          )}
         </TabsContent>
 
         <TabsContent value="order-types" className="mt-0">

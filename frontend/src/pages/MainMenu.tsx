@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppModuleKey, appModules, filterModulesForUser } from "@/lib/roleAccess";
-import { getFeatureFlags, getFeatureSettings, normalizeFeatureFlags } from "@/lib/api";
+import { getFeatureFlags, getRuntimeFeatureSettings, normalizeFeatureFlags } from "@/lib/api";
 import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
@@ -47,7 +47,7 @@ const MainMenu = () => {
   });
 
   useEffect(() => {
-    Promise.all([getFeatureSettings(), getFeatureFlags().catch(() => [])])
+    Promise.all([getRuntimeFeatureSettings(), getFeatureFlags().catch(() => [])])
       .then(([settings, coreFlags]) => {
         const normalizedFromSettings = normalizeFeatureFlags(settings);
         const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));

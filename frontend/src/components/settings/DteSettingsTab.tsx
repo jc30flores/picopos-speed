@@ -132,6 +132,33 @@ export const DteSettingsTab = () => {
       </Card>
 
       <Card>
+        <CardHeader>
+          <CardTitle>Entrega fiscal</CardTitle>
+          <CardDescription>Estas acciones solo se muestran cuando Hacienda/DTE está activo. Si está apagado, GastroPOSV opera como POS local.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["fiscalEmailEnabled", "Correo fiscal", "Permitir envío fiscal por correo."],
+            ["fiscalWhatsappEnabled", "WhatsApp fiscal", "Permitir envío fiscal por WhatsApp."],
+            ["fiscalPdfEnabled", "PDF fiscal", "Permitir generación/descarga PDF fiscal."],
+            ["fiscalJsonEnabled", "JSON fiscal", "Permitir generación/descarga JSON fiscal."],
+          ].map(([key, title, description]) => (
+            <div key={key} className="flex items-center justify-between gap-3 rounded-md border p-3">
+              <div>
+                <div className="font-semibold">{title}</div>
+                <p className="text-xs text-muted-foreground">{description}</p>
+              </div>
+              <Switch
+                checked={Boolean(draft[key as keyof DteSettings])}
+                disabled={disabled}
+                onCheckedChange={(checked) => patchDraft({ [key]: checked } as Partial<DteSettings>)}
+              />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle>API / conexión</CardTitle></CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-2">

@@ -80,7 +80,7 @@ import {
   setOrderPending,
   getPrintingStatus,
   getFeatureFlags,
-  getFeatureSettings,
+  getRuntimeFeatureSettings,
   getDteSettings,
   getDiningAreas,
   getRestaurantTables,
@@ -1743,7 +1743,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setAllowCloseWithPendingOrders(enabled);
       })
       .catch(() => undefined);
-    getFeatureSettings().then((settings) => {
+    getRuntimeFeatureSettings().then((settings) => {
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setTableMapEnabled(settings.tableMapEnabled);

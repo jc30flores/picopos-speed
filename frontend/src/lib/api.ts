@@ -409,9 +409,9 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       reportsEnabled: fromMap(byKey, ['module_reports_enabled'], defaults.reportsEnabled),
       clientsEnabled: fromMap(byKey, ['module_clients_enabled'], defaults.clientsEnabled),
       settingsEnabled: fromMap(byKey, ['module_settings_enabled'], defaults.settingsEnabled),
-      dteEnabled: fromMap(byKey, ['module_dte_enabled', 'dte_enabled', 'dte_visible', 'hacienda_enabled', 'can_send_dte'], defaults.dteEnabled),
-      whatsappEnabled: fromMap(byKey, ['module_whatsapp_enabled'], defaults.whatsappEnabled),
-      emailEnabled: fromMap(byKey, ['module_email_enabled'], defaults.emailEnabled),
+      dteEnabled: fromMap(byKey, ['dte_visible', 'can_send_dte'], defaults.dteEnabled),
+      whatsappEnabled: fromMap(byKey, ['fiscal_whatsapp_enabled'], defaults.whatsappEnabled),
+      emailEnabled: fromMap(byKey, ['fiscal_email_enabled'], defaults.emailEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
@@ -433,9 +433,9 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     reportsEnabled: fromMap(raw, ['reportsEnabled', 'reports_enabled'], defaults.reportsEnabled),
     clientsEnabled: fromMap(raw, ['clientsEnabled', 'clients_enabled'], defaults.clientsEnabled),
     settingsEnabled: fromMap(raw, ['settingsEnabled', 'settings_enabled'], defaults.settingsEnabled),
-    dteEnabled: fromMap(raw, ['dteEnabled', 'dte_enabled', 'hacienda_enabled', 'can_send_dte'], defaults.dteEnabled),
-    whatsappEnabled: fromMap(raw, ['whatsappEnabled', 'whatsapp_enabled'], defaults.whatsappEnabled),
-    emailEnabled: fromMap(raw, ['emailEnabled', 'email_enabled'], defaults.emailEnabled),
+    dteEnabled: fromMap(raw, ['dteEnabled', 'dte_visible', 'can_send_dte'], defaults.dteEnabled),
+    whatsappEnabled: fromMap(raw, ['whatsappEnabled', 'fiscal_whatsapp_enabled'], defaults.whatsappEnabled),
+    emailEnabled: fromMap(raw, ['emailEnabled', 'fiscal_email_enabled'], defaults.emailEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
@@ -566,9 +566,6 @@ export type FeatureSettings = {
   reportsEnabled: boolean;
   clientsEnabled: boolean;
   settingsEnabled: boolean;
-  dteEnabled: boolean;
-  whatsappEnabled: boolean;
-  emailEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
   cashCloseExpectedTotalsAllowedRoles: string[];
   cashCloseExpectedTotalsVisibleFields: string[];
@@ -649,6 +646,10 @@ export type DteSettings = {
   apiTokenMasked: string;
   timeoutSeconds: number;
   retryCount: number;
+  fiscalEmailEnabled: boolean;
+  fiscalWhatsappEnabled: boolean;
+  fiscalPdfEnabled: boolean;
+  fiscalJsonEnabled: boolean;
   status: string;
   lastConnectionTestAt: string | null;
   lastErrorSanitized: string;
@@ -1402,9 +1403,6 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     reportsEnabled: normalized.reportsEnabled,
     clientsEnabled: normalized.clientsEnabled,
     settingsEnabled: normalized.settingsEnabled,
-    dteEnabled: normalized.dteEnabled,
-    whatsappEnabled: normalized.whatsappEnabled,
-    emailEnabled: normalized.emailEnabled,
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
@@ -1416,6 +1414,34 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
     posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
   };
+};
+
+const featureSettingsFromNormalized = (normalized: FeatureFlagsNormalized, data: any = {}): FeatureSettings => ({
+  posEnabled: normalized.posEnabled,
+  openOrdersEnabled: normalized.openOrdersEnabled,
+  kioskEnabled: normalized.kioskEnabled,
+  customerDisplayEnabled: normalized.customerDisplayEnabled,
+  kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+  menuDiscountsEnabled: normalized.menuDiscountsEnabled,
+  reportsEnabled: normalized.reportsEnabled,
+  clientsEnabled: normalized.clientsEnabled,
+  settingsEnabled: normalized.settingsEnabled,
+  cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
+  cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
+  cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
+  inventoryStockPolicy: normalizeInventoryStockPolicy(data.inventory_stock_policy ?? normalized.inventoryStockPolicy),
+  inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
+  posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
+  tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+  posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
+  posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
+  posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
+});
+
+export const getRuntimeFeatureSettings = async (): Promise<FeatureSettings> => {
+  const response = await request("/core/feature-flags/");
+  const data = await handleJson<any>(response);
+  return featureSettingsFromNormalized(normalizeFeatureFlags(data));
 };
 
 export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): Promise<FeatureSettings> => {
@@ -1431,9 +1457,6 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       reports_enabled: payload.reportsEnabled,
       clients_enabled: payload.clientsEnabled,
       settings_enabled: payload.settingsEnabled,
-      dte_enabled: payload.dteEnabled,
-      whatsapp_enabled: payload.whatsappEnabled,
-      email_enabled: payload.emailEnabled,
       cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
       cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
@@ -1458,9 +1481,6 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     reportsEnabled: normalized.reportsEnabled,
     clientsEnabled: normalized.clientsEnabled,
     settingsEnabled: normalized.settingsEnabled,
-    dteEnabled: normalized.dteEnabled,
-    whatsappEnabled: normalized.whatsappEnabled,
-    emailEnabled: normalized.emailEnabled,
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
@@ -1500,6 +1520,11 @@ export const getAppearanceSettings = async (): Promise<AppearanceSettings> => {
   return mapAppearanceSettings(await handleJson<any>(response));
 };
 
+export const getPublicAppearanceSettings = async (): Promise<AppearanceSettings> => {
+  const response = await request("/public/appearance/");
+  return mapAppearanceSettings(await handleJson<any>(response));
+};
+
 export const updateAppearanceSettings = async (payload: { primaryColor?: string; restoreDefault?: boolean }): Promise<AppearanceSettings> => {
   const response = await request("/settings/appearance/", {
     method: "PATCH",
@@ -1515,6 +1540,10 @@ const mapDteSettings = (data: any): DteSettings => ({
   apiTokenMasked: String(data.api_token_masked ?? ""),
   timeoutSeconds: Number(data.timeout_seconds ?? 15),
   retryCount: Number(data.retry_count ?? 3),
+  fiscalEmailEnabled: Boolean(data.fiscal_email_enabled ?? data.api?.fiscal_email_enabled),
+  fiscalWhatsappEnabled: Boolean(data.fiscal_whatsapp_enabled ?? data.api?.fiscal_whatsapp_enabled),
+  fiscalPdfEnabled: Boolean(data.fiscal_pdf_enabled ?? data.api?.fiscal_pdf_enabled),
+  fiscalJsonEnabled: Boolean(data.fiscal_json_enabled ?? data.api?.fiscal_json_enabled),
   status: String(data.config_status ?? data.status ?? "disabled"),
   lastConnectionTestAt: data.last_connection_test_at ?? null,
   lastErrorSanitized: String(data.last_error_sanitized ?? ""),
@@ -1593,6 +1622,10 @@ export const updateDteSettings = async (payload: Partial<DteSettings> & { apiTok
       api_token: payload.apiToken,
       timeout_seconds: payload.timeoutSeconds,
       retry_count: payload.retryCount,
+      fiscal_email_enabled: payload.fiscalEmailEnabled,
+      fiscal_whatsapp_enabled: payload.fiscalWhatsappEnabled,
+      fiscal_pdf_enabled: payload.fiscalPdfEnabled,
+      fiscal_json_enabled: payload.fiscalJsonEnabled,
       issuer: payload.issuer ? {
         legal_name: payload.issuer.legalName,
         commercial_name: payload.issuer.commercialName,

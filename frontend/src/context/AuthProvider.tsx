@@ -29,6 +29,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   useEffect(() => {
+    if (window.location.pathname === "/login") {
+      setLoading(false);
+      return;
+    }
     void loadUser("bootstrap");
   }, [loadUser]);
 

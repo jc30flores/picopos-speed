@@ -24,7 +24,7 @@ import {
   createProductSpecialPrice,
   deleteProductSpecialPrice,
   getCategories,
-  getFeatureSettings,
+  getRuntimeFeatureSettings,
   getInventoryItems,
   getProductEffectiveInventoryLinks,
   listProductSpecialPrices,
@@ -187,7 +187,7 @@ export const ProductFormDialog = ({
 
   useEffect(() => {
     if (!open) return;
-    getFeatureSettings()
+    getRuntimeFeatureSettings()
       .then((settings) => setGlobalInventoryStockPolicy(settings.inventoryStockPolicy))
       .catch(() => setGlobalInventoryStockPolicy("allow"));
   }, [open]);

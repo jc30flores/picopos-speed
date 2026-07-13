@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ArrowLeft, Redo2, Save, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { createRestaurantTable, createTableArea, deleteRestaurantTable, deleteTableArea, getFeatureSettings, getTableLayout, saveTableLayout, updateRestaurantTable, updateTableArea, type DiningArea, type RestaurantTable } from "@/lib/api";
+import { createRestaurantTable, createTableArea, deleteRestaurantTable, deleteTableArea, getRuntimeFeatureSettings, getTableLayout, saveTableLayout, updateRestaurantTable, updateTableArea, type DiningArea, type RestaurantTable } from "@/lib/api";
 
 const GRID_SIZE = 20;
 const snapValue = (n: number, enabled: boolean) => enabled ? Math.round(n / GRID_SIZE) * GRID_SIZE : n;
@@ -74,7 +74,7 @@ export default function TablesEditor() {
   };
 
   useEffect(() => {
-    getFeatureSettings().then((s) => setEnabled(Boolean(s.tableMapEnabled))).catch(() => setEnabled(false));
+    getRuntimeFeatureSettings().then((s) => setEnabled(Boolean(s.tableMapEnabled))).catch(() => setEnabled(false));
   }, []);
 
   useEffect(() => {

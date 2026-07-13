@@ -1,4 +1,4 @@
-import { getAppearanceSettings, type AppearanceSettings } from "@/lib/api";
+import { getPublicAppearanceSettings, type AppearanceSettings } from "@/lib/api";
 
 const hexToHsl = (hex: string): string => {
   const cleaned = hex.replace("#", "");
@@ -37,7 +37,7 @@ export const applyAppearanceSettings = (settings: AppearanceSettings) => {
 
 export const loadAppearanceSettings = async () => {
   try {
-    applyAppearanceSettings(await getAppearanceSettings());
+    applyAppearanceSettings(await getPublicAppearanceSettings());
   } catch {
     // Apariencia no debe bloquear el arranque de la app.
   }
