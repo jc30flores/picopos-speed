@@ -312,6 +312,35 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
         return _session_response(session)
 
 
+class TableSessionSplitTableView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada o cerrada."}, status=404)
+        table_id = _parse_int(request.data.get("table_id"))
+        if not table_id:
+            return Response({"table_id": "Mesa inválida."}, status=400)
+        links = TableSessionTable.objects.select_for_update().filter(session=session)
+        if links.count() <= 1:
+            return Response({"detail": "La mesa no pertenece a un grupo unido."}, status=400)
+        removed, _ = links.filter(table_id=table_id).delete()
+        if removed == 0:
+            return Response({"table_id": "La mesa no pertenece a esta sesión."}, status=400)
+        remaining_names = list(
+            TableSessionTable.objects.filter(session=session)
+            .select_related("table")
+            .order_by("created_at", "id")
+            .values_list("table__name", flat=True)
+        )
+        if session.primary_order_id:
+            session.primary_order.pending_reference = " + ".join(remaining_names) if len(remaining_names) > 1 else f"Mesa {remaining_names[0]}"
+            session.primary_order.save(update_fields=["pending_reference", "updated_at"])
+        return Response({"detail": "Mesa separada correctamente.", "session": TableSessionSerializer(session).data})
+
+
 class TableSessionMoveTableView(TableMapFeatureGuardMixin, APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 

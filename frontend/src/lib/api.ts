@@ -6685,6 +6685,11 @@ export const mergeTableSessionTables = async (sessionId: number, tableIds: numbe
   const data = await handleJson<any>(response);
   return mapTableSession(data.session ?? data);
 };
+export const splitTableSessionTable = async (sessionId: number, tableId: number): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/split-table/`, { method: 'POST', body: JSON.stringify({ table_id: tableId }) });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
+};
 export const sendTableSessionToKitchen = async (sessionId: number): Promise<TableSession> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/send-to-kitchen/`, { method: 'POST' });
   const data = await handleJson<any>(response);
