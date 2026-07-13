@@ -36,6 +36,14 @@ def _parse_table_ids(data) -> list[int]:
     return table_ids
 
 
+def _parse_int(value, *, default=None):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _parse_guests_count(data):
     raw_value = data.get("guests_count", data.get("guest_count", 1))
     try:
@@ -259,20 +267,31 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
 
     @transaction.atomic
     def post(self, request, pk: int):
-        session = TableSession.objects.select_for_update().filter(id=pk).first()
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
         if not session:
-            return Response({"detail": "Sesión no encontrada."}, status=404)
-        table_ids = request.data.get("table_ids") or []
+            return Response({"detail": "Sesión no encontrada o cerrada."}, status=404)
+        table_ids = _parse_table_ids(request.data)
         if not table_ids:
             return Response({"detail": "Selecciona mesas para unir."}, status=400)
-        busy = TableSessionTable.objects.filter(table_id__in=table_ids, session__status__in=ACTIVE_TABLE_SESSION_STATUSES).exclude(session=session).exists()
-        if busy:
-            return Response({"detail": "No se puede unir una mesa ocupada en esta versión."}, status=400)
         existing = set(session.session_tables.values_list("table_id", flat=True))
         to_add = [tid for tid in table_ids if tid not in existing]
-        tables = RestaurantTable.objects.filter(id__in=to_add, is_active=True)
+        if not to_add:
+            return _session_response(session)
+        tables = list(RestaurantTable.objects.select_for_update().filter(id__in=to_add, is_active=True))
+        if len(tables) != len(set(to_add)):
+            return Response({"detail": "Hay mesas inválidas o inactivas."}, status=400)
+        busy = TableSessionTable.objects.select_for_update().filter(
+            table_id__in=to_add,
+            session__status__in=ACTIVE_TABLE_SESSION_STATUSES,
+        ).exclude(session=session).exists()
+        if busy:
+            return Response({"detail": "No se puede unir una mesa ocupada en esta versión."}, status=400)
         TableSessionTable.objects.bulk_create([TableSessionTable(session=session, table=t) for t in tables])
-        return Response({"detail": "Mesas unidas.", "session": TableSessionSerializer(session).data})
+        if session.primary_order_id:
+            names = list(session.session_tables.select_related("table").order_by("created_at", "id").values_list("table__name", flat=True))
+            session.primary_order.pending_reference = " + ".join(names)
+            session.primary_order.save(update_fields=["pending_reference", "updated_at"])
+        return _session_response(session)
 
 
 class TableSessionMoveTableView(TableMapFeatureGuardMixin, APIView):
@@ -297,12 +316,8 @@ class TableSessionMoveTableView(TableMapFeatureGuardMixin, APIView):
         if target_busy:
             return Response({"detail": "La mesa destino ya tiene una sesión activa."}, status=400)
 
-        source_table_id = request.data.get("source_table_id")
+        source_table_id = _parse_int(request.data.get("source_table_id"))
         if source_table_id not in (None, ""):
-            try:
-                source_table_id = int(source_table_id)
-            except (TypeError, ValueError):
-                return Response({"source_table_id": "Mesa origen inválida."}, status=400)
             removed, _ = TableSessionTable.objects.filter(session=session, table_id=source_table_id).delete()
             if removed == 0:
                 return Response({"source_table_id": "La mesa origen no pertenece a esta sesión."}, status=400)
@@ -329,7 +344,7 @@ class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
             order.recalculate_financials()
             has_balance = order.items.exists() and order.payment_status != "paid"
             if has_balance:
-                return Response({"detail": "La mesa tiene saldo pendiente y no puede liberarse."}, status=400)
+                return Response({"detail": "No puedes liberar una mesa con saldo pendiente."}, status=400)
         session.status = TableSession.STATUS_CLOSED
         session.closed_by = request.user
         session.closed_at = timezone.now()
