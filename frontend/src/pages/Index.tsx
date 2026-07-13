@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, MoveRight, SplitSquareHorizontal, Utensils, X, Home } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -517,6 +517,13 @@ type TableConfirmDialogState =
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
   const [kitchenSummaryDialog, setKitchenSummaryDialog] = useState<{ open: boolean; loading: boolean; sessions: TableKitchenSessionSummary[] }>({ open: false, loading: false, sessions: [] });
+  const tableMapViewportRef = useRef<HTMLDivElement | null>(null);
+  const tableMapUserAdjustedRef = useRef(false);
+  const tableMapDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const opsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [tableMapTransform, setTableMapTransform] = useState({ scale: 1, x: 0, y: 0 });
+  const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, isSheet: false });
+  const [viewportReflowTick, setViewportReflowTick] = useState(0);
   const longPressOpsRef = useRef<number | null>(null);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
@@ -945,6 +952,87 @@ type TableConfirmDialogState =
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [opsContextMenu.open, mergeMode.active, transferMode.active]);
+
+  const fitTableMapToViewport = useCallback((markManual = false) => {
+    const viewport = tableMapViewportRef.current;
+    if (!viewport || restaurantTables.length === 0) return;
+    const rect = viewport.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const bounds = restaurantTables.reduce(
+      (acc, table) => {
+        const rotation = Math.abs(Number(table.rotation || 0) % 180);
+        const rotated = rotation > 2 && rotation < 178;
+        const extra = rotated ? Math.max(table.width, table.height) * 0.24 : 0;
+        return {
+          minX: Math.min(acc.minX, table.x - extra),
+          minY: Math.min(acc.minY, table.y - extra),
+          maxX: Math.max(acc.maxX, table.x + table.width + extra),
+          maxY: Math.max(acc.maxY, table.y + table.height + extra),
+        };
+      },
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+    );
+    const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const centerX = bounds.minX + contentWidth / 2;
+    const centerY = bounds.minY + contentHeight / 2;
+    const padding = Math.min(100, Math.max(48, Math.min(rect.width, rect.height) * 0.12));
+    const usableWidth = Math.max(240, rect.width - padding * 2);
+    const usableHeight = Math.max(240, rect.height - padding * 2);
+    const nextScale = Math.min(1.12, Math.max(0.35, Math.min(usableWidth / contentWidth, usableHeight / contentHeight)));
+    setTableMapTransform({
+      scale: nextScale,
+      x: rect.width / 2 - centerX * nextScale,
+      y: rect.height / 2 - centerY * nextScale,
+    });
+    if (markManual) tableMapUserAdjustedRef.current = false;
+  }, [restaurantTables]);
+
+  useLayoutEffect(() => {
+    if (!tableMapEnabled || posMode !== "tables") return;
+    if (!tableMapUserAdjustedRef.current) fitTableMapToViewport();
+  }, [fitTableMapToViewport, posMode, restaurantTables, tableMapEnabled, tableSessions]);
+
+  useEffect(() => {
+    if (!tableMapEnabled || posMode !== "tables" || !tableMapViewportRef.current) return;
+    const observer = new ResizeObserver(() => {
+      if (!tableMapUserAdjustedRef.current) fitTableMapToViewport();
+    });
+    observer.observe(tableMapViewportRef.current);
+    return () => observer.disconnect();
+  }, [fitTableMapToViewport, posMode, tableMapEnabled]);
+
+  useEffect(() => {
+    if (!opsContextMenu.open) return;
+    const handleResize = () => setViewportReflowTick((tick) => tick + 1);
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleResize);
+    };
+  }, [opsContextMenu.open]);
+
+  useLayoutEffect(() => {
+    if (!opsContextMenu.open) return;
+    const safe = 16;
+    const isSheet = window.innerWidth < 640 || window.matchMedia("(pointer: coarse)").matches;
+    const maxHeight = Math.max(280, window.innerHeight - safe * 2);
+    if (isSheet) {
+      setOpsMenuPosition({ left: safe, top: Math.max(safe, window.innerHeight - Math.min(Math.round(window.innerHeight * 0.78), maxHeight) - safe), maxHeight: Math.min(Math.round(window.innerHeight * 0.78), maxHeight), isSheet: true });
+      requestAnimationFrame(() => opsMenuRef.current?.focus());
+      return;
+    }
+    const menuRect = opsMenuRef.current?.getBoundingClientRect();
+    const menuWidth = Math.min(menuRect?.width || 320, window.innerWidth - safe * 2);
+    const menuHeight = Math.min(menuRect?.height || 560, maxHeight);
+    const preferredLeft = opsContextMenu.x + 12;
+    const preferredTop = opsContextMenu.y + 8;
+    const left = Math.max(safe, Math.min(preferredLeft, window.innerWidth - menuWidth - safe));
+    const top = Math.max(safe, Math.min(preferredTop, window.innerHeight - menuHeight - safe));
+    setOpsMenuPosition({ left, top, maxHeight, isSheet: false });
+    requestAnimationFrame(() => opsMenuRef.current?.focus());
+  }, [opsContextMenu.open, opsContextMenu.x, opsContextMenu.y, opsContextMenu.tableId, viewportReflowTick]);
 
   useEffect(() => {
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
@@ -3466,6 +3554,39 @@ type TableConfirmDialogState =
     cart.some((item) => item.requiresKitchen || products.find((product) => product.id === item.productId)?.requiresKitchen)
   );
   const tableOrderPrimaryLabel = tableOrderHasKitchenItems ? "Enviar a cocina" : "Guardar orden";
+  const handleTableMapWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!tableMapEnabled || posMode !== "tables") return;
+    event.preventDefault();
+    tableMapUserAdjustedRef.current = true;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const zoomFactor = event.deltaY > 0 ? 0.92 : 1.08;
+    setTableMapTransform((current) => {
+      const nextScale = Math.max(0.35, Math.min(1.8, current.scale * zoomFactor));
+      const worldX = (pointerX - current.x) / current.scale;
+      const worldY = (pointerY - current.y) / current.scale;
+      return {
+        scale: nextScale,
+        x: pointerX - worldX * nextScale,
+        y: pointerY - worldY * nextScale,
+      };
+    });
+  };
+  const handleTableMapPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    tableMapUserAdjustedRef.current = true;
+    tableMapDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: tableMapTransform.x, originY: tableMapTransform.y };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const handleTableMapPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = tableMapDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setTableMapTransform((current) => ({ ...current, x: drag.originX + event.clientX - drag.startX, y: drag.originY + event.clientY - drag.startY }));
+  };
+  const handleTableMapPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (tableMapDragRef.current?.pointerId === event.pointerId) tableMapDragRef.current = null;
+  };
 
   if (isCashGateLoading) {
     return (
@@ -3504,27 +3625,49 @@ type TableConfirmDialogState =
         </Button>
 
         <div
-          className="relative h-full overflow-auto text-foreground"
+          ref={tableMapViewportRef}
+          className="relative h-full touch-none overflow-hidden text-foreground"
+          onWheel={handleTableMapWheel}
+          onPointerDown={handleTableMapPointerDown}
+          onPointerMove={handleTableMapPointerMove}
+          onPointerUp={handleTableMapPointerUp}
+          onPointerCancel={handleTableMapPointerUp}
+          onDoubleClick={() => fitTableMapToViewport(true)}
           style={{
             background: "radial-gradient(circle at top left, color-mix(in srgb, var(--color-primary-surface) 36%, transparent), transparent 32%), linear-gradient(135deg, hsl(var(--background)), hsl(var(--muted)) 58%, hsl(var(--card)))",
           }}
         >
-          <div className="pointer-events-none sticky left-0 top-0 z-30 flex justify-end p-3 pr-4">
+          <div className="pointer-events-none absolute right-3 top-3 z-30 flex max-w-[calc(100vw-5rem)] flex-wrap justify-end gap-2">
             <div className="pointer-events-auto flex flex-wrap justify-end gap-2 rounded-lg border border-border bg-popover/85 px-3 py-2 text-xs font-semibold text-popover-foreground shadow-lg backdrop-blur">
               <span>Libres: {freeCount}</span>
               <span>Ocupadas: {occupiedCount}</span>
               <button type="button" className="rounded px-1 underline-offset-2 hover:underline" onClick={() => void openKitchenSummary()}>En cocina: {kitchenCount}</button>
             </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="pointer-events-auto h-8 gap-2 border-border bg-popover/90 px-2 text-xs text-popover-foreground shadow-lg backdrop-blur hover:bg-muted"
+              onClick={() => fitTableMapToViewport(true)}
+              title="Ajustar mapa a pantalla"
+              aria-label="Ajustar mapa a pantalla"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              Ajustar
+            </Button>
           </div>
           {selectionMessage ? (
-            <div className="pointer-events-none sticky left-0 top-14 z-30 flex justify-center px-3">
+            <div className="pointer-events-none absolute left-0 right-0 top-14 z-30 flex justify-center px-3">
               <div className="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-lg border border-[var(--color-primary-border)] bg-popover/90 px-4 py-3 text-sm font-medium text-popover-foreground shadow-xl backdrop-blur">
                 <span>{selectionMessage}</span>
                 <Button className="h-8" size="sm" variant="outline" onClick={() => { setMergeMode({ active: false, sessionId: null, sourceTableId: null }); setTransferMode({ active: false, sessionId: null, sourceTableId: null }); }}>Cancelar</Button>
               </div>
             </div>
           ) : null}
-          <div className="relative h-[1200px] w-[1800px]">
+          <div
+            className="absolute left-0 top-0 h-[1400px] w-[2200px] will-change-transform"
+            style={{ transform: `translate3d(${tableMapTransform.x}px, ${tableMapTransform.y}px, 0) scale(${tableMapTransform.scale})`, transformOrigin: "0 0" }}
+          >
             {opsTables.map((table) => {
                   const session = sessionByTableId.get(table.id);
                   const selected = selectedOpsTableId === table.id;
@@ -3562,10 +3705,19 @@ type TableConfirmDialogState =
         {opsContextMenu.open ? (
           <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>
             <Card
-              className={cn("fixed max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl backdrop-blur sm:absolute sm:w-80", "bottom-3 left-3 right-3 sm:bottom-auto sm:left-auto sm:right-auto")}
+              ref={opsMenuRef}
+              role={opsMenuPosition.isSheet ? "dialog" : "menu"}
+              tabIndex={-1}
+              className={cn(
+                "fixed z-50 overflow-y-auto overscroll-contain rounded-xl border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl outline-none backdrop-blur scrollbar-thin",
+                opsMenuPosition.isSheet ? "left-4 right-4 w-auto" : "w-80"
+              )}
               style={{
-                left: typeof window !== "undefined" && window.innerWidth >= 640 ? Math.min(opsContextMenu.x, window.innerWidth - 340) : undefined,
-                top: typeof window !== "undefined" && window.innerWidth >= 640 ? Math.max(12, Math.min(opsContextMenu.y, window.innerHeight - 520)) : undefined,
+                left: opsMenuPosition.isSheet ? 16 : opsMenuPosition.left,
+                right: opsMenuPosition.isSheet ? 16 : undefined,
+                top: opsMenuPosition.top,
+                maxHeight: opsMenuPosition.isSheet ? `${opsMenuPosition.maxHeight}px` : `min(560px, ${opsMenuPosition.maxHeight}px)`,
+                scrollbarWidth: "thin",
               }}
               onClick={(e)=>e.stopPropagation()}
             >
@@ -3587,7 +3739,7 @@ type TableConfirmDialogState =
                 );
                 return (
                   <div className="space-y-1">
-                    <div className="border-b border-border pb-2">
+                    <div className="sticky top-0 z-10 border-b border-border bg-popover/95 pb-2 backdrop-blur">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="font-semibold">{table.name}</div>
