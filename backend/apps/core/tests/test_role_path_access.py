@@ -27,10 +27,10 @@ class RolePathAccessMiddlewareTests(TestCase):
         response = self.client.get("/api/employees/attendance/today/")
         self.assertEqual(response.status_code, 200)
 
-    def test_worker_can_read_feature_settings(self):
+    def test_worker_cannot_read_feature_settings(self):
         self._login_worker()
         response = self.client.get("/api/settings/features/")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
 
     def test_worker_is_blocked_for_other_modules(self):
         self._login_worker()

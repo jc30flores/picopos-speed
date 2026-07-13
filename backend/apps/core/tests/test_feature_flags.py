@@ -11,6 +11,8 @@ class FeatureFlagApiTests(TestCase):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(username="admin", password="pass1234")
         UserProfile.objects.create(user=self.user, role="admin", is_active=True)
+        self.superadmin = get_user_model().objects.create_user(username="superadmin", password="pass1234")
+        UserProfile.objects.create(user=self.superadmin, role="superadmin", is_active=True)
         self.worker = get_user_model().objects.create_user(username="worker", password="pass1234")
         UserProfile.objects.create(user=self.worker, role="worker", is_active=True)
         self.client.force_authenticate(user=self.user)
@@ -27,6 +29,7 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(response.data[0]["key"], "FF_CUSTOMERS_LOYALTY")
 
     def test_update_feature_flag(self):
+        self.client.force_authenticate(user=self.superadmin)
         flag = FeatureFlag.objects.create(
             key="FF_SHIFTS_CASH",
             label="Turnos y caja",
@@ -43,6 +46,7 @@ class FeatureFlagApiTests(TestCase):
         self.assertTrue(flag.is_enabled)
 
     def test_settings_features_get_and_patch(self):
+        self.client.force_authenticate(user=self.superadmin)
         response = self.client.get("/api/settings/features/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("kiosk_enabled", response.data)
@@ -62,15 +66,16 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(patch.data["cash_close_expected_totals_allowed_roles"], ["cashier"])
 
     def test_settings_features_options_excludes_admin(self):
+        self.client.force_authenticate(user=self.superadmin)
         response = self.client.get("/api/settings/features/options/")
         self.assertEqual(response.status_code, 200)
         role_codes = [row["code"] for row in response.data["roles"]]
         self.assertNotIn("admin", role_codes)
 
-    def test_worker_can_read_but_cannot_patch_settings_features(self):
+    def test_worker_cannot_read_or_patch_settings_features(self):
         self.client.force_authenticate(user=self.worker)
         read_response = self.client.get("/api/settings/features/")
-        self.assertEqual(read_response.status_code, 200)
+        self.assertEqual(read_response.status_code, 403)
 
         patch_response = self.client.patch(
             "/api/settings/features/",
@@ -100,16 +105,16 @@ class FeatureFlagApiTests(TestCase):
 
     def test_settings_dte_get_and_superadmin_only_technical_patch(self):
         response = self.client.get("/api/settings/dte/")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.data["enabled"])
-        self.assertEqual(response.data["config_status"], DTEGlobalSettings.STATUS_DISABLED)
+        self.assertEqual(response.status_code, 403)
 
         admin_patch = self.client.patch("/api/settings/dte/", {"base_url": "https://example.test/api"}, format="json")
         self.assertEqual(admin_patch.status_code, 403)
 
-        superuser = get_user_model().objects.create_user(username="super", password="pass1234", is_superuser=True)
-        UserProfile.objects.create(user=superuser, role="superadmin", is_active=True)
-        self.client.force_authenticate(user=superuser)
+        self.client.force_authenticate(user=self.superadmin)
+        super_get = self.client.get("/api/settings/dte/")
+        self.assertEqual(super_get.status_code, 200)
+        self.assertFalse(super_get.data["enabled"])
+        self.assertEqual(super_get.data["config_status"], DTEGlobalSettings.STATUS_DISABLED)
         super_patch = self.client.patch(
             "/api/settings/dte/",
             {"enabled": False, "environment": "test", "base_url": "https://example.test/api", "api_token": "secret-token"},

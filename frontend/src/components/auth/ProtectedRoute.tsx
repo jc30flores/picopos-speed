@@ -20,9 +20,10 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
 
   const shouldCheckAttendance = Boolean(user) && location.pathname !== "/" && location.pathname !== "/login";
   const canEvaluateAttendanceGuard = !shouldCheckAttendance || (attendanceResolved && !attendanceLoading);
+  const isProductSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
 
-  const blockedByAllowedRoles = Boolean(user && allowedRoles && !user.isSuperuser && !allowedRoles.includes(user.role));
-  const blockedByPath = Boolean(user && !isRouteAllowed(user.role, location.pathname, user.isSuperuser));
+  const blockedByAllowedRoles = Boolean(user && allowedRoles && !isProductSuperadmin && !allowedRoles.includes(user.role));
+  const blockedByPath = Boolean(user && !isRouteAllowed(user.role, location.pathname, isProductSuperadmin));
   const blockedByAttendance = Boolean(shouldCheckAttendance && canEvaluateAttendanceGuard && !accessState.canAccessDashboard);
   const isBlocked = blockedByAllowedRoles || blockedByPath || blockedByAttendance;
 
@@ -75,7 +76,7 @@ export const ProtectedRoute = ({ allowedRoles, deniedRedirectTo, deniedMessage =
       canAccessDashboard: accessState.canAccessDashboard,
       attendanceError,
     });
-    return <Navigate to={deniedRedirectTo || getLandingRouteForRole(user.role, user.isSuperuser)} replace />;
+    return <Navigate to={deniedRedirectTo || getLandingRouteForRole(user.role, isProductSuperadmin)} replace />;
   }
 
   return children;

@@ -37,7 +37,7 @@ def _get_or_create_profile(user):
 
 
 def _build_auth_payload(user, role: str):
-    is_superadmin = role == "superadmin" or bool(getattr(user, "is_superuser", False))
+    is_superadmin = role == "superadmin"
     profile_payload = {
         "role": role,
         "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),

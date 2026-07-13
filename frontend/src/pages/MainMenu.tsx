@@ -12,6 +12,9 @@ import { useAttendanceAccess } from "@/context/useAttendanceAccess";
 import { toast } from "sonner";
 import { APP_DISPLAY_NAME } from "@/lib/branding";
 
+const isProductSuperadmin = (user: ReturnType<typeof useAuth>["user"]) =>
+  Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
+
 const iconByModule: Partial<Record<AppModuleKey, LucideIcon>> = {
   pos: ShoppingCart,
   pending: ClipboardList,
@@ -33,25 +36,32 @@ const MainMenu = () => {
   const { accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
   const [featureVisibility, setFeatureVisibility] = useState({
-    pos: true,
+    pos: false,
     openOrders: false,
-    kiosk: true,
-    kitchen: true,
-    customerDisplay: true,
-    menuDiscounts: true,
-    inventory: true,
-    reports: true,
-    clients: true,
-    settings: true,
+    kiosk: false,
+    kitchen: false,
+    customerDisplay: false,
+    menuDiscounts: false,
+    inventory: false,
+    reports: false,
+    clients: false,
+    settings: false,
+    tableService: false,
+    operationMode: "quick_pos" as "quick_pos" | "table_service" | "both",
     loaded: false,
   });
+  const [featureError, setFeatureError] = useState<string | null>(null);
 
   useEffect(() => {
+    setFeatureError(null);
+    setFeatureVisibility((previous) => ({ ...previous, loaded: false }));
     Promise.all([getRuntimeFeatureSettings(), getFeatureFlags().catch(() => [])])
       .then(([settings, coreFlags]) => {
         const normalizedFromSettings = normalizeFeatureFlags(settings);
         const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));
         const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
+        const tableService = normalized.operationMode !== "quick_pos" && normalized.tableMapEnabled;
+        const isSuperadmin = isProductSuperadmin(user);
         setFeatureVisibility({
           pos: normalized.posEnabled,
           openOrders: false,
@@ -62,7 +72,9 @@ const MainMenu = () => {
           inventory: normalized.inventoryModuleEnabled,
           reports: normalized.reportsEnabled,
           clients: normalized.clientsEnabled,
-          settings: normalized.settingsEnabled || Boolean(user?.isSuperuser || user?.role === "superadmin"),
+          settings: normalized.settingsEnabled || isSuperadmin,
+          tableService,
+          operationMode: normalized.operationMode,
           loaded: true,
         });
       })
@@ -73,8 +85,10 @@ const MainMenu = () => {
           non_blocking: true,
           keep_authenticated: true,
         });
+        setFeatureError("No se pudieron cargar los módulos disponibles.");
+        setFeatureVisibility((previous) => ({ ...previous, loaded: false }));
       });
-  }, [user?.isSuperuser, user?.role]);
+  }, [user]);
 
   const cards = useMemo(
     () =>
@@ -91,6 +105,7 @@ const MainMenu = () => {
           if (module.key === "clients") return featureVisibility.clients !== false;
           if (module.key === "settings") return featureVisibility.settings !== false;
           if (module.key === "dte") return false;
+          if (module.key === "tables_editor") return featureVisibility.tableService !== false;
           return true;
         })
         .map((module) => ({ ...module, icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON })),
@@ -142,7 +157,17 @@ const MainMenu = () => {
         <AttendancePanel />
         {!isWorker ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => {
+            {!featureVisibility.loaded ? (
+              featureError ? (
+                <div className="col-span-full rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                  {featureError}
+                </div>
+              ) : (
+                Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className="h-24 animate-pulse rounded-2xl border bg-muted/40" aria-label="Cargando módulos" />
+                ))
+              )
+            ) : cards.map((card) => {
               const CardIcon = card.icon ?? DEFAULT_MENU_ICON;
               return (
               <Button

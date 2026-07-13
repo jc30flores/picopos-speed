@@ -17,7 +17,7 @@ def _role_is(user, roles: set[str]) -> bool:
 
 
 def is_superadmin(user) -> bool:
-    return bool(getattr(user, "is_superuser", False) or _role_is(user, {"superadmin"}))
+    return _role_is(user, {"superadmin"})
 
 
 def is_admin(user) -> bool:
@@ -77,17 +77,17 @@ class IsKitchen(BasePermission):
 
 class IsAdminOrManager(BasePermission):
     def has_permission(self, request, view):
-        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"admin", "manager"}))
+        return bool(is_superadmin(request.user) or _role_is(request.user, {"admin", "manager"}))
 
 
 class IsManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"admin", "manager"}))
+        return bool(is_superadmin(request.user) or _role_is(request.user, {"admin", "manager"}))
 
 
 class IsCashierOrManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return bool(getattr(request.user, "is_superuser", False) or _role_is(request.user, {"cashier", "admin", "manager"}))
+        return bool(is_superadmin(request.user) or _role_is(request.user, {"cashier", "admin", "manager"}))
 
 
 class IsKitchenOrManagerOrAdmin(BasePermission):

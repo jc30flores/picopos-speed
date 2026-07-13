@@ -14,7 +14,7 @@ import { useAuth } from "@/context/useAuth";
 const Settings = () => {
   const [activeTab, setActiveTab] = useState("employees");
   const { user } = useAuth();
-  const isSuperadmin = Boolean(user?.isSuperuser || user?.role === "superadmin");
+  const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
   const tabs = [
     { label: "Empleados", value: "employees" },
     { label: "Horarios", value: "schedules" },

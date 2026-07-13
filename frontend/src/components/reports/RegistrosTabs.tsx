@@ -8,12 +8,17 @@ export const RegistrosTabs = () => {
   const location = useLocation();
   const { user } = useAuth();
   const [dteEnabled, setDteEnabled] = useState(false);
-  const isAdminLike = user?.role === "admin" || user?.role === "superadmin" || Boolean(user?.isSuperuser);
+  const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
+  const isAdminLike = user?.role === "admin" || user?.role === "superadmin";
   const canViewCash = isAdminLike;
   const canViewReports = isAdminLike;
   useEffect(() => {
+    if (!isSuperadmin) {
+      setDteEnabled(false);
+      return;
+    }
     getDteSettings().then((settings) => setDteEnabled(settings.haciendaEnabled)).catch(() => setDteEnabled(false));
-  }, []);
+  }, [isSuperadmin]);
   return (
     <div className="mb-4 flex flex-wrap gap-3">
       {canViewReports ? (
@@ -29,7 +34,7 @@ export const RegistrosTabs = () => {
           <Link to="/registros/caja">Caja</Link>
         </Button>
       ) : null}
-      {canViewReports && dteEnabled ? (
+      {isSuperadmin && canViewReports && dteEnabled ? (
         <Button asChild variant={location.pathname === "/registros/dte" ? "default" : "outline"} className="min-h-12 rounded-xl px-5 md:min-h-14 md:text-base">
           <Link to="/registros/dte">DTE</Link>
         </Button>

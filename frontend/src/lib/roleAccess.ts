@@ -34,14 +34,14 @@ export const appModules: AppModuleConfig[] = [
   { key: "menu_discounts", label: "MENÚ & DESCUENTOS", path: "/menu", requiredRoles: ["admin", "manager"] },
   { key: "inventory", label: "INVENTARIO", path: "/inventory", requiredRoles: ["admin", "manager"] },
   { key: "registers", label: "REPORTES", path: "/registros/ventas", requiredRoles: ["admin"] },
-  { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["admin"] },
+  { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["superadmin"] },
   { key: "clients", label: "CLIENTES", path: "/clientes", requiredRoles: ["admin", "manager"] },
   { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin"] },
 ];
 
 export const canAccessModule = (user: RoleAccessUser, module: AppModuleConfig) => {
   if (!user) return false;
-  if (user.isSuperuser) return true;
+  if (user.role === "superadmin") return true;
   return module.requiredRoles.includes(user.role);
 };
 
@@ -50,7 +50,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
   superadmin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
-  admin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
+  admin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/empleados", "/settings"],
   manager: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   kitchen: ["/kitchen"],
@@ -62,40 +62,34 @@ export const allowedRoutesByRole: Record<AppRole, string[]> = {
 export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path: string }>> = {
   superadmin: [
     { label: "POS", path: "/" },
-    { label: "Pedidos abiertos", path: "/open-orders" },
     { label: "Kiosk", path: "/kiosk" },
     { label: "Cocina", path: "/kitchen" },
     { label: "Pedidos Clientes", path: "/customer-display" },
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Inventario", path: "/inventory" },
     { label: "Reportes", path: "/registros/ventas" },
-    { label: "DTE", path: "/registros/dte" },
     { label: "Clientes", path: "/clientes" },
     { label: "Configuración", path: "/settings" },
   ],
   admin: [
     { label: "POS", path: "/" },
-    { label: "Open Orders", path: "/open-orders" },
     { label: "Kiosk", path: "/kiosk" },
     { label: "Cocina", path: "/kitchen" },
     { label: "Pedidos Clientes", path: "/customer-display" },
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Inventario", path: "/inventory" },
     { label: "Reportes", path: "/registros/ventas" },
-    { label: "DTE", path: "/registros/dte" },
     { label: "Clientes", path: "/clientes" },
     { label: "Configuración", path: "/settings" },
   ],
   manager: [
     { label: "POS", path: "/" },
-    { label: "Open Orders", path: "/open-orders" },
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Inventario", path: "/inventory" },
     { label: "Clientes", path: "/clientes" },
   ],
   cashier: [
     { label: "POS", path: "/pos" },
-    { label: "Open Orders", path: "/open-orders" },
   ],
   kitchen: [{ label: "Cocina", path: "/kitchen" }],
   kiosk: [{ label: "Kiosk", path: "/kiosk" }],
@@ -115,12 +109,12 @@ const landingRouteByRole: Record<AppRole, string> = {
 };
 
 export const getLandingRouteForRole = (role: AppRole, isSuperuser = false) => {
-  if (isSuperuser) return "/";
+  if (isSuperuser && role === "superadmin") return "/";
   return landingRouteByRole[role] ?? "/";
 };
 
 export const isRouteAllowed = (role: AppRole, path: string, isSuperuser = false) => {
-  if (isSuperuser) return true;
+  if (isSuperuser && role === "superadmin") return true;
   if (path.startsWith("/registros")) {
     if (path === "/registros/caja") return role === "admin";
     return allowedRoutesByRole[role].includes(path);

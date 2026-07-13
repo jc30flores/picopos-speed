@@ -120,6 +120,7 @@ export const SalesHistoryTab = () => {
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketHtml, setTicketHtml] = useState("");
   const canChangePaymentMethod = user?.role === "admin" || Boolean(user?.isSuperuser);
+  const canUseDteActions = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
   const [dteEnabled, setDteEnabled] = useState(false);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
@@ -217,10 +218,14 @@ export const SalesHistoryTab = () => {
   }, [canChangePaymentMethod]);
 
   useEffect(() => {
+    if (!canUseDteActions) {
+      setDteEnabled(false);
+      return;
+    }
     getDteSettings()
       .then((value) => setDteEnabled(value.haciendaEnabled))
       .catch(() => setDteEnabled(false));
-  }, []);
+  }, [canUseDteActions]);
 
   const filteredSales = sales;
 
@@ -655,7 +660,7 @@ export const SalesHistoryTab = () => {
                               <Repeat2 className="h-4 w-4" />
                             </Button>
                           ) : null}
-                          {dteEnabled ? (
+                          {canUseDteActions && dteEnabled ? (
                             <Button
                               variant="outline"
                               size="sm"
