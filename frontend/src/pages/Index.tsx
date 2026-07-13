@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, MoveRight, SplitSquareHorizontal, Utensils, X } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, MoveRight, SplitSquareHorizontal, Utensils, X, Home } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -100,7 +100,11 @@ import {
   splitTableSessionTable,
   moveTableSessionTable,
   releaseTableSession,
+  forceReleaseTableSession,
   sendTableSessionToKitchen,
+  getTableKitchenSummary,
+  markTableKitchenItemReady,
+  markTableKitchenItemDelivered,
   Category,
   Discount,
   ModifierGroup,
@@ -117,6 +121,7 @@ import {
   Payment,
   TableSession,
   RestaurantTable,
+  TableKitchenSessionSummary,
 } from "@/lib/api";
 import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
@@ -198,6 +203,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     customCode: item.code,
     assignedName: item.assignedName,
     unitPriceOverride: item.unitPriceOverride ?? null,
+    requiresKitchen: item.kitchenStatus === "pending",
     modifiers,
   };
 };
@@ -509,6 +515,8 @@ type TableConfirmDialogState =
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
+  const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
+  const [kitchenSummaryDialog, setKitchenSummaryDialog] = useState<{ open: boolean; loading: boolean; sessions: TableKitchenSessionSummary[] }>({ open: false, loading: false, sessions: [] });
   const longPressOpsRef = useRef<number | null>(null);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
@@ -824,8 +832,8 @@ type TableConfirmDialogState =
 
   const handleSendTableSession = async (session: TableSession) => {
     try {
-      await sendTableSessionToKitchen(session.id);
-      toast.success("Orden enviada a cocina.");
+      const updated = await sendTableSessionToKitchen(session.id);
+      toast.success(updated.detail || (updated.sentCount === 0 ? "No hay productos nuevos para enviar." : "Orden enviada a cocina."));
       await refreshTableSessions();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo enviar a cocina.");
@@ -836,6 +844,20 @@ type TableConfirmDialogState =
     const sourceTableId = session.tableIds[0] ?? selectedOpsTableId;
     if (!sourceTableId) {
       toast.error("No se pudo identificar la mesa.");
+      return;
+    }
+    let hasBalance = false;
+    try {
+      if (session.primaryOrder) {
+        const order = await getOrderById(session.primaryOrder);
+        hasBalance = Number(order.remaining ?? 0) > 0;
+      }
+    } catch {
+      hasBalance = Number(session.totalCached ?? 0) > 0;
+    }
+    if (hasBalance) {
+      const requiresPin = !(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin");
+      setForceReleaseDialog({ open: true, session, reason: "", pin: "", requiresPin, loading: false });
       return;
     }
     setTableConfirmDialog({ open: true, type: "release", sourceTableId, targetTableId: null, session });
@@ -849,6 +871,30 @@ type TableConfirmDialogState =
       setSelectedOpsTableId(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo liberar la mesa.");
+    }
+  };
+
+  const confirmForceReleaseTableSession = async () => {
+    const session = forceReleaseDialog.session;
+    if (!session || forceReleaseDialog.loading) return;
+    if (!forceReleaseDialog.reason.trim()) {
+      toast.error("Ingresa un motivo.");
+      return;
+    }
+    if (forceReleaseDialog.requiresPin && !forceReleaseDialog.pin.trim()) {
+      toast.error("Ingresa PIN de admin o superadmin.");
+      return;
+    }
+    setForceReleaseDialog((prev) => ({ ...prev, loading: true }));
+    try {
+      await forceReleaseTableSession(session.id, { reason: forceReleaseDialog.reason.trim(), authorizationPin: forceReleaseDialog.pin.trim() || undefined });
+      toast.success("Mesa liberada y cuenta pendiente cancelada.");
+      setForceReleaseDialog({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
+      await refreshTableSessions();
+      setSelectedOpsTableId(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo liberar la mesa.");
+      setForceReleaseDialog((prev) => ({ ...prev, loading: false }));
     }
   };
 
@@ -2588,7 +2634,7 @@ type TableConfirmDialogState =
       if (sendKitchen) {
         session = await sendTableSessionToKitchen(tableOrderContext.sessionId);
         upsertTableSession(session);
-        toast.success("Orden enviada a cocina.");
+        toast.success(session.detail || (session.sentCount === 0 ? "No hay productos nuevos para enviar." : `${session.sentCount ?? 0} productos enviados a cocina.`));
       } else {
         toast.success("Orden guardada en mesa.");
       }
@@ -2616,6 +2662,33 @@ type TableConfirmDialogState =
     setTableOrderContext(null);
     setPosMode("tables");
     void refreshTableSessions();
+  };
+
+  const openKitchenSummary = async () => {
+    setKitchenSummaryDialog({ open: true, loading: true, sessions: [] });
+    try {
+      const sessions = await getTableKitchenSummary();
+      setKitchenSummaryDialog({ open: true, loading: false, sessions });
+    } catch (error) {
+      setKitchenSummaryDialog({ open: false, loading: false, sessions: [] });
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar cocina.");
+    }
+  };
+
+  const refreshKitchenSummary = async () => {
+    const sessions = await getTableKitchenSummary();
+    setKitchenSummaryDialog({ open: true, loading: false, sessions });
+  };
+
+  const updateKitchenItemStatus = async (itemId: number, target: "ready" | "delivered") => {
+    try {
+      if (target === "ready") await markTableKitchenItemReady(itemId);
+      else await markTableKitchenItemDelivered(itemId);
+      await refreshKitchenSummary();
+      toast.success(target === "ready" ? "Producto marcado listo." : "Producto marcado entregado.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar cocina.");
+    }
   };
 
   const handleCreatePayout = async () => {
@@ -3390,7 +3463,7 @@ type TableConfirmDialogState =
 
   const tableOrderHasKitchenItems = Boolean(tableOrderContext) && (
     Boolean(activeOrder?.requiresKitchen) ||
-    cart.some((item) => products.find((product) => product.id === item.productId)?.requiresKitchen)
+    cart.some((item) => item.requiresKitchen || products.find((product) => product.id === item.productId)?.requiresKitchen)
   );
   const tableOrderPrimaryLabel = tableOrderHasKitchenItems ? "Enviar a cocina" : "Guardar orden";
 
@@ -3420,13 +3493,13 @@ type TableConfirmDialogState =
     return (
       <div className="h-[100dvh] overflow-hidden bg-background">
         <Button
-          className="fixed left-3 top-3 z-40 h-9 gap-2 border-border bg-background/85 px-3 text-foreground shadow-sm backdrop-blur hover:bg-muted"
+          className="fixed left-3 top-3 z-50 h-9 gap-2 border-border bg-popover/95 px-3 text-popover-foreground shadow-lg backdrop-blur hover:bg-muted"
           variant="outline"
           onClick={() => navigate("/")}
           title="Volver al menú principal"
           aria-label="Volver al menú principal"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <Home className="h-4 w-4" />
           <span>Menú</span>
         </Button>
 
@@ -3440,7 +3513,7 @@ type TableConfirmDialogState =
             <div className="pointer-events-auto flex flex-wrap justify-end gap-2 rounded-lg border border-border bg-popover/85 px-3 py-2 text-xs font-semibold text-popover-foreground shadow-lg backdrop-blur">
               <span>Libres: {freeCount}</span>
               <span>Ocupadas: {occupiedCount}</span>
-              <span>En cocina: {kitchenCount}</span>
+              <button type="button" className="rounded px-1 underline-offset-2 hover:underline" onClick={() => void openKitchenSummary()}>En cocina: {kitchenCount}</button>
             </div>
           </div>
           {selectionMessage ? (
@@ -3489,10 +3562,10 @@ type TableConfirmDialogState =
         {opsContextMenu.open ? (
           <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>
             <Card
-              className={cn("fixed border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl backdrop-blur sm:absolute sm:w-80", "bottom-3 left-3 right-3 sm:bottom-auto sm:left-auto sm:right-auto")}
+              className={cn("fixed max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl backdrop-blur sm:absolute sm:w-80", "bottom-3 left-3 right-3 sm:bottom-auto sm:left-auto sm:right-auto")}
               style={{
                 left: typeof window !== "undefined" && window.innerWidth >= 640 ? Math.min(opsContextMenu.x, window.innerWidth - 340) : undefined,
-                top: typeof window !== "undefined" && window.innerWidth >= 640 ? Math.min(opsContextMenu.y, window.innerHeight - 500) : undefined,
+                top: typeof window !== "undefined" && window.innerWidth >= 640 ? Math.max(12, Math.min(opsContextMenu.y, window.innerHeight - 520)) : undefined,
               }}
               onClick={(e)=>e.stopPropagation()}
             >
@@ -3670,7 +3743,9 @@ type TableConfirmDialogState =
                     <div key={item.id} className="flex items-start justify-between gap-3 border-b p-3 last:border-b-0">
                       <div>
                         <p className="font-medium">{item.assignedName ? `${item.assignedName} · ` : ""}{item.productName}</p>
-                        <p className="text-xs text-muted-foreground">Cantidad {item.quantity}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Cantidad {item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Listo" : "Entregado"}
+                        </p>
                       </div>
                       <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
                     </div>
@@ -3700,6 +3775,91 @@ type TableConfirmDialogState =
               {tableBillDialog.order ? <Button variant="outline" onClick={() => void smartPrintTicket({ orderId: tableBillDialog.order!.id, preferDirect: false })}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
               {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) openTablePayment(tableId, session); }}>Cobrar</Button> : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={forceReleaseDialog.open} onOpenChange={(open) => !forceReleaseDialog.loading && setForceReleaseDialog((prev) => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Liberar mesa con saldo pendiente</DialogTitle>
+              <DialogDescription>Esta acción cancelará la cuenta pendiente y dejará la mesa disponible. Los pagos existentes se conservan.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                <div className="flex justify-between"><span>Saldo a cancelar</span><span className="font-semibold">{formatMoney(forceReleaseDialog.session?.totalCached ?? 0)}</span></div>
+                <div className="mt-1 text-xs text-muted-foreground">{forceReleaseDialog.requiresPin ? "Requiere PIN de admin o superadmin." : "Tu rol permite autorizar esta liberación."}</div>
+              </div>
+              <div>
+                <Label>Motivo obligatorio</Label>
+                <Textarea value={forceReleaseDialog.reason} onChange={(event) => setForceReleaseDialog((prev) => ({ ...prev, reason: event.target.value }))} placeholder="Ej: cliente se retiró, error operativo, cambio de mesa" />
+              </div>
+              {forceReleaseDialog.requiresPin ? (
+                <div>
+                  <Label>PIN admin/superadmin</Label>
+                  <Input value={forceReleaseDialog.pin} onChange={(event) => setForceReleaseDialog((prev) => ({ ...prev, pin: event.target.value.replace(/\D/g, "").slice(0, 6) }))} inputMode="numeric" type="password" autoComplete="off" />
+                </div>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" disabled={forceReleaseDialog.loading} onClick={() => setForceReleaseDialog({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false })}>Cancelar</Button>
+              <Button disabled={forceReleaseDialog.loading} onClick={() => void confirmForceReleaseTableSession()}>{forceReleaseDialog.loading ? "Liberando..." : "Liberar mesa"}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={kitchenSummaryDialog.open} onOpenChange={(open) => setKitchenSummaryDialog((prev) => ({ ...prev, open }))}>
+          <DialogContent className="max-h-[92dvh] max-w-4xl overflow-hidden p-0">
+            <DialogHeader className="border-b px-5 py-4">
+              <DialogTitle>Órdenes en cocina</DialogTitle>
+              <DialogDescription>Resumen por mesa, persona y estado de productos.</DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[70dvh] overflow-y-auto px-5 py-4">
+              {kitchenSummaryDialog.loading ? (
+                <div className="py-8 text-sm text-muted-foreground">Cargando cocina...</div>
+              ) : kitchenSummaryDialog.sessions.length ? (
+                <div className="space-y-4">
+                  {kitchenSummaryDialog.sessions.map((session) => (
+                    <div key={session.sessionId} className="rounded-lg border bg-card p-3">
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-semibold">{session.tableLabel || "Mesa"}</p>
+                          <p className="text-xs text-muted-foreground">{session.guestsCount} personas · Total {formatMoney(session.total)} · Pendiente {formatMoney(session.remaining)}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTableBill(tableId, tableSession); }}>Ver cuenta</Button>
+                          <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) openTablePayment(tableId, tableSession); }}>Cobrar</Button>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {(session.people.length ? session.people : [{ label: "Cuenta general", total: session.total, items: session.items }]).map((person) => (
+                          <div key={person.label} className="rounded-md border bg-muted/10 p-2">
+                            <div className="mb-2 flex justify-between text-sm font-medium"><span>{person.label}</span><span>{formatMoney(person.total)}</span></div>
+                            <div className="space-y-2">
+                              {person.items.map((item) => (
+                                <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background p-2 text-sm">
+                                  <div>
+                                    <p className="font-medium">{item.productName}</p>
+                                    <p className="text-xs text-muted-foreground">x{item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Listo" : "Entregado"}</p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Listo</Button>
+                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Entregado</Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-8 text-sm text-muted-foreground">No hay órdenes de mesa activas.</div>
+              )}
+            </div>
+            <DialogFooter className="border-t px-5 py-3">
+              <Button variant="outline" onClick={() => setKitchenSummaryDialog({ open: false, loading: false, sessions: [] })}>Cerrar</Button>
+              <Button onClick={() => void refreshKitchenSummary()}>Actualizar</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -3864,119 +4024,72 @@ type TableConfirmDialogState =
             <div className="flex-none border-b p-4">
               <div className="mb-3 space-y-2">
                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-                  <ClockSV className="px-3 py-2" timeClassName="text-base sm:text-lg" />
+                  {!tableOrderContext ? <ClockSV className="px-3 py-2" timeClassName="text-base sm:text-lg" /> : <div />}
                   <h2 className="text-xl font-bold text-center">Pedido Actual</h2>
                   <div className="flex items-center justify-end gap-2">
-                    <TooltipProvider delayDuration={120}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            title="Producto manual"
-                            aria-label="Producto manual"
-                            className="h-11 w-11 rounded-xl gp-primary-border"
-                            onClick={() =>
-                              privilegedGuard.requirePrivilege("manualProduct", () => setIsManualProductOpen(true))
-                            }
-                          >
-                            <Plus className="h-5 w-5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Producto manual</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider delayDuration={120}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            title="Descuentos"
-                            aria-label="Descuentos"
-                            className="h-11 w-11 rounded-xl"
-                            onClick={() =>
-                              privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))
-                            }
-                          >
-                            <BadgePercent className="h-5 w-5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Descuentos</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-
-                    {shouldShowQuickSalesButton ? (
-                      <TooltipProvider delayDuration={120}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              title={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
-                              aria-label={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
-                              className="h-11 w-11 rounded-xl gp-primary-border gp-primary-text"
-                              onClick={quickSalesMode === "last_sale" ? handleLastSaleQuickAction : openRecentSalesActions}
-                              disabled={isQuickSaleProcessing}
-                            >
-                              {quickSalesMode === "last_sale" ? (
-                                <PrinterCheck className="h-5 w-5" />
-                              ) : (
-                                <History className="h-5 w-5" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                    {!tableOrderContext ? (
+                      <>
+                        <TooltipProvider delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button type="button" variant="outline" size="icon" title="Producto manual" aria-label="Producto manual" className="h-11 w-11 rounded-xl gp-primary-border" onClick={() => privilegedGuard.requirePrivilege("manualProduct", () => setIsManualProductOpen(true))}>
+                                <Plus className="h-5 w-5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Producto manual</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="outline" size="icon" title="Descuentos" aria-label="Descuentos" className="h-11 w-11 rounded-xl" onClick={() => privilegedGuard.requirePrivilege("discounts", () => setIsDiscountDialogOpen(true))}>
+                                <BadgePercent className="h-5 w-5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Descuentos</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        {shouldShowQuickSalesButton ? (
+                          <TooltipProvider delayDuration={120}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="outline" size="icon" title={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"} aria-label={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"} className="h-11 w-11 rounded-xl gp-primary-border gp-primary-text" onClick={quickSalesMode === "last_sale" ? handleLastSaleQuickAction : openRecentSalesActions} disabled={isQuickSaleProcessing}>
+                                  {quickSalesMode === "last_sale" ? <PrinterCheck className="h-5 w-5" /> : <History className="h-5 w-5" />}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : null}
+                        <TooltipProvider delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="outline" size="icon" title="Transacciones de caja" aria-label="Transacciones de caja" className="h-11 w-11 rounded-xl" onClick={() => privilegedGuard.requirePrivilege("cashTransactions", () => { setIsCashDialogOpen(true); loadCashData().catch(() => undefined); })}>
+                                <Wallet className="h-5 w-5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Transacciones de caja</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="outline" size="icon" title="Refrescar" aria-label="Refrescar" className="h-11 w-11 rounded-xl" onClick={() => hardReloadPos("toolbar_refresh")}>
+                                <RefreshCw className="h-5 w-5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Refrescar</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </>
                     ) : null}
-                    <TooltipProvider delayDuration={120}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            title="Transacciones de caja"
-                            aria-label="Transacciones de caja"
-                            className="h-11 w-11 rounded-xl"
-                            onClick={() =>
-                              privilegedGuard.requirePrivilege("cashTransactions", () => {
-                                setIsCashDialogOpen(true);
-                                loadCashData().catch(() => undefined);
-                              })
-                            }
-                          >
-                            <Wallet className="h-5 w-5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Transacciones de caja</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider delayDuration={120}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            title="Refrescar"
-                            aria-label="Refrescar"
-                            className="h-11 w-11 rounded-xl"
-                            onClick={() => hardReloadPos("toolbar_refresh")}
-                          >
-                            <RefreshCw className="h-5 w-5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Refrescar</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
                   </div>
                 </div>
               </div>
 
             </div>
 
-            <div className="flex-none border-b px-4 py-3">
+            {!tableOrderContext ? <div className="flex-none border-b px-4 py-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <Popover open={isOrderTypeSelectorOpen} onOpenChange={setIsOrderTypeSelectorOpen}>
                   <PopoverTrigger asChild>
@@ -4036,7 +4149,7 @@ type TableConfirmDialogState =
                   </span>
                 </Button>
               </div>
-            </div>
+            </div> : null}
 
             <div ref={cartItemsScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
               {cart.length === 0 ? (
@@ -4145,21 +4258,19 @@ type TableConfirmDialogState =
               </div>
 
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  className="h-14 w-14 p-0"
-                  onClick={() => void handleQuickPrintTicket()}
-                  title="Imprimir ticket"
-                  aria-label="Imprimir ticket"
-                >
-                  <Printer className="h-5 w-5" />
-                </Button>
+                {!tableOrderContext ? (
+                  <Button variant="outline" className="h-14 w-14 p-0" onClick={() => void handleQuickPrintTicket()} title="Imprimir ticket" aria-label="Imprimir ticket">
+                    <Printer className="h-5 w-5" />
+                  </Button>
+                ) : null}
                 <Button
                   variant="secondary"
                   className="h-14 w-14 p-0"
                   onClick={() => {
                     if (tableOrderContext) {
-                      void saveTableOrder({ sendKitchen: false, returnToMap: false });
+                      const session = tableSessions.find((row) => row.id === tableOrderContext.sessionId);
+                      const tableId = session?.tableIds[0] ?? selectedOpsTableId ?? 0;
+                      if (session) void openTableBill(tableId, session);
                       return;
                     }
                     const isCurrentOrderEmpty = cart.length === 0;
@@ -4170,10 +4281,10 @@ type TableConfirmDialogState =
                     void handleSendOrderToPending();
                   }}
                   disabled={isSendingToPending}
-                  title={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
-                  aria-label={cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
+                  title={tableOrderContext ? "Ver cuenta" : cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
+                  aria-label={tableOrderContext ? "Ver cuenta" : cart.length === 0 ? "Órdenes guardadas" : "Guardar orden"}
                 >
-                  <Save className="h-5 w-5" />
+                  {tableOrderContext ? <ReceiptText className="h-5 w-5" /> : <Save className="h-5 w-5" />}
                 </Button>
                 <Button
                   variant="default"
@@ -4187,21 +4298,6 @@ type TableConfirmDialogState =
                     <span className="text-sm font-medium opacity-90">{formatMoney(total)}</span>
                   </span>
                 </Button>
-                {tableOrderContext ? (
-                  <Button
-                    variant="outline"
-                    className="h-14 w-14 p-0"
-                    onClick={() => {
-                      const session = tableSessions.find((row) => row.id === tableOrderContext.sessionId);
-                      const tableId = session?.tableIds[0] ?? selectedOpsTableId ?? 0;
-                      if (session) openTablePayment(tableId, session);
-                    }}
-                    title="Cobrar mesa"
-                    disabled={!activeOrder || Number(activeOrder.remaining || activeOrder.totalPayable || activeOrder.total || 0) <= 0}
-                  >
-                    <CreditCard className="h-5 w-5" />
-                  </Button>
-                ) : null}
                 <Button
                   variant="outline"
                   className="h-14 w-14 p-0"
