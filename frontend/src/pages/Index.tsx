@@ -152,6 +152,7 @@ interface CartItem {
   isCustom?: boolean;
   customCode?: string;
   assignedName?: string;
+  tableGuestId?: number | null;
   unitPriceOverride?: number | null;
   appliedSpecialPriceRuleName?: string | null;
   requiresKitchen?: boolean;
@@ -202,6 +203,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     isCustom: Boolean(item.isCustom),
     customCode: item.code,
     assignedName: item.assignedName,
+    tableGuestId: item.tableGuestId ?? null,
     unitPriceOverride: item.unitPriceOverride ?? null,
     requiresKitchen: item.kitchenStatus === "pending",
     modifiers,
@@ -513,6 +515,7 @@ type TableConfirmDialogState =
   const [transferMode, setTransferMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
   const [tableConfirmDialog, setTableConfirmDialog] = useState<TableConfirmDialogState>({ open: false, type: null, sourceTableId: null, targetTableId: null, session: null });
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
+  const [tableBillView, setTableBillView] = useState<"all" | "person" | "pending" | "kitchen" | "served">("person");
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
@@ -711,16 +714,54 @@ type TableConfirmDialogState =
     }
   }, [navigate, setContextFromTableSession, upsertTableSession]);
 
-  const openTablePayment = useCallback((tableId: number, session: TableSession) => {
+  const openTablePayment = useCallback(async (tableId: number, session: TableSession) => {
     if (!session.primaryOrder) {
       toast.error("La mesa no tiene orden activa.");
       return;
     }
-    upsertTableSession(session);
-    setContextFromTableSession(tableId, session);
-    setPosMode("pos");
-    navigate(`/pos?pending_order_id=${session.primaryOrder}&mode=pay`, { state: { fromOpenOrders: true, tableSession: session, tableId } });
-  }, [navigate, setContextFromTableSession, upsertTableSession]);
+    try {
+      upsertTableSession(session);
+      setContextFromTableSession(tableId, session);
+      const order = await getOrderById(session.primaryOrder);
+      const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
+      const serviceKey = order.serviceType || serviceType;
+      setActiveOrder(order);
+      setCreatedOrderId(order.id);
+      setCreatedOrderNumber(order.orderNumber);
+      setCart(restoredCart);
+      setSelectedDiscount(null);
+      setServiceType(serviceKey);
+      setCheckoutDraft({
+        items: restoredCart,
+        subtotal: order.subtotalBeforeDiscounts ?? order.total,
+        tax: order.taxTotal ?? 0,
+        total: order.totalPayable ?? order.total,
+        taxRate,
+        serviceType: serviceKey,
+        createdAt: Date.now(),
+      });
+      const dueCents = typeof order.remainingCents === "number" ? order.remainingCents : toCents(order.remaining);
+      setPaymentAmount(centsToInput(dueCents));
+      setTipAmount("0");
+      setPaymentReference("");
+      setSelectedPaymentMethodCode("");
+      setPaymentMethodAutoSelectedFromOrderType(false);
+      setPaymentMethod("cash");
+      setCardType(null);
+      setShowCashPanel(false);
+      setActiveTenderField(null);
+      setSplitEnabled(false);
+      const initialParts = splitEvenly(Math.max(dueCents, 0), 1);
+      setParts(initialParts);
+      setActivePartId(initialParts[0]?.id ?? null);
+      setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
+      setPosMode("pos");
+      setIsPaymentMethodOpen(false);
+      setIsPaymentOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el cobro de mesa.");
+    }
+  }, [serviceType, setContextFromTableSession, taxRate, upsertTableSession]);
 
   const openTableSession = async (tableId: number) => {
     const existing = sessionByTableId.get(tableId);
@@ -827,6 +868,7 @@ type TableConfirmDialogState =
       toast.error("La mesa no tiene orden activa.");
       return;
     }
+    setPosMode("tables");
     setTableBillDialog({ open: true, loading: true, tableId, session, order: null, payments: [] });
     try {
       const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
@@ -1465,10 +1507,12 @@ type TableConfirmDialogState =
     const modifierPrice = modifiers.reduce((sum, mod) => sum + mod.price, 0);
     const totalPrice = effectiveBasePrice + modifierPrice;
     const assignedGuestName = tableOrderContext?.orderMode === "per_person" ? tableOrderContext.activeGuestLabel ?? undefined : undefined;
+    const assignedGuestId = tableOrderContext?.orderMode === "per_person" ? tableOrderContext.activeGuestId ?? null : null;
 
     const existingItemIndex = cart.findIndex(
       (item) =>
         item.productId === product.id &&
+        (item.tableGuestId ?? null) === assignedGuestId &&
         (item.assignedName || "") === (assignedGuestName || "") &&
         JSON.stringify(item.modifiers) === JSON.stringify(modifiers)
     );
@@ -1490,6 +1534,7 @@ type TableConfirmDialogState =
           quantity: 1,
           isCustom: false,
           assignedName: assignedGuestName,
+          tableGuestId: assignedGuestId,
           appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
           requiresKitchen: Boolean(product.requiresKitchen),
           modifiers,
@@ -1730,6 +1775,7 @@ type TableConfirmDialogState =
           isCustom: Boolean(item.isCustom),
           customCode: item.customCode,
           assignedName: item.assignedName,
+          tableGuestId: item.tableGuestId ?? null,
           modifiers: item.modifiers,
         })),
       });
@@ -2514,9 +2560,10 @@ type TableConfirmDialogState =
       price: getItemBaseEffective(item),
       quantity: item.quantity,
       isCustom: Boolean(item.isCustom),
-      unitPriceOverride: item.unitPriceOverride ?? null,
-      customCode: item.customCode,
-      assignedName: item.assignedName,
+        unitPriceOverride: item.unitPriceOverride ?? null,
+        customCode: item.customCode,
+        assignedName: item.assignedName,
+        tableGuestId: item.tableGuestId ?? null,
       modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
     }));
 
@@ -2552,6 +2599,7 @@ type TableConfirmDialogState =
         unitPriceOverride: item.unitPriceOverride ?? null,
         customCode: item.customCode,
         assignedName: item.assignedName,
+        tableGuestId: item.tableGuestId ?? null,
         modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
       })),
     });
@@ -2657,6 +2705,7 @@ type TableConfirmDialogState =
             unitPriceOverride: item.unitPriceOverride ?? null,
             customCode: item.customCode,
             assignedName: item.assignedName,
+            tableGuestId: item.tableGuestId ?? null,
             modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
           })),
         });
@@ -3554,9 +3603,20 @@ type TableConfirmDialogState =
     cart.some((item) => item.requiresKitchen || products.find((product) => product.id === item.productId)?.requiresKitchen)
   );
   const tableOrderPrimaryLabel = tableOrderHasKitchenItems ? "Enviar a cocina" : "Guardar orden";
+  const getKitchenStatusLabel = (status?: Order["items"][number]["kitchenStatus"]) => {
+    if (status === "sent") return "En cocina";
+    if (status === "ready") return "Listo";
+    if (status === "delivered") return "Servido";
+    return "Pendiente de enviar";
+  };
+  const getKitchenStatusTone = (status?: Order["items"][number]["kitchenStatus"]) => {
+    if (status === "sent") return "border-amber-300 bg-amber-500/10 text-amber-700 dark:text-amber-200";
+    if (status === "ready") return "border-blue-300 bg-blue-500/10 text-blue-700 dark:text-blue-200";
+    if (status === "delivered") return "border-emerald-300 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
+    return "border-muted-foreground/20 bg-muted text-muted-foreground";
+  };
   const handleTableMapWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (!tableMapEnabled || posMode !== "tables") return;
-    event.preventDefault();
     tableMapUserAdjustedRef.current = true;
     const rect = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - rect.left;
@@ -3600,15 +3660,27 @@ type TableConfirmDialogState =
     const opsTables = restaurantTables;
     const freeCount = restaurantTables.filter((t) => !sessionByTableId.get(t.id)).length;
     const kitchenCount = restaurantTables.filter((t) => sessionByTableId.get(t.id)?.status === "sent_to_kitchen").length;
-    const occupiedCount = restaurantTables.filter((t) => !!sessionByTableId.get(t.id) && sessionByTableId.get(t.id)?.status !== "sent_to_kitchen").length;
+    const occupiedCount = restaurantTables.filter((t) => !!sessionByTableId.get(t.id)).length;
     const selectionSourceLabel = getTableLabel(mergeMode.sourceTableId ?? transferMode.sourceTableId);
     const selectionMessage = mergeMode.active
       ? `Selecciona la mesa que deseas unir con ${selectionSourceLabel}`
       : transferMode.active
         ? "Selecciona la mesa destino"
         : "";
-    const joinedSessions = tableSessions.filter((session) => session.tableIds.length > 1);
-    const joinedGroupNumberBySessionId = new Map(joinedSessions.map((session, index) => [session.id, index + 1]));
+    const joinedSessions = tableSessions
+      .filter((session) => session.tableIds.length > 1)
+      .sort((a, b) => {
+        const groupA = a.groupNumber ?? Number.MAX_SAFE_INTEGER;
+        const groupB = b.groupNumber ?? Number.MAX_SAFE_INTEGER;
+        const openedA = a.openedAt ? new Date(a.openedAt).getTime() : 0;
+        const openedB = b.openedAt ? new Date(b.openedAt).getTime() : 0;
+        return groupA - groupB || openedA - openedB || a.id - b.id;
+      });
+    const fallbackGroupNumbers = new Map<number, number>();
+    joinedSessions.forEach((session, index) => {
+      fallbackGroupNumbers.set(session.id, index + 1);
+    });
+    const joinedGroupNumberBySessionId = new Map(joinedSessions.map((session) => [session.id, session.groupNumber ?? fallbackGroupNumbers.get(session.id) ?? 1]));
     const groupColorFor = (groupNumber: number) => `hsl(${(groupNumber * 68) % 360} 72% 46%)`;
 
     return (
@@ -3678,15 +3750,21 @@ type TableConfirmDialogState =
                   const canSelectForMerge = mergeMode.active && table.id !== mergeMode.sourceTableId && (!session || session.id === mergeMode.sessionId);
                   const canSelectForMove = transferMode.active && table.id !== transferMode.sourceTableId && !session;
                   const tableTone = session?.status === "sent_to_kitchen"
-                    ? "color-mix(in srgb, hsl(var(--warning)) 24%, hsl(var(--card)))"
-                    : session
-                      ? groupColor
-                        ? `color-mix(in srgb, ${groupColor} 24%, hsl(var(--card)))`
-                        : "color-mix(in srgb, hsl(var(--destructive)) 18%, hsl(var(--card)))"
-                      : "color-mix(in srgb, var(--color-primary-surface) 76%, hsl(var(--card)))";
+                    ? "color-mix(in srgb, hsl(var(--warning)) 34%, hsl(var(--card)))"
+                    : session?.status === "partially_paid"
+                      ? "color-mix(in srgb, hsl(var(--primary)) 22%, hsl(var(--card)))"
+                      : session
+                        ? "color-mix(in srgb, hsl(var(--destructive)) 18%, hsl(var(--card)))"
+                        : "color-mix(in srgb, var(--color-primary-surface) 76%, hsl(var(--card)))";
                   const tableBorder = canSelectForMerge || canSelectForMove
                     ? "var(--color-primary)"
-                    : groupColor || table.color || (session ? "color-mix(in srgb, hsl(var(--foreground)) 38%, hsl(var(--border)))" : "var(--color-primary-border)");
+                    : session?.status === "sent_to_kitchen"
+                      ? "color-mix(in srgb, hsl(var(--warning)) 78%, hsl(var(--border)))"
+                      : session?.status === "partially_paid"
+                        ? "color-mix(in srgb, hsl(var(--primary)) 78%, hsl(var(--border)))"
+                        : session
+                          ? "color-mix(in srgb, hsl(var(--destructive)) 58%, hsl(var(--border)))"
+                          : table.color || "var(--color-primary-border)";
                   return (
                     <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),900); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={(e) => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } if (transferMode.active) { void handleMoveToTable(table.id); return; } setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} className={cn("absolute border-2 shadow-xl transition hover:scale-[1.02] focus:outline-none", selected && "ring-2 ring-white/80", isJoined && "border-4 shadow-2xl", (canSelectForMerge || canSelectForMove) && "ring-4 ring-[var(--color-primary)]", (mergeMode.active || transferMode.active) && !(canSelectForMerge || canSelectForMove) && "opacity-45", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: table.color && !session ? `${table.color}33` : tableTone, borderColor: tableBorder, boxShadow: groupColor ? `0 0 0 4px color-mix(in srgb, ${groupColor} 28%, transparent), 0 18px 36px color-mix(in srgb, ${groupColor} 22%, transparent)` : undefined }}>
                       <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-foreground">
@@ -3754,12 +3832,12 @@ type TableConfirmDialogState =
                     {!session && allowTableMerge ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: null, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session ? menuButton(isJoined ? "Agregar productos" : "Agregar productos", <Plus className="h-4 w-4" />, () => { void openTableSession(table.id); close(); }) : null}
                     {session ? menuButton(isJoined ? "Ver cuenta conjunta" : "Ver cuenta", <Eye className="h-4 w-4" />, () => { void openTableBill(table.id, session); close(); }) : null}
-                    {session ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
                     {session ? menuButton("Enviar cocina", <ChefHat className="h-4 w-4" />, () => { void handleSendTableSession(session); close(); }, session.status === "sent_to_kitchen") : null}
                     {session && allowTableTransfer ? menuButton(isJoined ? "Mover grupo" : "Mover mesa", <MoveRight className="h-4 w-4" />, () => { setTransferMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona la mesa destino"); close(); }) : null}
                     {session && allowTableMerge ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session && isJoined ? menuButton("Separar mesa", <SplitSquareHorizontal className="h-4 w-4" />, () => { handleSplitTableSession(session, table.id); close(); }) : null}
-                    {session && (allowSplitByGuest || allowSplitByItem) ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session && (allowSplitByGuest || allowSplitByItem) ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
                     {session ? menuButton(isJoined ? "Liberar grupo" : "Liberar mesa", <DoorOpen className="h-4 w-4" />, () => { void handleReleaseTableSession(session); close(); }) : null}
                     {menuButton("Cerrar", <X className="h-4 w-4" />, close)}
                   </div>
@@ -3890,18 +3968,74 @@ type TableConfirmDialogState =
                   <div><p className="text-muted-foreground">Personas</p><p className="font-semibold">{tableBillDialog.session?.guestsCount ?? 1}</p></div>
                   <div><p className="text-muted-foreground">Saldo</p><p className="font-semibold">{formatMoney(tableBillDialog.order.remaining)}</p></div>
                 </div>
-                <div className="max-h-80 overflow-auto rounded-lg border">
-                  {tableBillDialog.order.items.length ? tableBillDialog.order.items.map((item) => (
-                    <div key={item.id} className="flex items-start justify-between gap-3 border-b p-3 last:border-b-0">
-                      <div>
-                        <p className="font-medium">{item.assignedName ? `${item.assignedName} · ` : ""}{item.productName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Cantidad {item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Listo" : "Entregado"}
-                        </p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ["person", "Por persona"],
+                    ["all", "Todos"],
+                    ["pending", "Pendiente de enviar"],
+                    ["kitchen", "En cocina"],
+                    ["served", "Servido"],
+                  ].map(([value, label]) => (
+                    <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value as typeof tableBillView)}>
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="max-h-[46vh] overflow-auto rounded-lg border">
+                  {tableBillDialog.order.items.length ? (() => {
+                    const filterItem = (item: Order["items"][number]) => {
+                      if (tableBillView === "pending") return (item.kitchenStatus ?? "pending") === "pending";
+                      if (tableBillView === "kitchen") return item.kitchenStatus === "sent" || item.kitchenStatus === "ready";
+                      if (tableBillView === "served") return item.kitchenStatus === "delivered";
+                      return true;
+                    };
+                    const visibleItems = tableBillDialog.order!.items.filter(filterItem);
+                    if (!visibleItems.length) return <div className="p-4 text-sm text-muted-foreground">No hay productos para este filtro.</div>;
+                    if (tableBillView === "all" || tableBillView === "pending" || tableBillView === "kitchen" || tableBillView === "served") {
+                      return visibleItems.map((item) => (
+                        <div key={item.id} className="flex items-start justify-between gap-3 border-b p-3 last:border-b-0">
+                          <div className="min-w-0">
+                            <p className="font-medium">{item.productName}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
+                            </p>
+                            {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
+                            <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
+                          </div>
+                          <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
+                        </div>
+                      ));
+                    }
+                    const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number }>();
+                    visibleItems.forEach((item) => {
+                      const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
+                      const seat = item.tableGuestSeatNumber ?? 999;
+                      const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
+                      const group = groups.get(key) ?? { label, seat, items: [], total: 0 };
+                      group.items.push(item);
+                      group.total += Number(item.lineTotalFinal ?? item.price * item.quantity);
+                      groups.set(key, group);
+                    });
+                    return Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).map((group) => (
+                      <div key={group.label} className="border-b last:border-b-0">
+                        <div className="sticky top-0 z-10 flex items-center justify-between bg-muted/70 px-3 py-2 text-sm font-semibold backdrop-blur">
+                          <span>{group.label}</span>
+                          <span>{formatMoney(group.total)}</span>
+                        </div>
+                        {group.items.map((item) => (
+                          <div key={item.id} className="flex items-start justify-between gap-3 px-3 py-3">
+                            <div className="min-w-0">
+                              <p className="font-medium">{item.productName}</p>
+                              <p className="text-xs text-muted-foreground">Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u</p>
+                              {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
+                              <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
+                            </div>
+                            <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
+                          </div>
+                        ))}
                       </div>
-                      <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
-                    </div>
-                  )) : <div className="p-4 text-sm text-muted-foreground">La mesa todavía no tiene productos.</div>}
+                    ));
+                  })() : <div className="p-4 text-sm text-muted-foreground">Esta mesa todavía no tiene productos.</div>}
                 </div>
                 <div className="grid gap-2 text-sm sm:grid-cols-3">
                   <div className="rounded-lg border p-3"><p className="text-muted-foreground">Subtotal</p><p className="font-semibold">{formatMoney(tableBillDialog.order.subtotalBeforeDiscounts ?? tableBillDialog.order.subtotalAfterDiscounts ?? tableBillDialog.order.total)}</p></div>
@@ -3926,7 +4060,7 @@ type TableConfirmDialogState =
               <Button variant="outline" onClick={() => setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] })}>Cerrar</Button>
               {tableBillDialog.order ? <Button variant="outline" onClick={() => void smartPrintTicket({ orderId: tableBillDialog.order!.id, preferDirect: false })}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
-              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) openTablePayment(tableId, session); }}>Cobrar</Button> : null}
+              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -3978,7 +4112,7 @@ type TableConfirmDialogState =
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTableBill(tableId, tableSession); }}>Ver cuenta</Button>
-                          <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) openTablePayment(tableId, tableSession); }}>Cobrar</Button>
+                          <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button>
                         </div>
                       </div>
                       <div className="space-y-3">
@@ -4422,7 +4556,21 @@ type TableConfirmDialogState =
                     if (tableOrderContext) {
                       const session = tableSessions.find((row) => row.id === tableOrderContext.sessionId);
                       const tableId = session?.tableIds[0] ?? selectedOpsTableId ?? 0;
-                      if (session) void openTableBill(tableId, session);
+                      if (session && activeOrder) {
+                        void (async () => {
+                          try {
+                            if (cart.length > 0) {
+                              const saved = await syncExistingOpenOrder(activeOrder);
+                              setActiveOrder(saved);
+                            }
+                            await openTableBill(tableId, session);
+                          } catch (error) {
+                            toast.error(error instanceof Error ? error.message : "No se pudo abrir la cuenta.");
+                          }
+                        })();
+                      } else if (session) {
+                        void openTableBill(tableId, session);
+                      }
                       return;
                     }
                     const isCurrentOrderEmpty = cart.length === 0;
