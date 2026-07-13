@@ -2696,6 +2696,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           : paymentMethod === "cash"
             ? latestRemaining
             : Math.min(paymentAmountForApi, latestRemaining);
+      const receivedForApi = selectedPaymentIsCash ? amountReceived : amountForApi;
 
       const inventoryWarningConfirmed = amountForApi >= latestRemaining - 0.01 ? await validateInventoryBeforeFinalPayment(Number(orderId)) : false;
       if (inventoryWarningConfirmed === null) return;
@@ -2706,7 +2707,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         cardType: paymentMethod === "card" ? "credit" : undefined,
         amount: amountForApi,
         amountApplied: amountForApi,
-        cashReceived: selectedPaymentIsCash ? amountReceived : amountForApi,
+        cashReceived: selectedPaymentIsCash ? receivedForApi : undefined,
         tipAmount: tipValue,
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
@@ -2735,7 +2736,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         setSaleCompletionSummary(
           buildSaleCompletionSummary({
             totalToPay: finalTotalToPay,
-            amountReceived: selectedPaymentIsCash ? amountReceived : finalTotalToPay,
+            amountReceived: selectedPaymentIsCash ? receivedForApi : amountForApi,
             paymentMethod,
             paymentMethodCode: selectedPaymentMethodCode,
           })
@@ -3779,7 +3780,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                           <span className="text-sm font-semibold">{formatMoney(sale.total)}</span>
                         </div>
                         <div className="text-xs text-zinc-400">{formatDateTimeSV(sale.createdAt)} · {sale.customerName} · {sale.paymentMethod}</div>
-                        <div className="truncate text-xs text-zinc-500">DTE: {sale.controlNumber || "No disponible"}</div>
+                        {dteEnabled ? <div className="truncate text-xs text-zinc-500">DTE: {sale.controlNumber || "No disponible"}</div> : null}
                       </div>
                       <div className="flex shrink-0 gap-2">
                         <Button size="sm" variant="outline" className="border-emerald-500/50" onClick={() => void handleRecentSalePrint(sale)} disabled={recentSalesPrintingId === sale.paymentId}>
@@ -4280,7 +4281,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={handleOpenCustomerDte}>
                       <span className="min-w-0 truncate text-left">
-                        Cliente: {selectedCustomer ? `${selectedCustomer.fullName} (${dteDocumentType})` : `Consumidor final (${dteDocumentType})`}
+                        Cliente: {selectedCustomer ? `${selectedCustomer.fullName}${dteEnabled ? ` (${dteDocumentType})` : ""}` : dteEnabled ? `Consumidor final (${dteDocumentType})` : "Consumidor final"}
                       </span>
                     </Button>
                     <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
@@ -4366,7 +4367,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
-              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || paymentAmountValue <= 0 || (splitEnabled && !splitValidation.isValid)}>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                 {isProcessingPayment ? "Procesando..." : "Registrar pago"}
               </Button>
             </div>
@@ -4377,16 +4378,16 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <Dialog open={isCustomerDteOpen} onOpenChange={setIsCustomerDteOpen}>
         <DialogContent className="w-[95vw] max-w-xl">
           <DialogHeader>
-            <DialogTitle>Cliente / DTE</DialogTitle>
+            <DialogTitle>{dteEnabled ? "Cliente / DTE" : "Cliente"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="space-y-2">
+            {dteEnabled ? <div className="space-y-2">
               <Label>Tipo DTE</Label>
               <div className="grid grid-cols-2 gap-2">
                 <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
                 <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
               </div>
-            </div>
+            </div> : null}
             <div className="space-y-2">
               <Label>Cliente</Label>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">

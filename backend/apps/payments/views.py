@@ -228,15 +228,20 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         remaining_cents = max(due_cents - existing_applied_cents, 0)
         requested_applied_cents = to_cents(serializer.validated_data.get("amount"))
         tip_cents = to_cents(serializer.validated_data.get("tip_amount"))
+        method = str(serializer.validated_data.get("method") or "").strip().lower()
+        payment_method = serializer.validated_data.get("payment_method")
+        is_cash_payment = method == "cash" or _is_cash_payment_method(payment_method)
         if remaining_cents <= 0:
             return Response({"detail": "Order is already paid"}, status=status.HTTP_400_BAD_REQUEST)
+        cash_received = serializer.validated_data.get("cash_received")
+        if is_cash_payment and requested_applied_cents > remaining_cents and cash_received is None:
+            cash_received = from_cents(requested_applied_cents)
+            requested_applied_cents = remaining_cents
         if requested_applied_cents > remaining_cents + 1:
             return Response({"detail": "Payment exceeds remaining balance"}, status=status.HTTP_400_BAD_REQUEST)
         applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents
-        method = str(serializer.validated_data.get("method") or "").strip().lower()
-        cash_received = serializer.validated_data.get("cash_received")
-        received_cents = to_cents(cash_received) if method == "cash" and cash_received is not None else applied_cents + tip_cents
-        if method == "cash" and received_cents < applied_cents + tip_cents:
+        received_cents = to_cents(cash_received) if is_cash_payment and cash_received is not None else applied_cents + tip_cents
+        if is_cash_payment and received_cents < applied_cents + tip_cents:
             return Response({"detail": "Cash received must cover amount + tip"}, status=status.HTTP_400_BAD_REQUEST)
         change_cents = max(received_cents - (applied_cents + tip_cents), 0)
         will_complete_payment = applied_cents >= remaining_cents
@@ -251,7 +256,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             order.financial_locked_at = timezone.now()
             order.save(update_fields=["amount_due_cents", "financial_locked_at", "updated_at"])
         payment = serializer.save(
-            cash_session=_get_open_session(request.user),
+            cash_session=_get_open_session_for_branch(order.branch_id),
             amount=from_cents(applied_cents),
             amount_applied=from_cents(applied_cents),
             amount_received=from_cents(received_cents),
@@ -260,7 +265,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             amount_received_cents=received_cents,
             change_cents=change_cents,
             tip_cents=tip_cents,
-            cash_received=from_cents(received_cents) if method == "cash" else None,
+            cash_received=from_cents(received_cents) if is_cash_payment else None,
         )
         _create_transaction_for_payment(payment, request.user)
         logger.info(
