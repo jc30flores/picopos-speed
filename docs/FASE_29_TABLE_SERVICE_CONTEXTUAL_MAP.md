@@ -241,11 +241,53 @@ Endpoints:
 - `POST /api/orders/items/<id>/mark-ready/`
 - `POST /api/orders/items/<id>/mark-delivered/`
 
+## Viewport del mapa y menu contextual
+
+El mapa operativo ahora usa un viewport fijo de pantalla completa con pan/zoom interno. La pagina no depende de scroll general para encontrar mesas.
+
+Auto-fit inicial:
+
+- calcula el bounding box real de todas las mesas visibles
+- considera ancho, alto y margen extra para mesas rotadas
+- calcula escala con padding responsive
+- limita zoom inicial entre `0.35` y `1.12`
+- centra el contenido con `translate3d(...) scale(...)`
+
+Responsive:
+
+- `ResizeObserver` recalcula el fit cuando cambia el contenedor
+- no resetea el mapa si el usuario ya hizo pan o zoom manual
+- doble click en el fondo ajusta el mapa
+- boton `Ajustar` recentra y vuelve a mostrar todo el salon
+
+Pan/zoom:
+
+- wheel hace zoom sobre el punto del cursor
+- arrastrar fondo mueve el mapa
+- la superficie usa `touch-action: none` para evitar scroll de pagina durante pan
+
+Menu contextual:
+
+- se renderiza como capa fija sobre el mapa
+- se mide y se recoloca contra el viewport con margen seguro de 16px
+- si no cabe a la derecha o abajo, se mueve dentro de pantalla
+- usa `max-height` y scroll interno con `overscroll-behavior: contain`
+- en pantallas pequenas o puntero touch se muestra como bottom sheet con altura maxima cercana a `78dvh`
+- el encabezado de mesa/grupo queda sticky mientras se hace scroll
+- recalcula posicion en `resize` y `orientationchange`
+
+Modo claro/oscuro:
+
+- la superficie sigue usando variables de tema (`background`, `muted`, `card`, `popover`, `border`, colores primarios)
+- el boton `Menu`, labels y `Ajustar` son flotantes y no mueven el contenido
+- el menu contextual usa `bg-popover`/`text-popover-foreground`, por lo que mantiene contraste en ambos modos
+
 ## Pruebas realizadas
 
 - `backend/venv/bin/python backend/manage.py check`
 - `cd frontend && npm run build`
 - Smoke de compilacion del flujo: mapa, menu contextual, POS contextual limpio, cobro directo, split endpoint, force release, resumen de cocina y documentacion.
+- Smoke de viewport: menu contextual con clamp/scroll interno, auto-fit por bounding box, ResizeObserver y boton `Ajustar`.
 
 ## Pendientes
 
