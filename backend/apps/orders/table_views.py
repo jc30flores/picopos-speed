@@ -99,6 +99,17 @@ def _next_order_number(branch: Branch) -> int:
     return int(current) + 1
 
 
+def _next_group_number() -> int:
+    current = (
+        TableSession.objects.select_for_update()
+        .filter(group_number__isnull=False)
+        .aggregate(max_group_number=Max("group_number"))
+        .get("max_group_number")
+        or 0
+    )
+    return int(current) + 1
+
+
 def _session_response(session: TableSession, *, status_code=status.HTTP_200_OK):
     data = TableSessionSerializer(session).data
     data["session_id"] = session.id
@@ -128,11 +139,15 @@ def _authorize_admin_or_superadmin_pin(pin: str):
 
 
 def _serialize_kitchen_item(item: OrderItem):
+    guest_label = item.assigned_name or (item.table_guest.label if item.table_guest_id and item.table_guest else "")
     return {
         "id": item.id,
         "product_name": item.product_name_snapshot,
         "quantity": item.quantity,
         "assigned_name": item.assigned_name,
+        "table_guest_id": item.table_guest_id,
+        "table_guest_label": guest_label,
+        "table_guest_seat_number": item.table_guest.seat_number if item.table_guest_id and item.table_guest else None,
         "kitchen_status": item.kitchen_status,
         "kitchen_sent_at": item.kitchen_sent_at,
         "kitchen_ready_at": item.kitchen_ready_at,
@@ -314,7 +329,15 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
             pending_reference=f"Mesa {tables[0].name}",
             pending_marked_at=timezone.localtime(timezone.now()),
         )
-        session = TableSession.objects.create(status="open", guests_count=guests_count, order_mode=order_mode, primary_order=order, opened_by=request.user, notes=notes)
+        session = TableSession.objects.create(
+            status="open",
+            guests_count=guests_count,
+            order_mode=order_mode,
+            primary_order=order,
+            opened_by=request.user,
+            notes=notes,
+            group_number=_next_group_number() if len(tables) > 1 else None,
+        )
         TableSessionTable.objects.bulk_create([TableSessionTable(session=session, table=tb) for tb in tables])
         if order_mode == "per_person":
             TableGuest.objects.bulk_create([TableGuest(session=session, label=f"Persona {i+1}", seat_number=i+1) for i in range(guests_count)])
@@ -393,6 +416,22 @@ class TableOrderItemKitchenStatusView(APIView):
         else:
             return Response({"detail": "Estado inválido."}, status=400)
         item.save(update_fields=fields)
+        if target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+            active_session = (
+                TableSession.objects.select_for_update()
+                .filter(primary_order=item.order, status=TableSession.STATUS_SENT_TO_KITCHEN)
+                .first()
+            )
+            has_open_kitchen_items = item.order.items.filter(
+                kitchen_status__in=[
+                    OrderItem.KITCHEN_STATUS_PENDING,
+                    OrderItem.KITCHEN_STATUS_SENT,
+                    OrderItem.KITCHEN_STATUS_READY,
+                ]
+            ).exists()
+            if active_session and not has_open_kitchen_items:
+                active_session.status = TableSession.STATUS_OPEN
+                active_session.save(update_fields=["status", "updated_at"])
         return Response({"detail": "Estado actualizado.", "item": _serialize_kitchen_item(item)})
 
 
@@ -421,6 +460,9 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
         if busy:
             return Response({"detail": "No se puede unir una mesa ocupada en esta versión."}, status=400)
         TableSessionTable.objects.bulk_create([TableSessionTable(session=session, table=t) for t in tables])
+        if session.session_tables.count() > 1 and not session.group_number:
+            session.group_number = _next_group_number()
+            session.save(update_fields=["group_number", "updated_at"])
         if session.primary_order_id:
             names = list(session.session_tables.select_related("table").order_by("created_at", "id").values_list("table__name", flat=True))
             session.primary_order.pending_reference = " + ".join(names)
@@ -454,6 +496,9 @@ class TableSessionSplitTableView(TableMapFeatureGuardMixin, APIView):
         if session.primary_order_id:
             session.primary_order.pending_reference = " + ".join(remaining_names) if len(remaining_names) > 1 else f"Mesa {remaining_names[0]}"
             session.primary_order.save(update_fields=["pending_reference", "updated_at"])
+        if len(remaining_names) <= 1 and session.group_number:
+            session.group_number = None
+            session.save(update_fields=["group_number", "updated_at"])
         return Response({"detail": "Mesa separada correctamente.", "session": TableSessionSerializer(session).data})
 
 
