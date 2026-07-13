@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
-import { BarChart3, ChefHat, ClipboardList, Boxes, FileText, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun, LayoutGrid } from "lucide-react";
+import { BarChart3, ChefHat, ClipboardList, Boxes, LogOut, Settings, ShoppingCart, Store, Tags, Users, Moon, Sun, LayoutGrid } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -21,7 +21,6 @@ const iconByModule: Partial<Record<AppModuleKey, LucideIcon>> = {
   menu_discounts: Tags,
   inventory: Boxes,
   registers: BarChart3,
-  dte: FileText,
   clients: Users,
   settings: Settings,
 };
@@ -35,7 +34,7 @@ const MainMenu = () => {
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
   const [featureVisibility, setFeatureVisibility] = useState({
     pos: true,
-    openOrders: true,
+    openOrders: false,
     kiosk: true,
     kitchen: true,
     customerDisplay: true,
@@ -44,7 +43,6 @@ const MainMenu = () => {
     reports: true,
     clients: true,
     settings: true,
-    dte: false,
     loaded: false,
   });
 
@@ -56,7 +54,7 @@ const MainMenu = () => {
         const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
         setFeatureVisibility({
           pos: normalized.posEnabled,
-          openOrders: normalized.openOrdersEnabled,
+          openOrders: false,
           kiosk: normalized.kioskEnabled,
           kitchen: normalized.kitchenDisplayEnabled,
           customerDisplay: normalized.customerDisplayEnabled,
@@ -65,7 +63,6 @@ const MainMenu = () => {
           reports: normalized.reportsEnabled,
           clients: normalized.clientsEnabled,
           settings: normalized.settingsEnabled || Boolean(user?.isSuperuser || user?.role === "superadmin"),
-          dte: normalized.dteEnabled,
           loaded: true,
         });
       })
@@ -84,7 +81,7 @@ const MainMenu = () => {
       filterModulesForUser(user, appModules)
         .filter((module) => {
           if (module.key === "pos") return featureVisibility.pos !== false;
-          if (module.key === "pending") return featureVisibility.openOrders !== false;
+          if (module.key === "pending") return false;
           if (module.key === "kiosk") return featureVisibility.kiosk !== false;
           if (module.key === "kitchen") return featureVisibility.kitchen !== false;
           if (module.key === "orders_customers") return featureVisibility.customerDisplay !== false;
@@ -93,7 +90,7 @@ const MainMenu = () => {
           if (module.key === "registers") return featureVisibility.reports !== false;
           if (module.key === "clients") return featureVisibility.clients !== false;
           if (module.key === "settings") return featureVisibility.settings !== false;
-          if (module.key === "dte") return featureVisibility.dte !== false;
+          if (module.key === "dte") return false;
           return true;
         })
         .map((module) => ({ ...module, icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON })),
