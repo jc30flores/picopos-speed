@@ -7,12 +7,12 @@ Esta fase deja el POS de `table_service` como una superficie operativa de salon.
 ## UX full-screen
 
 - `/pos` en modo mesas renderiza un mapa full-screen.
-- Fuera del mapa solo queda el boton minimalista `Menu`, fijo en la esquina superior izquierda.
+- Fuera del mapa solo queda el boton minimalista `Menu`, fijo en la esquina superior izquierda, con icono `Home`, fondo `popover` y contraste para claro/oscuro.
 - No se muestran `Editor de mesas`, selector de area, `Todas las areas`, filtros por estado ni paneles laterales.
 - Los contadores quedan dentro del mapa, arriba a la derecha:
   - `Libres: X`
   - `Ocupadas: X`
-  - `En cocina: X`
+  - `En cocina: X`, clickeable para abrir resumen de cocina
 - El mapa usa scroll/pan propio.
 - En tema claro usa superficies claras profesionales con contraste de texto.
 - En tema oscuro usa superficies oscuras operativas.
@@ -31,6 +31,7 @@ El menu muestra:
 - total cacheado si existe
 - indicador `Unida` cuando la sesion incluye mas de una mesa
 - colores adaptados a tema claro/oscuro mediante `bg-popover`, `text-popover-foreground`, `border` y `muted`
+- altura maxima `calc(100dvh - 1.5rem)` y scroll interno para que no se salga de pantalla
 
 ## Acciones por estado
 
@@ -49,7 +50,7 @@ Mesa ocupada o con orden abierta:
 - Mover mesa
 - Unir mesa
 - Dividir cuenta
-- Liberar mesa con confirmacion propia; el backend bloquea si hay saldo pendiente
+- Liberar mesa con confirmacion propia; si hay saldo pendiente usa liberacion forzada con autorizacion
 - Cerrar
 
 Mesa unida:
@@ -78,9 +79,10 @@ En POS contextual de mesa:
 - El encabezado dice `Orden de mesa`.
 - Si hay grupo, muestra `Grupo Mesa X + Mesa Y`.
 - Solo aparece `Volver a mesas`; no aparece `Volver al menu principal`.
+- No aparecen controles del POS rapido: reloj, tipo de pedido, cliente, transacciones de caja, reimpresion, refrescar, impresion de ticket ni cobro como CTA.
 - Si hay productos sin guardar, `Volver a mesas` abre un modal propio con `Guardar y volver`, `Volver sin guardar` y `Cancelar`.
 - El CTA principal ya no es `Cobrar`; es `Enviar a cocina` cuando hay productos de cocina o `Guardar orden` cuando no aplica cocina.
-- `Cobrar mesa` queda como accion secundaria.
+- La accion secundaria visible en el panel es `Ver cuenta`; el cobro se hace desde mapa o desde cuenta.
 
 ## Recuperacion de sesion activa
 
@@ -113,6 +115,7 @@ El boton `Iniciar orden` queda deshabilitado mientras el request esta en curso p
 - pagos realizados
 - saldo pendiente
 - acciones para agregar productos, cobrar, imprimir cuenta local y cerrar
+- estado de cocina por producto: pendiente, en cocina, listo o entregado
 
 No se muestra flujo DTE cuando DTE esta apagado.
 
@@ -169,7 +172,23 @@ No se pierden productos, personas ni pagos porque se mueve la relacion de mesa, 
 
 ## Liberar mesa
 
-`Liberar mesa` abre modal propio del sistema. Si hay saldo pendiente, el backend responde con `No puedes liberar una mesa con saldo pendiente.` y no borra datos de venta. Si la orden ya esta pagada o no hay orden con saldo, la sesion se cierra.
+`Liberar mesa` abre modal propio del sistema.
+
+Sin saldo pendiente:
+
+- libera normal con confirmacion simple
+- cierra la sesion y la mesa queda disponible
+
+Con saldo pendiente:
+
+- admin/superadmin puede confirmar con motivo obligatorio
+- cajero u otro rol debe ingresar PIN de admin/superadmin y motivo obligatorio
+- endpoint: `POST /api/orders/tables/sessions/<id>/force-release/`
+- la orden queda `canceled` y `financial_status=voided`
+- pagos parciales existentes se conservan y no se toca caja
+- se cancela el saldo pendiente ajustando `amount_due_cents` a lo ya pagado
+- se registra auditoria `table_session.force_release` con solicitante, autorizador, motivo, saldo cancelado, pago conservado, mesa/sesion/orden
+- no genera DTE ni contacta Hacienda
 
 ## Confirmaciones del sistema
 
@@ -179,20 +198,61 @@ El flujo de mesas no usa `window.confirm`, `alert` ni `prompt`. Las confirmacion
 
 `Enviar cocina` se muestra para sesiones con orden activa y tambien es el CTA principal del POS contextual cuando los productos requieren cocina. Si la orden esta vacia, el backend responde con mensaje controlado. Si procede, guarda los items, marca la orden como enviada y la mesa pasa a `En cocina`.
 
+Cada `OrderItem` tiene estado de cocina:
+
+- `pending`: pendiente de enviar
+- `sent`: en cocina
+- `ready`: listo
+- `delivered`: entregado
+
+El endpoint de mesa envia solo items `pending`. Si no hay nuevos productos, responde `No hay productos nuevos para enviar.` y no duplica cocina.
+
 Cuando no hay productos de cocina, el CTA principal es `Guardar orden`; guarda los items en la mesa sin abrir cobro.
+
+## Ordenes guardadas por mesa
+
+En POS rapido, el boton de ordenes guardadas conserva el comportamiento existente: con carrito vacio abre `/open-orders`; con productos, guarda la orden.
+
+En POS contextual de mesa, ese boton cambia a `Ver cuenta` y abre el resumen de la mesa/grupo:
+
+- productos por persona o cuenta general
+- productos enviados a cocina
+- productos pendientes de enviar
+- productos listos/entregados
+- totales y saldo
+- acciones para agregar productos o cobrar
+
+## Vista cocina
+
+El contador `En cocina: X` del mapa abre el modal `Ordenes en cocina`.
+
+La vista muestra por mesa/grupo:
+
+- mesa o grupo
+- personas/clientes segun `assigned_name`
+- productos pendientes, en cocina, listos y entregados
+- total por persona
+- total de mesa y saldo
+- acciones `Listo`, `Entregado`, `Ver cuenta` y `Cobrar`
+
+Endpoints:
+
+- `GET /api/orders/tables/kitchen-summary/`
+- `POST /api/orders/items/<id>/mark-ready/`
+- `POST /api/orders/items/<id>/mark-delivered/`
 
 ## Pruebas realizadas
 
 - `backend/venv/bin/python backend/manage.py check`
 - `cd frontend && npm run build`
-- Smoke de compilacion del flujo: mapa, menu contextual, POS contextual, cobro directo, split endpoint y documentacion.
+- Smoke de compilacion del flujo: mapa, menu contextual, POS contextual limpio, cobro directo, split endpoint, force release, resumen de cocina y documentacion.
 
 ## Pendientes
 
 - Reservas/bloqueo de mesa.
 - Selector profesional de areas.
 - Flujo avanzado de cocina por persona.
-- Envio a cocina incremental por item para evitar reimpresion/reenviado de items ya enviados.
 - Division real de cuenta al separar una mesa con productos asignados.
+- Impresion real de comandas incrementales por item nuevo.
 - Pruebas E2E de escritorio y touch.
 - El log `Bad request syntax ('0')` no se pudo reproducir desde las llamadas API de mesas; `request()` mantiene guard contra body `0`.
