@@ -10,6 +10,7 @@ import { PinKeypad } from "@/components/auth/PinKeypad";
 import { ClockSV } from "@/components/ClockSV";
 import { getLandingRouteForRole } from "@/lib/roleAccess";
 import { isApiStatusError, isNetworkApiError } from "@/lib/api";
+import { APP_DISPLAY_NAME } from "@/lib/branding";
 
 const PIN_LENGTH = 6;
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
@@ -180,6 +181,7 @@ const Login = () => {
       <ClockSV className="mx-auto w-full max-w-sm bg-background/50" timeClassName="text-4xl sm:text-5xl" />
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
+          <p className="text-sm font-semibold uppercase tracking-wide text-primary">{APP_DISPLAY_NAME}</p>
           <CardTitle>{usePassword ? "Login administrador" : "Ingresa tu PIN"}</CardTitle>
         </CardHeader>
         <CardContent>

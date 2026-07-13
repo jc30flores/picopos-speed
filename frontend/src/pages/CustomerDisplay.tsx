@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getCustomerOrders } from "@/lib/api";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { APP_DISPLAY_NAME } from "@/lib/branding";
 
 const CustomerDisplay = () => {
   const navigate = useNavigate();
@@ -86,7 +87,7 @@ const CustomerDisplay = () => {
             <div className="w-16 h-16 bg-gradient-accent rounded-2xl flex items-center justify-center shadow-xl">
               <span className="text-4xl">🌶️</span>
             </div>
-            <h1 className="text-5xl font-bold">Pico de Gallo</h1>
+            <h1 className="text-5xl font-bold">{APP_DISPLAY_NAME}</h1>
           </div>
           <p className="text-xl text-muted-foreground">Estado de Pedidos</p>
           <div className="mt-4 flex justify-center gap-2">

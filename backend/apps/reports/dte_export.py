@@ -258,7 +258,7 @@ def _json_export_payload(dte: DTERecord, year: int, month: int) -> dict[str, Any
     response = extract_hacienda_response(dte)
     payload = {
         "metadata": {
-            "system": "Pico de Gallo POS",
+            "system": "GastroPOSV",
             "export_type": "json",
             "year": year,
             "month": month,
