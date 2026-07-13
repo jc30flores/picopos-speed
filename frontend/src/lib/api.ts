@@ -409,7 +409,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       reportsEnabled: fromMap(byKey, ['module_reports_enabled'], defaults.reportsEnabled),
       clientsEnabled: fromMap(byKey, ['module_clients_enabled'], defaults.clientsEnabled),
       settingsEnabled: fromMap(byKey, ['module_settings_enabled'], defaults.settingsEnabled),
-      dteEnabled: fromMap(byKey, ['module_dte_enabled'], defaults.dteEnabled),
+      dteEnabled: fromMap(byKey, ['module_dte_enabled', 'dte_enabled', 'dte_visible'], defaults.dteEnabled),
       whatsappEnabled: fromMap(byKey, ['module_whatsapp_enabled'], defaults.whatsappEnabled),
       emailEnabled: fromMap(byKey, ['module_email_enabled'], defaults.emailEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
@@ -590,6 +590,56 @@ export type AppearanceSettings = {
   colorPrimaryText: string;
   colorPrimaryContrast: string;
   cssVariables: Record<string, string>;
+  palette?: string[];
+};
+
+export type DteIssuerSettings = {
+  legalName: string;
+  commercialName: string;
+  documentType: string;
+  nit: string;
+  dui: string;
+  nrc: string;
+  activityCode: string;
+  activityDescription: string;
+  establishmentType: string;
+  department: string;
+  municipality: string;
+  address: string;
+  phone: string;
+  email: string;
+};
+
+export type DteBranchSettings = {
+  id?: number | null;
+  name: string;
+  code: string;
+  address: string;
+  establishmentCodeMh: string;
+  establishmentCode: string;
+  posCodeMh: string;
+  posCode: string;
+  establishmentType: string;
+  branchAddress: string;
+  phone: string;
+  email: string;
+  active: boolean;
+};
+
+export type DteCorrelative = {
+  id: number;
+  tipoDte: string;
+  label: string;
+  ambiente: "00" | "01";
+  environment: string;
+  branchName: string;
+  year: number;
+  establishmentCode: string;
+  posCode: string;
+  lastNumber: number;
+  nextNumber: number;
+  active: boolean;
+  updatedAt?: string | null;
 };
 
 export type DteSettings = {
@@ -603,6 +653,17 @@ export type DteSettings = {
   lastConnectionTestAt: string | null;
   lastErrorSanitized: string;
   canManageTechnical: boolean;
+  permissions?: {
+    canViewBasic: boolean;
+    canEditTechnical: boolean;
+    canEditCorrelatives: boolean;
+    isSuperadmin: boolean;
+  };
+  issuer: DteIssuerSettings;
+  branch: DteBranchSettings;
+  correlatives: DteCorrelative[];
+  pendingFields: string[];
+  apiTokenConfigured: boolean;
   message?: string;
 };
 
@@ -1431,6 +1492,7 @@ const mapAppearanceSettings = (data: any): AppearanceSettings => ({
   colorPrimaryText: String(data.color_primary_text ?? "#0D3B26"),
   colorPrimaryContrast: String(data.color_primary_contrast ?? "#FFFFFF"),
   cssVariables: data.css_variables ?? {},
+  palette: Array.isArray(data.palette) ? data.palette : [],
 });
 
 export const getAppearanceSettings = async (): Promise<AppearanceSettings> => {
@@ -1456,7 +1518,61 @@ const mapDteSettings = (data: any): DteSettings => ({
   status: String(data.config_status ?? data.status ?? "disabled"),
   lastConnectionTestAt: data.last_connection_test_at ?? null,
   lastErrorSanitized: String(data.last_error_sanitized ?? ""),
-  canManageTechnical: Boolean(data.can_manage_technical),
+  canManageTechnical: Boolean(data.can_manage_technical ?? data.permissions?.can_edit_technical),
+  permissions: {
+    canViewBasic: Boolean(data.permissions?.can_view_basic),
+    canEditTechnical: Boolean(data.permissions?.can_edit_technical ?? data.can_manage_technical),
+    canEditCorrelatives: Boolean(data.permissions?.can_edit_correlatives),
+    isSuperadmin: Boolean(data.permissions?.is_superadmin),
+  },
+  issuer: {
+    legalName: String(data.issuer?.legal_name ?? ""),
+    commercialName: String(data.issuer?.commercial_name ?? ""),
+    documentType: String(data.issuer?.document_type ?? "NIT"),
+    nit: String(data.issuer?.nit ?? ""),
+    dui: String(data.issuer?.dui ?? ""),
+    nrc: String(data.issuer?.nrc ?? ""),
+    activityCode: String(data.issuer?.activity_code ?? ""),
+    activityDescription: String(data.issuer?.activity_description ?? ""),
+    establishmentType: String(data.issuer?.establishment_type ?? ""),
+    department: String(data.issuer?.department ?? ""),
+    municipality: String(data.issuer?.municipality ?? ""),
+    address: String(data.issuer?.address ?? ""),
+    phone: String(data.issuer?.phone ?? ""),
+    email: String(data.issuer?.email ?? ""),
+  },
+  branch: {
+    id: data.branch?.id ?? null,
+    name: String(data.branch?.name ?? data.single_branch?.branch_name ?? ""),
+    code: String(data.branch?.code ?? ""),
+    address: String(data.branch?.address ?? ""),
+    establishmentCodeMh: String(data.branch?.establishment_code_mh ?? data.single_branch?.establishment_code ?? ""),
+    establishmentCode: String(data.branch?.establishment_code ?? ""),
+    posCodeMh: String(data.branch?.pos_code_mh ?? data.single_branch?.pos_code ?? ""),
+    posCode: String(data.branch?.pos_code ?? ""),
+    establishmentType: String(data.branch?.establishment_type ?? data.single_branch?.establishment_type ?? ""),
+    branchAddress: String(data.branch?.branch_address ?? data.single_branch?.address ?? ""),
+    phone: String(data.branch?.phone ?? ""),
+    email: String(data.branch?.email ?? ""),
+    active: Boolean(data.branch?.active ?? true),
+  },
+  correlatives: (Array.isArray(data.correlatives) ? data.correlatives : []).map((row: any) => ({
+    id: Number(row.id),
+    tipoDte: String(row.tipo_dte ?? ""),
+    label: String(row.label ?? row.tipo_dte ?? ""),
+    ambiente: (row.ambiente === "01" ? "01" : "00") as "00" | "01",
+    environment: String(row.environment ?? ""),
+    branchName: String(row.branch_name ?? ""),
+    year: Number(row.year ?? new Date().getFullYear()),
+    establishmentCode: String(row.establishment_code ?? ""),
+    posCode: String(row.pos_code ?? ""),
+    lastNumber: Number(row.last_number ?? 0),
+    nextNumber: Number(row.next_number ?? 1),
+    active: Boolean(row.active ?? true),
+    updatedAt: row.updated_at ?? null,
+  })),
+  pendingFields: Array.isArray(data.pending_fields) ? data.pending_fields.map(String) : [],
+  apiTokenConfigured: Boolean(data.api?.api_token_configured ?? data.api_token_masked),
   message: data.message ? String(data.message) : undefined,
 });
 
@@ -1477,9 +1593,58 @@ export const updateDteSettings = async (payload: Partial<DteSettings> & { apiTok
       api_token: payload.apiToken,
       timeout_seconds: payload.timeoutSeconds,
       retry_count: payload.retryCount,
+      issuer: payload.issuer ? {
+        legal_name: payload.issuer.legalName,
+        commercial_name: payload.issuer.commercialName,
+        document_type: payload.issuer.documentType,
+        nit: payload.issuer.nit,
+        dui: payload.issuer.dui,
+        nrc: payload.issuer.nrc,
+        activity_code: payload.issuer.activityCode,
+        activity_description: payload.issuer.activityDescription,
+        establishment_type: payload.issuer.establishmentType,
+        department: payload.issuer.department,
+        municipality: payload.issuer.municipality,
+        address: payload.issuer.address,
+        phone: payload.issuer.phone,
+        email: payload.issuer.email,
+      } : undefined,
+      branch: payload.branch ? {
+        name: payload.branch.name,
+        code: payload.branch.code,
+        address: payload.branch.address,
+        establishment_code_mh: payload.branch.establishmentCodeMh,
+        establishment_code: payload.branch.establishmentCode,
+        pos_code_mh: payload.branch.posCodeMh,
+        pos_code: payload.branch.posCode,
+        establishment_type: payload.branch.establishmentType,
+        branch_address: payload.branch.branchAddress,
+        phone: payload.branch.phone,
+        email: payload.branch.email,
+      } : undefined,
     }),
   });
   return mapDteSettings(await handleJson<any>(response));
+};
+
+export const initializeDteCorrelatives = async (): Promise<DteCorrelative[]> => {
+  const response = await request("/settings/dte/correlatives/", { method: "POST", body: JSON.stringify({}) });
+  const data = await handleJson<any>(response);
+  return mapDteSettings({ correlatives: data.correlatives ?? [] } as any).correlatives;
+};
+
+export const updateDteCorrelative = async (id: number, payload: { lastNumber: number; reason: string; confirmDecrease?: boolean }): Promise<DteCorrelative[]> => {
+  const response = await request(`/settings/dte/correlatives/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ last_number: payload.lastNumber, reason: payload.reason, confirm_decrease: payload.confirmDecrease }),
+  });
+  const data = await handleJson<any>(response);
+  return mapDteSettings({ correlatives: data.correlatives ?? [] } as any).correlatives;
+};
+
+export const testDteConnectionSettings = async (): Promise<{ ok: boolean; status: string; message: string; missing?: string[] }> => {
+  const response = await request("/settings/dte/test-connection/", { method: "POST", body: JSON.stringify({}) });
+  return handleJson(response);
 };
 
 const mapTicketSettings = (data: any): TicketSettings => ({

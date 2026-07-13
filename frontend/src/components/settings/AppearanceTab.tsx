@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { applyAppearanceSettings } from "@/lib/theme";
-import { getAppearanceSettings, updateAppearanceSettings, type AppearanceSettings } from "@/lib/api";
+import { ApiRequestError, getAppearanceSettings, updateAppearanceSettings, type AppearanceSettings } from "@/lib/api";
 
 const safePalette = ["#1F7A4D", "#2563EB", "#0F766E", "#B45309", "#BE123C", "#6D28D9", "#374151"];
 
@@ -15,6 +15,7 @@ export const AppearanceTab = () => {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const load = () => {
     setLoading(true);
@@ -40,6 +41,8 @@ export const AppearanceTab = () => {
 
   const save = async (restoreDefault = false) => {
     setSaving(true);
+    setError(null);
+    setSuggestions([]);
     try {
       const saved = await updateAppearanceSettings({ primaryColor: color, restoreDefault });
       setSettings(saved);
@@ -47,10 +50,25 @@ export const AppearanceTab = () => {
       applyAppearanceSettings(saved);
       toast.success("Color aplicado. Vuelve a iniciar sesión para cargar la nueva apariencia.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Color inválido");
+      const payload = error instanceof ApiRequestError && error.payload && typeof error.payload === "object" ? error.payload as { message?: string; suggestions?: string[] } : null;
+      const message = payload?.message || (error instanceof Error ? error.message : "Color inválido");
+      setError(message);
+      setSuggestions(Array.isArray(payload?.suggestions) ? payload.suggestions : []);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const testColor = () => {
+    if (!/^#[0-9A-F]{6}$/i.test(color)) {
+      setError("Usa formato HEX completo, por ejemplo #2563EB.");
+      setSuggestions(["#2563EB", "#0F766E", "#374151"]);
+      return;
+    }
+    setError(null);
+    setSuggestions([]);
+    toast.success("Formato válido. Puedes aplicar el color.");
   };
 
   if (loading && !preview) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando apariencia...</CardContent></Card>;
@@ -73,12 +91,21 @@ export const AppearanceTab = () => {
           <CardTitle>Apariencia del sistema</CardTitle>
           <CardDescription>Define un color principal con contraste válido para modo claro y oscuro.</CardDescription>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {suggestions.length ? (
+            <div className="flex flex-wrap gap-2 pt-2">
+              {suggestions.map((item) => (
+                <Button key={item} size="sm" variant="outline" onClick={() => setColor(item.toUpperCase())}>
+                  {item}
+                </Button>
+              ))}
+            </div>
+          ) : null}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label>Paleta recomendada</Label>
             <div className="flex flex-wrap gap-2">
-              {safePalette.map((item) => (
+              {(settings?.palette?.length ? settings.palette : safePalette).map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -99,7 +126,8 @@ export const AppearanceTab = () => {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void save(false)} disabled={saving}>Aplicar</Button>
+            <Button onClick={testColor} disabled={saving} variant="outline">Probar color</Button>
+            <Button onClick={() => void save(false)} disabled={saving}>{saving ? "Aplicando..." : "Aplicar"}</Button>
             <Button variant="outline" onClick={() => void save(true)} disabled={saving}>Restaurar predeterminado</Button>
           </div>
         </CardContent>
