@@ -29,8 +29,23 @@ import {
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 import { useServiceTypes } from "@/hooks/useServiceTypes";
+import { formatDateShort, formatDurationMinutes, formatPeriodLabel, formatPercent } from "@/lib/datetime";
 
 const toISODate = (date: Date) => date.toISOString().slice(0, 10);
+const todayRange = () => {
+  const today = toISODate(new Date());
+  return { start: today, end: today, granularity: "hours" as ReportsGranularity };
+};
+const yesterdayRange = () => {
+  const date = shiftDays(new Date(), -1);
+  const day = toISODate(date);
+  return { start: day, end: day, granularity: "hours" as ReportsGranularity };
+};
+const weekRange = () => {
+  const end = new Date();
+  const start = shiftDays(end, -6);
+  return { start: toISODate(start), end: toISODate(end), granularity: "week" as ReportsGranularity };
+};
 const getMonthRange = () => {
   const now = new Date();
   return {
@@ -43,7 +58,22 @@ const shiftDays = (date: Date, days: number) => {
   copy.setDate(copy.getDate() + days);
   return copy;
 };
-const formatHours = (minutes: number) => `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+const formatHours = formatDurationMinutes;
+
+const SalesTooltip = ({ active, payload, label, granularity }: { active?: boolean; payload?: Array<{ name?: string; value?: number | string; color?: string }>; label?: string; granularity: ReportsGranularity }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg">
+      <div className="mb-1 font-semibold">{formatPeriodLabel(label, granularity)}</div>
+      {payload.map((item) => (
+        <div key={item.name} className="flex min-w-44 items-center justify-between gap-4">
+          <span className="text-muted-foreground">{item.name}</span>
+          <span className="font-semibold">{formatMoney(Number(item.value || 0))}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const compareRange = (
   from: string,
@@ -255,6 +285,17 @@ export const RegistrosReportesTab = () => {
     if (!comparisonKpis || comparisonKpis.totalSales <= 0) return null;
     return ((currentKpis.totalSales - comparisonKpis.totalSales) / comparisonKpis.totalSales) * 100;
   }, [comparisonKpis, currentKpis.totalSales]);
+  const bestPoint = useMemo(() => {
+    const points = series?.points ?? [];
+    return points.reduce<(typeof points)[number] | null>((best, point) => (!best || point.currentTotal > best.currentTotal ? point : best), null);
+  }, [series]);
+  const peakPoint = bestPoint;
+  const netEstimated = currentKpis.totalSales;
+  const applyRange = (range: { start: string; end: string; granularity: ReportsGranularity }) => {
+    setDateFrom(range.start);
+    setDateTo(range.end);
+    setGranularity(range.granularity);
+  };
 
   return (
     <div className="space-y-5">
@@ -263,6 +304,12 @@ export const RegistrosReportesTab = () => {
           <CardTitle className="text-base font-semibold">Rango de análisis</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => applyRange(todayRange())}>Hoy</Button>
+            <Button variant="outline" size="sm" onClick={() => applyRange(yesterdayRange())}>Ayer</Button>
+            <Button variant="outline" size="sm" onClick={() => applyRange(weekRange())}>Semana actual</Button>
+            <Button variant="outline" size="sm" onClick={() => applyRange({ ...getMonthRange(), granularity: "week" })}>Mes actual</Button>
+          </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-11 bg-background" />
             <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-11 bg-background" />
@@ -287,12 +334,10 @@ export const RegistrosReportesTab = () => {
               variant="outline"
               className="h-11"
               onClick={() => {
-                const next = getMonthRange();
-                setDateFrom(next.start);
-                setDateTo(next.end);
+                applyRange({ ...getMonthRange(), granularity: "week" });
               }}
             >
-              Mes actual
+              Aplicar
             </Button>
           </div>
           {filterError ? <p className="text-sm text-destructive">{filterError}</p> : null}
@@ -314,10 +359,13 @@ export const RegistrosReportesTab = () => {
         </AccordionItem>
       </Accordion>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Total ventas</CardTitle></CardHeader><CardContent className="text-2xl font-bold">{formatMoney(currentKpis.totalSales)}</CardContent></Card>
         <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Transacciones</CardTitle></CardHeader><CardContent className="text-2xl font-bold">{currentKpis.transactions}</CardContent></Card>
         <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Ticket promedio</CardTitle></CardHeader><CardContent className="text-2xl font-bold">{formatMoney(currentKpis.avgTicket)}</CardContent></Card>
+        <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Neto estimado</CardTitle></CardHeader><CardContent className="text-2xl font-bold">{formatMoney(netEstimated)}</CardContent></Card>
+        <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Mejor día</CardTitle></CardHeader><CardContent><div className="text-lg font-bold">{bestPoint ? formatDateShort(bestPoint.bucket) : "-"}</div><p className="text-xs text-muted-foreground">{bestPoint ? formatMoney(bestPoint.currentTotal) : "Sin ventas"}</p></CardContent></Card>
+        <Card className="border-border/70 bg-card/80"><CardHeader><CardTitle className="text-sm text-muted-foreground">Hora pico</CardTitle></CardHeader><CardContent><div className="text-lg font-bold">{peakPoint ? formatPeriodLabel(peakPoint.bucket, granularity) : "-"}</div><p className="text-xs text-muted-foreground">{comparisonDelta !== null ? `Comparación ${formatPercent(comparisonDelta)}` : "Sin comparación"}</p></CardContent></Card>
       </div>
 
       <Card className="border-border/70 bg-card/80 shadow-sm">
@@ -334,9 +382,9 @@ export const RegistrosReportesTab = () => {
             {series?.points?.length ? (
               <AreaChart data={series.points}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="bucket" stroke="hsl(var(--muted-foreground))" />
+                <XAxis dataKey="bucket" tickFormatter={(value) => formatPeriodLabel(value, granularity)} stroke="hsl(var(--muted-foreground))" />
                 <YAxis tickFormatter={(value) => formatMoney(Number(value))} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip formatter={(value: number | string) => formatMoney(Number(value || 0))} />
+                <Tooltip content={(props) => <SalesTooltip {...props} granularity={granularity} />} />
                 <Legend />
                 <Area dataKey="currentTotal" name="Actual" stroke="hsl(var(--primary))" fill="hsl(var(--primary) / 0.22)" strokeWidth={2} />
                 <Line dataKey="comparisonTotal" name="Comparación" stroke="hsl(var(--muted-foreground))" strokeWidth={2} dot={false} />
@@ -400,7 +448,10 @@ export const RegistrosReportesTab = () => {
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="label" hide />
                 <YAxis stroke="hsl(var(--muted-foreground))" />
-                <Tooltip formatter={(value: number | string) => formatMoney(Number(value || 0))} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: "0.5rem", color: "hsl(var(--popover-foreground))" }}
+                  formatter={(value: number | string) => formatMoney(Number(value || 0))}
+                />
                 <Bar dataKey="total" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>

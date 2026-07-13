@@ -30,7 +30,7 @@ export const formatDateSV = (value: DateInput): string => {
   return new Intl.DateTimeFormat("es-SV", {
     timeZone: APP_TZ,
     year: "numeric",
-    month: "2-digit",
+    month: "short",
     day: "2-digit",
   }).format(date);
 };
@@ -41,12 +41,11 @@ export const formatDateTimeSV = (value: DateInput): string => {
   return new Intl.DateTimeFormat("es-SV", {
     timeZone: APP_TZ,
     year: "numeric",
-    month: "2-digit",
+    month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
+    hour12: true,
   }).format(date);
 };
 
@@ -57,9 +56,47 @@ export const formatTimeSV = (value: DateInput): string => {
     timeZone: APP_TZ,
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
+    hour12: true,
   }).format(date);
+};
+
+export const formatDateShort = formatDateSV;
+export const formatDateTime = formatDateTimeSV;
+export const formatTime = formatTimeSV;
+
+export const formatCurrency = (value: number | string | null | undefined): string => {
+  const amount = Number(value ?? 0);
+  return new Intl.NumberFormat("es-SV", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(amount) ? amount : 0);
+};
+
+export const formatPercent = (value: number | string | null | undefined, digits = 1): string => {
+  const amount = Number(value ?? 0);
+  return `${Number.isFinite(amount) ? amount.toFixed(digits) : "0.0"}%`;
+};
+
+export const formatDurationMinutes = (minutes: number | string | null | undefined): string => {
+  const total = Math.max(0, Math.round(Number(minutes ?? 0) || 0));
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  return `${hours}h ${String(mins).padStart(2, "0")}m`;
+};
+
+export const formatPeriodLabel = (value: DateInput, granularity?: "hours" | "week" | "month" | "year" | string): string => {
+  const date = toDate(value);
+  if (!date) return String(value ?? "-");
+  if (granularity === "hours") return formatTimeSV(date);
+  if (granularity === "year") {
+    return new Intl.DateTimeFormat("es-SV", { timeZone: APP_TZ, year: "numeric" }).format(date);
+  }
+  if (granularity === "month") {
+    return new Intl.DateTimeFormat("es-SV", { timeZone: APP_TZ, month: "short", year: "numeric" }).format(date);
+  }
+  return new Intl.DateTimeFormat("es-SV", { timeZone: APP_TZ, day: "2-digit", month: "short" }).format(date);
 };
 
 export const getHourSV = (value: DateInput): number | null => {
