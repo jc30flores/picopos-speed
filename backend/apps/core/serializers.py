@@ -174,6 +174,8 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "--color-primary-contrast": obj.color_primary_contrast,
             "--color-primary-on-light": getattr(obj, "color_primary_on_light", obj.color_primary),
             "--color-primary-on-dark": getattr(obj, "color_primary_on_dark", obj.color_primary),
+            "--color-primary-muted": obj.color_primary_soft,
+            "--color-primary-surface": obj.color_primary_soft,
         }
 
     def get_theme_mode(self, obj: SystemAppearanceSettings) -> str:
@@ -183,7 +185,22 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
         return True
 
     def get_palette(self, obj: SystemAppearanceSettings) -> list[str]:
-        return ["#1F7A4D", "#2563EB", "#0F766E", "#B45309", "#BE123C", "#6D28D9", "#374151", "#B7791F"]
+        return [
+            "#1F7A4D",
+            "#2563EB",
+            "#0F766E",
+            "#0284C7",
+            "#0891B2",
+            "#6D28D9",
+            "#A21CAF",
+            "#DB2777",
+            "#BE123C",
+            "#B45309",
+            "#B7791F",
+            "#374151",
+            "#111827",
+            "#0D9488",
+        ]
 
 
 class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
