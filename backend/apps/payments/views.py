@@ -34,6 +34,7 @@ from apps.dte.services.dte_service import (
 )
 from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
+from apps.dte.runtime import get_dte_runtime_status, is_dte_config_ready
 from apps.core.money import to_cents, from_cents
 from apps.inventory.services import InventoryStockPolicyError, apply_inventory_for_order, reverse_inventory_for_order, validate_order_inventory_policy
 
@@ -318,8 +319,20 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
+            runtime_status = get_dte_runtime_status()
             def _after_commit_dte():
                 def _enqueue_dte_async():
+                    runtime = get_dte_runtime_status()
+                    if not runtime.enabled:
+                        logger.info("DTE_SKIP_DISABLED order_id=%s payment_id=%s", payment.order_id, payment.id)
+                        dte_meta["dte_status"] = "DISABLED"
+                        dte_meta["dte_last_error"] = ""
+                        return
+                    if not runtime.config_ready:
+                        logger.info("DTE_SKIP_CONFIG_PENDING order_id=%s payment_id=%s status=%s", payment.order_id, payment.id, runtime.config_status)
+                        dte_meta["dte_status"] = "CONFIG_PENDING"
+                        dte_meta["dte_last_error"] = runtime.message
+                        return
                     try:
                         logger.info("payment.dte.trigger order_id=%s payment_id=%s", payment.order_id, payment.id)
                         dte_record = send_dte_for_order(payment.order, payment=payment, queue_only=True)
@@ -342,6 +355,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                             dte_record.status,
                             dte_meta["dte_outbox_id"],
                         )
+                    except DTEPreflightError as exc:
+                        logger.warning("payment.dte.preflight order_id=%s payment_id=%s error=%s", payment.order_id, payment.id, exc)
+                        dte_meta["dte_status"] = "CONFIG_PENDING"
+                        dte_meta["dte_last_error"] = str(exc)
                     except Exception as exc:  # noqa: BLE001 - fiscal send must not break payment completion
                         logger.exception("payment.dte.failed order_id=%s payment_id=%s", payment.order_id, payment.id)
                         dte_meta["dte_status"] = "FAILED"
@@ -350,7 +367,13 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                     threading.Thread(target=_enqueue_dte_async, daemon=True, name=f"dte-enqueue-{payment.id}").start()
                 except Exception:
                     _enqueue_dte_async()
-            transaction.on_commit(_after_commit_dte)
+            if runtime_status.enabled and runtime_status.config_ready:
+                transaction.on_commit(_after_commit_dte)
+            else:
+                reason = "DISABLED" if not runtime_status.enabled else "CONFIG_PENDING"
+                logger.info("%s order_id=%s payment_id=%s", "DTE_SKIP_DISABLED" if reason == "DISABLED" else "DTE_SKIP_CONFIG_PENDING", payment.order_id, payment.id)
+                dte_meta["dte_status"] = reason
+                dte_meta["dte_last_error"] = "" if reason == "DISABLED" else runtime_status.message
         else:
             log_audit(
                 request,
@@ -368,7 +391,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         if remaining <= 0 and hasattr(payment.order, "invoice"):
             data["invoice_status"] = payment.order.invoice.status
             data["invoice_id"] = payment.order.invoice.id
-            data["dte_status"] = dte_meta["dte_status"] or "QUEUED"
+            data["dte_status"] = dte_meta["dte_status"] or "DISABLED"
             data["dte_record_id"] = dte_meta["dte_record_id"]
             data["dte_outbox_id"] = dte_meta["dte_outbox_id"]
             data["dte_last_error"] = dte_meta["dte_last_error"]
@@ -508,7 +531,11 @@ class PaymentRecordRefundView(APIView):
 
         dte_action = {"action": "internal_refund"}
         fiscal_result = {"attempted": False, "success": False, "message": "Sin documento base para invalidación fiscal."}
-        dte_base = record or latest_dte
+        if not is_dte_config_ready():
+            dte_base = None
+            logger.info("DTE_SKIP_UNAVAILABLE refund payment_id=%s order_id=%s", payment.id, order.id)
+        else:
+            dte_base = record or latest_dte
         def _attempt_invalidation(*, base_record, allow_non_accepted: bool) -> dict:
             try:
                 return invalidate_dte_for_order(
@@ -530,7 +557,7 @@ class PaymentRecordRefundView(APIView):
                 )
                 return {"success": False, "status": "RECHAZADO", "error": str(exc)}
 
-        if record:
+        if record and is_dte_config_ready():
             dte_type = (record.dte_type or "").upper()
             issued_at = resolve_issued_at(record)
             should_credit_note = dte_type.startswith("CCF") and (timezone.now() - issued_at).total_seconds() > 24 * 3600
@@ -581,7 +608,7 @@ class PaymentRecordRefundView(APIView):
                         "message": "Refund interno registrado, pero la invalidación fiscal fue rechazada.",
                     }
                     fiscal_result = {"attempted": True, "success": False, "message": result.get("error") or "Invalidación fiscal rechazada."}
-        elif dte_base:
+        elif dte_base and is_dte_config_ready():
             result = _attempt_invalidation(base_record=dte_base, allow_non_accepted=True)
             invalidation = DTEInvalidation.objects.create(
                 order=order,

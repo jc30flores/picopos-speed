@@ -14,6 +14,7 @@ import {
   dteIssuedList,
   dteResend,
   downloadDteExportZip,
+  getDteSettings,
   type DTERecord,
 } from "@/lib/api";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -116,6 +117,7 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
   const [pageSize, setPageSize] = useState(20);
   const [count, setCount] = useState(0);
   const [totalAmountSum, setTotalAmountSum] = useState(0);
+  const [dteEnabled, setDteEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -139,6 +141,7 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
   );
 
   const load = async () => {
+    if (dteEnabled === false) return;
     setLoading(true);
     setError(null);
     try {
@@ -156,8 +159,22 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
   };
 
   useEffect(() => {
+    if (dteEnabled === null) return;
+    if (!dteEnabled) {
+      setRows([]);
+      setCount(0);
+      setTotalAmountSum(0);
+      setLoading(false);
+      return;
+    }
     load();
-  }, [filters]);
+  }, [filters, dteEnabled]);
+
+  useEffect(() => {
+    getDteSettings()
+      .then((settings) => setDteEnabled(settings.haciendaEnabled))
+      .catch(() => setDteEnabled(false));
+  }, []);
 
   const copy = async (value?: string, title = "Copiado") => {
     if (!value) return;
@@ -327,7 +344,20 @@ export default function DTEPage({ embedded = false }: { embedded?: boolean }) {
 
   const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
-  const content = (
+  const disabledContent = (
+    <div className="rounded-xl border bg-card/70 p-6">
+      <h2 className="text-lg font-semibold">Facturación electrónica desactivada</h2>
+      <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+        Este sistema está operando como POS local. No se enviarán ventas a Hacienda ni se mostrarán acciones DTE.
+      </p>
+    </div>
+  );
+
+  const loadingStatusContent = (
+    <div className="rounded-xl border bg-card/70 p-6 text-sm text-muted-foreground">Cargando estado de facturación electrónica...</div>
+  );
+
+  const content = dteEnabled === null ? loadingStatusContent : dteEnabled === false ? disabledContent : (
       <div className="space-y-4">
         <div className="space-y-3 rounded-xl border bg-card/40 p-4">
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-12">

@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import {
   changeInternalPaymentMethod,
   dteDeliverByOrder,
+  getDteSettings,
   refundSaleRecord,
   getPaymentMethods,
   getSalesReport,
@@ -119,6 +120,7 @@ export const SalesHistoryTab = () => {
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketHtml, setTicketHtml] = useState("");
   const canChangePaymentMethod = user?.role === "admin" || Boolean(user?.isSuperuser);
+  const [dteEnabled, setDteEnabled] = useState(false);
 
   const dateFrom = startDate ? getLocalDateSV(startDate) : undefined;
   const dateTo = endDate ? getLocalDateSV(endDate) : undefined;
@@ -176,7 +178,7 @@ export const SalesHistoryTab = () => {
           paymentId: row.paymentId,
           date: row.createdAt,
           orderNumber: `ORD-${row.orderNumber}`,
-          controlNumber: row.controlNumber || "-",
+          controlNumber: row.controlNumber || "—",
           customerName: row.customerName || "-",
           serviceType: row.serviceTypeLabel ?? serviceTypeLabelByKey.get(row.serviceType ?? "") ?? row.serviceType ?? "-",
           channel: "POS",
@@ -213,6 +215,12 @@ export const SalesHistoryTab = () => {
       .then(setPaymentMethodOptions)
       .catch((error) => console.error("Failed to load payment methods", error));
   }, [canChangePaymentMethod]);
+
+  useEffect(() => {
+    getDteSettings()
+      .then((value) => setDteEnabled(value.haciendaEnabled))
+      .catch(() => setDteEnabled(false));
+  }, []);
 
   const filteredSales = sales;
 
@@ -647,18 +655,20 @@ export const SalesHistoryTab = () => {
                               <Repeat2 className="h-4 w-4" />
                             </Button>
                           ) : null}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-9 rounded-lg px-3"
-                            title="Enviar DTE a Cliente"
-                            aria-label="Enviar DTE a Cliente"
-                            onClick={() => void handleSendDteToCustomer(sale)}
-                            disabled={sendingByOrderId === sale.orderId}
-                          >
-                            <Send className="mr-2 h-4 w-4" />
-                            {sendingByOrderId === sale.orderId ? "Enviando..." : "Enviar DTE a Cliente"}
-                          </Button>
+                          {dteEnabled ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-9 rounded-lg px-3"
+                              title="Enviar DTE a Cliente"
+                              aria-label="Enviar DTE a Cliente"
+                              onClick={() => void handleSendDteToCustomer(sale)}
+                              disabled={sendingByOrderId === sale.orderId}
+                            >
+                              <Send className="mr-2 h-4 w-4" />
+                              {sendingByOrderId === sale.orderId ? "Enviando..." : "Enviar DTE a Cliente"}
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -675,7 +685,9 @@ export const SalesHistoryTab = () => {
           <DialogHeader>
             <DialogTitle>Reembolsar venta</DialogTitle>
             <DialogDescription>
-              Si hay DTE aceptado, se invalidará o se generará NC según reglas fiscales. Si no hay DTE aceptado, se hará reembolso interno.
+              {dteEnabled
+                ? "Si hay DTE aceptado, se invalidará o se generará NC según reglas fiscales. Si no hay DTE aceptado, se hará reembolso interno."
+                : "Facturación electrónica está desactivada. El reembolso se registrará solo de forma interna."}
             </DialogDescription>
           </DialogHeader>
           {selectedSale ? (

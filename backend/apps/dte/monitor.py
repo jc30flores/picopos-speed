@@ -104,6 +104,20 @@ class DTEHealthMonitor:
         return STATE_DEGRADED
 
     def check_once(self, force_log: bool = False) -> HealthSnapshot:
+        from apps.dte.runtime import get_dte_runtime_status
+
+        runtime = get_dte_runtime_status()
+        if not runtime.enabled:
+            self._save_snapshot(state=STATE_DOWN, health_status_code=None, health_body="DTE disabled", factura_code=None, factura_body="")
+            if force_log:
+                DTE_LOGGER.info("[DTE MONITOR] skipped reason=disabled")
+            return self.get_cached_snapshot()
+        if not runtime.config_ready:
+            self._save_snapshot(state=STATE_DOWN, health_status_code=None, health_body="DTE config pending", factura_code=None, factura_body="")
+            if force_log:
+                DTE_LOGGER.info("[DTE MONITOR] skipped reason=config_pending")
+            return self.get_cached_snapshot()
+
         previous = self.get_cached_snapshot()
         health_code = None
         health_body = ""

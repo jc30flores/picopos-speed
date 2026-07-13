@@ -81,6 +81,7 @@ import {
   getPrintingStatus,
   getFeatureFlags,
   getFeatureSettings,
+  getDteSettings,
   getDiningAreas,
   getRestaurantTables,
   getTableSessions,
@@ -367,6 +368,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [recentSalesError, setRecentSalesError] = useState("");
   const [recentSalesPrintingId, setRecentSalesPrintingId] = useState<number | null>(null);
   const [recentSalesSendingId, setRecentSalesSendingId] = useState<number | null>(null);
+  const [dteEnabled, setDteEnabled] = useState(false);
   const [isQuickSaleProcessing, setIsQuickSaleProcessing] = useState(false);
   const [quickSalesMode, setQuickSalesMode] = useState<PosQuickSalesButtonMode>("last_sale");
   const [quickSalesHistoryScope, setQuickSalesHistoryScope] = useState<PosQuickSalesHistoryScope>("current_shift");
@@ -590,6 +592,12 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     setCategories(categoriesResponse);
     setModifierGroups(modifierGroupsResponse);
   };
+
+  useEffect(() => {
+    getDteSettings()
+      .then((settings) => setDteEnabled(settings.haciendaEnabled))
+      .catch(() => setDteEnabled(false));
+  }, []);
 
   useEffect(() => {
     loadMenuData().catch((error) => {
@@ -3750,7 +3758,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         <DialogContent className="flex max-h-[88dvh] w-[min(94vw,760px)] max-w-3xl flex-col overflow-hidden border-emerald-500/50 bg-zinc-950 text-zinc-50 p-0">
           <DialogHeader className="border-b border-emerald-500/30 px-5 py-4">
             <DialogTitle className="flex items-center gap-2 text-emerald-300"><ReceiptText className="h-5 w-5" /> Ventas recientes</DialogTitle>
-            <DialogDescription>Acciones rápidas para imprimir ticket o enviar DTE sin entrar a Reportes. {quickSalesHistoryScope === "current_shift" ? "Mostrando última apertura de caja." : quickSalesHistoryWindowMinutes === 1440 ? "Mostrando ventas de hoy." : `Mostrando últimos ${quickSalesHistoryWindowMinutes} minutos.`}</DialogDescription>
+            <DialogDescription>Acciones rápidas para imprimir ticket{dteEnabled ? " o enviar DTE" : ""} sin entrar a Reportes. {quickSalesHistoryScope === "current_shift" ? "Mostrando última apertura de caja." : quickSalesHistoryWindowMinutes === 1440 ? "Mostrando ventas de hoy." : `Mostrando últimos ${quickSalesHistoryWindowMinutes} minutos.`}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {recentSalesLoading ? (
@@ -3777,9 +3785,11 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         <Button size="sm" variant="outline" className="border-emerald-500/50" onClick={() => void handleRecentSalePrint(sale)} disabled={recentSalesPrintingId === sale.paymentId}>
                           <Printer className="mr-1 h-4 w-4" /> {recentSalesPrintingId === sale.paymentId ? "Imprimiendo..." : "Ticket"}
                         </Button>
-                        <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void handleRecentSaleSendDte(sale)} disabled={recentSalesSendingId === sale.id || !sale.canSendDte}>
-                          <Send className="mr-1 h-4 w-4" /> {recentSalesSendingId === sale.id ? "Enviando..." : "Enviar DTE"}
-                        </Button>
+                        {dteEnabled ? (
+                          <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void handleRecentSaleSendDte(sale)} disabled={recentSalesSendingId === sale.id || !sale.canSendDte}>
+                            <Send className="mr-1 h-4 w-4" /> {recentSalesSendingId === sale.id ? "Enviando..." : "Enviar DTE"}
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   </div>

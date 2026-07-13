@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from apps.core.audit import log_audit
 from apps.core.models import DTEGlobalSettings
+from apps.dte.runtime import DISABLED_MESSAGE, is_dte_enabled
 from apps.core.permissions import _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.dte.models import CreditNote, DTEInvalidation, DTERecord
@@ -31,13 +32,12 @@ logger = logging.getLogger("apps.dte")
 
 
 def _dte_enabled() -> bool:
-    settings = DTEGlobalSettings.objects.filter(pk=1).first()
-    return bool(settings and settings.hacienda_enabled)
+    return is_dte_enabled()
 
 
 def _dte_disabled_response():
     return Response(
-        {"detail": "Facturación electrónica desactivada. Las ventas se registran solo localmente."},
+        {"detail": DISABLED_MESSAGE},
         status=status.HTTP_403_FORBIDDEN,
     )
 

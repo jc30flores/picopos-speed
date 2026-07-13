@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.core.models import Branch, ServiceType
+from apps.core.models import Branch, DTEGlobalSettings, ServiceType
 from apps.orders.models import Order
 from apps.users.models import UserProfile
 
@@ -51,6 +51,14 @@ class PaymentDteTriggerTests(TestCase):
 
     @patch("apps.payments.views.send_dte_for_order")
     def test_full_payment_queues_dte_and_returns_pending_status(self, mock_send):
+        DTEGlobalSettings.objects.create(
+            hacienda_enabled=True,
+            ambiente=DTEGlobalSettings.AMBIENTE_TEST,
+            base_url="https://example.test/api",
+            api_token="token",
+            status=DTEGlobalSettings.STATUS_CONFIGURED,
+        )
+
         class _Outbox:
             id = 9001
 
@@ -75,3 +83,16 @@ class PaymentDteTriggerTests(TestCase):
             time.sleep(0.01)
         mock_send.assert_called_once()
         self.assertTrue(mock_send.call_args.kwargs.get("queue_only"))
+
+    @patch("apps.payments.views.send_dte_for_order")
+    def test_full_payment_skips_dte_when_disabled(self, mock_send):
+        DTEGlobalSettings.objects.create(hacienda_enabled=False, status=DTEGlobalSettings.STATUS_DISABLED)
+        self.client.force_authenticate(self.user)
+        response = self.client.post(
+            "/api/payments/",
+            {"order": self.order.id, "method": "cash", "amount": "10.00", "tip_amount": "0.00", "cash_received": "10.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json().get("dte_status"), "DISABLED")
+        mock_send.assert_not_called()

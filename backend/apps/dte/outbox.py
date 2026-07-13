@@ -21,6 +21,7 @@ from apps.dte.monitor import STATE_UP, check_health_now, get_monitor
 from apps.dte.services.active_branch import get_active_branch
 from apps.dte.services.dte_service import DTEPreflightError, assert_no_string_numbers, build_payload_cf
 from apps.dte.services.emisor import get_emisor_nit, payload_emisor_nit
+from apps.dte.runtime import get_dte_runtime_status
 from apps.orders.models import OrderInvoice
 
 DTE_LOGGER = logging.getLogger("apps.dte")
@@ -426,12 +427,13 @@ def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTE
 
 
 def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
-    from apps.core.models import DTEGlobalSettings
-
-    dte_settings = DTEGlobalSettings.objects.filter(pk=1).first()
-    if not dte_settings or not dte_settings.hacienda_enabled:
+    runtime = get_dte_runtime_status()
+    if not runtime.enabled:
         DTE_LOGGER.info("[DTE OUTBOX] disabled order=%s payment=%s action=skip_enqueue", order.id, getattr(payment, "id", None))
-        raise DTEPreflightError("Facturación electrónica desactivada. Las ventas se registran solo localmente.")
+        raise DTEPreflightError(runtime.message)
+    if not runtime.config_ready:
+        DTE_LOGGER.info("[DTE OUTBOX] config_pending order=%s payment=%s action=skip_enqueue", order.id, getattr(payment, "id", None))
+        raise DTEPreflightError(runtime.message)
     numero_control, codigo_generacion = _extract(payload)
     DTE_LOGGER.info(
         "dte.outbox.enqueue order_id=%s payment_id=%s dte_record_id=%s numero_control=%s codigo_generacion=%s has_dte=%s payload_size=%s attempt_immediate=%s",
@@ -590,6 +592,13 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
 
 def process_pending_outbox(limit: int = 50) -> int:
     global _LAST_IDLE_LOG_TS
+    runtime = get_dte_runtime_status()
+    if not runtime.enabled:
+        DTE_LOGGER.debug("[DTE OUTBOX] process skipped reason=disabled")
+        return 0
+    if not runtime.config_ready:
+        DTE_LOGGER.debug("[DTE OUTBOX] process skipped reason=config_pending")
+        return 0
     health = _health_snapshot(stale_seconds=2 * int(getattr(settings, "DTE_MONITOR_INTERVAL_SECONDS", 10) or 10))
     circuit_open, open_until = _is_circuit_open()
 
