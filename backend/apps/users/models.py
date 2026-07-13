@@ -5,6 +5,7 @@ from django.utils import timezone
 
 class UserProfile(models.Model):
     ROLE_CHOICES = [
+        ("superadmin", "Superadmin"),
         ("admin", "Admin"),
         ("manager", "Manager"),
         ("cashier", "Cashier"),

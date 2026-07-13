@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 ROLE_LANDING_ROUTE = {
+    "superadmin": "/",
     "kitchen": "/kitchen",
     "kiosk": "/kiosk",
     "worker": "/",
@@ -30,12 +31,13 @@ def _json_response(payload, status_code=status.HTTP_200_OK):
 def _get_or_create_profile(user):
     profile, _ = UserProfile.objects.get_or_create(
         user=user,
-        defaults={"role": "admin" if user.is_superuser else "cashier", "is_active": True},
+        defaults={"role": "superadmin" if user.is_superuser else "cashier", "is_active": True},
     )
     return profile
 
 
 def _build_auth_payload(user, role: str):
+    is_superadmin = role == "superadmin" or bool(getattr(user, "is_superuser", False))
     profile_payload = {
         "role": role,
         "redirect_to": ROLE_LANDING_ROUTE.get(role, "/"),
@@ -54,7 +56,13 @@ def _build_auth_payload(user, role: str):
         # Stable structured shape (new contract)
         "user": user_payload,
         "profile": profile_payload,
-        "permissions": {},
+        "permissions": {
+            "is_superadmin": is_superadmin,
+            "can_manage_features": is_superadmin,
+            "can_manage_dte_settings": is_superadmin,
+            "can_manage_correlatives": is_superadmin,
+            "can_manage_appearance": is_superadmin or role == "admin",
+        },
     }
 
 
@@ -216,7 +224,7 @@ def verify_privileged_pin_view(request):
 
     privileged_profiles = UserProfile.objects.select_related("user").filter(
         is_active=True,
-        role__in=["admin", "manager"],
+        role__in=["superadmin", "admin", "manager"],
         user__is_active=True,
     )
     for profile in privileged_profiles:
@@ -244,7 +252,7 @@ def authorize_price_change_view(request):
 
     privileged_profiles = UserProfile.objects.select_related("user").filter(
         is_active=True,
-        role__in=["admin", "manager"],
+        role__in=["superadmin", "admin", "manager"],
         user__is_active=True,
     )
     for profile in privileged_profiles:

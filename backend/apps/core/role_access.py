@@ -8,6 +8,9 @@ AUTH_ALLOWED_PREFIXES = (
 )
 
 ROLE_ALLOWED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "superadmin": (
+        re.compile(r"^/api/"),
+    ),
     "kitchen": (
         re.compile(r"^/api/kitchen/"),
         re.compile(r"^/api/orders/kitchen/?$"),
@@ -55,6 +58,8 @@ ROLE_DENIED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
 
 
 def is_api_path_allowed_for_role(role: str, path: str) -> bool:
+    if role == "superadmin":
+        return True
     if not path.startswith("/api/"):
         return True
     if any(path.startswith(prefix) for prefix in AUTH_ALLOWED_PREFIXES):

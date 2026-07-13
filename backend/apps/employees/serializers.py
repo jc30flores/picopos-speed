@@ -18,6 +18,11 @@ class EmployeeUserSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
     role = serializers.ChoiceField(choices=UserProfile.ROLE_CHOICES)
 
+    def validate_role(self, value: str) -> str:
+        if value == "superadmin":
+            raise serializers.ValidationError("No se puede crear ni asignar superadmin desde la interfaz.")
+        return value
+
 
 class EmployeeSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True)
@@ -158,6 +163,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
         email = user_data.get("email") or ""
         password = user_data.get("password")
         role = user_data.get("role")
+        if role == "superadmin":
+            raise serializers.ValidationError({"user": {"role": "No se puede crear superadmin desde la interfaz."}})
         if not username:
             raise serializers.ValidationError({"user": {"username": "Username is required"}})
         if not role:
@@ -204,6 +211,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
             user.set_password(password)
         user.save()
         if role:
+            if role == "superadmin":
+                raise serializers.ValidationError({"user": {"role": "No se puede asignar superadmin desde la interfaz."}})
             profile, _ = UserProfile.objects.get_or_create(user=user, defaults={"role": role, "is_active": True})
             profile.role = role
             profile.is_active = employee.status == "active"

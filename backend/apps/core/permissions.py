@@ -16,6 +16,30 @@ def _role_is(user, roles: set[str]) -> bool:
     return profile.role in roles
 
 
+def is_superadmin(user) -> bool:
+    return bool(getattr(user, "is_superuser", False) or _role_is(user, {"superadmin"}))
+
+
+def is_admin(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, {"admin"}))
+
+
+def is_manager(user) -> bool:
+    return bool(is_admin(user) or _role_is(user, {"manager"}))
+
+
+def can_manage_features(user) -> bool:
+    return is_superadmin(user)
+
+
+def can_manage_dte_settings(user) -> bool:
+    return is_superadmin(user)
+
+
+def can_manage_correlatives(user) -> bool:
+    return is_superadmin(user)
+
+
 class IsAuthenticatedAndActive(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
@@ -24,7 +48,12 @@ class IsAuthenticatedAndActive(BasePermission):
 
 class IsAdmin(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"admin"})
+        return is_admin(request.user)
+
+
+class IsSuperAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return is_superadmin(request.user)
 
 
 class IsManager(BasePermission):
@@ -64,7 +93,7 @@ class IsKitchenOrManagerOrAdmin(BasePermission):
 
 class IsKitchenOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"kitchen", "admin"})
+        return bool(is_superadmin(request.user) or _role_is(request.user, {"kitchen", "admin"}))
 
 
 class IsAuthenticatedOrReadOnly(BasePermission):

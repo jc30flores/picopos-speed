@@ -23,7 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def active_employee_queryset():
-    return Employee.objects.select_related("branch", "user").filter(is_deleted=False).exclude(full_name__istartswith="Empleado eliminado")
+    return (
+        Employee.objects.select_related("branch", "user")
+        .filter(is_deleted=False)
+        .exclude(full_name__istartswith="Empleado eliminado")
+        .exclude(user__profile__role="superadmin")
+    )
 
 
 class EmployeeListCreateView(generics.ListCreateAPIView):

@@ -26,6 +26,7 @@ export type RoleAccessUser = Pick<AuthUser, "role" | "isSuperuser"> | null;
 
 export const appModules: AppModuleConfig[] = [
   { key: "pos", label: "POS", path: "/pos", requiredRoles: ["admin", "manager", "cashier"] },
+  { key: "pending", label: "PEDIDOS ABIERTOS", path: "/open-orders", requiredRoles: ["admin", "manager", "cashier"] },
   { key: "tables_editor", label: "Editor de mesas", path: "/tables/editor", requiredRoles: ["admin", "manager"] },
   { key: "kiosk", label: "KIOSK", path: "/kiosk", requiredRoles: ["admin", "kiosk"] },
   { key: "kitchen", label: "COCINA", path: "/kitchen", requiredRoles: ["admin", "kitchen"] },
@@ -48,6 +49,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
   modules.filter((module) => canAccessModule(user, module));
 
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
+  superadmin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
   admin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
   manager: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/menu", "/inventory", "/clientes"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
@@ -58,6 +60,19 @@ export const allowedRoutesByRole: Record<AppRole, string[]> = {
 };
 
 export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path: string }>> = {
+  superadmin: [
+    { label: "POS", path: "/" },
+    { label: "Pedidos abiertos", path: "/open-orders" },
+    { label: "Kiosk", path: "/kiosk" },
+    { label: "Cocina", path: "/kitchen" },
+    { label: "Pedidos Clientes", path: "/customer-display" },
+    { label: "Menú & Descuentos", path: "/menu" },
+    { label: "Inventario", path: "/inventory" },
+    { label: "Reportes", path: "/registros/ventas" },
+    { label: "DTE", path: "/registros/dte" },
+    { label: "Clientes", path: "/clientes" },
+    { label: "Configuración", path: "/settings" },
+  ],
   admin: [
     { label: "POS", path: "/" },
     { label: "Open Orders", path: "/open-orders" },
@@ -89,6 +104,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
 };
 
 const landingRouteByRole: Record<AppRole, string> = {
+  superadmin: "/",
   admin: "/",
   manager: "/",
   cashier: "/pos",
