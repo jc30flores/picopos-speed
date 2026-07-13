@@ -1,4 +1,6 @@
 from django.db import models, transaction
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from pathlib import Path
 from django.db.models import Case, IntegerField, Value, When
 from PIL import Image, UnidentifiedImageError
@@ -11,7 +13,7 @@ from rest_framework.views import APIView
 
 from apps.core.models import ActivityCatalog, Branch, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig, TicketSettings
 from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
-from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, is_admin, is_superadmin
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, can_view_dte, is_admin, is_superadmin
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
 from apps.dte.runtime import DISABLED_MESSAGE, get_dte_runtime_status
 
@@ -229,6 +231,22 @@ class FeatureFlagListView(generics.ListAPIView):
     serializer_class = FeatureFlagSerializer
     permission_classes = [IsAuthenticatedAndActive]
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        dte_settings = DTEGlobalSettings.objects.filter(pk=1).first()
+        dte_enabled = bool(dte_settings and dte_settings.hacienda_enabled)
+        rows = list(response.data)
+        rows.extend(
+            [
+                {"id": None, "key": "dte_enabled", "label": "DTE activo", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
+                {"id": None, "key": "dte_visible", "label": "DTE visible", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
+                {"id": None, "key": "can_view_dte", "label": "Puede ver DTE", "description": "", "is_enabled": can_view_dte(request.user), "enabled": can_view_dte(request.user), "metadata": {}},
+                {"id": None, "key": "can_manage_dte", "label": "Puede administrar DTE", "description": "", "is_enabled": is_superadmin(request.user), "enabled": is_superadmin(request.user), "metadata": {}},
+            ]
+        )
+        response.data = rows
+        return response
+
 
 class FeatureFlagDetailView(generics.RetrieveUpdateAPIView):
     queryset = FeatureFlag.objects.all()
@@ -416,7 +434,20 @@ class AppearanceSettingsView(APIView):
         if request.data.get("restore_default"):
             tokens = build_color_tokens(SystemAppearanceSettings.DEFAULT_PRIMARY)
         else:
-            tokens = build_color_tokens(str(request.data.get("primary_color") or "").strip())
+            try:
+                tokens = build_color_tokens(str(request.data.get("primary_color") or "").strip())
+            except Exception as exc:
+                detail = getattr(exc, "detail", None)
+                if isinstance(detail, dict):
+                    return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {
+                        "error": "invalid_color",
+                        "message": "El color seleccionado no se pudo validar.",
+                        "suggestions": ["#2563EB", "#0F766E", "#374151"],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         previous = settings.primary_color
         for field, value in tokens.items():
             setattr(settings, field, value)
@@ -432,12 +463,92 @@ def get_dte_settings() -> DTEGlobalSettings:
     return settings
 
 
+DTE_COUNTER_TYPES = ["CF_01", "CCF_03", "NC_05", "ND_06", "SE_14"]
+
+
+def _get_primary_branch() -> Branch:
+    branch = Branch.objects.filter(is_active=True).order_by("id").first()
+    if branch:
+        return branch
+    return Branch.objects.create(name="Sucursal principal", code="PRINCIPAL", is_active=True)
+
+
+def _get_branch_config(branch: Branch):
+    from apps.dte.models import DTEBranchConfig
+
+    config, _ = DTEBranchConfig.objects.get_or_create(branch=branch)
+    return config
+
+
+def _safe_str(data, key: str) -> str:
+    return str((data or {}).get(key) or "").strip()
+
+
+def _sync_dte_branch_config(config, issuer: dict, branch_payload: dict, branch: Branch) -> list[str]:
+    changed = []
+    mapping = {
+        "emisor_nombre": _safe_str(issuer, "legal_name") or _safe_str(issuer, "nombre") or _safe_str(issuer, "razon_social"),
+        "emisor_nombre_comercial": _safe_str(issuer, "commercial_name") or _safe_str(issuer, "nombre_comercial"),
+        "emisor_nit": _safe_str(issuer, "nit"),
+        "emisor_nrc": _safe_str(issuer, "nrc"),
+        "cod_actividad": _safe_str(issuer, "activity_code") or _safe_str(issuer, "cod_actividad"),
+        "desc_actividad": _safe_str(issuer, "activity_description") or _safe_str(issuer, "desc_actividad"),
+        "tipo_establecimiento": _safe_str(branch_payload, "establishment_type") or _safe_str(issuer, "establishment_type") or _safe_str(issuer, "tipo_establecimiento"),
+        "direccion_departamento": _safe_str(issuer, "department") or _safe_str(issuer, "departamento"),
+        "direccion_municipio": _safe_str(issuer, "municipality") or _safe_str(issuer, "municipio"),
+        "direccion_complemento": _safe_str(branch_payload, "branch_address") or _safe_str(issuer, "address") or _safe_str(issuer, "direccion"),
+        "telefono": _safe_str(issuer, "phone") or _safe_str(issuer, "telefono"),
+        "correo": _safe_str(issuer, "email") or _safe_str(issuer, "correo"),
+        "cod_estable_mh": _safe_str(branch_payload, "establishment_code_mh") or _safe_str(branch_payload, "codEstableMH"),
+        "cod_estable": _safe_str(branch_payload, "establishment_code") or _safe_str(branch_payload, "codEstable"),
+        "cod_punto_venta_mh": _safe_str(branch_payload, "pos_code_mh") or _safe_str(branch_payload, "codPuntoVentaMH"),
+        "cod_punto_venta": _safe_str(branch_payload, "pos_code") or _safe_str(branch_payload, "codPuntoVenta"),
+    }
+    for field, value in mapping.items():
+        if value and getattr(config, field) != value:
+            setattr(config, field, value)
+            changed.append(field)
+    branch_name = _safe_str(branch_payload, "name") or _safe_str(branch_payload, "branch_name")
+    if branch_name and branch.name != branch_name:
+        branch.name = branch_name
+        branch.save(update_fields=["name"])
+    branch_address = _safe_str(branch_payload, "address")
+    if branch_address and branch.address != branch_address:
+        branch.address = branch_address
+        branch.save(update_fields=["address"])
+    if changed:
+        config.save(update_fields=[*changed, "updated_at"])
+    return changed
+
+
+def _initialize_correlatives(branch: Branch, settings: DTEGlobalSettings) -> int:
+    from apps.dte.models import DTEControlCounter
+
+    config = _get_branch_config(branch)
+    est = (config.cod_estable or config.cod_estable_mh or "X001")[:4].upper()
+    pos = (config.cod_punto_venta or config.cod_punto_venta_mh or "X001")[:4].upper()
+    year = timezone.localdate().year
+    created = 0
+    for dte_type in DTE_COUNTER_TYPES:
+        _row, was_created = DTEControlCounter.objects.get_or_create(
+            branch=branch,
+            ambiente=settings.ambiente,
+            dte_type=dte_type,
+            year=year,
+            establishment_code=est,
+            pos_code=pos,
+            defaults={"last_number": 0},
+        )
+        created += int(was_created)
+    return created
+
+
 class DTEGlobalSettingsView(APIView):
     permission_classes = [IsAuthenticatedAndActive]
 
     def get(self, request):
         settings = get_dte_settings()
-        data = DTEGlobalSettingsSerializer(settings).data
+        data = DTEGlobalSettingsSerializer(settings, context={"request": request}).data
         runtime = get_dte_runtime_status()
         data["can_manage_technical"] = is_superadmin(request.user)
         data["config_ready"] = runtime.config_ready
@@ -449,6 +560,8 @@ class DTEGlobalSettingsView(APIView):
         if not is_superadmin(request.user):
             return Response({"detail": "Solo superadmin puede cambiar configuración técnica DTE."}, status=status.HTTP_403_FORBIDDEN)
         settings = DTEGlobalSettings.objects.select_for_update().get_or_create(pk=1)[0]
+        branch = _get_primary_branch()
+        branch_config = _get_branch_config(branch)
         previous = {
             "hacienda_enabled": settings.hacienda_enabled,
             "ambiente": settings.ambiente,
@@ -479,9 +592,25 @@ class DTEGlobalSettingsView(APIView):
             settings.timeout_seconds = max(1, min(120, int(request.data.get("timeout_seconds") or 15)))
         if "retry_count" in request.data:
             settings.retry_count = max(0, min(10, int(request.data.get("retry_count") or 0)))
+        api_payload = request.data.get("api") if isinstance(request.data.get("api"), dict) else {}
+        if api_payload:
+            if "base_url" in api_payload:
+                settings.base_url = _safe_str(api_payload, "base_url")
+            if "api_token" in api_payload and _safe_str(api_payload, "api_token"):
+                settings.api_token = _safe_str(api_payload, "api_token")
+            if "timeout_seconds" in api_payload:
+                settings.timeout_seconds = max(1, min(120, int(api_payload.get("timeout_seconds") or 15)))
+            if "retry_count" in api_payload:
+                settings.retry_count = max(0, min(10, int(api_payload.get("retry_count") or 0)))
+        issuer_payload = request.data.get("issuer") if isinstance(request.data.get("issuer"), dict) else {}
+        branch_payload = request.data.get("branch") if isinstance(request.data.get("branch"), dict) else {}
+        if issuer_payload or branch_payload:
+            _sync_dte_branch_config(branch_config, issuer_payload, branch_payload, branch)
+        if request.data.get("initialize_correlatives"):
+            _initialize_correlatives(branch, settings)
         if not settings.hacienda_enabled:
             settings.status = DTEGlobalSettings.STATUS_DISABLED
-        elif not settings.base_url or not settings.api_token:
+        elif not settings.base_url or not settings.api_token or DTEGlobalSettingsSerializer(settings, context={"request": request}).get_pending_fields(settings):
             settings.status = DTEGlobalSettings.STATUS_PENDING
         else:
             settings.status = DTEGlobalSettings.STATUS_CONFIGURED
@@ -500,11 +629,80 @@ class DTEGlobalSettingsView(APIView):
             {"previous": previous, "new": {**previous, "hacienda_enabled": settings.hacienda_enabled, "ambiente": settings.ambiente, "base_url": settings.base_url, "api_token": "***" if settings.api_token else ""}},
         )
         runtime = get_dte_runtime_status()
-        data = DTEGlobalSettingsSerializer(settings).data
+        data = DTEGlobalSettingsSerializer(settings, context={"request": request}).data
         data["can_manage_technical"] = is_superadmin(request.user)
         data["config_ready"] = runtime.config_ready
         data["message"] = runtime.message
         return Response(data)
+
+
+class DTECorrelativesView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        settings = get_dte_settings()
+        data = DTEGlobalSettingsSerializer(settings, context={"request": request}).data
+        return Response({"correlatives": data["correlatives"], "permissions": data["permissions"]})
+
+    @transaction.atomic
+    def post(self, request):
+        if not is_superadmin(request.user):
+            return Response({"detail": "Solo superadmin puede inicializar correlativos."}, status=status.HTTP_403_FORBIDDEN)
+        settings = get_dte_settings()
+        created = _initialize_correlatives(_get_primary_branch(), settings)
+        from apps.core.audit import log_audit
+
+        log_audit(request, "dte.correlatives.initialize", "DTEControlCounter", "bulk", {"created": created})
+        data = DTEGlobalSettingsSerializer(settings, context={"request": request}).data
+        return Response({"created": created, "correlatives": data["correlatives"]})
+
+
+class DTECorrelativeDetailView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    @transaction.atomic
+    def patch(self, request, pk: int):
+        from apps.dte.models import DTEControlCounter, DTERecord
+
+        reason = _safe_str(request.data, "reason") or _safe_str(request.data, "motivo")
+        if not reason:
+            return Response({"reason": "El motivo es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            next_last = int(request.data.get("last_number"))
+        except (TypeError, ValueError):
+            return Response({"last_number": "Número inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        counter = get_object_or_404(DTEControlCounter.objects.select_for_update(), pk=pk)
+        if next_last < counter.last_number and not request.data.get("confirm_decrease"):
+            return Response(
+                {
+                    "error": "decrease_requires_confirmation",
+                    "message": "Cambiar correlativos hacia abajo puede duplicar numeración fiscal. Confirma explícitamente para continuar.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        prefix = f"DTE-{counter.dte_type.split('_')[-1]}-{counter.establishment_code}{counter.pos_code}-"
+        if DTERecord.objects.filter(control_number__startswith=prefix, control_number__endswith=f"{next_last:015d}").exists():
+            return Response({"last_number": "Ya existe un DTE con ese número de control."}, status=status.HTTP_400_BAD_REQUEST)
+        previous = counter.last_number
+        counter.last_number = next_last
+        counter.save(update_fields=["last_number", "updated_at"])
+        from apps.core.audit import log_audit
+
+        log_audit(request, "dte.correlative.update", "DTEControlCounter", counter.id, {"previous": previous, "new": next_last, "reason": reason})
+        settings = get_dte_settings()
+        data = DTEGlobalSettingsSerializer(settings, context={"request": request}).data
+        return Response({"correlative": next((row for row in data["correlatives"] if row["id"] == counter.id), None), "correlatives": data["correlatives"]})
+
+
+class DTETestConnectionView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        settings = get_dte_settings()
+        missing = DTEGlobalSettingsSerializer(settings, context={"request": request}).get_pending_fields(settings)
+        if missing:
+            return Response({"ok": False, "status": "pending", "missing": missing, "message": "Configuración incompleta. No se contactó Hacienda."}, status=status.HTTP_200_OK)
+        return Response({"ok": True, "status": "configured", "message": "Configuración mínima completa. Prueba externa no ejecutada desde este entorno."})
 
 
 class BranchListView(generics.ListAPIView):

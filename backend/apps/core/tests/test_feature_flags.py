@@ -89,8 +89,14 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(patch.data["primary_color"], "#2563EB")
         self.assertIn("--color-primary", patch.data["css_variables"])
 
-        invalid = self.client.patch("/api/settings/appearance/", {"primary_color": "#FFFFFF"}, format="json")
+        neutral = self.client.patch("/api/settings/appearance/", {"primary_color": "#374151"}, format="json")
+        self.assertEqual(neutral.status_code, 200)
+        self.assertIn("--color-primary-on-light", neutral.data["css_variables"])
+
+        invalid = self.client.patch("/api/settings/appearance/", {"primary_color": "blue"}, format="json")
         self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.data["error"], "invalid_color_format")
+        self.assertIn("suggestions", invalid.data)
 
     def test_settings_dte_get_and_superadmin_only_technical_patch(self):
         response = self.client.get("/api/settings/dte/")
@@ -111,4 +117,7 @@ class FeatureFlagApiTests(TestCase):
         )
         self.assertEqual(super_patch.status_code, 200)
         self.assertEqual(super_patch.data["base_url"], "https://example.test/api")
+        self.assertIn("issuer", super_patch.data)
+        self.assertIn("branch", super_patch.data)
+        self.assertIn("permissions", super_patch.data)
         self.assertNotIn("secret-token", str(super_patch.data))

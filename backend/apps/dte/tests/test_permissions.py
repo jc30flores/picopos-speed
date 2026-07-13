@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.core.models import Branch, ServiceType
+from apps.core.models import Branch, DTEGlobalSettings, ServiceType
 from apps.dte.models import DTERecord
 from apps.orders.models import Order
 from apps.users.models import UserProfile
@@ -16,6 +16,7 @@ class DTEPermissionsTests(TestCase):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(username="cash", password="pw")
         UserProfile.objects.create(user=self.user, role="cashier", is_active=True)
+        DTEGlobalSettings.objects.update_or_create(pk=1, defaults={"hacienda_enabled": True, "status": DTEGlobalSettings.STATUS_CONFIGURED})
 
         branch = Branch.objects.create(name="Main", code="MAIN")
         service_type = ServiceType.objects.create(key="dine-in", label="En local")
@@ -46,6 +47,15 @@ class DTEPermissionsTests(TestCase):
         self.client.force_authenticate(self.user)
         res = self.client.get('/api/dte/issued/')
         self.assertEqual(res.status_code, 200)
+
+    def test_superadmin_can_list_when_dte_disabled(self):
+        superuser = get_user_model().objects.create_user(username="super_dte", password="pw", is_superuser=True)
+        UserProfile.objects.create(user=superuser, role="superadmin", is_active=True)
+        DTEGlobalSettings.objects.update_or_create(pk=1, defaults={"hacienda_enabled": False, "status": DTEGlobalSettings.STATUS_DISABLED})
+        self.client.force_authenticate(superuser)
+        res = self.client.get("/api/dte/issued/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], "disabled")
 
     def test_send_email_endpoint_exists(self):
         self.client.force_authenticate(self.user)

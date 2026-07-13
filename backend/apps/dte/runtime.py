@@ -34,14 +34,15 @@ def get_dte_runtime_status() -> DTERuntimeStatus:
 
     base_url = (config.base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip()
     token = (config.api_token or getattr(settings, "DTE_API_TOKEN", "") or "").strip()
-    config_ready = bool(base_url and token)
+    issuer_ready = _issuer_config_ready()
+    config_ready = bool(base_url and token and issuer_ready)
     status = DTEGlobalSettings.STATUS_CONFIGURED if config_ready else DTEGlobalSettings.STATUS_PENDING
     return DTERuntimeStatus(
         enabled=True,
         config_ready=config_ready,
         config_status=status,
         environment="production" if config.ambiente == DTEGlobalSettings.AMBIENTE_PROD else "test",
-        message="Facturación electrónica activa." if config_ready else "Configuración DTE pendiente. No se contactará Hacienda hasta completar URL y token.",
+        message="Facturación electrónica activa." if config_ready else "Configuración DTE pendiente. No se contactará Hacienda hasta completar API, emisor, sucursal y correlativos.",
         base_url=base_url,
     )
 
@@ -53,3 +54,37 @@ def is_dte_enabled() -> bool:
 def is_dte_config_ready() -> bool:
     status = get_dte_runtime_status()
     return bool(status.enabled and status.config_ready)
+
+
+def _issuer_config_ready() -> bool:
+    try:
+        from apps.core.models import Branch
+        from apps.core.models import DTEGlobalSettings
+        from apps.dte.models import DTEBranchConfig, DTEControlCounter
+
+        branch = Branch.objects.filter(is_active=True).order_by("id").first()
+        cfg = DTEBranchConfig.objects.filter(branch=branch, is_active=True).first() if branch else None
+        if not cfg:
+            return False
+        required = [
+            cfg.emisor_nit,
+            cfg.emisor_nrc,
+            cfg.emisor_nombre,
+            cfg.cod_actividad,
+            cfg.desc_actividad,
+            cfg.tipo_establecimiento,
+            cfg.cod_estable,
+            cfg.cod_punto_venta,
+            cfg.direccion_departamento,
+            cfg.direccion_municipio,
+            cfg.direccion_complemento,
+            cfg.telefono,
+            cfg.correo,
+        ]
+        if not all(str(value or "").strip() for value in required):
+            return False
+        settings_row = DTEGlobalSettings.objects.filter(pk=1).first()
+        ambiente = settings_row.ambiente if settings_row else DTEGlobalSettings.AMBIENTE_TEST
+        return DTEControlCounter.objects.filter(branch=branch, ambiente=ambiente).exists()
+    except Exception:
+        return False

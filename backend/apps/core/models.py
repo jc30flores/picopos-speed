@@ -112,6 +112,8 @@ class SystemAppearanceSettings(models.Model):
     color_primary_border = models.CharField(max_length=7, default="#7EC8A3")
     color_primary_text = models.CharField(max_length=7, default="#0D3B26")
     color_primary_contrast = models.CharField(max_length=7, default="#FFFFFF")
+    color_primary_on_light = models.CharField(max_length=7, default=DEFAULT_PRIMARY)
+    color_primary_on_dark = models.CharField(max_length=7, default=DEFAULT_PRIMARY)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

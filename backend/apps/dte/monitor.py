@@ -195,10 +195,22 @@ class DTEHealthMonitor:
         first = True
         previous_state = self.get_cached_snapshot().state
         retry_backoff = 1
+        last_disabled_log_ts = 0.0
+        disabled_sleep = int(getattr(settings, "DTE_DISABLED_WORKER_SLEEP_SECONDS", 300) or 300)
+        disabled_log_every = int(getattr(settings, "DTE_DISABLED_LOG_EVERY_SECONDS", 600) or 600)
         while True:
             try:
                 snapshot = self.check_once(force_log=first)
                 first = False
+                expected_offline = snapshot.health_body in {"DTE disabled", "DTE config pending"}
+                if snapshot.state == STATE_DOWN and expected_offline:
+                    now_ts = time.time()
+                    if now_ts - last_disabled_log_ts >= disabled_log_every:
+                        DTE_LOGGER.info("[DTE MONITOR] sleeping reason=%s", snapshot.health_body)
+                        last_disabled_log_ts = now_ts
+                    time.sleep(disabled_sleep)
+                    previous_state = snapshot.state
+                    continue
                 if snapshot.state == STATE_DOWN:
                     DTE_LOGGER.info("[DTE MONITOR] STATE=DOWN next_retry_in=%ss", retry_backoff)
                 retry_backoff = 1 if snapshot.state == STATE_UP else min(retry_backoff * 2, self.max_backoff)

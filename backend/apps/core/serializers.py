@@ -110,19 +110,23 @@ def _contrast(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
 
 def build_color_tokens(primary: str) -> dict[str, str]:
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", primary or ""):
-        raise serializers.ValidationError({"primary_color": "Color HEX inválido. Usa formato #RRGGBB."})
+        raise serializers.ValidationError(
+            {
+                "error": "invalid_color_format",
+                "message": "Color HEX inválido. Usa formato #RRGGBB.",
+                "suggestions": ["#2563EB", "#0F766E", "#374151"],
+            }
+        )
     rgb = _hex_to_rgb(primary)
     white = (255, 255, 255)
     black = (15, 23, 42)
-    if max(_contrast(rgb, white), _contrast(rgb, black)) < 4.5:
-        raise serializers.ValidationError({"primary_color": "El color no alcanza contraste suficiente para texto."})
-    if _contrast(rgb, (255, 255, 255)) < 2.2 or _contrast(rgb, (17, 24, 39)) < 2.2:
-        raise serializers.ValidationError({"primary_color": "El color se pierde en modo claro u oscuro. Elige un tono más definido."})
     contrast = "#FFFFFF" if _contrast(rgb, white) >= _contrast(rgb, black) else "#0F172A"
     hover = _mix(rgb, black if _relative_luminance(rgb) > 0.45 else white, 0.18)
     soft = _mix(rgb, white, 0.82)
     border = _mix(rgb, white, 0.45)
     text = _mix(rgb, black, 0.5) if _relative_luminance(rgb) > 0.45 else _mix(rgb, white, 0.45)
+    on_light = _mix(rgb, black, 0.35) if _contrast(rgb, white) < 3 else rgb
+    on_dark = _mix(rgb, white, 0.28) if _contrast(rgb, (17, 24, 39)) < 3 else rgb
     return {
         "primary_color": primary.upper(),
         "color_primary": primary.upper(),
@@ -131,6 +135,8 @@ def build_color_tokens(primary: str) -> dict[str, str]:
         "color_primary_border": _rgb_to_hex(border),
         "color_primary_text": _rgb_to_hex(text),
         "color_primary_contrast": contrast,
+        "color_primary_on_light": _rgb_to_hex(on_light),
+        "color_primary_on_dark": _rgb_to_hex(on_dark),
     }
 
 
@@ -166,6 +172,8 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "--color-primary-border": obj.color_primary_border,
             "--color-primary-text": obj.color_primary_text,
             "--color-primary-contrast": obj.color_primary_contrast,
+            "--color-primary-on-light": getattr(obj, "color_primary_on_light", obj.color_primary),
+            "--color-primary-on-dark": getattr(obj, "color_primary_on_dark", obj.color_primary),
         }
 
     def get_theme_mode(self, obj: SystemAppearanceSettings) -> str:
@@ -175,7 +183,7 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
         return True
 
     def get_palette(self, obj: SystemAppearanceSettings) -> list[str]:
-        return ["#1F7A4D", "#2563EB", "#0F766E", "#B45309", "#BE123C", "#6D28D9", "#374151"]
+        return ["#1F7A4D", "#2563EB", "#0F766E", "#B45309", "#BE123C", "#6D28D9", "#374151", "#B7791F"]
 
 
 class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
@@ -185,6 +193,11 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
     config_status = serializers.CharField(source="status", read_only=True)
     single_branch = serializers.SerializerMethodField()
     correlatives = serializers.SerializerMethodField()
+    api = serializers.SerializerMethodField()
+    issuer = serializers.SerializerMethodField()
+    branch = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
+    pending_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = DTEGlobalSettings
@@ -201,6 +214,11 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
             "config_status",
             "single_branch",
             "correlatives",
+            "api",
+            "issuer",
+            "branch",
+            "permissions",
+            "pending_fields",
             "last_connection_test_at",
             "last_error_sanitized",
             "updated_at",
@@ -228,6 +246,105 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
             "address": getattr(config, "direccion_complemento", "") or getattr(branch, "address", "") or "",
         }
 
+    def _branch_and_config(self):
+        from apps.core.models import Branch
+        from apps.dte.models import DTEBranchConfig
+
+        branch = Branch.objects.filter(is_active=True).order_by("id").first()
+        config = DTEBranchConfig.objects.filter(branch=branch).first() if branch else None
+        return branch, config
+
+    def get_api(self, obj: DTEGlobalSettings) -> dict:
+        return {
+            "enabled": obj.hacienda_enabled,
+            "environment": self.get_environment(obj),
+            "ambiente": obj.ambiente,
+            "base_url": obj.base_url,
+            "api_token_masked": self.get_api_token_masked(obj),
+            "api_token_configured": bool(obj.api_token),
+            "timeout_seconds": obj.timeout_seconds,
+            "retry_count": obj.retry_count,
+            "last_connection_test_at": obj.last_connection_test_at,
+            "last_error_sanitized": obj.last_error_sanitized,
+        }
+
+    def get_issuer(self, obj: DTEGlobalSettings) -> dict:
+        _branch, config = self._branch_and_config()
+        return {
+            "legal_name": getattr(config, "emisor_nombre", "") or "",
+            "commercial_name": getattr(config, "emisor_nombre_comercial", "") or "",
+            "document_type": "NIT",
+            "nit": getattr(config, "emisor_nit", "") or "",
+            "dui": "",
+            "nrc": getattr(config, "emisor_nrc", "") or "",
+            "activity_code": getattr(config, "cod_actividad", "") or "",
+            "activity_description": getattr(config, "desc_actividad", "") or "",
+            "establishment_type": getattr(config, "tipo_establecimiento", "") or "",
+            "department": getattr(config, "direccion_departamento", "") or "",
+            "municipality": getattr(config, "direccion_municipio", "") or "",
+            "address": getattr(config, "direccion_complemento", "") or "",
+            "phone": getattr(config, "telefono", "") or "",
+            "email": getattr(config, "correo", "") or "",
+            "updated_at": getattr(config, "updated_at", None),
+            "validation_status": "configured" if config else "pending",
+        }
+
+    def get_branch(self, obj: DTEGlobalSettings) -> dict:
+        branch, config = self._branch_and_config()
+        return {
+            "id": branch.id if branch else None,
+            "name": branch.name if branch else "",
+            "code": branch.code if branch else "",
+            "address": getattr(branch, "address", "") or "",
+            "establishment_code_mh": getattr(config, "cod_estable_mh", "") or "",
+            "establishment_code": getattr(config, "cod_estable", "") or "",
+            "pos_code_mh": getattr(config, "cod_punto_venta_mh", "") or "",
+            "pos_code": getattr(config, "cod_punto_venta", "") or "",
+            "establishment_type": getattr(config, "tipo_establecimiento", "") or "",
+            "branch_address": getattr(config, "direccion_complemento", "") or getattr(branch, "address", "") or "",
+            "phone": getattr(config, "telefono", "") or "",
+            "email": getattr(config, "correo", "") or "",
+            "active": bool(branch and branch.is_active and (getattr(config, "is_active", True))),
+        }
+
+    def get_permissions(self, obj: DTEGlobalSettings) -> dict:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        from apps.core.permissions import can_manage_correlatives, can_manage_dte_settings, is_admin, is_superadmin
+
+        return {
+            "can_view_basic": bool(user and user.is_authenticated and is_admin(user)),
+            "can_edit_technical": bool(user and user.is_authenticated and can_manage_dte_settings(user)),
+            "can_edit_correlatives": bool(user and user.is_authenticated and can_manage_correlatives(user)),
+            "is_superadmin": bool(user and user.is_authenticated and is_superadmin(user)),
+        }
+
+    def get_pending_fields(self, obj: DTEGlobalSettings) -> list[str]:
+        if not obj.hacienda_enabled:
+            return []
+        issuer = self.get_issuer(obj)
+        branch = self.get_branch(obj)
+        required = {
+            "URL API": obj.base_url,
+            "API token": obj.api_token,
+            "razón social": issuer["legal_name"],
+            "NIT": issuer["nit"],
+            "NRC": issuer["nrc"],
+            "código de actividad": issuer["activity_code"],
+            "actividad económica": issuer["activity_description"],
+            "departamento": issuer["department"],
+            "municipio": issuer["municipality"],
+            "dirección": issuer["address"],
+            "teléfono": issuer["phone"],
+            "correo": issuer["email"],
+            "código establecimiento": branch["establishment_code"],
+            "código punto de venta": branch["pos_code"],
+        }
+        pending = [label for label, value in required.items() if not str(value or "").strip()]
+        if not self.get_correlatives(obj):
+            pending.append("correlativos")
+        return pending
+
     def get_correlatives(self, obj: DTEGlobalSettings) -> list[dict]:
         from apps.dte.models import DTEControlCounter
 
@@ -236,8 +353,17 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
             {
                 "id": row.id,
                 "tipo_dte": row.dte_type,
+                "label": {
+                    "CF_01": "Consumidor Final / 01",
+                    "CCF_03": "Crédito Fiscal / 03",
+                    "NC_05": "Nota de Crédito / 05",
+                    "ND_06": "Nota de Débito / 06",
+                    "SE_14": "Sujeto Excluido / 14",
+                }.get(row.dte_type, row.dte_type),
+                "ambiente": row.ambiente,
                 "environment": "production" if row.ambiente == "01" else "test",
                 "branch_name": row.branch.name,
+                "year": row.year,
                 "establishment_code": row.establishment_code,
                 "pos_code": row.pos_code,
                 "last_number": row.last_number,

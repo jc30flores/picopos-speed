@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 from apps.core.audit import log_audit
 from apps.core.models import DTEGlobalSettings
 from apps.dte.runtime import DISABLED_MESSAGE, is_dte_enabled
-from apps.core.permissions import _get_profile
+from apps.core.permissions import _get_profile, can_view_dte, is_superadmin
 from apps.core.timezone_utils import parse_business_date_range
 from apps.dte.models import CreditNote, DTEInvalidation, DTERecord
 from apps.dte.serializers import (
@@ -52,14 +52,13 @@ def _extract_delivery_phone(request) -> str | None:
 
 class IsDTECashierOrAbove(BasePermission):
     def has_permission(self, request, view):
-        profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"admin", "manager", "cashier"})
+        return can_view_dte(request.user)
 
 
 class IsDTEAccountantOrAdmin(BasePermission):
     def has_permission(self, request, view):
         profile = _get_profile(request.user)
-        return bool(profile and profile.is_active and profile.role in {"admin"})
+        return bool(is_superadmin(request.user) or (profile and profile.is_active and profile.role in {"admin", "accountant"}))
 
 
 class DTEIssuedListView(generics.ListAPIView):
@@ -105,6 +104,20 @@ class DTEIssuedListView(generics.ListAPIView):
         return qs.order_by("-created_at")
 
     def list(self, request, *args, **kwargs):
+        if not _dte_enabled():
+            if is_superadmin(request.user):
+                return Response(
+                    {
+                        "status": "disabled",
+                        "message": DISABLED_MESSAGE,
+                        "count": 0,
+                        "page": 1,
+                        "page_size": int(request.query_params.get("page_size", 20) or 20),
+                        "results": [],
+                        "total_amount_sum": "0",
+                    }
+                )
+            return _dte_disabled_response()
         queryset = self.get_queryset()
         count = queryset.count()
         total_amount_sum = queryset.aggregate(total=Sum("total_amount")).get("total") or 0

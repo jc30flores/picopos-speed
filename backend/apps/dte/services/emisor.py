@@ -87,8 +87,8 @@ def get_emisor_config(branch=None) -> dict[str, Any]:
     return {
         "nit": get_emisor_nit(branch_obj),
         "nrc": _setting("DTE_EMISOR_NRC"),
-        "nombre": _setting("DTE_EMISOR_NOMBRE") or _setting("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
-        "nombreComercial": _setting("DTE_EMISOR_NOMBRE_COMERCIAL") or _setting("DTE_NOMBRE_COMERCIAL") or "Pico de Gallo",
+        "nombre": _setting("DTE_EMISOR_NOMBRE") or _setting("DTE_NOMBRE_COMERCIAL") or "GastroPOSV",
+        "nombreComercial": _setting("DTE_EMISOR_NOMBRE_COMERCIAL") or _setting("DTE_NOMBRE_COMERCIAL") or "GastroPOSV",
         "codActividad": _setting("DTE_EMISOR_COD_ACTIVIDAD"),
         "descActividad": _setting("DTE_EMISOR_DESC_ACTIVIDAD"),
         "tipoEstablecimiento": _setting("DTE_EMISOR_TIPO_ESTABLECIMIENTO"),

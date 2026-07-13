@@ -30,6 +30,7 @@ _OUTBOX_WORKER_LOCK = threading.Lock()
 _LAST_DB_DOWN_LOG_TS = 0.0
 _LAST_HTTP_DOWN_LOG_TS = 0.0
 _LAST_IDLE_LOG_TS = 0.0
+_LAST_DISABLED_LOG_TS = 0.0
 
 CIRCUIT_FAIL_COUNT = "dte:circuit:fail_count"
 CIRCUIT_OPEN_UNTIL = "dte:circuit:open_until"
@@ -591,10 +592,13 @@ def _resend_existing_outbox(outbox: DTEOutbox) -> DTEOutbox:
 
 
 def process_pending_outbox(limit: int = 50) -> int:
-    global _LAST_IDLE_LOG_TS
+    global _LAST_IDLE_LOG_TS, _LAST_DISABLED_LOG_TS
     runtime = get_dte_runtime_status()
     if not runtime.enabled:
-        DTE_LOGGER.debug("[DTE OUTBOX] process skipped reason=disabled")
+        now_ts = time.time()
+        if now_ts - _LAST_DISABLED_LOG_TS >= int(getattr(settings, "DTE_DISABLED_LOG_EVERY_SECONDS", 600) or 600):
+            DTE_LOGGER.info("DTE_WORKER_DISABLED sleeping")
+            _LAST_DISABLED_LOG_TS = now_ts
         return 0
     if not runtime.config_ready:
         DTE_LOGGER.debug("[DTE OUTBOX] process skipped reason=config_pending")
@@ -671,11 +675,13 @@ def process_pending_outbox(limit: int = 50) -> int:
 
 def _outbox_worker_loop() -> None:
     interval = float(getattr(settings, "DTE_OUTBOX_INTERVAL", 2) or 2)
+    disabled_interval = float(getattr(settings, "DTE_DISABLED_WORKER_SLEEP_SECONDS", 300) or 300)
     batch_size = int(getattr(settings, "DTE_OUTBOX_CONCURRENCY", 1) or 1)
     db_backoff_seconds = 1.0
     while True:
         close_old_connections()
         try:
+            runtime = get_dte_runtime_status()
             process_pending_outbox(limit=batch_size)
             db_backoff_seconds = 1.0
         except DjangoOperationalError as exc:
@@ -696,7 +702,7 @@ def _outbox_worker_loop() -> None:
             continue
         except Exception:  # noqa: BLE001
             _log_throttled("warning", "db", "[DTE OUTBOX] worker loop error (summarized)")
-        time.sleep(interval)
+        time.sleep(disabled_interval if not runtime.enabled else interval)
 
 
 def start_outbox_worker() -> bool:
