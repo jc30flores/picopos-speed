@@ -2,114 +2,125 @@
 
 ## Alcance
 
-Esta fase corrige permisos de Configuracion > Funciones y avanza el modo restaurante para que el mapa de mesas sea la vista principal cuando la instalacion opera en `table_service`.
+Esta fase deja el POS de `table_service` como una superficie operativa de salon. El editor y la configuracion de mesas quedan fuera del POS; `/pos` se enfoca en mapa, estados y acciones por mesa.
 
-## Permisos de Funciones
+## UX full-screen
 
-- `superadmin` ve y modifica todas las secciones de Funciones.
-- `admin` ve solo:
-  - Modo de Operacion
-  - Inventario
-  - Seguridad / Caja
-  - Control Rapido
-  - Personalizacion visual
-- `admin` no recibe ni puede modificar claves sensibles como POS, Pantallas, Reportes, Clientes o Hacienda/DTE.
-- Hacienda / DTE sigue siendo solo para `superadmin`.
-- El backend filtra el JSON por rol y devuelve `403` si un admin intenta modificar una clave no permitida.
-
-## Mapa de mesas
-
-- En modo mesas, `/pos` muestra un mapa full-screen con barra superior compacta.
-- Se removieron los paneles laterales fijos de operacion.
-- El mapa permite filtrar por area y estado:
-  - Todas
-  - Libres
-  - Ocupadas
-  - En cocina
-- Las mesas muestran estado, capacidad/personas e indicador de mesa unida.
-- El color activo del tema se usa para bordes y estados visuales.
+- `/pos` en modo mesas renderiza un mapa full-screen oscuro.
+- Fuera del mapa solo queda el boton `Volver al menu principal`, fijo en la esquina superior izquierda.
+- No se muestran `Editor de mesas`, selector de area, `Todas las areas`, filtros por estado ni paneles laterales.
+- Los contadores quedan dentro del mapa, arriba a la derecha:
+  - `Libres: X`
+  - `Ocupadas: X`
+  - `En cocina: X`
+- El mapa usa scroll/pan propio y mantiene fondo oscuro tambien en tema claro.
+- Las mesas usan variables del tema para bordes y resaltados: `--color-primary`, `--color-primary-border`, `--color-primary-surface` y `--color-primary-contrast`.
 
 ## Menu contextual
 
-Al tocar o hacer click derecho sobre una mesa se abre un menu contextual. En desktop aparece cerca del cursor; en pantallas pequenas funciona como bottom sheet.
+Al tocar una mesa se abre un menu contextual. En desktop aparece cerca del cursor; en pantallas pequenas funciona como bottom sheet. Se cierra tocando fuera o con `Esc`.
 
-Acciones disponibles segun estado:
+El menu muestra:
 
-- Mesa libre: Nueva orden.
-- Mesa ocupada: Agregar productos, Ver cuenta, Cobrar, Enviar a cocina, Mover mesa, Unir mesas, Dividir cuenta y Liberar mesa.
-- No se muestra Adjuntar cuenta porque el cobro conjunto real queda pendiente y no debe aparecer como boton roto.
+- nombre de mesa
+- estado: libre, ocupada, en cocina o parcial
+- personas cuando hay sesion
+- total cacheado si existe
+- indicador `Unida` cuando la sesion incluye mas de una mesa
 
-## Nueva orden por personas
+## Acciones por estado
 
-El endpoint `/api/orders/tables/sessions/` acepta:
+Mesa libre:
 
-```json
-{
-  "table_id": 1,
-  "guest_count": 4,
-  "order_mode": "by_guest",
-  "notes": ""
-}
-```
+- Nueva orden
+- Unir mesa
+- Cerrar
 
-Tambien acepta `table_ids`, `guests_count`, `table` y `per_person` por compatibilidad.
+Mesa ocupada o con orden abierta:
 
-La respuesta incluye `session_id`, `order_id`, `guest_count`, `status` y la lista de personas. En modo `per_person`, el POS contextual mantiene una persona activa y asigna productos nuevos con `assignedName`.
+- Agregar productos
+- Ver cuenta
+- Cobrar
+- Enviar cocina
+- Mover mesa
+- Unir mesa
+- Dividir cuenta
+- Liberar mesa cuando no hay saldo pendiente
+- Cerrar
 
-## Correccion del 500
+Mesa unida:
 
-La causa del 500 era doble:
+- Ver cuenta conjunta
+- Agregar productos
+- Cobrar grupo
+- Mover grupo
+- Cerrar
 
-- Se generaba `order_number` con `count() + 1` y `branch_id=1`, causando colisiones con la restriccion unica por sucursal.
-- `TableSessionSerializer` declaraba `tables` pero no lo incluia en `fields`.
+Separar mesa y reservas quedan pendientes porque no hay flujo completo habilitado.
 
-Ahora la numeracion usa `Max(order_number) + 1` dentro de transaccion por sucursal activa y el serializer responde correctamente.
+## Nueva orden y agregar productos
 
-## Mover, unir y liberar
+`Nueva orden` abre el dialogo de personas, modo de orden (`Orden completa` o `Por persona`) y notas. Al iniciar, se crea la sesion y se abre el POS contextual de esa mesa.
 
-Se agregaron endpoints:
+`Agregar productos` reemplaza a `Nueva orden` cuando ya existe una sesion activa. Reutiliza el POS rapido con contexto de mesa, persona activa en modo `per_person`, guardado y regreso al mapa.
 
-- `POST /api/orders/tables/sessions/<id>/move-table/`
-- `POST /api/orders/tables/sessions/<id>/release/`
+## Ver cuenta
 
-`merge` ya existia y se mantiene para unir mesas libres a una sesion activa.
+`Ver cuenta` abre un resumen local con:
 
-Liberar mesa solo se permite si no hay saldo pendiente.
+- mesa
+- personas
+- productos y asignacion por persona cuando existe
+- subtotal
+- descuentos
+- impuestos
+- total
+- pagos realizados
+- saldo pendiente
+- acciones para agregar productos, cobrar, imprimir cuenta local y cerrar
 
-## Cobro y pagos divididos
+No se muestra flujo DTE cuando DTE esta apagado.
 
-Cobrar desde mesa reutiliza el flujo existente del POS rapido con `pending_order_id` y `mode=pay`. Esto conserva:
+## Cobrar
 
-- pago completo
-- pago parcial
-- efectivo con cambio
-- multiples metodos
-- caja sin inflar efectivo con tarjeta/transferencia
+`Cobrar` reutiliza el flujo existente con `pending_order_id` y `mode=pay`, conservando pagos divididos, pagos parciales y pago completo. Al completar el pago, el backend cierra la sesion de mesa para que el mapa la muestre libre. Si el pago queda parcial, la sesion queda `partially_paid`.
 
-DTE apagado sigue operando como POS local y no debe enviar ni contactar Hacienda.
+DTE apagado sigue registrando el pago localmente y no contacta Hacienda.
 
-## Pruebas realizadas
+## Unir mesas
 
-- Smoke de permisos con `APIClient`:
-  - superadmin ve todas las claves de Funciones.
-  - admin ve solo campos permitidos.
-  - admin modificando `pos_enabled` recibe `403`.
-  - admin modificando `operation_mode` recibe `200`.
-  - admin consultando Hacienda/DTE recibe `403`.
-- Smoke de mesas en transaccion con rollback:
-  - crear sesion de mesa con 4 personas devuelve `201`.
-  - mover mesa devuelve `200`.
-  - liberar mesa sin saldo devuelve `200`.
-- `python manage.py check` sin errores.
-- `npm run build` exitoso.
+`Unir mesa` entra en modo seleccion dentro del mapa:
+
+1. muestra `Selecciona la mesa que deseas unir con Mesa X`
+2. resalta destinos validos
+3. pide confirmacion `Unir Mesa X con Mesa Y`
+4. une la mesa a la sesion existente o crea una sesion agrupada si ambas mesas estaban libres
+
+El backend valida mesas inactivas, ids invalidos y conflictos con otra sesion activa para evitar 500.
+
+## Mover mesa
+
+`Mover mesa` entra en modo seleccion:
+
+1. muestra `Selecciona la mesa destino`
+2. resalta mesas libres
+3. pide confirmacion `Mover orden de Mesa X a Mesa Y`
+4. mueve la sesion al destino y actualiza la referencia de la orden
+
+No se pierden productos, personas ni pagos porque se mueve la relacion de mesa, no la orden.
+
+## Liberar mesa
+
+`Liberar mesa` llama al endpoint de release. Si hay saldo pendiente, el backend responde con `No puedes liberar una mesa con saldo pendiente.` y no borra datos de venta. Si la orden ya esta pagada o no hay orden con saldo, la sesion se cierra.
+
+## Enviar cocina
+
+`Enviar cocina` se muestra para sesiones con orden activa. Si la orden esta vacia, el backend responde con mensaje controlado. Si procede, marca la orden como enviada y la mesa pasa a `En cocina`.
 
 ## Pendientes
 
-- Cobro conjunto real entre varias mesas.
-- Historial/auditoria visual de movimientos de mesa.
 - Separar mesas unidas.
+- Reservas/bloqueo de mesa.
+- Selector profesional de areas.
 - Flujo avanzado de cocina por persona.
-- Reservas.
-- Multi-sucursal real.
-- Portal remoto y licencias.
-- Pruebas automatizadas de mesas con base de test con permiso `CREATE DATABASE`.
+- Pruebas E2E de escritorio y touch.
