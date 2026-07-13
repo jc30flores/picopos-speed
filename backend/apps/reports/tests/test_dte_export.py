@@ -123,7 +123,7 @@ class DTEExportTests(TestCase):
             names = sorted(zf.namelist())
             self.assertEqual(names, [f"CF/{accepted.codigo_generacion}.json", f"INVALIDADOS/{invalid.codigo_generacion}.json"])
             payload = json.loads(zf.read(f"CF/{accepted.codigo_generacion}.json"))
-            self.assertEqual(payload["metadata"]["system"], "Pico de Gallo POS")
+            self.assertEqual(payload["metadata"]["system"], "GastroPOSV")
             self.assertEqual(payload["respuesta_hacienda"]["selloRecibido"], SELLO)
             self.assertEqual(payload["respuesta_hacienda"]["fhProcesamiento"], "2026-04-05T12:00:00")
             serialized = json.dumps(payload)

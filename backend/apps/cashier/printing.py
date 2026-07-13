@@ -281,8 +281,8 @@ def build_end_of_day_ticket(session_id: int) -> str:
     addr_1, addr_2, city_dept = _parse_branch_address(branch_profile.get("direccion_complemento", ""))
 
     lines: list[str] = [
-        (branch_profile.get("emisor_nombre", "Pico de Gallo") or "Pico de Gallo").upper(),
-        (branch_profile.get("branch_name", "") or getattr(branch, "name", "PICO DE GALLO POS") or "PICO DE GALLO POS").upper(),
+        (branch_profile.get("emisor_nombre", "GastroPOSV") or "GastroPOSV").upper(),
+        (branch_profile.get("branch_name", "") or getattr(branch, "name", "GASTROPOSV") or "GASTROPOSV").upper(),
         addr_1,
         addr_2,
         city_dept,
@@ -385,7 +385,7 @@ def build_end_of_day_ticket_pdf(session_id: int) -> bytes:
     branch_address = profile.get("direccion_complemento", "").strip()
 
     filename = f"end_of_day_{timezone.localtime(session.closed_at or timezone.now()).strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
-    center_lines = ["Pico de Gallo POS", f"Sucursal {branch_name}"]
+    center_lines = ["GastroPOSV", f"Sucursal {branch_name}"]
     if branch_address:
         center_lines.append(branch_address)
 

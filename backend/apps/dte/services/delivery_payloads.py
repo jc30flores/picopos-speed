@@ -13,7 +13,7 @@ def _company_name_from_env() -> str:
     return (
         str(os.environ.get("COMPANY_NAME") or "").strip()
         or str(os.environ.get("DTE_NOMBRE_COMERCIAL") or "").strip()
-        or "PicoPOS"
+        or "GastroPOSV"
     )
 
 

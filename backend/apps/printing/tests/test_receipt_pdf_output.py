@@ -73,8 +73,8 @@ class ReceiptPdfOutputTests(SimpleTestCase):
             self.skipTest("pypdf no está instalado en el entorno de pruebas")
         result = build_sale_receipt_pdf(
             receipt_context={
-                "restaurant_name": "Pico de Gallo",
-                "tagline": "Pico de Gallo POS",
+                "restaurant_name": "GastroPOSV",
+                "tagline": "GastroPOSV",
                 "address": "San Salvador",
                 "service_type_label": "DINE IN",
                 "cashier_name": "Caja 1",

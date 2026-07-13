@@ -449,7 +449,7 @@ def build_whatsapp_payload(record: DTERecord, destination: WhatsAppDestinationRe
         tipo_dte, doc_type = "14", "SX"
     elif isinstance(dte.get("identificacion"), dict) and dte["identificacion"].get("tipoDte"):
         tipo_dte = str(dte["identificacion"]["tipoDte"])
-    empresa_nombre = base.get("company_name") or resolve_delivery_config().whatsapp_company_name or "PicoPOS"
+    empresa_nombre = base.get("company_name") or resolve_delivery_config().whatsapp_company_name or "GastroPOSV"
     resumen = dte.get("resumen") if isinstance(dte.get("resumen"), dict) else {}
     total = float(resumen.get("totalPagar") or base.get("total") or record.total_amount or 0)
     estado_mh = str(

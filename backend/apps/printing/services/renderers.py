@@ -53,8 +53,8 @@ def _service_type_label(order: Order) -> str:
 def _display_brand_name(value: str) -> str:
     raw = str(value or "").strip()
     if raw.lower().startswith("pico de gallo"):
-        return "Pico de Gallo"
-    return raw or "Pico de Gallo"
+        return "GastroPOSV"
+    return raw or "GastroPOSV"
 
 
 def _format_right_label_value(label: str, value: str) -> str:
@@ -230,8 +230,8 @@ def build_receipt_context(order: Order) -> dict:
     public_url = build_hacienda_consulta_publica_url(fecha_dte, codigo_generacion)
     logo_path = _logo_path()
     return {
-        "restaurant_name": branch_profile.get("branch_name") or (order.branch.name if order.branch else "Pico de Gallo"),
-        "tagline": branch_profile.get("emisor_nombre") or "Pico de Gallo POS",
+        "restaurant_name": branch_profile.get("branch_name") or (order.branch.name if order.branch else "GastroPOSV"),
+        "tagline": branch_profile.get("emisor_nombre_comercial") or branch_profile.get("emisor_nombre") or "GastroPOSV",
         "address": branch_profile.get("direccion_complemento") or "",
         "phone": getattr(order.branch, "phone", "") or "",
         "service_type_label": _service_type_label(order),
@@ -270,7 +270,7 @@ def build_receipt_context(order: Order) -> dict:
 def render_kitchen_ticket(order: Order) -> dict:
     now = timezone.localtime(order.created_at)
     lines: list[str] = []
-    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("GastroPOSV"))
     lines.append(_line(order.branch.name if order.branch else "Sucursal"))
     lines.append(_divider())
     lines.append(_line(f"Orden #{order.order_number}"))
@@ -415,7 +415,7 @@ def render_customer_ticket(order: Order) -> dict:
 def render_closeout_ticket(session, summary: dict) -> dict:
     now = timezone.localtime(session.closed_at or timezone.now())
     lines: list[str] = []
-    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("GastroPOSV"))
     lines.append(_line("Corte de caja"))
     lines.append(_divider())
     lines.append(_line(f"Register: {session.register.name}"))
@@ -464,7 +464,7 @@ def render_refund_ticket(order: Order, refund: Refund) -> dict:
     now = timezone.localtime(refund.created_at)
     total_refund = refund.amount + refund.tip_refunded
     lines: list[str] = []
-    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("GastroPOSV"))
     lines.append(_line("Recibo de reembolso"))
     lines.append(_divider())
     lines.append(_line(f"Orden #{order.order_number}"))
@@ -508,7 +508,7 @@ def render_refund_ticket(order: Order, refund: Refund) -> dict:
 def render_void_ticket(order: Order, reason: str) -> dict:
     now = timezone.localtime(timezone.now())
     lines: list[str] = []
-    lines.append(_line("Pico de Gallo POS"))
+    lines.append(_line("GastroPOSV"))
     lines.append(_line("Orden anulada"))
     lines.append(_divider())
     lines.append(_line(f"Orden #{order.order_number}"))

@@ -327,10 +327,10 @@ def _money(value: Decimal | str | float | int) -> Decimal:
 
 
 def _brand_name(ctx: dict) -> str:
-    raw = str(ctx.get("tagline") or ctx.get("restaurant_name") or "Pico de Gallo").strip()
+    raw = str(ctx.get("tagline") or ctx.get("restaurant_name") or "GastroPOSV").strip()
     if raw.lower().startswith("pico de gallo"):
-        return "Pico de Gallo"
-    return raw or "Pico de Gallo"
+        return "GastroPOSV"
+    return raw or "GastroPOSV"
 
 
 def clean_display(value, fallback: str = "") -> str:
@@ -699,4 +699,3 @@ def build_sale_receipt_pdf(
         len(pdf_bytes),
     )
     return ReceiptPdfResult(pdf_bytes=pdf_bytes, filename=filename)
-

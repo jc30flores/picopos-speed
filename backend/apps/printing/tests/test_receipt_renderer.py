@@ -13,7 +13,7 @@ class ReceiptRendererTests(SimpleTestCase):
 
     def test_render_customer_ticket_does_not_fail_when_logo_missing(self):
         mock_ctx = {
-            "tagline": "Pico de Gallo POS",
+            "tagline": "GastroPOSV",
             "restaurant_name": "Sucursal Centro",
             "address": "San Salvador",
             "phone": "2222-2222",
@@ -49,4 +49,4 @@ class ReceiptRendererTests(SimpleTestCase):
         self.assertNotIn("<<CENTER>>", payload["text"])
         self.assertNotIn("consultaPublica", payload["text"])
         self.assertFalse(payload["meta"]["logo_exists"])
-        self.assertEqual(payload["meta"]["pdf_center_lines"][0], "Pico de Gallo")
+        self.assertEqual(payload["meta"]["pdf_center_lines"][0], "GastroPOSV")

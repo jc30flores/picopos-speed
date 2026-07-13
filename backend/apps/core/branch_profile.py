@@ -51,7 +51,7 @@ def get_branch_profile(branch_id: int | None) -> dict[str, str]:
         or _setting("DTE_EMISOR_NOMBRE_COMERCIAL")
         or _setting("DTE_EMISOR_NOMBRE")
         or _setting("DTE_NOMBRE_COMERCIAL")
-        or "Pico de Gallo"
+        or "GastroPOSV"
     ).strip()
 
     return {
