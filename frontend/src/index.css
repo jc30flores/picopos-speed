@@ -63,8 +63,13 @@ All colors MUST be HSL.
     --color-primary-hover: #17623E;
     --color-primary-soft: #DDF3E8;
     --color-primary-border: #7EC8A3;
+    --color-primary-ring: #7EC8A3;
     --color-primary-text: #0D3B26;
     --color-primary-contrast: #FFFFFF;
+    --color-primary-active: #17623E;
+    --color-primary-muted: #DDF3E8;
+    --color-primary-surface: #DDF3E8;
+    --color-primary-chart: #1F7A4D;
     --gradient-subtle: linear-gradient(180deg, hsl(0, 0%, 100%), hsl(220, 9%, 98%));
 
     /* Shadows */
@@ -172,6 +177,37 @@ All colors MUST be HSL.
 }
 
 @layer utilities {
+  .gp-primary-bg {
+    background-color: var(--color-primary);
+    color: var(--color-primary-contrast);
+  }
+
+  .gp-primary-button {
+    background-color: var(--color-primary);
+    color: var(--color-primary-contrast);
+    border-color: var(--color-primary-border);
+  }
+
+  .gp-primary-button:hover {
+    background-color: var(--color-primary-hover);
+  }
+
+  .gp-primary-border {
+    border-color: var(--color-primary-border);
+  }
+
+  .gp-primary-text {
+    color: var(--color-primary);
+  }
+
+  .gp-primary-soft {
+    background-color: color-mix(in srgb, var(--color-primary-soft) 64%, transparent);
+  }
+
+  .gp-primary-ring {
+    --tw-ring-color: var(--color-primary-ring);
+  }
+
   .hover-lift {
     @apply transition-transform duration-200 hover:scale-[1.02] hover:shadow-lg;
   }

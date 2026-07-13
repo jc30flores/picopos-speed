@@ -24,6 +24,11 @@ const hexToHsl = (hex: string): string => {
 export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   const root = document.documentElement;
   Object.entries(settings.cssVariables).forEach(([key, value]) => root.style.setProperty(key, value));
+  root.style.setProperty("--color-primary-active", settings.cssVariables["--color-primary-active"] ?? settings.colorPrimaryHover);
+  root.style.setProperty("--color-primary-ring", settings.cssVariables["--color-primary-ring"] ?? settings.colorPrimaryBorder);
+  root.style.setProperty("--color-primary-chart", settings.cssVariables["--color-primary-chart"] ?? settings.colorPrimary);
+  root.style.setProperty("--color-primary-muted", settings.cssVariables["--color-primary-muted"] ?? settings.colorPrimarySoft);
+  root.style.setProperty("--color-primary-surface", settings.cssVariables["--color-primary-surface"] ?? settings.colorPrimarySoft);
   root.style.setProperty("--primary", hexToHsl(settings.colorPrimary));
   root.style.setProperty("--primary-light", hexToHsl(settings.colorPrimaryHover));
   root.style.setProperty("--primary-foreground", hexToHsl(settings.colorPrimaryContrast));
@@ -35,9 +40,21 @@ export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   root.style.setProperty("--gradient-accent", `linear-gradient(135deg, ${settings.colorPrimary}, ${settings.colorPrimaryHover})`);
 };
 
+const APPEARANCE_CACHE_KEY = "gastroposv.publicAppearance";
+
 export const loadAppearanceSettings = async () => {
   try {
-    applyAppearanceSettings(await getPublicAppearanceSettings());
+    const cached = localStorage.getItem(APPEARANCE_CACHE_KEY);
+    if (cached) {
+      applyAppearanceSettings(JSON.parse(cached) as AppearanceSettings);
+    }
+  } catch {
+    localStorage.removeItem(APPEARANCE_CACHE_KEY);
+  }
+  try {
+    const settings = await getPublicAppearanceSettings();
+    applyAppearanceSettings(settings);
+    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(settings));
   } catch {
     // Apariencia no debe bloquear el arranque de la app.
   }

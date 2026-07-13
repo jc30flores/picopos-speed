@@ -142,6 +142,14 @@ def get_feature_settings_payload() -> dict:
     if stock_policy not in {"allow", "warn", "block"}:
         stock_policy = "allow"
     quick_sales = get_pos_quick_sales_settings()
+    table_flag = flags["table_map_enabled"]
+    table_metadata = dict(table_flag.metadata or {})
+    operation_mode = str(table_metadata.get("operation_mode") or ("both" if table_flag.is_enabled else "quick_pos")).strip().lower()
+    if operation_mode not in {"quick_pos", "table_service", "both"}:
+        operation_mode = "quick_pos"
+    default_pos_entry = str(table_metadata.get("default_pos_entry") or ("table_map" if operation_mode == "table_service" else "quick_pos")).strip().lower()
+    if operation_mode == "quick_pos" or default_pos_entry not in {"quick_pos", "table_map"}:
+        default_pos_entry = "quick_pos"
     return {
         "pos_enabled": bool(flags["module_pos_enabled"].is_enabled),
         "open_orders_enabled": bool(flags["module_open_orders_enabled"].is_enabled),
@@ -158,7 +166,13 @@ def get_feature_settings_payload() -> dict:
         "inventory_stock_policy": stock_policy,
         "inventory_advanced_enabled": bool(flags["FF_INVENTORY"].is_enabled),
         "pos_product_images_enabled": bool(flags["pos_product_images_enabled"].is_enabled),
-        "table_map_enabled": bool(flags["table_map_enabled"].is_enabled),
+        "table_map_enabled": bool(table_flag.is_enabled and operation_mode != "quick_pos"),
+        "operation_mode": operation_mode,
+        "default_pos_entry": default_pos_entry,
+        "allow_table_merge": bool(table_metadata.get("allow_table_merge", True)),
+        "allow_table_transfer": bool(table_metadata.get("allow_table_transfer", True)),
+        "allow_split_by_guest": bool(table_metadata.get("allow_split_by_guest", True)),
+        "allow_split_by_item": bool(table_metadata.get("allow_split_by_item", True)),
         "pos_quick_sales_button_mode": quick_sales["mode"],
         "pos_quick_sales_history_scope": quick_sales["history_scope"],
         "pos_quick_sales_history_window_minutes": quick_sales["history_window_minutes"],
@@ -320,6 +334,34 @@ class FeatureSettingsView(APIView):
             stock_metadata["policy"] = policy
             stock_flag.metadata = stock_metadata
             stock_flag.save(update_fields=["metadata"])
+
+        table_flag = FeatureFlag.objects.get(key="table_map_enabled")
+        table_metadata = dict(table_flag.metadata or {})
+        operation_fields = {
+            "operation_mode",
+            "default_pos_entry",
+            "allow_table_merge",
+            "allow_table_transfer",
+            "allow_split_by_guest",
+            "allow_split_by_item",
+        }
+        if any(field in request.data for field in operation_fields):
+            operation_mode = str(request.data.get("operation_mode") or table_metadata.get("operation_mode") or "quick_pos").strip().lower()
+            if operation_mode not in {"quick_pos", "table_service", "both"}:
+                return Response({"operation_mode": "Modo de operación inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            default_pos_entry = str(request.data.get("default_pos_entry") or table_metadata.get("default_pos_entry") or ("table_map" if operation_mode == "table_service" else "quick_pos")).strip().lower()
+            if operation_mode == "quick_pos":
+                default_pos_entry = "quick_pos"
+            elif default_pos_entry not in {"quick_pos", "table_map"}:
+                return Response({"default_pos_entry": "Entrada inicial inválida."}, status=status.HTTP_400_BAD_REQUEST)
+            table_metadata["operation_mode"] = operation_mode
+            table_metadata["default_pos_entry"] = default_pos_entry
+            for field in ["allow_table_merge", "allow_table_transfer", "allow_split_by_guest", "allow_split_by_item"]:
+                if field in request.data:
+                    table_metadata[field] = bool(request.data.get(field))
+            table_flag.metadata = table_metadata
+            table_flag.is_enabled = operation_mode != "quick_pos"
+            table_flag.save(update_fields=["metadata", "is_enabled"])
         return Response(get_feature_settings_payload())
 
 

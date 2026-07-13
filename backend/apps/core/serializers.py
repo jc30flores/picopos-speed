@@ -169,10 +169,13 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
         return {
             "--color-primary": obj.color_primary,
             "--color-primary-hover": obj.color_primary_hover,
+            "--color-primary-active": obj.color_primary_hover,
             "--color-primary-soft": obj.color_primary_soft,
             "--color-primary-border": obj.color_primary_border,
+            "--color-primary-ring": obj.color_primary_border,
             "--color-primary-text": obj.color_primary_text,
             "--color-primary-contrast": obj.color_primary_contrast,
+            "--color-primary-chart": obj.color_primary,
             "--color-primary-on-light": getattr(obj, "color_primary_on_light", obj.color_primary),
             "--color-primary-on-dark": getattr(obj, "color_primary_on_dark", obj.color_primary),
             "--color-primary-muted": obj.color_primary_soft,

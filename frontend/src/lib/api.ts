@@ -346,9 +346,29 @@ type FeatureFlagsNormalized = {
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
   tableMapEnabled: boolean;
+  operationMode: OperationMode;
+  defaultPosEntry: DefaultPosEntry;
+  allowTableMerge: boolean;
+  allowTableTransfer: boolean;
+  allowSplitByGuest: boolean;
+  allowSplitByItem: boolean;
   posQuickSalesButtonMode: PosQuickSalesButtonMode;
   posQuickSalesHistoryScope: PosQuickSalesHistoryScope;
   posQuickSalesHistoryWindowMinutes: PosQuickSalesHistoryWindowMinutes;
+};
+
+export type OperationMode = "quick_pos" | "table_service" | "both";
+export type DefaultPosEntry = "quick_pos" | "table_map";
+
+const normalizeOperationMode = (value: unknown): OperationMode => {
+  const normalized = String(value ?? "quick_pos").trim().toLowerCase();
+  return normalized === "table_service" || normalized === "both" || normalized === "quick_pos" ? normalized : "quick_pos";
+};
+
+const normalizeDefaultPosEntry = (value: unknown, operationMode: OperationMode): DefaultPosEntry => {
+  const normalized = String(value ?? (operationMode === "table_service" ? "table_map" : "quick_pos")).trim().toLowerCase();
+  if (operationMode === "quick_pos") return "quick_pos";
+  return normalized === "table_map" ? "table_map" : "quick_pos";
 };
 
 const normalizePosQuickSalesMode = (value: unknown): PosQuickSalesButtonMode => {
@@ -386,6 +406,12 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryAdvancedEnabled: false,
     posProductImagesEnabled: false,
     tableMapEnabled: false,
+    operationMode: "quick_pos",
+    defaultPosEntry: "quick_pos",
+    allowTableMerge: true,
+    allowTableTransfer: true,
+    allowSplitByGuest: true,
+    allowSplitByItem: true,
     posQuickSalesButtonMode: "last_sale",
     posQuickSalesHistoryScope: "current_shift",
     posQuickSalesHistoryWindowMinutes: 60,
@@ -397,7 +423,13 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     return fallback;
   };
   if (Array.isArray(raw)) {
+    const rowsByKey = Object.fromEntries(raw.map((r: any) => [String(r?.key ?? ''), r]));
     const byKey = Object.fromEntries(raw.map((r: any) => [String(r?.key ?? ''), Boolean(r?.enabled ?? r?.is_enabled)]));
+    const tableRow = rowsByKey.table_map_enabled ?? {};
+    const tableMetadata = tableRow.metadata && typeof tableRow.metadata === "object" ? tableRow.metadata : {};
+    const tableMapEnabled = fromMap(byKey, ['table_map_enabled'], defaults.tableMapEnabled);
+    const operationMode = normalizeOperationMode(tableMetadata.operation_mode ?? (tableMapEnabled ? "both" : "quick_pos"));
+    const defaultPosEntry = normalizeDefaultPosEntry(tableMetadata.default_pos_entry, operationMode);
     return {
       posEnabled: fromMap(byKey, ['module_pos_enabled'], defaults.posEnabled),
       openOrdersEnabled: fromMap(byKey, ['module_open_orders_enabled'], defaults.openOrdersEnabled),
@@ -416,12 +448,20 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
       posProductImagesEnabled: fromMap(byKey, ['pos_product_images_enabled'], defaults.posProductImagesEnabled),
-      tableMapEnabled: fromMap(byKey, ['table_map_enabled'], defaults.tableMapEnabled),
+      tableMapEnabled: operationMode !== "quick_pos" && tableMapEnabled,
+      operationMode,
+      defaultPosEntry,
+      allowTableMerge: Boolean(tableMetadata.allow_table_merge ?? defaults.allowTableMerge),
+      allowTableTransfer: Boolean(tableMetadata.allow_table_transfer ?? defaults.allowTableTransfer),
+      allowSplitByGuest: Boolean(tableMetadata.allow_split_by_guest ?? defaults.allowSplitByGuest),
+      allowSplitByItem: Boolean(tableMetadata.allow_split_by_item ?? defaults.allowSplitByItem),
       posQuickSalesButtonMode: defaults.posQuickSalesButtonMode,
       posQuickSalesHistoryScope: defaults.posQuickSalesHistoryScope,
       posQuickSalesHistoryWindowMinutes: defaults.posQuickSalesHistoryWindowMinutes,
     };
   }
+  const operationMode = normalizeOperationMode(raw?.operationMode ?? raw?.operation_mode ?? (fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled) ? "both" : "quick_pos"));
+  const defaultPosEntry = normalizeDefaultPosEntry(raw?.defaultPosEntry ?? raw?.default_pos_entry, operationMode);
   return {
     posEnabled: fromMap(raw, ['posEnabled', 'pos_enabled'], defaults.posEnabled),
     openOrdersEnabled: fromMap(raw, ['openOrdersEnabled', 'open_orders_enabled'], defaults.openOrdersEnabled),
@@ -440,7 +480,13 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
     posProductImagesEnabled: fromMap(raw, ['posProductImagesEnabled', 'pos_product_images_enabled'], defaults.posProductImagesEnabled),
-    tableMapEnabled: fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled),
+    tableMapEnabled: operationMode !== "quick_pos" && fromMap(raw, ['tableMapEnabled', 'table_map_enabled'], defaults.tableMapEnabled),
+    operationMode,
+    defaultPosEntry,
+    allowTableMerge: fromMap(raw, ['allowTableMerge', 'allow_table_merge'], defaults.allowTableMerge),
+    allowTableTransfer: fromMap(raw, ['allowTableTransfer', 'allow_table_transfer'], defaults.allowTableTransfer),
+    allowSplitByGuest: fromMap(raw, ['allowSplitByGuest', 'allow_split_by_guest'], defaults.allowSplitByGuest),
+    allowSplitByItem: fromMap(raw, ['allowSplitByItem', 'allow_split_by_item'], defaults.allowSplitByItem),
     posQuickSalesButtonMode: normalizePosQuickSalesMode(raw?.posQuickSalesButtonMode ?? raw?.pos_quick_sales_button_mode),
     posQuickSalesHistoryScope: normalizePosQuickSalesHistoryScope(raw?.posQuickSalesHistoryScope ?? raw?.pos_quick_sales_history_scope),
     posQuickSalesHistoryWindowMinutes: normalizePosQuickSalesHistoryWindow(raw?.posQuickSalesHistoryWindowMinutes ?? raw?.pos_quick_sales_history_window_minutes),
@@ -573,6 +619,12 @@ export type FeatureSettings = {
   inventoryAdvancedEnabled: boolean;
   posProductImagesEnabled: boolean;
   tableMapEnabled: boolean;
+  operationMode: OperationMode;
+  defaultPosEntry: DefaultPosEntry;
+  allowTableMerge: boolean;
+  allowTableTransfer: boolean;
+  allowSplitByGuest: boolean;
+  allowSplitByItem: boolean;
   posQuickSalesButtonMode: PosQuickSalesButtonMode;
   posQuickSalesHistoryScope: PosQuickSalesHistoryScope;
   posQuickSalesHistoryWindowMinutes: PosQuickSalesHistoryWindowMinutes;
@@ -1077,6 +1129,13 @@ export type AuthUser = {
   isSuperuser: boolean;
   isStaff: boolean;
   redirectTo?: string;
+  permissions?: {
+    isSuperadmin?: boolean;
+    canManageFeatures?: boolean;
+    canManageDteSettings?: boolean;
+    canManageCorrelatives?: boolean;
+    canManageAppearance?: boolean;
+  };
 };
 
 type AuthPayload = AuthUser & {
@@ -1085,6 +1144,18 @@ type AuthPayload = AuthUser & {
   redirect_to?: string;
   user?: Partial<AuthUser> & { is_superuser?: boolean; is_staff?: boolean };
   profile?: { role?: AuthUser["role"]; redirect_to?: string; redirectTo?: string };
+  permissions?: {
+    is_superadmin?: boolean;
+    isSuperadmin?: boolean;
+    can_manage_features?: boolean;
+    canManageFeatures?: boolean;
+    can_manage_dte_settings?: boolean;
+    canManageDteSettings?: boolean;
+    can_manage_correlatives?: boolean;
+    canManageCorrelatives?: boolean;
+    can_manage_appearance?: boolean;
+    canManageAppearance?: boolean;
+  };
 };
 
 const buildApiUrl = (path: string) => {
@@ -1250,6 +1321,7 @@ const handleJson = async <T>(response: Response): Promise<T> => {
 const normalizeAuthPayload = (raw: AuthPayload): AuthUser => {
   const nestedUser = raw.user ?? {};
   const nestedProfile = raw.profile ?? {};
+  const rawPermissions = raw.permissions ?? {};
   return {
     id: Number(raw.id ?? nestedUser.id ?? 0),
     username: String(raw.username ?? nestedUser.username ?? ""),
@@ -1258,6 +1330,13 @@ const normalizeAuthPayload = (raw: AuthPayload): AuthUser => {
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser ?? nestedUser.isSuperuser ?? nestedUser.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff ?? nestedUser.isStaff ?? nestedUser.is_staff),
     redirectTo: (raw.redirectTo ?? raw.redirect_to ?? nestedProfile.redirectTo ?? nestedProfile.redirect_to) as string | undefined,
+    permissions: {
+      isSuperadmin: Boolean(rawPermissions.isSuperadmin ?? rawPermissions.is_superadmin),
+      canManageFeatures: Boolean(rawPermissions.canManageFeatures ?? rawPermissions.can_manage_features),
+      canManageDteSettings: Boolean(rawPermissions.canManageDteSettings ?? rawPermissions.can_manage_dte_settings),
+      canManageCorrelatives: Boolean(rawPermissions.canManageCorrelatives ?? rawPermissions.can_manage_correlatives),
+      canManageAppearance: Boolean(rawPermissions.canManageAppearance ?? rawPermissions.can_manage_appearance),
+    },
   };
 };
 
@@ -1410,6 +1489,12 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
     tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+    operationMode: normalized.operationMode,
+    defaultPosEntry: normalized.defaultPosEntry,
+    allowTableMerge: normalized.allowTableMerge,
+    allowTableTransfer: normalized.allowTableTransfer,
+    allowSplitByGuest: normalized.allowSplitByGuest,
+    allowSplitByItem: normalized.allowSplitByItem,
     posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
     posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
     posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
@@ -1433,6 +1518,12 @@ const featureSettingsFromNormalized = (normalized: FeatureFlagsNormalized, data:
   inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
   posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
   tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+  operationMode: normalized.operationMode,
+  defaultPosEntry: normalized.defaultPosEntry,
+  allowTableMerge: normalized.allowTableMerge,
+  allowTableTransfer: normalized.allowTableTransfer,
+  allowSplitByGuest: normalized.allowSplitByGuest,
+  allowSplitByItem: normalized.allowSplitByItem,
   posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
   posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
   posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,
@@ -1464,6 +1555,12 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
       inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
       pos_product_images_enabled: payload.posProductImagesEnabled,
       table_map_enabled: payload.tableMapEnabled,
+      operation_mode: payload.operationMode,
+      default_pos_entry: payload.defaultPosEntry,
+      allow_table_merge: payload.allowTableMerge,
+      allow_table_transfer: payload.allowTableTransfer,
+      allow_split_by_guest: payload.allowSplitByGuest,
+      allow_split_by_item: payload.allowSplitByItem,
       pos_quick_sales_button_mode: payload.posQuickSalesButtonMode,
       pos_quick_sales_history_scope: payload.posQuickSalesHistoryScope,
       pos_quick_sales_history_window_minutes: payload.posQuickSalesHistoryWindowMinutes,
@@ -1488,6 +1585,12 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     inventoryAdvancedEnabled: Boolean(data.inventory_advanced_enabled ?? normalized.inventoryAdvancedEnabled),
     posProductImagesEnabled: Boolean(data.pos_product_images_enabled ?? normalized.posProductImagesEnabled),
     tableMapEnabled: Boolean(data.table_map_enabled ?? normalized.tableMapEnabled),
+    operationMode: normalized.operationMode,
+    defaultPosEntry: normalized.defaultPosEntry,
+    allowTableMerge: normalized.allowTableMerge,
+    allowTableTransfer: normalized.allowTableTransfer,
+    allowSplitByGuest: normalized.allowSplitByGuest,
+    allowSplitByItem: normalized.allowSplitByItem,
     posQuickSalesButtonMode: normalized.posQuickSalesButtonMode,
     posQuickSalesHistoryScope: normalized.posQuickSalesHistoryScope,
     posQuickSalesHistoryWindowMinutes: normalized.posQuickSalesHistoryWindowMinutes,

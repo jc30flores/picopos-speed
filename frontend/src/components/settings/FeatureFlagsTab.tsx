@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "r
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -25,6 +25,12 @@ const defaultState: FeatureSettings = {
   inventoryAdvancedEnabled: false,
   posProductImagesEnabled: false,
   tableMapEnabled: false,
+  operationMode: "quick_pos",
+  defaultPosEntry: "quick_pos",
+  allowTableMerge: true,
+  allowTableTransfer: true,
+  allowSplitByGuest: true,
+  allowSplitByItem: true,
   posQuickSalesButtonMode: "last_sale",
   posQuickSalesHistoryScope: "current_shift",
   posQuickSalesHistoryWindowMinutes: 60,
@@ -108,6 +114,24 @@ const quickSalesWindows = [
   { value: 120, label: "2 horas" },
   { value: 240, label: "4 horas" },
   { value: 1440, label: "Hoy" },
+] as const;
+
+const operationModes = [
+  {
+    value: "quick_pos",
+    title: "POS rápido",
+    description: "Entra directo a caja rápida. Oculta el mapa y el editor de mesas del menú principal.",
+  },
+  {
+    value: "table_service",
+    title: "Servicio en mesas",
+    description: "El POS abre el mapa de mesas primero para tomar órdenes por mesa o persona.",
+  },
+  {
+    value: "both",
+    title: "Ambos",
+    description: "Permite venta rápida y servicio en mesas en la misma instalación.",
+  },
 ] as const;
 
 export const FeatureFlagsTab = () => {
@@ -212,6 +236,80 @@ export const FeatureFlagsTab = () => {
         <p className="text-sm text-muted-foreground">Activa solo lo necesario. Los cambios se guardan de inmediato y mantienen las llaves existentes.</p>
       </div>
 
+      <section className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Operación</span>
+          <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Modo del restaurante</h4>
+        </div>
+        <Card className="gp-primary-border bg-card/90 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Modo de operación</CardTitle>
+            <CardDescription className="text-xs">Define si esta instalación trabaja como caja rápida, servicio en mesas o ambos.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 pt-0">
+            <div className="grid gap-2 md:grid-cols-3">
+              {operationModes.map((mode) => {
+                const selected = settings.operationMode === mode.value;
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => {
+                      const nextEntry = mode.value === "table_service" ? "table_map" : "quick_pos";
+                      void persist({
+                        operationMode: mode.value,
+                        tableMapEnabled: mode.value !== "quick_pos",
+                        defaultPosEntry: nextEntry,
+                      });
+                    }}
+                    className={cn(
+                      "rounded-xl border p-3 text-left transition",
+                      selected ? "gp-primary-border gp-primary-soft shadow-sm" : "border-border/70 bg-background/40 hover:border-[var(--color-primary-border)]"
+                    )}
+                  >
+                    <div className="font-semibold">{mode.title}</div>
+                    <p className="mt-1 text-xs leading-snug text-muted-foreground">{mode.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+            {settings.operationMode !== "quick_pos" ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">Entrada al POS</div>
+                  <Select
+                    value={settings.defaultPosEntry}
+                    onValueChange={(value) => void persist({ defaultPosEntry: value as FeatureSettings["defaultPosEntry"] })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Entrada inicial" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="table_map">Mapa de mesas</SelectItem>
+                      <SelectItem value="quick_pos">POS rápido</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2 text-sm">
+                  {[
+                    ["allowTableMerge", "Permitir unir mesas"],
+                    ["allowTableTransfer", "Permitir mover mesa"],
+                    ["allowSplitByGuest", "Dividir por persona"],
+                    ["allowSplitByItem", "Dividir por productos"],
+                  ].map(([key, label]) => (
+                    <label key={key} className="flex items-center justify-between rounded-lg border bg-background/50 px-3 py-2">
+                      <span>{label}</span>
+                      <Switch
+                        checked={Boolean(settings[key as keyof FeatureSettings])}
+                        onCheckedChange={(checked) => void persist({ [key]: checked } as Partial<FeatureSettings>)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </section>
+
       {[...featureSections, { title: "Seguridad / Caja", eyebrow: "Control", items: [cashSetting] }].map((section) => (
         <section key={section.title} className="space-y-2">
           <div className="flex items-center gap-2">
@@ -241,7 +339,7 @@ export const FeatureFlagsTab = () => {
           <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">POS</span>
           <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Control rápido</h4>
         </div>
-        <Card className="border-emerald-500/30 bg-card/90 shadow-sm">
+        <Card className="gp-primary-border bg-card/90 shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Botón rápido de ventas en POS</CardTitle>
             <CardDescription className="text-xs">Define si el botón del POS reimprime la última venta, muestra historial autorizado o queda oculto.</CardDescription>
@@ -257,7 +355,7 @@ export const FeatureFlagsTab = () => {
                     onClick={() => void persist({ posQuickSalesButtonMode: mode.value })}
                     className={cn(
                       "rounded-xl border p-3 text-left transition",
-                      selected ? "border-emerald-500 bg-emerald-500/10 shadow-sm" : "border-border/70 bg-background/40 hover:border-emerald-500/50",
+                      selected ? "gp-primary-border gp-primary-soft shadow-sm" : "border-border/70 bg-background/40 hover:border-[var(--color-primary-border)]",
                     )}
                   >
                     <div className="font-semibold">{mode.title}</div>
@@ -277,14 +375,14 @@ export const FeatureFlagsTab = () => {
                   <button
                     type="button"
                     onClick={() => void persist({ posQuickSalesHistoryScope: "current_shift" })}
-                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "current_shift" ? "border-emerald-500 bg-emerald-500/10" : "border-border/70")}
+                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "current_shift" ? "gp-primary-border gp-primary-soft" : "border-border/70")}
                   >
                     Última apertura de caja
                   </button>
                   <button
                     type="button"
                     onClick={() => void persist({ posQuickSalesHistoryScope: "time_window" })}
-                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "time_window" ? "border-emerald-500 bg-emerald-500/10" : "border-border/70")}
+                    className={cn("rounded-lg border p-3 text-left text-sm", settings.posQuickSalesHistoryScope === "time_window" ? "gp-primary-border gp-primary-soft" : "border-border/70")}
                   >
                     Período hacia atrás
                   </button>
@@ -365,7 +463,10 @@ export const FeatureFlagsTab = () => {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-3xl">
-          <DialogHeader><DialogTitle>Configurar permisos de totales esperados</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Configurar permisos de totales esperados</DialogTitle>
+            <DialogDescription>Define qué roles ven los totales esperados y qué campos aparecen al cerrar caja.</DialogDescription>
+          </DialogHeader>
           <div className="grid gap-6 md:grid-cols-2">
             <div className="space-y-3">
               <div className="flex items-center justify-between"><h4 className="font-semibold">Roles autorizados</h4><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => void persist({ cashCloseExpectedTotalsAllowedRoles: options.roles.map((r) => r.code) })}>Todos</Button><Button size="sm" variant="outline" onClick={() => void persist({ cashCloseExpectedTotalsAllowedRoles: [] })}>Ninguno</Button></div></div>

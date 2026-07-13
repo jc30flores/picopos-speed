@@ -99,7 +99,7 @@ export const AttendancePanel = () => {
   };
 
   return (
-    <Card className="rounded-xl border border-emerald-500/30 bg-card/80 p-3 sm:p-4">
+    <Card className="rounded-xl border gp-primary-border bg-card/80 p-3 sm:p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Marcaje del día</p>

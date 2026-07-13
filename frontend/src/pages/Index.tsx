@@ -304,7 +304,7 @@ const CashPaymentPanel = ({
   panelRef,
   paymentInputRef,
 }: CashPaymentPanelProps) => (
-  <div ref={panelRef} className="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+  <div ref={panelRef} className="space-y-2 rounded-xl border gp-primary-border gp-primary-soft p-3">
     <div className="flex items-center justify-between gap-3">
       <div>
         <h3 className="font-semibold">Pago en efectivo</h3>
@@ -468,6 +468,8 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
   const [tableMapEnabled, setTableMapEnabled] = useState(false);
+  const [operationMode, setOperationMode] = useState<"quick_pos" | "table_service" | "both">("quick_pos");
+  const [allowTableMerge, setAllowTableMerge] = useState(true);
   const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
   const [diningAreas, setDiningAreas] = useState<any[]>([]);
   const [restaurantTables, setRestaurantTables] = useState<any[]>([]);
@@ -1746,7 +1748,10 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
     getRuntimeFeatureSettings().then((settings) => {
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
-      setTableMapEnabled(settings.tableMapEnabled);
+      setOperationMode(settings.operationMode);
+      setAllowTableMerge(settings.allowTableMerge);
+      setTableMapEnabled(settings.tableMapEnabled && settings.operationMode !== "quick_pos");
+      setPosMode(settings.defaultPosEntry === "table_map" && settings.operationMode !== "quick_pos" ? "tables" : "pos");
       setQuickSalesMode(settings.posQuickSalesButtonMode);
       setQuickSalesHistoryScope(settings.posQuickSalesHistoryScope);
       setQuickSalesHistoryWindowMinutes(settings.posQuickSalesHistoryWindowMinutes);
@@ -3111,7 +3116,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       <div className="h-[100dvh] bg-background p-3 sm:p-4">
         <div className="mx-auto grid h-full max-w-[1800px] grid-cols-1 gap-3 lg:grid-cols-[250px_1fr_320px]">
           <Card className="p-3 space-y-3">
-            <Button variant="outline" onClick={() => setPosMode("pos")}>POS rápido</Button>{selectedOpsArea !== "all" ? <Button variant="outline" onClick={() => setSelectedOpsArea("all")}>Volver a todas</Button> : null}
+            {operationMode !== "table_service" ? <Button variant="outline" onClick={() => setPosMode("pos")}>POS rápido</Button> : null}{selectedOpsArea !== "all" ? <Button variant="outline" onClick={() => setSelectedOpsArea("all")}>Volver a todas</Button> : null}
             <Button variant="outline" onClick={() => navigate("/tables/editor")}>Editor de mesas</Button>
             <div className="space-y-1 text-sm"><p className="font-semibold">Áreas</p><button className={cn("w-full rounded border p-2 text-left", selectedOpsArea === "all" && "border-primary")} onClick={() => setSelectedOpsArea("all")}>Todas</button>{diningAreas.map((a) => <button key={a.id} className={cn("w-full rounded border p-2 text-left", selectedOpsArea === a.id && "border-primary")} onClick={() => setSelectedOpsArea(a.id)}>{a.name}</button>)}</div>
             <div className="space-y-1 text-sm"><p className="font-semibold">Estado</p><Button variant={selectedOpsFilter === "all" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("all")}>Todas</Button><Button variant={selectedOpsFilter === "free" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("free")}>Libres</Button><Button variant={selectedOpsFilter === "occupied" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("occupied")}>Ocupadas</Button><Button variant={selectedOpsFilter === "kitchen" ? "default" : "outline"} className="w-full" onClick={() => setSelectedOpsFilter("kitchen")}>En cocina</Button></div>
@@ -3132,7 +3137,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   const selected = selectedOpsTableId === table.id;
                   const stateLabel = getSessionStateLabel(session);
                   return (
-                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),2000); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={() => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: `${table.color || "#10b981"}33`, borderColor: table.color || "#10b981" }}>
+                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),2000); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={() => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" }); else void openTableSession(table.id); }} className={cn("absolute border-2 shadow-md", selected && "ring-2 ring-white/70", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: table.color ? `${table.color}33` : "color-mix(in srgb, var(--color-primary) 24%, transparent)", borderColor: table.color || "var(--color-primary-border)" }}>
                       <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-white">
                         <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
                         {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
@@ -3146,14 +3151,17 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
           </Card>
 
           <Card className="p-3">
-            {!selectedOpsTableId ? <p className="text-sm text-muted-foreground">Selecciona una mesa para ver acciones.</p> : (() => { const table = restaurantTables.find((t) => t.id === selectedOpsTableId); const session = selectedOpsTableId ? sessionByTableId.get(selectedOpsTableId) : null; if (!table) return null; return <div className="space-y-2"><h3 className="font-semibold">{table.name}</h3><p className="text-sm text-muted-foreground">{session ? "Mesa ocupada" : "Mesa libre"}</p><Button className="w-full" onClick={() => session ? void openTableSession(table.id) : setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" })}>{session ? "Agregar productos" : "Nueva orden"}</Button><Button className="w-full" variant="outline" disabled={!session}>Enviar a cocina</Button><Button className="w-full" variant="outline" disabled={!session}>Unir mesa</Button><Button className="w-full" variant="outline" disabled={!session}>Cobrar mesa</Button></div>; })()}
+            {!selectedOpsTableId ? <p className="text-sm text-muted-foreground">Selecciona una mesa para ver acciones.</p> : (() => { const table = restaurantTables.find((t) => t.id === selectedOpsTableId); const session = selectedOpsTableId ? sessionByTableId.get(selectedOpsTableId) : null; if (!table) return null; return <div className="space-y-2"><h3 className="font-semibold">{table.name}</h3><p className="text-sm text-muted-foreground">{session ? "Mesa ocupada" : "Mesa libre"}</p><Button className="w-full" onClick={() => session ? void openTableSession(table.id) : setNewSessionDialog({ open: true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode: "table", notes: "" })}>{session ? "Agregar productos" : "Nueva orden"}</Button><Button className="w-full" variant="outline" disabled={!session}>Enviar a cocina</Button><Button className="w-full" variant="outline" disabled={!session || !allowTableMerge} onClick={() => { if (!session) return; setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); }}>Unir mesa</Button><Button className="w-full" variant="outline" disabled={!session} onClick={() => session?.primaryOrder ? navigate(`/pos?pending_order_id=${session.primaryOrder}&mode=pay`, { state: { fromOpenOrders: true } }) : undefined}>Cobrar mesa</Button></div>; })()}
           </Card>
         </div>
 
-        {opsContextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}><Card className="absolute w-64 p-2" style={{ left: Math.min(opsContextMenu.x, window.innerWidth - 270), top: Math.min(opsContextMenu.y, window.innerHeight - 320) }} onClick={(e)=>e.stopPropagation()}>{(() => { const table = restaurantTables.find((t) => t.id === opsContextMenu.tableId); const session = table ? sessionByTableId.get(table.id) : null; if (!table) return null; return <div className="space-y-1"><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"table", notes:"" }); else void openTableSession(table.id); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>{session ? "Ver orden" : "Nueva orden"}</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session} onClick={() => { setMergeMode({ active:true, sessionId: session?.id ?? null, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>Unir mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Unir cuentas requiere soporte de fusión de órdenes en backend.")}>Unir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled onClick={() => toast.message("Transferir cuenta queda preparado para próxima iteración.")}>Transferir cuenta</Button><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>Cancelar</Button></div>; })()}</Card></div> : null}
+        {opsContextMenu.open ? <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}><Card className="absolute w-64 p-2" style={{ left: Math.min(opsContextMenu.x, window.innerWidth - 270), top: Math.min(opsContextMenu.y, window.innerHeight - 320) }} onClick={(e)=>e.stopPropagation()}>{(() => { const table = restaurantTables.find((t) => t.id === opsContextMenu.tableId); const session = table ? sessionByTableId.get(table.id) : null; if (!table) return null; return <div className="space-y-1"><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => { setSelectedOpsTableId(table.id); if (!session) setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"table", notes:"" }); else void openTableSession(table.id); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>{session ? "Ver orden" : "Nueva orden"}</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session || !allowTableMerge} onClick={() => { setMergeMode({ active:true, sessionId: session?.id ?? null, sourceTableId: table.id }); toast.message("Selecciona una mesa libre para unirla."); setOpsContextMenu({ open:false, x:0, y:0, tableId:null }); }}>Unir mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" disabled={!session} onClick={() => session?.primaryOrder ? navigate(`/pos?pending_order_id=${session.primaryOrder}&mode=pay`, { state: { fromOpenOrders: true } }) : undefined}>Cobrar mesa</Button><Button className="h-11 w-full justify-start" variant="ghost" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>Cancelar</Button></div>; })()}</Card></div> : null}
         <Dialog open={newSessionDialog.open} onOpenChange={(open) => setNewSessionDialog((prev) => ({ ...prev, open }))}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Nueva orden</DialogTitle></DialogHeader>
+            <DialogHeader>
+              <DialogTitle>Nueva orden</DialogTitle>
+              <DialogDescription>Configura personas, modo de pedido y notas antes de abrir la orden de mesa.</DialogDescription>
+            </DialogHeader>
             <div className="space-y-3">
               <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<div className="ml-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1"><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button><span className="min-w-8 text-center font-semibold">{newSessionDialog.guests}</span><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.min(99,p.guests+1)}))}>+</Button></div></div></div>{(() => { const table = restaurantTables.find((t) => t.id === newSessionDialog.tableId); const cap = Number(table?.capacity || 0); return cap > 0 && newSessionDialog.guests > cap ? <p className="text-xs text-amber-500">Sobre capacidad sugerida de la mesa.</p> : null; })()}
               <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
@@ -3247,6 +3255,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             src={product.imageUrl ?? ""}
                             alt={product.name}
                             loading="lazy"
+                            decoding="async"
                             className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                             onError={() => setHiddenProductImages((previous) => ({ ...previous, [product.id]: true }))}
                           />
@@ -3258,7 +3267,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                         {!showProductImage && badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}
                       </div>
                       {productPricing.display.showOfferBadge && (
-                        <Badge className="mb-1 max-w-full truncate bg-emerald-600 text-white">
+                        <Badge className="mb-1 max-w-full truncate gp-primary-bg">
                           {productPricing.appliedRule?.name?.trim() || "OFERTA"}
                         </Badge>
                       )}
@@ -3292,7 +3301,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                             size="icon"
                             title="Producto manual"
                             aria-label="Producto manual"
-                            className="h-11 w-11 rounded-xl border-emerald-500/60"
+                            className="h-11 w-11 rounded-xl gp-primary-border"
                             onClick={() =>
                               privilegedGuard.requirePrivilege("manualProduct", () => setIsManualProductOpen(true))
                             }
@@ -3332,7 +3341,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                               size="icon"
                               title={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
                               aria-label={quickSalesMode === "last_sale" ? "Reimprimir última venta" : "Historial de ventas"}
-                              className="h-11 w-11 rounded-xl border-emerald-500/60 text-emerald-600 dark:text-emerald-300"
+                              className="h-11 w-11 rounded-xl gp-primary-border gp-primary-text"
                               onClick={quickSalesMode === "last_sale" ? handleLastSaleQuickAction : openRecentSalesActions}
                               disabled={isQuickSaleProcessing}
                             >
@@ -3549,7 +3558,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                   </div>
                 )}
                 {cartPricing.discountLines.map((line) => (
-                  <div key={`${line.source}-${line.id}`} className="flex justify-between text-emerald-600">
+                  <div key={`${line.source}-${line.id}`} className="flex justify-between gp-primary-text">
                     <span>Descuento ({line.name})</span>
                     <span>-{formatMoney(line.amount)}</span>
                   </div>
@@ -3756,9 +3765,9 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
 
 
       <Dialog open={isRecentSalesOpen} onOpenChange={setIsRecentSalesOpen}>
-        <DialogContent className="flex max-h-[88dvh] w-[min(94vw,760px)] max-w-3xl flex-col overflow-hidden border-emerald-500/50 bg-zinc-950 text-zinc-50 p-0">
-          <DialogHeader className="border-b border-emerald-500/30 px-5 py-4">
-            <DialogTitle className="flex items-center gap-2 text-emerald-300"><ReceiptText className="h-5 w-5" /> Ventas recientes</DialogTitle>
+        <DialogContent className="flex max-h-[88dvh] w-[min(94vw,760px)] max-w-3xl flex-col overflow-hidden gp-primary-border bg-zinc-950 text-zinc-50 p-0">
+          <DialogHeader className="border-b gp-primary-border px-5 py-4">
+            <DialogTitle className="flex items-center gap-2 gp-primary-text"><ReceiptText className="h-5 w-5" /> Ventas recientes</DialogTitle>
             <DialogDescription>Acciones rápidas para imprimir ticket{dteEnabled ? " o enviar DTE" : ""} sin entrar a Reportes. {quickSalesHistoryScope === "current_shift" ? "Mostrando última apertura de caja." : quickSalesHistoryWindowMinutes === 1440 ? "Mostrando ventas de hoy." : `Mostrando últimos ${quickSalesHistoryWindowMinutes} minutos.`}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -3771,23 +3780,23 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
             ) : (
               <div className="space-y-3">
                 {recentSales.map((sale) => (
-                  <div key={`${sale.id}-${sale.paymentId}`} className="rounded-xl border border-emerald-500/25 bg-zinc-900/80 p-3">
+                  <div key={`${sale.id}-${sale.paymentId}`} className="rounded-xl border gp-primary-border bg-zinc-900/80 p-3">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-emerald-200">{sale.orderNumber}</span>
-                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-200">{sale.status}</Badge>
+                          <span className="font-semibold gp-primary-text">{sale.orderNumber}</span>
+                          <Badge variant="outline" className="gp-primary-border gp-primary-text">{sale.status}</Badge>
                           <span className="text-sm font-semibold">{formatMoney(sale.total)}</span>
                         </div>
                         <div className="text-xs text-zinc-400">{formatDateTimeSV(sale.createdAt)} · {sale.customerName} · {sale.paymentMethod}</div>
                         {dteEnabled ? <div className="truncate text-xs text-zinc-500">DTE: {sale.controlNumber || "No disponible"}</div> : null}
                       </div>
                       <div className="flex shrink-0 gap-2">
-                        <Button size="sm" variant="outline" className="border-emerald-500/50" onClick={() => void handleRecentSalePrint(sale)} disabled={recentSalesPrintingId === sale.paymentId}>
+                        <Button size="sm" variant="outline" className="gp-primary-border" onClick={() => void handleRecentSalePrint(sale)} disabled={recentSalesPrintingId === sale.paymentId}>
                           <Printer className="mr-1 h-4 w-4" /> {recentSalesPrintingId === sale.paymentId ? "Imprimiendo..." : "Ticket"}
                         </Button>
                         {dteEnabled ? (
-                          <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={() => void handleRecentSaleSendDte(sale)} disabled={recentSalesSendingId === sale.id || !sale.canSendDte}>
+                          <Button size="sm" className="gp-primary-button" onClick={() => void handleRecentSaleSendDte(sale)} disabled={recentSalesSendingId === sale.id || !sale.canSendDte}>
                             <Send className="mr-1 h-4 w-4" /> {recentSalesSendingId === sale.id ? "Enviando..." : "Enviar DTE"}
                           </Button>
                         ) : null}
@@ -4198,7 +4207,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                                 {formatMoney(item.unitPriceFinal ?? item.unitPriceBeforeDiscount ?? 0)} c/u
                               </div>
                               {(item.discountAmount ?? 0) > 0 && (
-                                <div className="text-[11px] text-emerald-600">
+                                <div className="text-[11px] gp-primary-text">
                                   Descuento {formatMoney(item.discountAmount ?? 0)}
                                 </div>
                               )}
@@ -4217,13 +4226,13 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
                       <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
                       {checkoutDiscountLines.length > 0
                         ? checkoutDiscountLines.map((line) => (
-                            <div key={`checkout-${line.source}-${line.id}`} className="flex justify-between text-emerald-600">
+                            <div key={`checkout-${line.source}-${line.id}`} className="flex justify-between gp-primary-text">
                               <span>Descuento ({line.name})</span>
                               <span>-{formatMoney(line.amount)}</span>
                             </div>
                           ))
                         : checkoutSummaryDiscount > 0
-                          ? <div className="flex justify-between text-emerald-600"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
+                          ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
                           : null}
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
                       <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
@@ -4436,7 +4445,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               error={whatsappClientError}
             />
             {dteDocumentType === "CF" && selectedCustomer?.isIvaExempt ? (
-              <div className="rounded-md border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm">
+              <div className="rounded-md border gp-primary-border gp-primary-soft p-3 text-sm">
                 <p className="font-medium">Cliente exento de IVA</p>
                 <p className="text-xs text-muted-foreground">El DTE se generará como venta exenta, sin IVA.</p>
               </div>
@@ -4453,6 +4462,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Dividir cuenta</DialogTitle>
+            <DialogDescription>Define partes de la cuenta antes de cobrar con uno o varios métodos de pago.</DialogDescription>
           </DialogHeader>
           <SplitPanel
             enabled={splitEnabled}
@@ -4516,7 +4526,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
       </Dialog>
 
       <Dialog open={isCustomerCreateOpen} onOpenChange={(open) => !isSavingCustomer && setIsCustomerCreateOpen(open)}>
-        <DialogContent className="flex max-h-[90vh] w-[96vw] max-w-3xl flex-col overflow-hidden rounded-2xl border-emerald-600/60 p-0">
+        <DialogContent className="flex max-h-[90vh] w-[96vw] max-w-3xl flex-col overflow-hidden rounded-2xl gp-primary-border p-0">
           <DialogHeader>
             <div className="border-b px-5 py-4">
               <DialogTitle>Nuevo cliente</DialogTitle>
@@ -4533,7 +4543,7 @@ type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
               </div>
             </div>
             {customerForm.clientType === "CF" ? (
-              <div className="rounded-xl border border-emerald-600/50 p-3 sm:col-span-2">
+              <div className="rounded-xl border gp-primary-border p-3 sm:col-span-2">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <Label>Exento de IVA</Label>
