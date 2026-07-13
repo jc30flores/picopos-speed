@@ -107,7 +107,8 @@ El boton `Iniciar orden` queda deshabilitado mientras el request esta en curso p
 
 - mesa
 - personas
-- productos y asignacion por persona cuando existe
+- productos agrupados por `Persona 1`, `Persona 2`, etc. cuando la orden es por persona
+- productos sin persona en `Mesa completa`
 - subtotal
 - descuentos
 - impuestos
@@ -116,12 +117,19 @@ El boton `Iniciar orden` queda deshabilitado mientras el request esta en curso p
 - saldo pendiente
 - acciones para agregar productos, cobrar, imprimir cuenta local y cerrar
 - estado de cocina por producto: pendiente, en cocina, listo o entregado
+- filtros `Por persona`, `Todos`, `Pendiente de enviar`, `En cocina` y `Servido`
+
+El modal recarga `order_id` y pagos desde backend antes de mostrar la cuenta. En POS contextual, si hay carrito local con cambios, primero sincroniza la orden abierta para que el resumen no dependa de estado stale del frontend.
+
+Los items de mesa persisten `table_guest_id` junto con `assigned_name`. El serializer devuelve `table_guest_label` y `table_guest_seat_number`, por lo que el resumen no necesita inferir personas solo por texto.
 
 No se muestra flujo DTE cuando DTE esta apagado.
 
 ## Cobrar
 
-`Cobrar` abre directamente el modal de cobro con `pending_order_id` y `mode=pay`, conservando pagos divididos, pagos parciales y pago completo. No manda al usuario a tomar productos como paso principal. Al completar el pago, el frontend solicita liberar la sesion pagada para que el mapa la muestre libre. Si el pago queda parcial, la sesion permanece activa.
+`Cobrar` desde mapa, menu contextual, cuenta de mesa o resumen de cocina abre directamente el modal de cobro del pedido usando el `order_id` de la sesion activa. Ya no navega a `/pos?mode=pay` como paso principal ni manda al usuario a tomar productos.
+
+Antes de abrir el modal, el frontend hidrata la orden desde backend, restaura el carrito solo como detalle de cobro, calcula el saldo pendiente y abre el mismo flujo de pago del POS con pagos mixtos, parciales y pago completo. Al completar el pago, el frontend solicita liberar la sesion pagada para que el mapa la muestre libre. Si el pago queda parcial, la sesion permanece activa.
 
 DTE apagado sigue registrando el pago localmente y no contacta Hacienda.
 
@@ -143,6 +151,7 @@ Las mesas unidas ahora comparten identidad visual de grupo:
 - borde y halo compartido
 - etiqueta `Grupo N`
 - menu contextual con lista completa del grupo, por ejemplo `Mesa 9 + Mesa 10`
+- `Grupo N` se persiste en `TableSession.group_number` y se asigna con `max(group_number) + 1`; al agregar otra mesa al grupo conserva el mismo numero y al separar hasta una sola mesa se elimina el estado de grupo
 
 Para unir una tercera mesa, se elige `Unir mesa` desde cualquier mesa del grupo y luego se selecciona una mesa libre. La mesa nueva se agrega a la misma sesion y adopta la identidad visual del grupo.
 
@@ -207,7 +216,28 @@ Cada `OrderItem` tiene estado de cocina:
 
 El endpoint de mesa envia solo items `pending`. Si no hay nuevos productos, responde `No hay productos nuevos para enviar.` y no duplica cocina.
 
+Cuando un producto se marca como `delivered`, si la orden ya no tiene items `pending`, `sent` ni `ready`, la sesion vuelve a estado `open`. Asi `En cocina` deja de contar mesas que ya fueron servidas pero aun no han sido cobradas.
+
 Cuando no hay productos de cocina, el CTA principal es `Guardar orden`; guarda los items en la mesa sin abrir cobro.
+
+## Conteos y estados visuales
+
+Los contadores del mapa usan estas reglas:
+
+- `Libres`: mesas visibles sin sesion activa.
+- `Ocupadas`: mesas visibles con sesion activa, incluyendo mesas en cocina y parcialmente pagadas.
+- `En cocina`: subconjunto de ocupadas con sesion `sent_to_kitchen`.
+
+Por eso `Libres + Ocupadas` coincide con el total visible, y `En cocina` no se resta de `Ocupadas`.
+
+Los bordes y fondos distinguen estados:
+
+- libre: superficie neutral/primaria suave
+- ocupada: tono destructivo suave con borde mas fuerte
+- en cocina: tono amber/warning
+- parcialmente pagada o pendiente: tono primario
+- grupo: halo y badge `Grupo N`
+- seleccionada: ring visible
 
 ## Ordenes guardadas por mesa
 
@@ -234,6 +264,7 @@ La vista muestra por mesa/grupo:
 - total por persona
 - total de mesa y saldo
 - acciones `Listo`, `Entregado`, `Ver cuenta` y `Cobrar`
+- datos de persona mediante `table_guest_id`, `table_guest_label` y `table_guest_seat_number`
 
 Endpoints:
 
@@ -281,6 +312,13 @@ Modo claro/oscuro:
 - la superficie sigue usando variables de tema (`background`, `muted`, `card`, `popover`, `border`, colores primarios)
 - el boton `Menu`, labels y `Ajustar` son flotantes y no mueven el contenido
 - el menu contextual usa `bg-popover`/`text-popover-foreground`, por lo que mantiene contraste en ambos modos
+
+## Correcciones de requests y consola
+
+- El cobro directo ya no dispara navegacion intermedia a modo productos, reduciendo recargas repetidas de orden/pagos.
+- `Ver cuenta` ejecuta una carga puntual de orden y pagos al abrir el modal; no usa polling ni efectos que refetcheen en cada render.
+- El zoom del mapa ya no llama `preventDefault()` desde el handler React de wheel, evitando el warning `Unable to preventDefault inside passive event listener invocation`.
+- No se encontro ningun `fetch(0)`, `send(0)`, `EventSource` ni `WebSocket` en el flujo de mesas; el request `Bad request syntax ('0')` queda monitoreado en logs porque no fue reproducible desde el codigo actual.
 
 ## Pruebas realizadas
 
