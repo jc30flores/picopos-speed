@@ -157,6 +157,11 @@ def transmit_sale_dte(
     payment_id: int | None = None,
     queue_only: bool = False,
 ) -> DTERecord:
+    from apps.core.models import DTEGlobalSettings
+
+    dte_settings = DTEGlobalSettings.objects.filter(pk=1).first()
+    if not dte_settings or not dte_settings.hacienda_enabled:
+        raise DTEPreflightError("Facturación electrónica desactivada. Las ventas se registran solo localmente.")
     DTE_LOGGER.info("[DTE] send_dte.start order=%s payment=%s source=%s", sale_id, payment_id, source)
     order = Order.objects.select_related("branch", "service_type", "customer").prefetch_related("items__applied_modifiers", "payments__payment_method").get(pk=sale_id)
     if order.dte_document_type != "CF":

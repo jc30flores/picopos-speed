@@ -328,9 +328,19 @@ export type PosQuickSalesHistoryScope = "current_shift" | "time_window";
 export type PosQuickSalesHistoryWindowMinutes = 15 | 30 | 60 | 120 | 240 | 1440;
 
 type FeatureFlagsNormalized = {
+  posEnabled: boolean;
+  openOrdersEnabled: boolean;
   kioskEnabled: boolean;
   customerDisplayEnabled: boolean;
   kitchenDisplayEnabled: boolean;
+  menuDiscountsEnabled: boolean;
+  inventoryModuleEnabled: boolean;
+  reportsEnabled: boolean;
+  clientsEnabled: boolean;
+  settingsEnabled: boolean;
+  dteEnabled: boolean;
+  whatsappEnabled: boolean;
+  emailEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
   inventoryStockPolicy: InventoryStockPolicy;
   inventoryAdvancedEnabled: boolean;
@@ -358,9 +368,19 @@ const normalizePosQuickSalesHistoryWindow = (value: unknown): PosQuickSalesHisto
 
 export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
   const defaults: FeatureFlagsNormalized = {
+    posEnabled: true,
+    openOrdersEnabled: true,
     kioskEnabled: true,
     customerDisplayEnabled: true,
     kitchenDisplayEnabled: true,
+    menuDiscountsEnabled: true,
+    inventoryModuleEnabled: true,
+    reportsEnabled: true,
+    clientsEnabled: true,
+    settingsEnabled: true,
+    dteEnabled: false,
+    whatsappEnabled: true,
+    emailEnabled: true,
     cashCloseExpectedTotalsControlEnabled: true,
     inventoryStockPolicy: "allow",
     inventoryAdvancedEnabled: false,
@@ -379,9 +399,19 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
   if (Array.isArray(raw)) {
     const byKey = Object.fromEntries(raw.map((r: any) => [String(r?.key ?? ''), Boolean(r?.enabled ?? r?.is_enabled)]));
     return {
+      posEnabled: fromMap(byKey, ['module_pos_enabled'], defaults.posEnabled),
+      openOrdersEnabled: fromMap(byKey, ['module_open_orders_enabled'], defaults.openOrdersEnabled),
       kioskEnabled: fromMap(byKey, ['FF_KIOSK_ENABLED'], defaults.kioskEnabled),
       customerDisplayEnabled: fromMap(byKey, ['FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
       kitchenDisplayEnabled: fromMap(byKey, ['FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+      menuDiscountsEnabled: fromMap(byKey, ['module_menu_discounts_enabled'], defaults.menuDiscountsEnabled),
+      inventoryModuleEnabled: fromMap(byKey, ['module_inventory_enabled', 'FF_INVENTORY'], defaults.inventoryModuleEnabled),
+      reportsEnabled: fromMap(byKey, ['module_reports_enabled'], defaults.reportsEnabled),
+      clientsEnabled: fromMap(byKey, ['module_clients_enabled'], defaults.clientsEnabled),
+      settingsEnabled: fromMap(byKey, ['module_settings_enabled'], defaults.settingsEnabled),
+      dteEnabled: fromMap(byKey, ['module_dte_enabled'], defaults.dteEnabled),
+      whatsappEnabled: fromMap(byKey, ['module_whatsapp_enabled'], defaults.whatsappEnabled),
+      emailEnabled: fromMap(byKey, ['module_email_enabled'], defaults.emailEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
       inventoryStockPolicy: defaults.inventoryStockPolicy,
       inventoryAdvancedEnabled: fromMap(byKey, ['FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
@@ -393,9 +423,19 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     };
   }
   return {
+    posEnabled: fromMap(raw, ['posEnabled', 'pos_enabled'], defaults.posEnabled),
+    openOrdersEnabled: fromMap(raw, ['openOrdersEnabled', 'open_orders_enabled'], defaults.openOrdersEnabled),
     kioskEnabled: fromMap(raw, ['kioskEnabled', 'kiosk_enabled', 'FF_KIOSK_ENABLED'], defaults.kioskEnabled),
     customerDisplayEnabled: fromMap(raw, ['customerDisplayEnabled', 'customer_display_enabled', 'FF_CUSTOMER_DISPLAY_ENABLED'], defaults.customerDisplayEnabled),
     kitchenDisplayEnabled: fromMap(raw, ['kitchenDisplayEnabled', 'kitchen_display_enabled', 'FF_KITCHEN_DISPLAY_ENABLED'], defaults.kitchenDisplayEnabled),
+    menuDiscountsEnabled: fromMap(raw, ['menuDiscountsEnabled', 'menu_discounts_enabled'], defaults.menuDiscountsEnabled),
+    inventoryModuleEnabled: fromMap(raw, ['inventoryModuleEnabled', 'inventory_module_enabled'], defaults.inventoryModuleEnabled),
+    reportsEnabled: fromMap(raw, ['reportsEnabled', 'reports_enabled'], defaults.reportsEnabled),
+    clientsEnabled: fromMap(raw, ['clientsEnabled', 'clients_enabled'], defaults.clientsEnabled),
+    settingsEnabled: fromMap(raw, ['settingsEnabled', 'settings_enabled'], defaults.settingsEnabled),
+    dteEnabled: fromMap(raw, ['dteEnabled', 'dte_enabled'], defaults.dteEnabled),
+    whatsappEnabled: fromMap(raw, ['whatsappEnabled', 'whatsapp_enabled'], defaults.whatsappEnabled),
+    emailEnabled: fromMap(raw, ['emailEnabled', 'email_enabled'], defaults.emailEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
     inventoryStockPolicy: normalizeInventoryStockPolicy(raw?.inventoryStockPolicy ?? raw?.inventory_stock_policy),
     inventoryAdvancedEnabled: fromMap(raw, ['inventoryAdvancedEnabled', 'inventory_advanced_enabled', 'FF_INVENTORY'], defaults.inventoryAdvancedEnabled),
@@ -517,9 +557,18 @@ export type FeatureFlag = {
 };
 
 export type FeatureSettings = {
+  posEnabled: boolean;
+  openOrdersEnabled: boolean;
   kioskEnabled: boolean;
   customerDisplayEnabled: boolean;
   kitchenDisplayEnabled: boolean;
+  menuDiscountsEnabled: boolean;
+  reportsEnabled: boolean;
+  clientsEnabled: boolean;
+  settingsEnabled: boolean;
+  dteEnabled: boolean;
+  whatsappEnabled: boolean;
+  emailEnabled: boolean;
   cashCloseExpectedTotalsControlEnabled: boolean;
   cashCloseExpectedTotalsAllowedRoles: string[];
   cashCloseExpectedTotalsVisibleFields: string[];
@@ -530,6 +579,31 @@ export type FeatureSettings = {
   posQuickSalesButtonMode: PosQuickSalesButtonMode;
   posQuickSalesHistoryScope: PosQuickSalesHistoryScope;
   posQuickSalesHistoryWindowMinutes: PosQuickSalesHistoryWindowMinutes;
+};
+
+export type AppearanceSettings = {
+  primaryColor: string;
+  colorPrimary: string;
+  colorPrimaryHover: string;
+  colorPrimarySoft: string;
+  colorPrimaryBorder: string;
+  colorPrimaryText: string;
+  colorPrimaryContrast: string;
+  cssVariables: Record<string, string>;
+};
+
+export type DteSettings = {
+  haciendaEnabled: boolean;
+  ambiente: "00" | "01";
+  baseUrl: string;
+  apiTokenMasked: string;
+  timeoutSeconds: number;
+  retryCount: number;
+  status: string;
+  lastConnectionTestAt: string | null;
+  lastErrorSanitized: string;
+  canManageTechnical: boolean;
+  message?: string;
 };
 
 export type TicketSettings = {
@@ -937,7 +1011,7 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant";
+  role: "superadmin" | "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant";
   isSuperuser: boolean;
   isStaff: boolean;
   redirectTo?: string;
@@ -1258,9 +1332,18 @@ export const getFeatureSettings = async (): Promise<FeatureSettings> => {
   const data = await handleJson<any>(response);
   const normalized = normalizeFeatureFlags(data);
   return {
+    posEnabled: normalized.posEnabled,
+    openOrdersEnabled: normalized.openOrdersEnabled,
     kioskEnabled: normalized.kioskEnabled,
     customerDisplayEnabled: normalized.customerDisplayEnabled,
     kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    menuDiscountsEnabled: normalized.menuDiscountsEnabled,
+    reportsEnabled: normalized.reportsEnabled,
+    clientsEnabled: normalized.clientsEnabled,
+    settingsEnabled: normalized.settingsEnabled,
+    dteEnabled: normalized.dteEnabled,
+    whatsappEnabled: normalized.whatsappEnabled,
+    emailEnabled: normalized.emailEnabled,
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
@@ -1279,8 +1362,17 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
     method: "PATCH",
     body: JSON.stringify({
       kiosk_enabled: payload.kioskEnabled,
+      pos_enabled: payload.posEnabled,
+      open_orders_enabled: payload.openOrdersEnabled,
       customer_display_enabled: payload.customerDisplayEnabled,
       kitchen_display_enabled: payload.kitchenDisplayEnabled,
+      menu_discounts_enabled: payload.menuDiscountsEnabled,
+      reports_enabled: payload.reportsEnabled,
+      clients_enabled: payload.clientsEnabled,
+      settings_enabled: payload.settingsEnabled,
+      dte_enabled: payload.dteEnabled,
+      whatsapp_enabled: payload.whatsappEnabled,
+      email_enabled: payload.emailEnabled,
       cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
       cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
       cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
@@ -1296,9 +1388,18 @@ export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): 
   const data = await handleJson<any>(response);
   const normalized = normalizeFeatureFlags(data);
   return {
+    posEnabled: normalized.posEnabled,
+    openOrdersEnabled: normalized.openOrdersEnabled,
     kioskEnabled: normalized.kioskEnabled,
     customerDisplayEnabled: normalized.customerDisplayEnabled,
     kitchenDisplayEnabled: normalized.kitchenDisplayEnabled,
+    menuDiscountsEnabled: normalized.menuDiscountsEnabled,
+    reportsEnabled: normalized.reportsEnabled,
+    clientsEnabled: normalized.clientsEnabled,
+    settingsEnabled: normalized.settingsEnabled,
+    dteEnabled: normalized.dteEnabled,
+    whatsappEnabled: normalized.whatsappEnabled,
+    emailEnabled: normalized.emailEnabled,
     cashCloseExpectedTotalsControlEnabled: normalized.cashCloseExpectedTotalsControlEnabled,
     cashCloseExpectedTotalsAllowedRoles: data.cash_close_expected_totals_allowed_roles ?? [],
     cashCloseExpectedTotalsVisibleFields: data.cash_close_expected_totals_visible_fields ?? [],
@@ -1319,6 +1420,64 @@ export const getFeatureSettingsOptions = async (): Promise<FeatureSettingsOption
     roles: data.roles ?? [],
     cashCloseExpectedTotalFields: data.cash_close_expected_total_fields ?? [],
   };
+};
+
+const mapAppearanceSettings = (data: any): AppearanceSettings => ({
+  primaryColor: String(data.primary_color ?? "#1F7A4D"),
+  colorPrimary: String(data.color_primary ?? data.primary_color ?? "#1F7A4D"),
+  colorPrimaryHover: String(data.color_primary_hover ?? "#17623E"),
+  colorPrimarySoft: String(data.color_primary_soft ?? "#DDF3E8"),
+  colorPrimaryBorder: String(data.color_primary_border ?? "#7EC8A3"),
+  colorPrimaryText: String(data.color_primary_text ?? "#0D3B26"),
+  colorPrimaryContrast: String(data.color_primary_contrast ?? "#FFFFFF"),
+  cssVariables: data.css_variables ?? {},
+});
+
+export const getAppearanceSettings = async (): Promise<AppearanceSettings> => {
+  const response = await request("/settings/appearance/");
+  return mapAppearanceSettings(await handleJson<any>(response));
+};
+
+export const updateAppearanceSettings = async (payload: { primaryColor?: string; restoreDefault?: boolean }): Promise<AppearanceSettings> => {
+  const response = await request("/settings/appearance/", {
+    method: "PATCH",
+    body: JSON.stringify({ primary_color: payload.primaryColor, restore_default: payload.restoreDefault }),
+  });
+  return mapAppearanceSettings(await handleJson<any>(response));
+};
+
+const mapDteSettings = (data: any): DteSettings => ({
+  haciendaEnabled: Boolean(data.hacienda_enabled),
+  ambiente: (data.ambiente === "01" ? "01" : "00") as "00" | "01",
+  baseUrl: String(data.base_url ?? ""),
+  apiTokenMasked: String(data.api_token_masked ?? ""),
+  timeoutSeconds: Number(data.timeout_seconds ?? 15),
+  retryCount: Number(data.retry_count ?? 3),
+  status: String(data.status ?? "disabled"),
+  lastConnectionTestAt: data.last_connection_test_at ?? null,
+  lastErrorSanitized: String(data.last_error_sanitized ?? ""),
+  canManageTechnical: Boolean(data.can_manage_technical),
+  message: data.message ? String(data.message) : undefined,
+});
+
+export const getDteSettings = async (): Promise<DteSettings> => {
+  const response = await request("/settings/dte/");
+  return mapDteSettings(await handleJson<any>(response));
+};
+
+export const updateDteSettings = async (payload: Partial<DteSettings> & { apiToken?: string }): Promise<DteSettings> => {
+  const response = await request("/settings/dte/", {
+    method: "PATCH",
+    body: JSON.stringify({
+      hacienda_enabled: payload.haciendaEnabled,
+      ambiente: payload.ambiente,
+      base_url: payload.baseUrl,
+      api_token: payload.apiToken,
+      timeout_seconds: payload.timeoutSeconds,
+      retry_count: payload.retryCount,
+    }),
+  });
+  return mapDteSettings(await handleJson<any>(response));
 };
 
 const mapTicketSettings = (data: any): TicketSettings => ({

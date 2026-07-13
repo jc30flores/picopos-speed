@@ -102,6 +102,77 @@ class FeatureFlag(models.Model):
         return f"{self.key} ({'on' if self.is_enabled else 'off'})"
 
 
+class SystemAppearanceSettings(models.Model):
+    DEFAULT_PRIMARY = "#1F7A4D"
+
+    primary_color = models.CharField(max_length=7, default=DEFAULT_PRIMARY)
+    color_primary = models.CharField(max_length=7, default=DEFAULT_PRIMARY)
+    color_primary_hover = models.CharField(max_length=7, default="#17623E")
+    color_primary_soft = models.CharField(max_length=7, default="#DDF3E8")
+    color_primary_border = models.CharField(max_length=7, default="#7EC8A3")
+    color_primary_text = models.CharField(max_length=7, default="#0D3B26")
+    color_primary_contrast = models.CharField(max_length=7, default="#FFFFFF")
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="appearance_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "System appearance settings"
+        verbose_name_plural = "System appearance settings"
+
+    def __str__(self) -> str:
+        return f"Apariencia {self.primary_color}"
+
+
+class DTEGlobalSettings(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_CONFIGURED = "configured"
+    STATUS_INVALID = "invalid"
+    STATUS_DISABLED = "disabled"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pendiente"),
+        (STATUS_CONFIGURED, "Configurado"),
+        (STATUS_INVALID, "Inválido"),
+        (STATUS_DISABLED, "Desactivado"),
+    ]
+    AMBIENTE_TEST = "00"
+    AMBIENTE_PROD = "01"
+    AMBIENTE_CHOICES = [
+        (AMBIENTE_TEST, "Pruebas"),
+        (AMBIENTE_PROD, "Producción"),
+    ]
+
+    hacienda_enabled = models.BooleanField(default=False)
+    ambiente = models.CharField(max_length=2, choices=AMBIENTE_CHOICES, default=AMBIENTE_TEST)
+    base_url = models.URLField(blank=True, default="")
+    api_token = models.CharField(max_length=255, blank=True, default="")
+    timeout_seconds = models.PositiveIntegerField(default=15)
+    retry_count = models.PositiveIntegerField(default=3)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DISABLED)
+    last_connection_test_at = models.DateTimeField(null=True, blank=True)
+    last_error_sanitized = models.TextField(blank=True, default="")
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dte_global_settings_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "DTE global settings"
+        verbose_name_plural = "DTE global settings"
+
+    def __str__(self) -> str:
+        return "Facturación electrónica activa" if self.hacienda_enabled else "Facturación electrónica desactivada"
+
+
 class TicketSettings(models.Model):
     ticket_logo = models.FileField(upload_to="ticket_logos/", null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

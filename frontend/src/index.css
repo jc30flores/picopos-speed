@@ -8,7 +8,7 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    /* Pico de Gallo POS Design System - Light Mode */
+    /* GastroPOSV Design System - Light Mode */
     --background: 0 0% 96%;
     --foreground: 209 61% 16%;
 
@@ -59,6 +59,12 @@ All colors MUST be HSL.
     /* Gradients */
     --gradient-primary: linear-gradient(135deg, hsl(209, 61%, 16%), hsl(209, 34%, 24%));
     --gradient-accent: linear-gradient(135deg, hsl(152, 62%, 34%), hsl(157, 48%, 42%));
+    --color-primary: #1F7A4D;
+    --color-primary-hover: #17623E;
+    --color-primary-soft: #DDF3E8;
+    --color-primary-border: #7EC8A3;
+    --color-primary-text: #0D3B26;
+    --color-primary-contrast: #FFFFFF;
     --gradient-subtle: linear-gradient(180deg, hsl(0, 0%, 100%), hsl(220, 9%, 98%));
 
     /* Shadows */
@@ -74,7 +80,7 @@ All colors MUST be HSL.
   }
 
   .dark {
-    /* Pico de Gallo POS Design System - Dark Mode */
+    /* GastroPOSV Design System - Dark Mode */
     --background: 222 47% 5%;
     --foreground: 0 0% 98%;
 

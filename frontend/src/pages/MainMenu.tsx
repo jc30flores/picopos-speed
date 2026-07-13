@@ -10,6 +10,7 @@ import { ClockSV } from "@/components/ClockSV";
 import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
 import { toast } from "sonner";
+import { APP_DISPLAY_NAME } from "@/lib/branding";
 
 const iconByModule: Partial<Record<AppModuleKey, LucideIcon>> = {
   pos: ShoppingCart,
@@ -32,7 +33,20 @@ const MainMenu = () => {
   const { user, logout } = useAuth();
   const { accessState, attendanceLoading, attendanceResolved, attendanceError } = useAttendanceAccess();
   const [theme, setTheme] = useState<"light" | "dark">(() => (document.documentElement.classList.contains("dark") ? "dark" : "light"));
-  const [featureVisibility, setFeatureVisibility] = useState({ kiosk: true, kitchen: true, customerDisplay: true, loaded: false });
+  const [featureVisibility, setFeatureVisibility] = useState({
+    pos: true,
+    openOrders: true,
+    kiosk: true,
+    kitchen: true,
+    customerDisplay: true,
+    menuDiscounts: true,
+    inventory: true,
+    reports: true,
+    clients: true,
+    settings: true,
+    dte: false,
+    loaded: false,
+  });
 
   useEffect(() => {
     Promise.all([getFeatureSettings(), getFeatureFlags().catch(() => [])])
@@ -40,7 +54,20 @@ const MainMenu = () => {
         const normalizedFromSettings = normalizeFeatureFlags(settings);
         const normalizedFromCore = normalizeFeatureFlags(coreFlags.map((f) => ({ key: f.key, enabled: f.isEnabled })));
         const normalized = { ...normalizedFromCore, ...normalizedFromSettings };
-        setFeatureVisibility({ kiosk: normalized.kioskEnabled, kitchen: normalized.kitchenDisplayEnabled, customerDisplay: normalized.customerDisplayEnabled, loaded: true });
+        setFeatureVisibility({
+          pos: normalized.posEnabled,
+          openOrders: normalized.openOrdersEnabled,
+          kiosk: normalized.kioskEnabled,
+          kitchen: normalized.kitchenDisplayEnabled,
+          customerDisplay: normalized.customerDisplayEnabled,
+          menuDiscounts: normalized.menuDiscountsEnabled,
+          inventory: normalized.inventoryModuleEnabled,
+          reports: normalized.reportsEnabled,
+          clients: normalized.clientsEnabled,
+          settings: normalized.settingsEnabled || Boolean(user?.isSuperuser || user?.role === "superadmin"),
+          dte: normalized.dteEnabled,
+          loaded: true,
+        });
       })
       .catch((error) => {
         const status = error instanceof Error && "status" in error ? (error as { status?: number }).status : undefined;
@@ -50,20 +77,27 @@ const MainMenu = () => {
           keep_authenticated: true,
         });
       });
-  }, []);
+  }, [user?.isSuperuser, user?.role]);
 
   const cards = useMemo(
     () =>
       filterModulesForUser(user, appModules)
-        .filter((module) => module.key !== "dte")
         .filter((module) => {
+          if (module.key === "pos") return featureVisibility.pos !== false;
+          if (module.key === "pending") return featureVisibility.openOrders !== false;
           if (module.key === "kiosk") return featureVisibility.kiosk !== false;
           if (module.key === "kitchen") return featureVisibility.kitchen !== false;
           if (module.key === "orders_customers") return featureVisibility.customerDisplay !== false;
+          if (module.key === "menu_discounts") return featureVisibility.menuDiscounts !== false;
+          if (module.key === "inventory") return featureVisibility.inventory !== false;
+          if (module.key === "registers") return featureVisibility.reports !== false;
+          if (module.key === "clients") return featureVisibility.clients !== false;
+          if (module.key === "settings") return featureVisibility.settings !== false;
+          if (module.key === "dte") return featureVisibility.dte !== false;
           return true;
         })
         .map((module) => ({ ...module, icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON })),
-    [featureVisibility.customerDisplay, featureVisibility.kiosk, featureVisibility.kitchen, user]
+    [featureVisibility, user]
   );
   const isWorker = user?.role === "worker";
 
@@ -102,7 +136,7 @@ const MainMenu = () => {
         </div>
         <div className="space-y-1 text-center">
           <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Centro de Control</p>
-          <h1 className="text-3xl font-bold text-foreground sm:text-4xl">Pico de Gallo POS</h1>
+          <h1 className="text-3xl font-bold text-foreground sm:text-4xl">{APP_DISPLAY_NAME}</h1>
           <p className="text-sm text-muted-foreground">Bienvenido, {user?.username ?? "Usuario"}</p>
           <div className="mx-auto mt-4 max-w-md">
             <ClockSV className="bg-background/50" timeClassName="text-5xl sm:text-6xl" />

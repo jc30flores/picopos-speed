@@ -3,7 +3,7 @@ from django.db.models.expressions import RawSQL
 from rest_framework import serializers
 import re
 
-from apps.core.models import ActivityCatalog, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig
+from apps.core.models import ActivityCatalog, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig
 from apps.menu.models import Product
 
 
@@ -80,6 +80,111 @@ class FeatureFlagSerializer(serializers.ModelSerializer):
     class Meta:
         model = FeatureFlag
         fields = ["id", "key", "label", "description", "is_enabled", "metadata"]
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    cleaned = value.strip().lstrip("#")
+    return int(cleaned[0:2], 16), int(cleaned[2:4], 16), int(cleaned[4:6], 16)
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#" + "".join(f"{max(0, min(255, int(c))):02X}" for c in rgb)
+
+
+def _mix(color: tuple[int, int, int], target: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    return tuple(round(color[i] + (target[i] - color[i]) * amount) for i in range(3))
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    def channel(v: int) -> float:
+        n = v / 255
+        return n / 12.92 if n <= 0.03928 else ((n + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(v) for v in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    high, low = sorted([_relative_luminance(a), _relative_luminance(b)], reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def build_color_tokens(primary: str) -> dict[str, str]:
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", primary or ""):
+        raise serializers.ValidationError({"primary_color": "Color HEX inválido. Usa formato #RRGGBB."})
+    rgb = _hex_to_rgb(primary)
+    white = (255, 255, 255)
+    black = (15, 23, 42)
+    if max(_contrast(rgb, white), _contrast(rgb, black)) < 4.5:
+        raise serializers.ValidationError({"primary_color": "El color no alcanza contraste suficiente para texto."})
+    if _contrast(rgb, (255, 255, 255)) < 2.2 or _contrast(rgb, (17, 24, 39)) < 2.2:
+        raise serializers.ValidationError({"primary_color": "El color se pierde en modo claro u oscuro. Elige un tono más definido."})
+    contrast = "#FFFFFF" if _contrast(rgb, white) >= _contrast(rgb, black) else "#0F172A"
+    hover = _mix(rgb, black if _relative_luminance(rgb) > 0.45 else white, 0.18)
+    soft = _mix(rgb, white, 0.82)
+    border = _mix(rgb, white, 0.45)
+    text = _mix(rgb, black, 0.5) if _relative_luminance(rgb) > 0.45 else _mix(rgb, white, 0.45)
+    return {
+        "primary_color": primary.upper(),
+        "color_primary": primary.upper(),
+        "color_primary_hover": _rgb_to_hex(hover),
+        "color_primary_soft": _rgb_to_hex(soft),
+        "color_primary_border": _rgb_to_hex(border),
+        "color_primary_text": _rgb_to_hex(text),
+        "color_primary_contrast": contrast,
+    }
+
+
+class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
+    css_variables = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SystemAppearanceSettings
+        fields = [
+            "primary_color",
+            "color_primary",
+            "color_primary_hover",
+            "color_primary_soft",
+            "color_primary_border",
+            "color_primary_text",
+            "color_primary_contrast",
+            "css_variables",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_css_variables(self, obj: SystemAppearanceSettings) -> dict[str, str]:
+        return {
+            "--color-primary": obj.color_primary,
+            "--color-primary-hover": obj.color_primary_hover,
+            "--color-primary-soft": obj.color_primary_soft,
+            "--color-primary-border": obj.color_primary_border,
+            "--color-primary-text": obj.color_primary_text,
+            "--color-primary-contrast": obj.color_primary_contrast,
+        }
+
+
+class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
+    api_token_masked = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DTEGlobalSettings
+        fields = [
+            "hacienda_enabled",
+            "ambiente",
+            "base_url",
+            "api_token_masked",
+            "timeout_seconds",
+            "retry_count",
+            "status",
+            "last_connection_test_at",
+            "last_error_sanitized",
+            "updated_at",
+        ]
+
+    def get_api_token_masked(self, obj: DTEGlobalSettings) -> str:
+        if not obj.api_token:
+            return ""
+        return f"{obj.api_token[:4]}...{obj.api_token[-4:]}" if len(obj.api_token) > 8 else "********"
 
 
 from apps.core.models import Branch

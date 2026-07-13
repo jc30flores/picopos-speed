@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.audit import log_audit
+from apps.core.models import DTEGlobalSettings
 from apps.core.permissions import _get_profile
 from apps.core.timezone_utils import parse_business_date_range
 from apps.dte.models import CreditNote, DTEInvalidation, DTERecord
@@ -27,6 +28,18 @@ from apps.dte.services.availability import evaluate_record_actions
 from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
 
 logger = logging.getLogger("apps.dte")
+
+
+def _dte_enabled() -> bool:
+    settings = DTEGlobalSettings.objects.filter(pk=1).first()
+    return bool(settings and settings.hacienda_enabled)
+
+
+def _dte_disabled_response():
+    return Response(
+        {"detail": "Facturación electrónica desactivada. Las ventas se registran solo localmente."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 def _extract_delivery_phone(request) -> str | None:
@@ -55,6 +68,8 @@ class DTEIssuedListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
+        if not _dte_enabled():
+            return DTERecord.objects.none()
         ensure_whatsapp_order_columns()
         qs = DTERecord.objects.select_related("order", "branch", "order__customer").prefetch_related("credit_notes")
         if not has_whatsapp_order_columns():
@@ -140,6 +155,8 @@ class DTEResendView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         logger.info(
             "[DTE RESEND] user=%s auth=%s perms=%s is_authenticated=%s",
             getattr(request.user, "username", "anonymous"),
@@ -186,6 +203,8 @@ class DTESendEmailView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
         result = deliver_dte_to_client(
             record,
@@ -205,6 +224,8 @@ class DTEBulkDeliveryView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
         result = deliver_dte_to_client(
             record,
@@ -224,6 +245,8 @@ class DTEOrderBulkDeliveryView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, order_id: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         record = DTERecord.objects.select_related("order", "order__customer").filter(order_id=order_id).order_by("-id").first()
         if not record:
             return Response({"detail": "No existe DTE para esta venta"}, status=status.HTTP_404_NOT_FOUND)
@@ -245,6 +268,8 @@ class DTESendWhatsAppView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         record = generics.get_object_or_404(DTERecord.objects.select_related("order", "order__customer"), pk=pk)
         result = deliver_dte_to_client(
             record,
@@ -264,6 +289,8 @@ class DTEInvalidateView(APIView):
     permission_classes = [IsDTECashierOrAbove]
 
     def post(self, request, pk: int):
+        if not _dte_enabled():
+            return _dte_disabled_response()
         def _resolve_actor_name(user) -> str:
             full = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
             return (

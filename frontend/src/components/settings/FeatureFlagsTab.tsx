@@ -9,9 +9,18 @@ import { cn } from "@/lib/utils";
 import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 
 const defaultState: FeatureSettings = {
+  posEnabled: true,
+  openOrdersEnabled: true,
   kioskEnabled: true,
   customerDisplayEnabled: true,
   kitchenDisplayEnabled: true,
+  menuDiscountsEnabled: true,
+  reportsEnabled: true,
+  clientsEnabled: true,
+  settingsEnabled: true,
+  dteEnabled: false,
+  whatsappEnabled: true,
+  emailEnabled: true,
   cashCloseExpectedTotalsControlEnabled: true,
   cashCloseExpectedTotalsAllowedRoles: [],
   cashCloseExpectedTotalsVisibleFields: [],
@@ -24,7 +33,23 @@ const defaultState: FeatureSettings = {
   posQuickSalesHistoryWindowMinutes: 60,
 };
 
-type ToggleSettingKey = "posProductImagesEnabled" | "tableMapEnabled" | "kioskEnabled" | "customerDisplayEnabled" | "kitchenDisplayEnabled" | "inventoryAdvancedEnabled" | "cashCloseExpectedTotalsControlEnabled";
+type ToggleSettingKey =
+  | "posEnabled"
+  | "openOrdersEnabled"
+  | "posProductImagesEnabled"
+  | "tableMapEnabled"
+  | "kioskEnabled"
+  | "customerDisplayEnabled"
+  | "kitchenDisplayEnabled"
+  | "menuDiscountsEnabled"
+  | "inventoryAdvancedEnabled"
+  | "reportsEnabled"
+  | "clientsEnabled"
+  | "settingsEnabled"
+  | "dteEnabled"
+  | "whatsappEnabled"
+  | "emailEnabled"
+  | "cashCloseExpectedTotalsControlEnabled";
 
 type ToggleSetting = {
   key: ToggleSettingKey;
@@ -38,6 +63,8 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
     title: "POS",
     eyebrow: "Venta rápida",
     items: [
+      { key: "posEnabled", title: "POS", description: "Mostrar u ocultar venta rápida/POS." },
+      { key: "openOrdersEnabled", title: "Pedidos clientes", description: "Mostrar u ocultar pedidos abiertos y pendientes." },
       {
         key: "posProductImagesEnabled",
         title: "Imágenes de productos en POS",
@@ -53,6 +80,7 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
     items: [
       { key: "customerDisplayEnabled", title: "Pantalla Cliente", description: "Mostrar u ocultar la pantalla cliente para todos los usuarios." },
       { key: "kitchenDisplayEnabled", title: "Pantalla Cocina", description: "Mostrar u ocultar Cocina para todos los usuarios." },
+      { key: "menuDiscountsEnabled", title: "Menú & descuentos", description: "Mostrar u ocultar gestión de menú y descuentos." },
     ],
   },
   {
@@ -60,6 +88,24 @@ const featureSections: Array<{ title: string; eyebrow: string; items: ToggleSett
     eyebrow: "Stock",
     items: [
       { key: "inventoryAdvancedEnabled", title: "Inventario avanzado", description: "Activa proveedores, costos y órdenes de compra dentro del inventario." },
+    ],
+  },
+  {
+    title: "Reportes y clientes",
+    eyebrow: "Administración",
+    items: [
+      { key: "reportsEnabled", title: "Reportes", description: "Mostrar u ocultar reportes y registros." },
+      { key: "clientsEnabled", title: "Clientes", description: "Mostrar u ocultar gestión de clientes." },
+      { key: "settingsEnabled", title: "Configuración para admins", description: "Superadmin siempre conserva acceso para reactivar módulos." },
+    ],
+  },
+  {
+    title: "Fiscal y comunicación",
+    eyebrow: "DTE",
+    items: [
+      { key: "dteEnabled", title: "DTE / Hacienda", description: "Mostrar u ocultar funciones fiscales DTE." },
+      { key: "whatsappEnabled", title: "WhatsApp", description: "Mostrar acciones de entrega fiscal por WhatsApp." },
+      { key: "emailEnabled", title: "Correo", description: "Mostrar acciones de entrega fiscal por correo." },
     ],
   },
 ];

@@ -426,6 +426,12 @@ def _get_or_create_pending_outbox(order, payment, payload: dict, dte_record: DTE
 
 
 def send_or_queue_dte(order, payment, payload: dict, dte_record: DTERecord | None = None, *, attempt_immediate: bool = True) -> DTEOutbox:
+    from apps.core.models import DTEGlobalSettings
+
+    dte_settings = DTEGlobalSettings.objects.filter(pk=1).first()
+    if not dte_settings or not dte_settings.hacienda_enabled:
+        DTE_LOGGER.info("[DTE OUTBOX] disabled order=%s payment=%s action=skip_enqueue", order.id, getattr(payment, "id", None))
+        raise DTEPreflightError("Facturación electrónica desactivada. Las ventas se registran solo localmente.")
     numero_control, codigo_generacion = _extract(payload)
     DTE_LOGGER.info(
         "dte.outbox.enqueue order_id=%s payment_id=%s dte_record_id=%s numero_control=%s codigo_generacion=%s has_dte=%s payload_size=%s attempt_immediate=%s",

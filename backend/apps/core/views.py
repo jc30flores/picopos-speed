@@ -9,20 +9,74 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import ActivityCatalog, Branch, Customer, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, TaxConfig, TicketSettings
+from apps.core.models import ActivityCatalog, Branch, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig, TicketSettings
 from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
-from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive
-from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, TaxConfigSerializer
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, is_admin, is_superadmin
+from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
 
 
 logger = logging.getLogger(__name__)
 
 
 FEATURE_FLAG_DEFAULTS = {
+    "module_pos_enabled": {
+        "label": "POS",
+        "description": "Mostrar u ocultar venta rápida/POS.",
+        "default": True,
+        "metadata": {"category": "Venta rápida / POS"},
+    },
+    "module_open_orders_enabled": {
+        "label": "Pedidos clientes",
+        "description": "Mostrar u ocultar pedidos abiertos y pendientes.",
+        "default": True,
+        "metadata": {"category": "Venta rápida / POS"},
+    },
     "FF_KIOSK_ENABLED": {
         "label": "KIOSK",
         "description": "Mostrar u ocultar el módulo KIOSK para todos los usuarios.",
         "default": True,
+    },
+    "module_menu_discounts_enabled": {
+        "label": "Menú & descuentos",
+        "description": "Mostrar u ocultar gestión de menú y descuentos.",
+        "default": True,
+        "metadata": {"category": "Operación / Pantallas"},
+    },
+    "module_reports_enabled": {
+        "label": "Reportes",
+        "description": "Mostrar u ocultar reportes y registros.",
+        "default": True,
+        "metadata": {"category": "Reportes"},
+    },
+    "module_clients_enabled": {
+        "label": "Clientes",
+        "description": "Mostrar u ocultar la gestión de clientes.",
+        "default": True,
+        "metadata": {"category": "Clientes"},
+    },
+    "module_settings_enabled": {
+        "label": "Configuración para administradores",
+        "description": "Oculta Configuración a administradores; superadmin siempre mantiene acceso.",
+        "default": True,
+        "metadata": {"category": "Seguridad / Caja"},
+    },
+    "module_dte_enabled": {
+        "label": "DTE / Hacienda",
+        "description": "Mostrar u ocultar funciones fiscales DTE.",
+        "default": False,
+        "metadata": {"category": "Fiscal / DTE"},
+    },
+    "module_whatsapp_enabled": {
+        "label": "WhatsApp fiscal",
+        "description": "Permitir acciones de entrega fiscal por WhatsApp.",
+        "default": True,
+        "metadata": {"category": "Comunicación"},
+    },
+    "module_email_enabled": {
+        "label": "Correo fiscal",
+        "description": "Permitir acciones de entrega fiscal por correo.",
+        "default": True,
+        "metadata": {"category": "Comunicación"},
     },
     "FF_CUSTOMER_DISPLAY_ENABLED": {
         "label": "Pantalla Cliente",
@@ -104,9 +158,18 @@ def get_feature_settings_payload() -> dict:
         stock_policy = "allow"
     quick_sales = get_pos_quick_sales_settings()
     return {
+        "pos_enabled": bool(flags["module_pos_enabled"].is_enabled),
+        "open_orders_enabled": bool(flags["module_open_orders_enabled"].is_enabled),
         "kiosk_enabled": bool(flags["FF_KIOSK_ENABLED"].is_enabled),
         "customer_display_enabled": bool(flags["FF_CUSTOMER_DISPLAY_ENABLED"].is_enabled),
         "kitchen_display_enabled": bool(flags["FF_KITCHEN_DISPLAY_ENABLED"].is_enabled),
+        "menu_discounts_enabled": bool(flags["module_menu_discounts_enabled"].is_enabled),
+        "reports_enabled": bool(flags["module_reports_enabled"].is_enabled),
+        "clients_enabled": bool(flags["module_clients_enabled"].is_enabled),
+        "settings_enabled": bool(flags["module_settings_enabled"].is_enabled),
+        "dte_enabled": bool(flags["module_dte_enabled"].is_enabled),
+        "whatsapp_enabled": bool(flags["module_whatsapp_enabled"].is_enabled),
+        "email_enabled": bool(flags["module_email_enabled"].is_enabled),
         "cash_close_expected_totals_control_enabled": bool(totals_flag.is_enabled),
         "cash_close_expected_totals_allowed_roles": list(metadata.get("allowed_roles") or []),
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
@@ -185,7 +248,7 @@ class FeatureSettingsView(APIView):
                 getattr(self.request.user, "id", None),
                 role or "unknown",
             )
-        return [IsAdmin()]
+        return [IsSuperAdmin()]
 
     def get(self, request):
         role = getattr(getattr(request.user, "profile", None), "role", None)
@@ -201,9 +264,18 @@ class FeatureSettingsView(APIView):
     def patch(self, request):
         _ensure_feature_settings_flags()
         mapping = {
+            "pos_enabled": "module_pos_enabled",
+            "open_orders_enabled": "module_open_orders_enabled",
             "kiosk_enabled": "FF_KIOSK_ENABLED",
             "customer_display_enabled": "FF_CUSTOMER_DISPLAY_ENABLED",
             "kitchen_display_enabled": "FF_KITCHEN_DISPLAY_ENABLED",
+            "menu_discounts_enabled": "module_menu_discounts_enabled",
+            "reports_enabled": "module_reports_enabled",
+            "clients_enabled": "module_clients_enabled",
+            "settings_enabled": "module_settings_enabled",
+            "dte_enabled": "module_dte_enabled",
+            "whatsapp_enabled": "module_whatsapp_enabled",
+            "email_enabled": "module_email_enabled",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
             "inventory_advanced_enabled": "FF_INVENTORY",
             "pos_product_images_enabled": "pos_product_images_enabled",
@@ -211,7 +283,12 @@ class FeatureSettingsView(APIView):
         }
         for field, key in mapping.items():
             if field in request.data:
-                FeatureFlag.objects.filter(key=key).update(is_enabled=bool(request.data.get(field)))
+                previous = FeatureFlag.objects.get(key=key)
+                next_value = bool(request.data.get(field))
+                if previous.is_enabled != next_value:
+                    FeatureFlag.objects.filter(key=key).update(is_enabled=next_value)
+                    from apps.core.audit import log_audit
+                    log_audit(request, "features.toggle", "FeatureFlag", key, {"field": field, "previous": previous.is_enabled, "new": next_value})
 
         totals_flag = FeatureFlag.objects.get(key="FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED")
         metadata = dict(totals_flag.metadata or {})
@@ -317,10 +394,106 @@ class FeatureSettingsOptionsView(APIView):
 
         roles = []
         for code, label in UserProfile.ROLE_CHOICES:
-            if code == "admin":
+            if code in {"admin", "superadmin"}:
                 continue
             roles.append({"code": code, "label": label})
         return Response({"roles": roles, "cash_close_expected_total_fields": CASH_EXPECTED_FIELDS})
+
+
+class AppearanceSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        settings, _ = SystemAppearanceSettings.objects.get_or_create(pk=1)
+        return Response(SystemAppearanceSettingsSerializer(settings).data)
+
+    @transaction.atomic
+    def patch(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Sin permisos para cambiar apariencia."}, status=status.HTTP_403_FORBIDDEN)
+        settings, _ = SystemAppearanceSettings.objects.select_for_update().get_or_create(pk=1)
+        if request.data.get("restore_default"):
+            tokens = build_color_tokens(SystemAppearanceSettings.DEFAULT_PRIMARY)
+        else:
+            tokens = build_color_tokens(str(request.data.get("primary_color") or "").strip())
+        previous = settings.primary_color
+        for field, value in tokens.items():
+            setattr(settings, field, value)
+        settings.updated_by = request.user
+        settings.save()
+        from apps.core.audit import log_audit
+        log_audit(request, "appearance.update", "SystemAppearanceSettings", settings.id, {"previous": previous, "new": settings.primary_color})
+        return Response(SystemAppearanceSettingsSerializer(settings).data)
+
+
+def get_dte_settings() -> DTEGlobalSettings:
+    settings, _ = DTEGlobalSettings.objects.get_or_create(pk=1)
+    return settings
+
+
+class DTEGlobalSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def get(self, request):
+        settings = get_dte_settings()
+        data = DTEGlobalSettingsSerializer(settings).data
+        data["can_manage_technical"] = is_superadmin(request.user)
+        data["message"] = (
+            "Facturación electrónica desactivada. Las ventas se registran solo localmente."
+            if not settings.hacienda_enabled
+            else "Facturación electrónica activa."
+        )
+        return Response(data)
+
+    @transaction.atomic
+    def patch(self, request):
+        if not is_superadmin(request.user):
+            return Response({"detail": "Solo superadmin puede cambiar configuración técnica DTE."}, status=status.HTTP_403_FORBIDDEN)
+        settings = DTEGlobalSettings.objects.select_for_update().get_or_create(pk=1)[0]
+        previous = {
+            "hacienda_enabled": settings.hacienda_enabled,
+            "ambiente": settings.ambiente,
+            "base_url": settings.base_url,
+            "api_token": "***" if settings.api_token else "",
+            "timeout_seconds": settings.timeout_seconds,
+            "retry_count": settings.retry_count,
+        }
+        if "hacienda_enabled" in request.data:
+            settings.hacienda_enabled = bool(request.data.get("hacienda_enabled"))
+        if "ambiente" in request.data:
+            ambiente = str(request.data.get("ambiente") or DTEGlobalSettings.AMBIENTE_TEST)
+            if ambiente not in {DTEGlobalSettings.AMBIENTE_TEST, DTEGlobalSettings.AMBIENTE_PROD}:
+                return Response({"ambiente": "Ambiente inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            settings.ambiente = ambiente
+        if "base_url" in request.data:
+            settings.base_url = str(request.data.get("base_url") or "").strip()
+        if "api_token" in request.data and str(request.data.get("api_token") or "").strip():
+            settings.api_token = str(request.data.get("api_token")).strip()
+        if "timeout_seconds" in request.data:
+            settings.timeout_seconds = max(1, min(120, int(request.data.get("timeout_seconds") or 15)))
+        if "retry_count" in request.data:
+            settings.retry_count = max(0, min(10, int(request.data.get("retry_count") or 0)))
+        if not settings.hacienda_enabled:
+            settings.status = DTEGlobalSettings.STATUS_DISABLED
+        elif not settings.base_url or not settings.api_token:
+            settings.status = DTEGlobalSettings.STATUS_PENDING
+        else:
+            settings.status = DTEGlobalSettings.STATUS_CONFIGURED
+        settings.updated_by = request.user
+        settings.save()
+        FeatureFlag.objects.update_or_create(
+            key="module_dte_enabled",
+            defaults={"label": "DTE / Hacienda", "description": "Mostrar u ocultar funciones fiscales DTE.", "is_enabled": settings.hacienda_enabled},
+        )
+        from apps.core.audit import log_audit
+        log_audit(
+            request,
+            "dte.settings.update",
+            "DTEGlobalSettings",
+            settings.id,
+            {"previous": previous, "new": {**previous, "hacienda_enabled": settings.hacienda_enabled, "ambiente": settings.ambiente, "base_url": settings.base_url, "api_token": "***" if settings.api_token else ""}},
+        )
+        return Response(DTEGlobalSettingsSerializer(settings).data)
 
 
 class BranchListView(generics.ListAPIView):
