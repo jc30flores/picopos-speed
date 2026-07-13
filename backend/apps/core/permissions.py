@@ -29,7 +29,39 @@ def is_manager(user) -> bool:
 
 
 def can_manage_features(user) -> bool:
-    return is_superadmin(user)
+    return bool(is_superadmin(user) or _role_is(user, {"admin"}))
+
+
+ADMIN_MANAGED_FEATURE_KEYS = {
+    "operation_mode",
+    "default_pos_entry",
+    "allow_table_merge",
+    "allow_table_transfer",
+    "allow_split_by_guest",
+    "allow_split_by_item",
+    "table_map_enabled",
+    "inventory_stock_policy",
+    "inventory_advanced_enabled",
+    "pos_product_images_enabled",
+    "cash_close_expected_totals_control_enabled",
+    "cash_close_expected_totals_allowed_roles",
+    "cash_close_expected_totals_visible_fields",
+    "pos_quick_sales_button_mode",
+    "pos_quick_sales_history_scope",
+    "pos_quick_sales_history_window_minutes",
+}
+
+
+def user_can_manage_feature_key(user, key: str) -> bool:
+    if is_superadmin(user):
+        return True
+    if _role_is(user, {"admin"}):
+        return key in ADMIN_MANAGED_FEATURE_KEYS
+    return False
+
+
+def user_can_view_features(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, {"admin"}))
 
 
 def can_manage_dte_settings(user) -> bool:

@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 
 from apps.core.models import ActivityCatalog, Branch, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig, TicketSettings
 from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
-from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, can_view_dte, is_admin, is_superadmin
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, can_view_dte, is_admin, is_superadmin, user_can_manage_feature_key, user_can_view_features
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
 from apps.dte.runtime import DISABLED_MESSAGE, get_dte_runtime_status
 
@@ -131,7 +131,33 @@ def _ensure_feature_settings_flags():
         )
 
 
-def get_feature_settings_payload() -> dict:
+ADMIN_FEATURE_SETTINGS_FIELDS = {
+    "operation_mode",
+    "default_pos_entry",
+    "allow_table_merge",
+    "allow_table_transfer",
+    "allow_split_by_guest",
+    "allow_split_by_item",
+    "table_map_enabled",
+    "inventory_stock_policy",
+    "inventory_advanced_enabled",
+    "pos_product_images_enabled",
+    "cash_close_expected_totals_control_enabled",
+    "cash_close_expected_totals_allowed_roles",
+    "cash_close_expected_totals_visible_fields",
+    "pos_quick_sales_button_mode",
+    "pos_quick_sales_history_scope",
+    "pos_quick_sales_history_window_minutes",
+}
+
+
+def _filter_feature_settings_payload_for_user(payload: dict, user) -> dict:
+    if is_superadmin(user):
+        return payload
+    return {key: value for key, value in payload.items() if key in ADMIN_FEATURE_SETTINGS_FIELDS}
+
+
+def get_feature_settings_payload(user=None) -> dict:
     _ensure_feature_settings_flags()
     flags = {item.key: item for item in FeatureFlag.objects.filter(key__in=FEATURE_FLAG_DEFAULTS.keys())}
     totals_flag = flags["FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED"]
@@ -150,7 +176,7 @@ def get_feature_settings_payload() -> dict:
     default_pos_entry = str(table_metadata.get("default_pos_entry") or ("table_map" if operation_mode == "table_service" else "quick_pos")).strip().lower()
     if operation_mode == "quick_pos" or default_pos_entry not in {"quick_pos", "table_map"}:
         default_pos_entry = "quick_pos"
-    return {
+    payload = {
         "pos_enabled": bool(flags["module_pos_enabled"].is_enabled),
         "open_orders_enabled": bool(flags["module_open_orders_enabled"].is_enabled),
         "kiosk_enabled": bool(flags["FF_KIOSK_ENABLED"].is_enabled),
@@ -177,6 +203,7 @@ def get_feature_settings_payload() -> dict:
         "pos_quick_sales_history_scope": quick_sales["history_scope"],
         "pos_quick_sales_history_window_minutes": quick_sales["history_window_minutes"],
     }
+    return _filter_feature_settings_payload_for_user(payload, user) if user is not None else payload
 
 
 class ServiceTypeListView(generics.ListAPIView):
@@ -263,10 +290,16 @@ class FeatureFlagDetailView(generics.RetrieveUpdateAPIView):
 
 
 class FeatureSettingsView(APIView):
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
 
     def get_permissions(self):
-        return [IsSuperAdmin()]
+        return [IsAuthenticatedAndActive()]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not user_can_view_features(request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("No tienes permiso para administrar Funciones.")
 
     def get(self, request):
         role = getattr(getattr(request.user, "profile", None), "role", None)
@@ -276,11 +309,20 @@ class FeatureSettingsView(APIView):
             getattr(request.user, "id", None),
             print_role,
         )
-        return Response(get_feature_settings_payload())
+        return Response(get_feature_settings_payload(request.user))
 
     @transaction.atomic
     def patch(self, request):
         _ensure_feature_settings_flags()
+        disallowed = sorted(str(field) for field in request.data.keys() if not user_can_manage_feature_key(request.user, str(field)))
+        if disallowed:
+            return Response(
+                {
+                    "detail": "No tienes permiso para modificar estas funciones.",
+                    "fields": disallowed,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         mapping = {
             "pos_enabled": "module_pos_enabled",
             "open_orders_enabled": "module_open_orders_enabled",
@@ -362,7 +404,7 @@ class FeatureSettingsView(APIView):
             table_flag.metadata = table_metadata
             table_flag.is_enabled = operation_mode != "quick_pos"
             table_flag.save(update_fields=["metadata", "is_enabled"])
-        return Response(get_feature_settings_payload())
+        return Response(get_feature_settings_payload(request.user))
 
 
 
@@ -430,7 +472,13 @@ class TicketLogoView(APIView):
 
 
 class FeatureSettingsOptionsView(APIView):
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not user_can_view_features(request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("No tienes permiso para administrar Funciones.")
 
     def get(self, request):
         from apps.users.models import UserProfile

@@ -15,10 +15,12 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState("employees");
   const { user } = useAuth();
   const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
+  const isAdmin = Boolean(user?.role === "admin");
+  const canViewFeatures = isSuperadmin || isAdmin;
   const tabs = [
     { label: "Empleados", value: "employees" },
     { label: "Horarios", value: "schedules" },
-    ...(isSuperadmin ? [{ label: "Funciones", value: "features" }] : []),
+    ...(canViewFeatures ? [{ label: "Funciones", value: "features" }] : []),
     { label: "Apariencia", value: "appearance" },
     ...(isSuperadmin ? [{ label: "Hacienda / DTE", value: "dte-settings" }] : []),
     { label: "Tipos de Pedido", value: "order-types" },
@@ -46,7 +48,7 @@ const Settings = () => {
         </TabsContent>
 
         <TabsContent value="features" className="mt-0">
-          {isSuperadmin ? <FeatureFlagsTab /> : (
+          {canViewFeatures ? <FeatureFlagsTab /> : (
             <div className="rounded-md border p-4 text-sm text-muted-foreground">No tienes permiso para esta sección.</div>
           )}
         </TabsContent>

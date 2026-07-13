@@ -65,6 +65,34 @@ class FeatureFlagApiTests(TestCase):
         self.assertEqual(patch.status_code, 200)
         self.assertEqual(patch.data["cash_close_expected_totals_allowed_roles"], ["cashier"])
 
+    def test_admin_reads_limited_feature_sections_only(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/settings/features/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("operation_mode", response.data)
+        self.assertIn("inventory_advanced_enabled", response.data)
+        self.assertIn("cash_close_expected_totals_control_enabled", response.data)
+        self.assertIn("pos_product_images_enabled", response.data)
+        self.assertNotIn("pos_enabled", response.data)
+        self.assertNotIn("reports_enabled", response.data)
+        self.assertNotIn("customer_display_enabled", response.data)
+
+    def test_admin_cannot_patch_sensitive_feature_keys(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.patch("/api/settings/features/", {"pos_enabled": False}, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("pos_enabled", response.data["fields"])
+
+    def test_admin_can_patch_operation_feature_keys(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.patch(
+            "/api/settings/features/",
+            {"operation_mode": "both", "allow_table_merge": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["operation_mode"], "both")
+
     def test_settings_features_options_excludes_admin(self):
         self.client.force_authenticate(user=self.superadmin)
         response = self.client.get("/api/settings/features/options/")

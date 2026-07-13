@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
+import { useAuth } from "@/context/useAuth";
 
 const defaultState: FeatureSettings = {
   posEnabled: true,
@@ -135,6 +136,8 @@ const operationModes = [
 ] as const;
 
 export const FeatureFlagsTab = () => {
+  const { user } = useAuth();
+  const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
   const [settings, setSettings] = useState<FeatureSettings>(defaultState);
   const [options, setOptions] = useState<FeatureSettingsOptions>({ roles: [], cashCloseExpectedTotalFields: [] });
   const [ticketLogoUrl, setTicketLogoUrl] = useState<string | null>(null);
@@ -228,6 +231,24 @@ export const FeatureFlagsTab = () => {
     description: "Controlar visibilidad de totales esperados.",
     action: <Button size="sm" variant="outline" onClick={() => setOpen(true)}>Permisos</Button>,
   };
+  const visibleFeatureSections = isSuperadmin
+    ? featureSections
+    : featureSections.filter((section) => section.title === "Inventario");
+  const visibleOperationalSections = [
+    ...visibleFeatureSections,
+    { title: "Seguridad / Caja", eyebrow: "Control", items: [cashSetting] },
+    ...(!isSuperadmin
+      ? [{
+        title: "Personalización visual",
+        eyebrow: "Visual",
+        items: [{
+          key: "posProductImagesEnabled" as ToggleSettingKey,
+          title: "Imágenes de productos en POS",
+          description: "Muestra las imágenes guardadas de los productos en las tarjetas del POS.",
+        }],
+      }]
+      : []),
+  ];
 
   return (
     <div className="space-y-5">
@@ -310,7 +331,7 @@ export const FeatureFlagsTab = () => {
         </Card>
       </section>
 
-      {[...featureSections, { title: "Seguridad / Caja", eyebrow: "Control", items: [cashSetting] }].map((section) => (
+      {visibleOperationalSections.map((section) => (
         <section key={section.title} className="space-y-2">
           <div className="flex items-center gap-2">
             <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{section.eyebrow}</span>
