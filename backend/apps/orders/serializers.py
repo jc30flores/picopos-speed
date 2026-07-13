@@ -786,6 +786,7 @@ class TableSessionSerializer(serializers.ModelSerializer):
     table_ids = serializers.SerializerMethodField()
     tables = serializers.SerializerMethodField()
     guests = TableGuestSerializer(many=True, read_only=True)
+    total_cached = serializers.SerializerMethodField()
 
     class Meta:
         model = TableSession
@@ -800,3 +801,8 @@ class TableSessionSerializer(serializers.ModelSerializer):
     def get_tables(self, obj):
         tables = [link.table for link in obj.session_tables.select_related("table", "table__area").all()]
         return RestaurantTableSerializer(tables, many=True).data
+
+    def get_total_cached(self, obj):
+        if obj.primary_order_id and obj.primary_order:
+            return obj.primary_order.total
+        return obj.total_cached

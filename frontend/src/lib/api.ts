@@ -6666,8 +6666,19 @@ export const getTableSessions = async (): Promise<TableSession[]> => {
 };
 export const createTableSession = async (payload: { tableIds: number[]; guestsCount: number; orderMode: 'table'|'per_person'; notes?: string; }): Promise<TableSession> => {
   const response = await request('/orders/tables/sessions/', { method: 'POST', body: JSON.stringify({ table_ids: payload.tableIds, guests_count: payload.guestsCount, order_mode: payload.orderMode, notes: payload.notes ?? '' }) });
+  if (response.status === 409) {
+    const conflict = await response.json().catch(() => null);
+    if (conflict?.code === "table_already_has_active_session" && conflict.session) {
+      return mapTableSession(conflict.session);
+    }
+    throw new ApiRequestError(conflict?.message || conflict?.detail || "La mesa ya tiene una orden activa.", {
+      code: conflict?.code,
+      status: response.status,
+      payload: conflict,
+    });
+  }
   const x = await handleJson<any>(response);
-  return mapTableSession(x);
+  return mapTableSession(x.session ?? x);
 };
 export const mergeTableSessionTables = async (sessionId: number, tableIds: number[]): Promise<TableSession> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/merge/`, { method: 'POST', body: JSON.stringify({ table_ids: tableIds }) });

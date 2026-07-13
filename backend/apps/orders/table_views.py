@@ -174,7 +174,7 @@ class TableLayoutView(TableMapFeatureGuardMixin, APIView):
         areas = DiningAreaSerializer(DiningArea.objects.all().order_by("sort_order","id"), many=True).data
         tables = RestaurantTableSerializer(RestaurantTable.objects.select_related("area").filter(is_active=True), many=True).data
         sessions = TableSessionSerializer(
-            TableSession.objects.filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at"),
+            TableSession.objects.select_related("primary_order").filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at"),
             many=True,
         ).data
         return Response({"areas": areas, "tables": tables, "sessions": sessions})
@@ -197,7 +197,7 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        qs = TableSession.objects.filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at")
+        qs = TableSession.objects.select_related("primary_order").filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at")
         return Response(TableSessionSerializer(qs, many=True).data)
 
     @transaction.atomic
@@ -218,9 +218,27 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
         tables = list(RestaurantTable.objects.select_for_update().filter(id__in=table_ids, is_active=True))
         if len(tables) != len(set(table_ids)):
             return Response({"detail": "Hay mesas inválidas o inactivas."}, status=400)
-        busy = TableSessionTable.objects.select_for_update().filter(table_id__in=table_ids, session__status__in=ACTIVE_TABLE_SESSION_STATUSES).exists()
-        if busy:
-            return Response({"detail": "Una o más mesas ya tienen sesión activa."}, status=400)
+        busy_link = (
+            TableSessionTable.objects.select_for_update()
+            .filter(table_id__in=table_ids, session__status__in=ACTIVE_TABLE_SESSION_STATUSES)
+            .select_related("session")
+            .order_by("-session__opened_at", "-session_id")
+            .first()
+        )
+        if busy_link:
+            session = busy_link.session
+            data = TableSessionSerializer(session).data
+            return Response(
+                {
+                    "code": "table_already_has_active_session",
+                    "message": "La mesa ya tiene una orden activa.",
+                    "detail": "La mesa ya tiene una orden activa.",
+                    "session": data,
+                    "order_id": session.primary_order_id,
+                    "table_id": busy_link.table_id,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         order = Order.objects.create(
             order_number=_next_order_number(branch),
             branch=branch,
