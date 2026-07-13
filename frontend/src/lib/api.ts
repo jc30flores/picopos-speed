@@ -1447,13 +1447,13 @@ export const updateAppearanceSettings = async (payload: { primaryColor?: string;
 };
 
 const mapDteSettings = (data: any): DteSettings => ({
-  haciendaEnabled: Boolean(data.hacienda_enabled),
-  ambiente: (data.ambiente === "01" ? "01" : "00") as "00" | "01",
+  haciendaEnabled: Boolean(data.enabled ?? data.hacienda_enabled),
+  ambiente: (data.environment === "production" || data.ambiente === "01" ? "01" : "00") as "00" | "01",
   baseUrl: String(data.base_url ?? ""),
   apiTokenMasked: String(data.api_token_masked ?? ""),
   timeoutSeconds: Number(data.timeout_seconds ?? 15),
   retryCount: Number(data.retry_count ?? 3),
-  status: String(data.status ?? "disabled"),
+  status: String(data.config_status ?? data.status ?? "disabled"),
   lastConnectionTestAt: data.last_connection_test_at ?? null,
   lastErrorSanitized: String(data.last_error_sanitized ?? ""),
   canManageTechnical: Boolean(data.can_manage_technical),
@@ -1470,7 +1470,9 @@ export const updateDteSettings = async (payload: Partial<DteSettings> & { apiTok
     method: "PATCH",
     body: JSON.stringify({
       hacienda_enabled: payload.haciendaEnabled,
+      enabled: payload.haciendaEnabled,
       ambiente: payload.ambiente,
+      environment: payload.ambiente === "01" ? "production" : payload.ambiente === "00" ? "test" : undefined,
       base_url: payload.baseUrl,
       api_token: payload.apiToken,
       timeout_seconds: payload.timeoutSeconds,

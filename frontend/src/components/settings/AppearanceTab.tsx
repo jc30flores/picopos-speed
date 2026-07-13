@@ -13,14 +13,27 @@ export const AppearanceTab = () => {
   const [settings, setSettings] = useState<AppearanceSettings | null>(null);
   const [color, setColor] = useState("#1F7A4D");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
+    setError(null);
     getAppearanceSettings()
       .then((value) => {
         setSettings(value);
         setColor(value.primaryColor);
       })
-      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo cargar apariencia"));
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "No se pudo cargar apariencia";
+        setError(message);
+        toast.error(message);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
   }, []);
 
   const preview = useMemo(() => settings, [settings]);
@@ -40,7 +53,18 @@ export const AppearanceTab = () => {
     }
   };
 
-  if (!preview) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando apariencia...</CardContent></Card>;
+  if (loading && !preview) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando apariencia...</CardContent></Card>;
+  if (error && !preview) {
+    return (
+      <Card>
+        <CardContent className="space-y-3 pt-6">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" onClick={load}>Reintentar</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!preview) return null;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -48,6 +72,7 @@ export const AppearanceTab = () => {
         <CardHeader>
           <CardTitle>Apariencia del sistema</CardTitle>
           <CardDescription>Define un color principal con contraste válido para modo claro y oscuro.</CardDescription>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">

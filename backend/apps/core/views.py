@@ -13,6 +13,7 @@ from apps.core.models import ActivityCatalog, Branch, Customer, DTEGlobalSetting
 from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
 from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, is_admin, is_superadmin
 from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
+from apps.dte.runtime import DISABLED_MESSAGE, get_dte_runtime_status
 
 
 logger = logging.getLogger(__name__)
@@ -437,12 +438,10 @@ class DTEGlobalSettingsView(APIView):
     def get(self, request):
         settings = get_dte_settings()
         data = DTEGlobalSettingsSerializer(settings).data
+        runtime = get_dte_runtime_status()
         data["can_manage_technical"] = is_superadmin(request.user)
-        data["message"] = (
-            "Facturación electrónica desactivada. Las ventas se registran solo localmente."
-            if not settings.hacienda_enabled
-            else "Facturación electrónica activa."
-        )
+        data["config_ready"] = runtime.config_ready
+        data["message"] = runtime.message
         return Response(data)
 
     @transaction.atomic
@@ -460,11 +459,18 @@ class DTEGlobalSettingsView(APIView):
         }
         if "hacienda_enabled" in request.data:
             settings.hacienda_enabled = bool(request.data.get("hacienda_enabled"))
+        if "enabled" in request.data:
+            settings.hacienda_enabled = bool(request.data.get("enabled"))
         if "ambiente" in request.data:
             ambiente = str(request.data.get("ambiente") or DTEGlobalSettings.AMBIENTE_TEST)
             if ambiente not in {DTEGlobalSettings.AMBIENTE_TEST, DTEGlobalSettings.AMBIENTE_PROD}:
                 return Response({"ambiente": "Ambiente inválido."}, status=status.HTTP_400_BAD_REQUEST)
             settings.ambiente = ambiente
+        if "environment" in request.data:
+            environment = str(request.data.get("environment") or "test").strip().lower()
+            if environment not in {"test", "production"}:
+                return Response({"environment": "Ambiente inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            settings.ambiente = DTEGlobalSettings.AMBIENTE_PROD if environment == "production" else DTEGlobalSettings.AMBIENTE_TEST
         if "base_url" in request.data:
             settings.base_url = str(request.data.get("base_url") or "").strip()
         if "api_token" in request.data and str(request.data.get("api_token") or "").strip():
@@ -493,7 +499,12 @@ class DTEGlobalSettingsView(APIView):
             settings.id,
             {"previous": previous, "new": {**previous, "hacienda_enabled": settings.hacienda_enabled, "ambiente": settings.ambiente, "base_url": settings.base_url, "api_token": "***" if settings.api_token else ""}},
         )
-        return Response(DTEGlobalSettingsSerializer(settings).data)
+        runtime = get_dte_runtime_status()
+        data = DTEGlobalSettingsSerializer(settings).data
+        data["can_manage_technical"] = is_superadmin(request.user)
+        data["config_ready"] = runtime.config_ready
+        data["message"] = runtime.message
+        return Response(data)
 
 
 class BranchListView(generics.ListAPIView):

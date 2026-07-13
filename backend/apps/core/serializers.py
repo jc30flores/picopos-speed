@@ -136,6 +136,9 @@ def build_color_tokens(primary: str) -> dict[str, str]:
 
 class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
     css_variables = serializers.SerializerMethodField()
+    theme_mode = serializers.SerializerMethodField()
+    allow_custom_color = serializers.SerializerMethodField()
+    palette = serializers.SerializerMethodField()
 
     class Meta:
         model = SystemAppearanceSettings
@@ -147,6 +150,9 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "color_primary_border",
             "color_primary_text",
             "color_primary_contrast",
+            "theme_mode",
+            "allow_custom_color",
+            "palette",
             "css_variables",
             "updated_at",
         ]
@@ -162,20 +168,39 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "--color-primary-contrast": obj.color_primary_contrast,
         }
 
+    def get_theme_mode(self, obj: SystemAppearanceSettings) -> str:
+        return "system"
+
+    def get_allow_custom_color(self, obj: SystemAppearanceSettings) -> bool:
+        return True
+
+    def get_palette(self, obj: SystemAppearanceSettings) -> list[str]:
+        return ["#1F7A4D", "#2563EB", "#0F766E", "#B45309", "#BE123C", "#6D28D9", "#374151"]
+
 
 class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
     api_token_masked = serializers.SerializerMethodField()
+    enabled = serializers.BooleanField(source="hacienda_enabled", read_only=True)
+    environment = serializers.SerializerMethodField()
+    config_status = serializers.CharField(source="status", read_only=True)
+    single_branch = serializers.SerializerMethodField()
+    correlatives = serializers.SerializerMethodField()
 
     class Meta:
         model = DTEGlobalSettings
         fields = [
             "hacienda_enabled",
+            "enabled",
             "ambiente",
+            "environment",
             "base_url",
             "api_token_masked",
             "timeout_seconds",
             "retry_count",
             "status",
+            "config_status",
+            "single_branch",
+            "correlatives",
             "last_connection_test_at",
             "last_error_sanitized",
             "updated_at",
@@ -185,6 +210,43 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
         if not obj.api_token:
             return ""
         return f"{obj.api_token[:4]}...{obj.api_token[-4:]}" if len(obj.api_token) > 8 else "********"
+
+    def get_environment(self, obj: DTEGlobalSettings) -> str:
+        return "production" if obj.ambiente == DTEGlobalSettings.AMBIENTE_PROD else "test"
+
+    def get_single_branch(self, obj: DTEGlobalSettings) -> dict:
+        from apps.core.models import Branch
+        from apps.dte.models import DTEBranchConfig
+
+        branch = Branch.objects.filter(is_active=True).order_by("id").first()
+        config = DTEBranchConfig.objects.filter(branch=branch).first() if branch else None
+        return {
+            "branch_name": branch.name if branch else "",
+            "establishment_code": getattr(config, "cod_estable_mh", "") or "",
+            "pos_code": getattr(config, "cod_punto_venta_mh", "") or "",
+            "establishment_type": getattr(config, "tipo_establecimiento", "") or "",
+            "address": getattr(config, "direccion_complemento", "") or getattr(branch, "address", "") or "",
+        }
+
+    def get_correlatives(self, obj: DTEGlobalSettings) -> list[dict]:
+        from apps.dte.models import DTEControlCounter
+
+        rows = DTEControlCounter.objects.select_related("branch").order_by("branch__name", "dte_type", "year")[:50]
+        return [
+            {
+                "id": row.id,
+                "tipo_dte": row.dte_type,
+                "environment": "production" if row.ambiente == "01" else "test",
+                "branch_name": row.branch.name,
+                "establishment_code": row.establishment_code,
+                "pos_code": row.pos_code,
+                "last_number": row.last_number,
+                "next_number": row.last_number + 1,
+                "active": True,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ]
 
 
 from apps.core.models import Branch

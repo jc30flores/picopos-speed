@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.core.models import FeatureFlag
+from apps.core.models import DTEGlobalSettings, FeatureFlag
 from apps.users.models import UserProfile
 
 
@@ -78,3 +78,37 @@ class FeatureFlagApiTests(TestCase):
             format="json",
         )
         self.assertEqual(patch_response.status_code, 403)
+
+    def test_settings_appearance_get_and_patch(self):
+        response = self.client.get("/api/settings/appearance/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("css_variables", response.data)
+
+        patch = self.client.patch("/api/settings/appearance/", {"primary_color": "#2563EB"}, format="json")
+        self.assertEqual(patch.status_code, 200)
+        self.assertEqual(patch.data["primary_color"], "#2563EB")
+        self.assertIn("--color-primary", patch.data["css_variables"])
+
+        invalid = self.client.patch("/api/settings/appearance/", {"primary_color": "#FFFFFF"}, format="json")
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_settings_dte_get_and_superadmin_only_technical_patch(self):
+        response = self.client.get("/api/settings/dte/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["enabled"])
+        self.assertEqual(response.data["config_status"], DTEGlobalSettings.STATUS_DISABLED)
+
+        admin_patch = self.client.patch("/api/settings/dte/", {"base_url": "https://example.test/api"}, format="json")
+        self.assertEqual(admin_patch.status_code, 403)
+
+        superuser = get_user_model().objects.create_user(username="super", password="pass1234", is_superuser=True)
+        UserProfile.objects.create(user=superuser, role="superadmin", is_active=True)
+        self.client.force_authenticate(user=superuser)
+        super_patch = self.client.patch(
+            "/api/settings/dte/",
+            {"enabled": False, "environment": "test", "base_url": "https://example.test/api", "api_token": "secret-token"},
+            format="json",
+        )
+        self.assertEqual(super_patch.status_code, 200)
+        self.assertEqual(super_patch.data["base_url"], "https://example.test/api")
+        self.assertNotIn("secret-token", str(super_patch.data))

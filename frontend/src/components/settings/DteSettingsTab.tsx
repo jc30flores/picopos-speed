@@ -12,11 +12,24 @@ export const DteSettingsTab = () => {
   const [settings, setSettings] = useState<DteSettings | null>(null);
   const [token, setToken] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
+    setError(null);
     getDteSettings()
       .then(setSettings)
-      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo cargar DTE"));
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "No se pudo cargar DTE";
+        setError(message);
+        toast.error(message);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
   }, []);
 
   const persist = async (patch: Partial<DteSettings> & { apiToken?: string }) => {
@@ -33,7 +46,18 @@ export const DteSettingsTab = () => {
     }
   };
 
-  if (!settings) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando Hacienda/DTE...</CardContent></Card>;
+  if (loading && !settings) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Cargando Hacienda/DTE...</CardContent></Card>;
+  if (error && !settings) {
+    return (
+      <Card>
+        <CardContent className="space-y-3 pt-6">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" onClick={load}>Reintentar</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!settings) return null;
 
   const disabled = !settings.canManageTechnical || saving;
 
@@ -43,6 +67,7 @@ export const DteSettingsTab = () => {
         <CardHeader>
           <CardTitle>Configuración Hacienda / DTE</CardTitle>
           <CardDescription>{settings.message}</CardDescription>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
           <div className="flex items-center justify-between rounded-md border p-3">
