@@ -10,6 +10,7 @@ from apps.core.views import (
     DTETestConnectionView,
     FeatureSettingsOptionsView,
     FeatureSettingsView,
+    PublicAppearanceView,
     TicketLogoView,
     TicketSettingsView,
 )
@@ -34,6 +35,7 @@ urlpatterns = [
     path("api/settings/features/", FeatureSettingsView.as_view(), name="settings-features"),
     path("api/settings/features/options/", FeatureSettingsOptionsView.as_view(), name="settings-features-options"),
     path("api/settings/appearance/", AppearanceSettingsView.as_view(), name="settings-appearance"),
+    path("api/public/appearance/", PublicAppearanceView.as_view(), name="public-appearance"),
     path("api/settings/dte/", DTEGlobalSettingsView.as_view(), name="settings-dte"),
     path("api/settings/dte/correlatives/", DTECorrelativesView.as_view(), name="settings-dte-correlatives"),
     path("api/settings/dte/correlatives/initialize/", DTECorrelativesView.as_view(), name="settings-dte-correlatives-initialize"),

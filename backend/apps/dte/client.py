@@ -137,13 +137,36 @@ def log_dte_response(context: dict, *, status_code: int, body_text: str, parsed_
 
 
 class DTEClient:
-    def __init__(self, base_url: str | None = None):
-        self.base_url = (base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip().rstrip("/")
+    def __init__(self, base_url: str | None = None, api_token: str | None = None, timeout_seconds: int | None = None):
+        db_base_url = ""
+        db_api_token = ""
+        db_timeout = None
+        db_disabled = False
+        try:
+            from apps.core.models import DTEGlobalSettings
+
+            config = DTEGlobalSettings.objects.filter(pk=1).first()
+            if config and config.hacienda_enabled:
+                db_base_url = (config.base_url or "").strip()
+                db_api_token = (config.api_token or "").strip()
+                db_timeout = int(config.timeout_seconds or 0) or None
+            elif config and not config.hacienda_enabled:
+                db_disabled = True
+                db_base_url = ""
+                db_api_token = ""
+        except Exception:  # noqa: BLE001
+            db_base_url = ""
+            db_api_token = ""
+            db_timeout = None
+
+        fallback_base_url = "" if db_disabled else getattr(settings, "DTE_BASE_URL", "")
+        fallback_token = "" if db_disabled else getattr(settings, "DTE_API_TOKEN", "")
+        self.base_url = (base_url or db_base_url or fallback_base_url or "").strip().rstrip("/")
         self.auth_header = getattr(settings, "DTE_API_AUTH_HEADER", "Authorization")
         self.auth_prefix = getattr(settings, "DTE_API_AUTH_PREFIX", "Bearer")
-        self.api_token = getattr(settings, "DTE_API_TOKEN", "")
+        self.api_token = api_token if api_token is not None else (db_api_token or fallback_token)
         self.connect_timeout = float(getattr(settings, "DTE_CONNECT_TIMEOUT", 5) or 5)
-        self.read_timeout = float(getattr(settings, "DTE_TIMEOUT_SECONDS", 120) or 120)
+        self.read_timeout = float(timeout_seconds or db_timeout or getattr(settings, "DTE_TIMEOUT_SECONDS", 120) or 120)
         self.user_agent = getattr(settings, "DTE_USER_AGENT", "PicoPOS-DTE/1.0")
         self.session = _shared_session()
 

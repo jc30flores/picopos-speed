@@ -113,8 +113,9 @@ def build_color_tokens(primary: str) -> dict[str, str]:
         raise serializers.ValidationError(
             {
                 "error": "invalid_color_format",
+                "code": "invalid_color_format",
                 "message": "Color HEX inválido. Usa formato #RRGGBB.",
-                "suggestions": ["#2563EB", "#0F766E", "#374151"],
+                "suggestions": ["#2563EB", "#0F766E", "#DB2777", "#C026D3", "#374151"],
             }
         )
     rgb = _hex_to_rgb(primary)
@@ -193,7 +194,11 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "#0891B2",
             "#6D28D9",
             "#A21CAF",
+            "#C026D3",
             "#DB2777",
+            "#BE185D",
+            "#EC4899",
+            "#E11D48",
             "#BE123C",
             "#B45309",
             "#B7791F",
@@ -208,6 +213,10 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
     enabled = serializers.BooleanField(source="hacienda_enabled", read_only=True)
     environment = serializers.SerializerMethodField()
     config_status = serializers.CharField(source="status", read_only=True)
+    fiscal_email_enabled = serializers.SerializerMethodField()
+    fiscal_whatsapp_enabled = serializers.SerializerMethodField()
+    fiscal_pdf_enabled = serializers.SerializerMethodField()
+    fiscal_json_enabled = serializers.SerializerMethodField()
     single_branch = serializers.SerializerMethodField()
     correlatives = serializers.SerializerMethodField()
     api = serializers.SerializerMethodField()
@@ -227,6 +236,10 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
             "api_token_masked",
             "timeout_seconds",
             "retry_count",
+            "fiscal_email_enabled",
+            "fiscal_whatsapp_enabled",
+            "fiscal_pdf_enabled",
+            "fiscal_json_enabled",
             "status",
             "config_status",
             "single_branch",
@@ -248,6 +261,18 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
 
     def get_environment(self, obj: DTEGlobalSettings) -> str:
         return "production" if obj.ambiente == DTEGlobalSettings.AMBIENTE_PROD else "test"
+
+    def get_fiscal_email_enabled(self, obj: DTEGlobalSettings) -> bool:
+        return bool(obj.hacienda_enabled and obj.fiscal_email_enabled)
+
+    def get_fiscal_whatsapp_enabled(self, obj: DTEGlobalSettings) -> bool:
+        return bool(obj.hacienda_enabled and obj.fiscal_whatsapp_enabled)
+
+    def get_fiscal_pdf_enabled(self, obj: DTEGlobalSettings) -> bool:
+        return bool(obj.hacienda_enabled and obj.fiscal_pdf_enabled)
+
+    def get_fiscal_json_enabled(self, obj: DTEGlobalSettings) -> bool:
+        return bool(obj.hacienda_enabled and obj.fiscal_json_enabled)
 
     def get_single_branch(self, obj: DTEGlobalSettings) -> dict:
         from apps.core.models import Branch
@@ -283,6 +308,10 @@ class DTEGlobalSettingsSerializer(serializers.ModelSerializer):
             "retry_count": obj.retry_count,
             "last_connection_test_at": obj.last_connection_test_at,
             "last_error_sanitized": obj.last_error_sanitized,
+            "fiscal_email_enabled": bool(obj.hacienda_enabled and obj.fiscal_email_enabled),
+            "fiscal_whatsapp_enabled": bool(obj.hacienda_enabled and obj.fiscal_whatsapp_enabled),
+            "fiscal_pdf_enabled": bool(obj.hacienda_enabled and obj.fiscal_pdf_enabled),
+            "fiscal_json_enabled": bool(obj.hacienda_enabled and obj.fiscal_json_enabled),
         }
 
     def get_issuer(self, obj: DTEGlobalSettings) -> dict:

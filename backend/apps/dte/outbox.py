@@ -682,6 +682,10 @@ def _outbox_worker_loop() -> None:
         close_old_connections()
         try:
             runtime = get_dte_runtime_status()
+            if not runtime.enabled:
+                _log_throttled("info", "disabled", "DTE_WORKER_DISABLED sleeping")
+                time.sleep(disabled_interval)
+                continue
             process_pending_outbox(limit=batch_size)
             db_backoff_seconds = 1.0
         except DjangoOperationalError as exc:
@@ -702,7 +706,10 @@ def _outbox_worker_loop() -> None:
             continue
         except Exception:  # noqa: BLE001
             _log_throttled("warning", "db", "[DTE OUTBOX] worker loop error (summarized)")
-        time.sleep(disabled_interval if not runtime.enabled else interval)
+            time.sleep(min(db_backoff_seconds, 30.0))
+            db_backoff_seconds = min(db_backoff_seconds * 2, 30.0)
+            continue
+        time.sleep(interval)
 
 
 def start_outbox_worker() -> bool:

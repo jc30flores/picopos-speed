@@ -41,7 +41,7 @@ def can_manage_correlatives(user) -> bool:
 
 
 def can_view_dte(user) -> bool:
-    return bool(is_superadmin(user) or _role_is(user, {"admin", "manager", "cashier", "accountant"}))
+    return is_superadmin(user)
 
 
 class IsAuthenticatedAndActive(BasePermission):

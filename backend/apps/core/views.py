@@ -63,24 +63,6 @@ FEATURE_FLAG_DEFAULTS = {
         "default": True,
         "metadata": {"category": "Seguridad / Caja"},
     },
-    "module_dte_enabled": {
-        "label": "DTE / Hacienda",
-        "description": "Mostrar u ocultar funciones fiscales DTE.",
-        "default": False,
-        "metadata": {"category": "Fiscal / DTE"},
-    },
-    "module_whatsapp_enabled": {
-        "label": "WhatsApp fiscal",
-        "description": "Permitir acciones de entrega fiscal por WhatsApp.",
-        "default": True,
-        "metadata": {"category": "Comunicación"},
-    },
-    "module_email_enabled": {
-        "label": "Correo fiscal",
-        "description": "Permitir acciones de entrega fiscal por correo.",
-        "default": True,
-        "metadata": {"category": "Comunicación"},
-    },
     "FF_CUSTOMER_DISPLAY_ENABLED": {
         "label": "Pantalla Cliente",
         "description": "Mostrar u ocultar la pantalla cliente para todos los usuarios.",
@@ -170,9 +152,6 @@ def get_feature_settings_payload() -> dict:
         "reports_enabled": bool(flags["module_reports_enabled"].is_enabled),
         "clients_enabled": bool(flags["module_clients_enabled"].is_enabled),
         "settings_enabled": bool(flags["module_settings_enabled"].is_enabled),
-        "dte_enabled": bool(flags["module_dte_enabled"].is_enabled),
-        "whatsapp_enabled": bool(flags["module_whatsapp_enabled"].is_enabled),
-        "email_enabled": bool(flags["module_email_enabled"].is_enabled),
         "cash_close_expected_totals_control_enabled": bool(totals_flag.is_enabled),
         "cash_close_expected_totals_allowed_roles": list(metadata.get("allowed_roles") or []),
         "cash_close_expected_totals_visible_fields": list(metadata.get("visible_fields") or []),
@@ -227,23 +206,32 @@ class ActiveTaxConfigView(generics.RetrieveAPIView):
 
 
 class FeatureFlagListView(generics.ListAPIView):
-    queryset = FeatureFlag.objects.all().order_by("key")
     serializer_class = FeatureFlagSerializer
     permission_classes = [IsAuthenticatedAndActive]
+
+    def get_queryset(self):
+        return FeatureFlag.objects.exclude(
+            key__in=["module_dte_enabled", "module_whatsapp_enabled", "module_email_enabled"]
+        ).order_by("key")
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
         dte_settings = DTEGlobalSettings.objects.filter(pk=1).first()
         dte_enabled = bool(dte_settings and dte_settings.hacienda_enabled)
+        can_dte = can_view_dte(request.user)
         rows = list(response.data)
         rows.extend(
             [
                 {"id": None, "key": "dte_enabled", "label": "DTE activo", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
-                {"id": None, "key": "dte_visible", "label": "DTE visible", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
-                {"id": None, "key": "can_view_dte", "label": "Puede ver DTE", "description": "", "is_enabled": can_view_dte(request.user), "enabled": can_view_dte(request.user), "metadata": {}},
+                {"id": None, "key": "dte_visible", "label": "DTE visible", "description": "", "is_enabled": dte_enabled and can_dte, "enabled": dte_enabled and can_dte, "metadata": {}},
+                {"id": None, "key": "can_view_dte", "label": "Puede ver DTE", "description": "", "is_enabled": can_dte, "enabled": can_dte, "metadata": {}},
                 {"id": None, "key": "can_manage_dte", "label": "Puede administrar DTE", "description": "", "is_enabled": is_superadmin(request.user), "enabled": is_superadmin(request.user), "metadata": {}},
-                {"id": None, "key": "can_send_dte", "label": "Puede enviar DTE", "description": "", "is_enabled": dte_enabled and can_view_dte(request.user), "enabled": dte_enabled and can_view_dte(request.user), "metadata": {}},
+                {"id": None, "key": "can_send_dte", "label": "Puede enviar DTE", "description": "", "is_enabled": dte_enabled and can_dte, "enabled": dte_enabled and can_dte, "metadata": {}},
                 {"id": None, "key": "hacienda_enabled", "label": "Hacienda activo", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
+                {"id": None, "key": "fiscal_email_enabled", "label": "Correo fiscal", "description": "", "is_enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_email_enabled), "enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_email_enabled), "metadata": {}},
+                {"id": None, "key": "fiscal_whatsapp_enabled", "label": "WhatsApp fiscal", "description": "", "is_enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_whatsapp_enabled), "enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_whatsapp_enabled), "metadata": {}},
+                {"id": None, "key": "fiscal_pdf_enabled", "label": "PDF fiscal", "description": "", "is_enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_pdf_enabled), "enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_pdf_enabled), "metadata": {}},
+                {"id": None, "key": "fiscal_json_enabled", "label": "JSON fiscal", "description": "", "is_enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_json_enabled), "enabled": bool(dte_enabled and dte_settings and dte_settings.fiscal_json_enabled), "metadata": {}},
             ]
         )
         response.data = rows
@@ -251,24 +239,19 @@ class FeatureFlagListView(generics.ListAPIView):
 
 
 class FeatureFlagDetailView(generics.RetrieveUpdateAPIView):
-    queryset = FeatureFlag.objects.all()
     serializer_class = FeatureFlagSerializer
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsSuperAdmin]
+
+    def get_queryset(self):
+        return FeatureFlag.objects.exclude(
+            key__in=["module_dte_enabled", "module_whatsapp_enabled", "module_email_enabled"]
+        )
 
 
 class FeatureSettingsView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsSuperAdmin]
 
     def get_permissions(self):
-        if self.request.method in {"GET", "HEAD", "OPTIONS"}:
-            return [IsAuthenticatedAndActive()]
-        role = getattr(getattr(self.request.user, "profile", None), "role", None)
-        if role != "admin" and not getattr(self.request.user, "is_superuser", False):
-            logger.warning(
-                "FEATURE_FLAGS_WRITE_DENIED user_id=%s role=%s",
-                getattr(self.request.user, "id", None),
-                role or "unknown",
-            )
         return [IsSuperAdmin()]
 
     def get(self, request):
@@ -294,9 +277,6 @@ class FeatureSettingsView(APIView):
             "reports_enabled": "module_reports_enabled",
             "clients_enabled": "module_clients_enabled",
             "settings_enabled": "module_settings_enabled",
-            "dte_enabled": "module_dte_enabled",
-            "whatsapp_enabled": "module_whatsapp_enabled",
-            "email_enabled": "module_email_enabled",
             "cash_close_expected_totals_control_enabled": "FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED",
             "inventory_advanced_enabled": "FF_INVENTORY",
             "pos_product_images_enabled": "pos_product_images_enabled",
@@ -408,7 +388,7 @@ class TicketLogoView(APIView):
 
 
 class FeatureSettingsOptionsView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request):
         from apps.users.models import UserProfile
@@ -458,6 +438,30 @@ class AppearanceSettingsView(APIView):
         from apps.core.audit import log_audit
         log_audit(request, "appearance.update", "SystemAppearanceSettings", settings.id, {"previous": previous, "new": settings.primary_color})
         return Response(SystemAppearanceSettingsSerializer(settings).data)
+
+
+class PublicAppearanceView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        settings, _ = SystemAppearanceSettings.objects.get_or_create(pk=1)
+        data = SystemAppearanceSettingsSerializer(settings).data
+        return Response(
+            {
+                "app_display_name": "GastroPOSV",
+                "primary_color": data["primary_color"],
+                "color_primary": data["color_primary"],
+                "color_primary_hover": data["color_primary_hover"],
+                "color_primary_soft": data["color_primary_soft"],
+                "color_primary_border": data["color_primary_border"],
+                "color_primary_text": data["color_primary_text"],
+                "color_primary_contrast": data["color_primary_contrast"],
+                "theme_mode": data["theme_mode"],
+                "palette": data["palette"],
+                "css_variables": data["css_variables"],
+            }
+        )
 
 
 def get_dte_settings() -> DTEGlobalSettings:
@@ -546,7 +550,7 @@ def _initialize_correlatives(branch: Branch, settings: DTEGlobalSettings) -> int
 
 
 class DTEGlobalSettingsView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request):
         settings = get_dte_settings()
@@ -571,6 +575,10 @@ class DTEGlobalSettingsView(APIView):
             "api_token": "***" if settings.api_token else "",
             "timeout_seconds": settings.timeout_seconds,
             "retry_count": settings.retry_count,
+            "fiscal_email_enabled": settings.fiscal_email_enabled,
+            "fiscal_whatsapp_enabled": settings.fiscal_whatsapp_enabled,
+            "fiscal_pdf_enabled": settings.fiscal_pdf_enabled,
+            "fiscal_json_enabled": settings.fiscal_json_enabled,
         }
         if "hacienda_enabled" in request.data:
             settings.hacienda_enabled = bool(request.data.get("hacienda_enabled"))
@@ -590,6 +598,8 @@ class DTEGlobalSettingsView(APIView):
             settings.base_url = str(request.data.get("base_url") or "").strip()
         if "api_token" in request.data and str(request.data.get("api_token") or "").strip():
             settings.api_token = str(request.data.get("api_token")).strip()
+        if request.data.get("clear_token"):
+            settings.api_token = ""
         if "timeout_seconds" in request.data:
             settings.timeout_seconds = max(1, min(120, int(request.data.get("timeout_seconds") or 15)))
         if "retry_count" in request.data:
@@ -600,10 +610,15 @@ class DTEGlobalSettingsView(APIView):
                 settings.base_url = _safe_str(api_payload, "base_url")
             if "api_token" in api_payload and _safe_str(api_payload, "api_token"):
                 settings.api_token = _safe_str(api_payload, "api_token")
+            if api_payload.get("clear_token"):
+                settings.api_token = ""
             if "timeout_seconds" in api_payload:
                 settings.timeout_seconds = max(1, min(120, int(api_payload.get("timeout_seconds") or 15)))
             if "retry_count" in api_payload:
                 settings.retry_count = max(0, min(10, int(api_payload.get("retry_count") or 0)))
+        for field in ("fiscal_email_enabled", "fiscal_whatsapp_enabled", "fiscal_pdf_enabled", "fiscal_json_enabled"):
+            if field in request.data:
+                setattr(settings, field, bool(request.data.get(field)))
         issuer_payload = request.data.get("issuer") if isinstance(request.data.get("issuer"), dict) else {}
         branch_payload = request.data.get("branch") if isinstance(request.data.get("branch"), dict) else {}
         if issuer_payload or branch_payload:
@@ -618,10 +633,6 @@ class DTEGlobalSettingsView(APIView):
             settings.status = DTEGlobalSettings.STATUS_CONFIGURED
         settings.updated_by = request.user
         settings.save()
-        FeatureFlag.objects.update_or_create(
-            key="module_dte_enabled",
-            defaults={"label": "DTE / Hacienda", "description": "Mostrar u ocultar funciones fiscales DTE.", "is_enabled": settings.hacienda_enabled},
-        )
         from apps.core.audit import log_audit
         log_audit(
             request,
@@ -639,7 +650,7 @@ class DTEGlobalSettingsView(APIView):
 
 
 class DTECorrelativesView(APIView):
-    permission_classes = [IsAuthenticatedAndActive]
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request):
         settings = get_dte_settings()

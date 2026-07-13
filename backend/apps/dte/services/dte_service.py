@@ -70,7 +70,12 @@ def _get_env(name: str, default: str = "") -> str:
 
 
 def build_dte_url(dte_type: str) -> tuple[str, str]:
-    base_url = (_get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
+    from apps.core.models import DTEGlobalSettings
+
+    config = DTEGlobalSettings.objects.filter(pk=1).first()
+    if config and not config.hacienda_enabled:
+        raise DTEPreflightError("Facturación electrónica desactivada. Las ventas se registran solo localmente.")
+    base_url = ((config.base_url if config and config.hacienda_enabled else "") or _get_env("DTE_BASE_URL") or _get_env("DTE_API_URL") or _get_env("DTE_ENDPOINT") or "").rstrip("/")
     endpoint = DTE_ENDPOINT_BY_TYPE.get(dte_type)
     if not endpoint:
         raise DTEPreflightError(f"Tipo DTE no soportado: {dte_type}")
@@ -78,9 +83,14 @@ def build_dte_url(dte_type: str) -> tuple[str, str]:
 
 
 def build_headers() -> dict[str, str]:
+    from apps.core.models import DTEGlobalSettings
+
+    config = DTEGlobalSettings.objects.filter(pk=1).first()
+    if config and not config.hacienda_enabled:
+        raise DTEPreflightError("Facturación electrónica desactivada. Las ventas se registran solo localmente.")
     header = _get_env("DTE_API_AUTH_HEADER", "Authorization")
     prefix = _get_env("DTE_API_AUTH_PREFIX", "Bearer")
-    token = _get_env("DTE_API_TOKEN", "")
+    token = (config.api_token if config and config.hacienda_enabled else "") or _get_env("DTE_API_TOKEN", "")
     if not token:
         raise DTEPreflightError("Falta configurar DTE_API_TOKEN")
     return {"Content-Type": "application/json", header: f"{prefix} {token}".strip()}
