@@ -58,15 +58,29 @@ Mesa unida:
 - Agregar productos
 - Cobrar grupo
 - Mover grupo
+- Unir otra mesa
+- Separar mesa
+- Dividir cuenta
+- Enviar cocina
+- Liberar grupo si no hay saldo
 - Cerrar
 
-Separar mesa y reservas quedan pendientes porque no hay flujo completo habilitado.
+Reservas/bloqueo quedan pendientes porque no hay flujo completo habilitado.
 
 ## Nueva orden y agregar productos
 
-`Nueva orden` abre el dialogo de personas, modo de orden (`Orden completa` o `Por persona`) y notas. Al iniciar, se crea la sesion y se abre el POS contextual de esa mesa.
+`Nueva orden` abre el dialogo de personas, modo de orden (`Orden completa` o `Por persona`) y notas. El modo recomendado por defecto es `Por persona`. Al iniciar, se crea la sesion y se abre el POS contextual de esa mesa.
 
 `Agregar productos` reemplaza a `Nueva orden` cuando ya existe una sesion activa. Reutiliza el POS rapido con contexto de mesa, persona activa en modo `per_person`, guardado y regreso al mapa.
+
+En POS contextual de mesa:
+
+- El encabezado dice `Orden de mesa`.
+- Si hay grupo, muestra `Grupo Mesa X + Mesa Y`.
+- Solo aparece `Volver a mesas`; no aparece `Volver al menu principal`.
+- Si hay productos sin guardar, `Volver a mesas` abre un modal propio con `Guardar y volver`, `Volver sin guardar` y `Cancelar`.
+- El CTA principal ya no es `Cobrar`; es `Enviar a cocina` cuando hay productos de cocina o `Guardar orden` cuando no aplica cocina.
+- `Cobrar mesa` queda como accion secundaria.
 
 ## Recuperacion de sesion activa
 
@@ -104,7 +118,7 @@ No se muestra flujo DTE cuando DTE esta apagado.
 
 ## Cobrar
 
-`Cobrar` reutiliza el flujo existente con `pending_order_id` y `mode=pay`, conservando pagos divididos, pagos parciales y pago completo. Al completar el pago, el backend cierra la sesion de mesa para que el mapa la muestre libre. Si el pago queda parcial, la sesion queda `partially_paid`.
+`Cobrar` abre directamente el modal de cobro con `pending_order_id` y `mode=pay`, conservando pagos divididos, pagos parciales y pago completo. No manda al usuario a tomar productos como paso principal. Al completar el pago, el frontend solicita liberar la sesion pagada para que el mapa la muestre libre. Si el pago queda parcial, la sesion permanece activa.
 
 DTE apagado sigue registrando el pago localmente y no contacta Hacienda.
 
@@ -115,9 +129,32 @@ DTE apagado sigue registrando el pago localmente y no contacta Hacienda.
 1. muestra `Selecciona la mesa que deseas unir con Mesa X`
 2. resalta destinos validos
 3. abre modal propio `Unir mesas`
-4. une la mesa a la sesion existente o crea una sesion agrupada si ambas mesas estaban libres
+4. si ambas mesas estaban libres, muestra cantidad de personas, modo de orden y notas
+5. une la mesa a la sesion existente o crea una sesion agrupada si ambas mesas estaban libres
 
 El backend valida mesas inactivas, ids invalidos y conflictos con otra sesion activa para evitar 500.
+
+Las mesas unidas ahora comparten identidad visual de grupo:
+
+- mismo color de grupo
+- borde y halo compartido
+- etiqueta `Grupo N`
+- menu contextual con lista completa del grupo, por ejemplo `Mesa 9 + Mesa 10`
+
+Para unir una tercera mesa, se elige `Unir mesa` desde cualquier mesa del grupo y luego se selecciona una mesa libre. La mesa nueva se agrega a la misma sesion y adopta la identidad visual del grupo.
+
+## Separar mesas
+
+`Separar mesa` aparece cuando una sesion tiene mas de una mesa. Usa modal propio del sistema y llama `POST /api/orders/tables/sessions/<id>/split-table/`.
+
+Reglas actuales:
+
+- quita la mesa seleccionada del grupo
+- mantiene la orden/cuenta conjunta en las mesas restantes
+- si queda una sola mesa, el grupo visual desaparece
+- la mesa separada queda libre visualmente porque ya no pertenece a la sesion activa
+
+La separacion avanzada de productos/personas por mesa sigue pendiente; por ahora la cuenta no se divide automaticamente.
 
 ## Mover mesa
 
@@ -140,13 +177,22 @@ El flujo de mesas no usa `window.confirm`, `alert` ni `prompt`. Las confirmacion
 
 ## Enviar cocina
 
-`Enviar cocina` se muestra para sesiones con orden activa. Si la orden esta vacia, el backend responde con mensaje controlado. Si procede, marca la orden como enviada y la mesa pasa a `En cocina`.
+`Enviar cocina` se muestra para sesiones con orden activa y tambien es el CTA principal del POS contextual cuando los productos requieren cocina. Si la orden esta vacia, el backend responde con mensaje controlado. Si procede, guarda los items, marca la orden como enviada y la mesa pasa a `En cocina`.
+
+Cuando no hay productos de cocina, el CTA principal es `Guardar orden`; guarda los items en la mesa sin abrir cobro.
+
+## Pruebas realizadas
+
+- `backend/venv/bin/python backend/manage.py check`
+- `cd frontend && npm run build`
+- Smoke de compilacion del flujo: mapa, menu contextual, POS contextual, cobro directo, split endpoint y documentacion.
 
 ## Pendientes
 
-- Separar mesas unidas.
 - Reservas/bloqueo de mesa.
 - Selector profesional de areas.
 - Flujo avanzado de cocina por persona.
+- Envio a cocina incremental por item para evitar reimpresion/reenviado de items ya enviados.
+- Division real de cuenta al separar una mesa con productos asignados.
 - Pruebas E2E de escritorio y touch.
 - El log `Bad request syntax ('0')` no se pudo reproducir desde las llamadas API de mesas; `request()` mantiene guard contra body `0`.
