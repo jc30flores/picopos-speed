@@ -784,15 +784,19 @@ class TableGuestSerializer(serializers.ModelSerializer):
 
 class TableSessionSerializer(serializers.ModelSerializer):
     table_ids = serializers.SerializerMethodField()
-    tables = RestaurantTableSerializer(source="session_tables", many=True, read_only=True)
+    tables = serializers.SerializerMethodField()
     guests = TableGuestSerializer(many=True, read_only=True)
 
     class Meta:
         model = TableSession
         fields = [
             "id", "status", "guests_count", "order_mode", "primary_order", "opened_by", "opened_at", "closed_by", "closed_at",
-            "notes", "total_cached", "table_ids", "guests", "created_at", "updated_at",
+            "notes", "total_cached", "table_ids", "tables", "guests", "created_at", "updated_at",
         ]
 
     def get_table_ids(self, obj):
         return list(obj.session_tables.values_list("table_id", flat=True))
+
+    def get_tables(self, obj):
+        tables = [link.table for link in obj.session_tables.select_related("table", "table__area").all()]
+        return RestaurantTableSerializer(tables, many=True).data

@@ -1,12 +1,12 @@
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import FeatureFlag
+from apps.core.models import Branch, FeatureFlag
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, RestaurantTableSerializer, TableSessionSerializer
@@ -14,6 +14,84 @@ from apps.orders.serializers import DiningAreaSerializer, RestaurantTableSeriali
 
 def _table_map_enabled() -> bool:
     return bool(FeatureFlag.objects.filter(key="table_map_enabled", is_enabled=True).exists())
+
+
+ACTIVE_TABLE_SESSION_STATUSES = ["open", "sent_to_kitchen", "partially_paid"]
+
+
+def _parse_table_ids(data) -> list[int]:
+    raw_table_ids = data.get("table_ids")
+    if raw_table_ids is None and data.get("table_id") is not None:
+        raw_table_ids = [data.get("table_id")]
+    if not isinstance(raw_table_ids, list):
+        return []
+    table_ids: list[int] = []
+    for raw_id in raw_table_ids:
+        try:
+            table_id = int(raw_id)
+        except (TypeError, ValueError):
+            return []
+        if table_id > 0 and table_id not in table_ids:
+            table_ids.append(table_id)
+    return table_ids
+
+
+def _parse_guests_count(data):
+    raw_value = data.get("guests_count", data.get("guest_count", 1))
+    try:
+        guests_count = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if guests_count < 1 or guests_count > 99:
+        return None
+    return guests_count
+
+
+def _normalize_order_mode(raw_mode: str) -> str | None:
+    mode = str(raw_mode or "table").strip().lower()
+    aliases = {
+        "full": TableSession.ORDER_MODE_TABLE,
+        "table": TableSession.ORDER_MODE_TABLE,
+        "complete": TableSession.ORDER_MODE_TABLE,
+        "by_guest": TableSession.ORDER_MODE_PER_PERSON,
+        "per_person": TableSession.ORDER_MODE_PER_PERSON,
+        "guest": TableSession.ORDER_MODE_PER_PERSON,
+    }
+    return aliases.get(mode)
+
+
+def _resolve_branch(request):
+    raw_branch_id = request.data.get("branch_id")
+    if raw_branch_id not in (None, ""):
+        try:
+            branch_id = int(raw_branch_id)
+        except (TypeError, ValueError):
+            return None
+        return Branch.objects.select_for_update().filter(id=branch_id, is_active=True).first()
+    return (
+        Branch.objects.select_for_update().filter(code="PRINCIPAL", is_active=True).first()
+        or Branch.objects.select_for_update().filter(is_active=True).order_by("id").first()
+    )
+
+
+def _next_order_number(branch: Branch) -> int:
+    current = (
+        Order.objects.select_for_update()
+        .filter(branch=branch)
+        .aggregate(max_order_number=Max("order_number"))
+        .get("max_order_number")
+        or 0
+    )
+    return int(current) + 1
+
+
+def _session_response(session: TableSession, *, status_code=status.HTTP_200_OK):
+    data = TableSessionSerializer(session).data
+    data["session_id"] = session.id
+    data["order_id"] = session.primary_order_id
+    data["table_id"] = data["table_ids"][0] if data.get("table_ids") else None
+    data["guest_count"] = session.guests_count
+    return Response(data, status=status_code)
 
 
 class TableMapFeatureGuardMixin:
@@ -69,7 +147,7 @@ class RestaurantTableDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpda
         table = self.get_object()
         has_active_session = TableSessionTable.objects.filter(
             table=table,
-            session__status__in=["open", "sent_to_kitchen", "partially_paid"],
+            session__status__in=ACTIVE_TABLE_SESSION_STATUSES,
         ).exists()
         if has_active_session:
             return Response({"detail": "No se puede eliminar una mesa con sesión activa."}, status=400)
@@ -88,7 +166,7 @@ class TableLayoutView(TableMapFeatureGuardMixin, APIView):
         areas = DiningAreaSerializer(DiningArea.objects.all().order_by("sort_order","id"), many=True).data
         tables = RestaurantTableSerializer(RestaurantTable.objects.select_related("area").filter(is_active=True), many=True).data
         sessions = TableSessionSerializer(
-            TableSession.objects.filter(status__in=["open", "sent_to_kitchen", "partially_paid"]).order_by("-opened_at"),
+            TableSession.objects.filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at"),
             many=True,
         ).data
         return Response({"areas": areas, "tables": tables, "sessions": sessions})
@@ -111,26 +189,33 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
     def get(self, request):
-        qs = TableSession.objects.filter(status__in=["open", "sent_to_kitchen", "partially_paid"]).order_by("-opened_at")
+        qs = TableSession.objects.filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at")
         return Response(TableSessionSerializer(qs, many=True).data)
 
     @transaction.atomic
     def post(self, request):
-        table_ids = request.data.get("table_ids") or []
-        guests_count = max(int(request.data.get("guests_count") or 1), 1)
-        order_mode = str(request.data.get("order_mode") or "table")
+        table_ids = _parse_table_ids(request.data)
+        guests_count = _parse_guests_count(request.data)
+        order_mode = _normalize_order_mode(request.data.get("order_mode"))
         notes = str(request.data.get("notes") or "")[:255]
         if not table_ids:
             return Response({"detail": "Debes seleccionar al menos una mesa."}, status=400)
+        if guests_count is None:
+            return Response({"guest_count": "La cantidad de personas debe estar entre 1 y 99."}, status=400)
+        if order_mode is None:
+            return Response({"order_mode": "Modo de orden inválido."}, status=400)
+        branch = _resolve_branch(request)
+        if not branch:
+            return Response({"branch_id": "Sucursal inválida o inactiva."}, status=400)
         tables = list(RestaurantTable.objects.select_for_update().filter(id__in=table_ids, is_active=True))
         if len(tables) != len(set(table_ids)):
             return Response({"detail": "Hay mesas inválidas o inactivas."}, status=400)
-        busy = TableSessionTable.objects.select_for_update().filter(table_id__in=table_ids, session__status__in=["open", "sent_to_kitchen", "partially_paid"]).exists()
+        busy = TableSessionTable.objects.select_for_update().filter(table_id__in=table_ids, session__status__in=ACTIVE_TABLE_SESSION_STATUSES).exists()
         if busy:
             return Response({"detail": "Una o más mesas ya tienen sesión activa."}, status=400)
         order = Order.objects.create(
-            order_number=(Order.objects.filter(branch_id=1).count() + 1),
-            branch_id=1,
+            order_number=_next_order_number(branch),
+            branch=branch,
             status="new",
             customer_name="",
             is_pending=True,
@@ -142,7 +227,7 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
         TableSessionTable.objects.bulk_create([TableSessionTable(session=session, table=tb) for tb in tables])
         if order_mode == "per_person":
             TableGuest.objects.bulk_create([TableGuest(session=session, label=f"Persona {i+1}", seat_number=i+1) for i in range(guests_count)])
-        return Response(TableSessionSerializer(session).data, status=201)
+        return _session_response(session, status_code=status.HTTP_201_CREATED)
 
 
 class TableSessionDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateAPIView):
@@ -180,7 +265,7 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
         table_ids = request.data.get("table_ids") or []
         if not table_ids:
             return Response({"detail": "Selecciona mesas para unir."}, status=400)
-        busy = TableSessionTable.objects.filter(table_id__in=table_ids, session__status__in=["open", "sent_to_kitchen", "partially_paid"]).exclude(session=session).exists()
+        busy = TableSessionTable.objects.filter(table_id__in=table_ids, session__status__in=ACTIVE_TABLE_SESSION_STATUSES).exclude(session=session).exists()
         if busy:
             return Response({"detail": "No se puede unir una mesa ocupada en esta versión."}, status=400)
         existing = set(session.session_tables.values_list("table_id", flat=True))
@@ -188,6 +273,68 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
         tables = RestaurantTable.objects.filter(id__in=to_add, is_active=True)
         TableSessionTable.objects.bulk_create([TableSessionTable(session=session, table=t) for t in tables])
         return Response({"detail": "Mesas unidas.", "session": TableSessionSerializer(session).data})
+
+
+class TableSessionMoveTableView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada o cerrada."}, status=404)
+        try:
+            target_table_id = int(request.data.get("target_table_id"))
+        except (TypeError, ValueError):
+            return Response({"target_table_id": "Mesa destino inválida."}, status=400)
+        target = RestaurantTable.objects.select_for_update().filter(id=target_table_id, is_active=True).first()
+        if not target:
+            return Response({"target_table_id": "Mesa destino inválida o inactiva."}, status=400)
+        target_busy = TableSessionTable.objects.select_for_update().filter(
+            table=target,
+            session__status__in=ACTIVE_TABLE_SESSION_STATUSES,
+        ).exclude(session=session).exists()
+        if target_busy:
+            return Response({"detail": "La mesa destino ya tiene una sesión activa."}, status=400)
+
+        source_table_id = request.data.get("source_table_id")
+        if source_table_id not in (None, ""):
+            try:
+                source_table_id = int(source_table_id)
+            except (TypeError, ValueError):
+                return Response({"source_table_id": "Mesa origen inválida."}, status=400)
+            removed, _ = TableSessionTable.objects.filter(session=session, table_id=source_table_id).delete()
+            if removed == 0:
+                return Response({"source_table_id": "La mesa origen no pertenece a esta sesión."}, status=400)
+        else:
+            TableSessionTable.objects.filter(session=session).delete()
+
+        TableSessionTable.objects.get_or_create(session=session, table=target)
+        if session.primary_order_id:
+            session.primary_order.pending_reference = f"Mesa {target.name}"
+            session.primary_order.save(update_fields=["pending_reference", "updated_at"])
+        return Response({"detail": "Mesa movida correctamente.", "session": TableSessionSerializer(session).data})
+
+
+class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada o ya cerrada."}, status=404)
+        order = session.primary_order
+        if order:
+            order.recalculate_financials()
+            has_balance = order.items.exists() and order.payment_status != "paid"
+            if has_balance:
+                return Response({"detail": "La mesa tiene saldo pendiente y no puede liberarse."}, status=400)
+        session.status = TableSession.STATUS_CLOSED
+        session.closed_by = request.user
+        session.closed_at = timezone.now()
+        session.save(update_fields=["status", "closed_by", "closed_at", "updated_at"])
+        return Response({"detail": "Mesa liberada correctamente.", "session": TableSessionSerializer(session).data})
 
 
 class TableSessionMoveItemsView(TableMapFeatureGuardMixin, APIView):

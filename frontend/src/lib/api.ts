@@ -1536,35 +1536,36 @@ export const getRuntimeFeatureSettings = async (): Promise<FeatureSettings> => {
 };
 
 export const updateFeatureSettings = async (payload: Partial<FeatureSettings>): Promise<FeatureSettings> => {
+  const body = Object.fromEntries(Object.entries({
+    kiosk_enabled: payload.kioskEnabled,
+    pos_enabled: payload.posEnabled,
+    open_orders_enabled: payload.openOrdersEnabled,
+    customer_display_enabled: payload.customerDisplayEnabled,
+    kitchen_display_enabled: payload.kitchenDisplayEnabled,
+    menu_discounts_enabled: payload.menuDiscountsEnabled,
+    reports_enabled: payload.reportsEnabled,
+    clients_enabled: payload.clientsEnabled,
+    settings_enabled: payload.settingsEnabled,
+    cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
+    cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
+    cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
+    inventory_stock_policy: payload.inventoryStockPolicy,
+    inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
+    pos_product_images_enabled: payload.posProductImagesEnabled,
+    table_map_enabled: payload.tableMapEnabled,
+    operation_mode: payload.operationMode,
+    default_pos_entry: payload.defaultPosEntry,
+    allow_table_merge: payload.allowTableMerge,
+    allow_table_transfer: payload.allowTableTransfer,
+    allow_split_by_guest: payload.allowSplitByGuest,
+    allow_split_by_item: payload.allowSplitByItem,
+    pos_quick_sales_button_mode: payload.posQuickSalesButtonMode,
+    pos_quick_sales_history_scope: payload.posQuickSalesHistoryScope,
+    pos_quick_sales_history_window_minutes: payload.posQuickSalesHistoryWindowMinutes,
+  }).filter(([, value]) => value !== undefined));
   const response = await request("/settings/features/", {
     method: "PATCH",
-    body: JSON.stringify({
-      kiosk_enabled: payload.kioskEnabled,
-      pos_enabled: payload.posEnabled,
-      open_orders_enabled: payload.openOrdersEnabled,
-      customer_display_enabled: payload.customerDisplayEnabled,
-      kitchen_display_enabled: payload.kitchenDisplayEnabled,
-      menu_discounts_enabled: payload.menuDiscountsEnabled,
-      reports_enabled: payload.reportsEnabled,
-      clients_enabled: payload.clientsEnabled,
-      settings_enabled: payload.settingsEnabled,
-      cash_close_expected_totals_control_enabled: payload.cashCloseExpectedTotalsControlEnabled,
-      cash_close_expected_totals_allowed_roles: payload.cashCloseExpectedTotalsAllowedRoles,
-      cash_close_expected_totals_visible_fields: payload.cashCloseExpectedTotalsVisibleFields,
-      inventory_stock_policy: payload.inventoryStockPolicy,
-      inventory_advanced_enabled: payload.inventoryAdvancedEnabled,
-      pos_product_images_enabled: payload.posProductImagesEnabled,
-      table_map_enabled: payload.tableMapEnabled,
-      operation_mode: payload.operationMode,
-      default_pos_entry: payload.defaultPosEntry,
-      allow_table_merge: payload.allowTableMerge,
-      allow_table_transfer: payload.allowTableTransfer,
-      allow_split_by_guest: payload.allowSplitByGuest,
-      allow_split_by_item: payload.allowSplitByItem,
-      pos_quick_sales_button_mode: payload.posQuickSalesButtonMode,
-      pos_quick_sales_history_scope: payload.posQuickSalesHistoryScope,
-      pos_quick_sales_history_window_minutes: payload.posQuickSalesHistoryWindowMinutes,
-    }),
+    body: JSON.stringify(body),
   });
   const data = await handleJson<any>(response);
   const normalized = normalizeFeatureFlags(data);
@@ -6607,12 +6608,12 @@ export const receivePurchaseOrder = async (id: number, payload: { notes?: string
 export type DiningArea = { id: number; name: string; sortOrder: number; isActive: boolean; x:number; y:number; width:number; height:number; color?:string; operationalZoom:number; operationalOffsetX:number; operationalOffsetY:number };
 export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
 export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
-export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[] };
+export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number };
 export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
 
 const mapDiningArea = (x: any): DiningArea => ({ id: x.id, name: x.name, sortOrder: Number(x.sort_order ?? 0), isActive: Boolean(x.is_active), x:Number(x.x??0), y:Number(x.y??0), width:Number(x.width??320), height:Number(x.height??220), color:x.color??"", operationalZoom:Number(x.operational_zoom??1), operationalOffsetX:Number(x.operational_offset_x??0), operationalOffsetY:Number(x.operational_offset_y??0) });
 const mapRestaurantTable = (x: any): RestaurantTable => ({ id: x.id, area: x.area, areaName: x.area_name, name: x.name, number: Number(x.number ?? 0), capacity: Number(x.capacity ?? 1), shape: x.shape, x: Number(x.x ?? 0), y: Number(x.y ?? 0), width: Number(x.width ?? 120), height: Number(x.height ?? 80), rotation: Number(x.rotation ?? 0), color: x.color ?? '', isActive: Boolean(x.is_active), sortOrder: Number(x.sort_order ?? 0) });
-const mapTableSession = (x: any): TableSession => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) });
+const mapTableSession = (x: any): TableSession => ({ id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? x.guest_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? x.order_id ?? null, tableIds: x.table_ids ?? (x.table_id ? [x.table_id] : []), guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })), openedAt: x.opened_at ?? null, totalCached: Number(x.total_cached ?? 0) });
 
 export const getDiningAreas = async (): Promise<DiningArea[]> => {
   const response = await request('/orders/tables/areas/');
@@ -6666,10 +6667,25 @@ export const getTableSessions = async (): Promise<TableSession[]> => {
 export const createTableSession = async (payload: { tableIds: number[]; guestsCount: number; orderMode: 'table'|'per_person'; notes?: string; }): Promise<TableSession> => {
   const response = await request('/orders/tables/sessions/', { method: 'POST', body: JSON.stringify({ table_ids: payload.tableIds, guests_count: payload.guestsCount, order_mode: payload.orderMode, notes: payload.notes ?? '' }) });
   const x = await handleJson<any>(response);
-  return { id: x.id, status: x.status, guestsCount: Number(x.guests_count ?? 1), orderMode: x.order_mode, primaryOrder: x.primary_order ?? null, tableIds: x.table_ids ?? [], guests: (x.guests ?? []).map((g: any) => ({ id: g.id, label: g.label, seatNumber: Number(g.seat_number ?? 1), isActive: Boolean(g.is_active), isPaid: Boolean(g.is_paid) })) };
+  return mapTableSession(x);
 };
 export const mergeTableSessionTables = async (sessionId: number, tableIds: number[]): Promise<TableSession> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/merge/`, { method: 'POST', body: JSON.stringify({ table_ids: tableIds }) });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
+};
+export const sendTableSessionToKitchen = async (sessionId: number): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/send-to-kitchen/`, { method: 'POST' });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
+};
+export const moveTableSessionTable = async (sessionId: number, payload: { targetTableId: number; sourceTableId?: number | null }): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/move-table/`, { method: 'POST', body: JSON.stringify({ target_table_id: payload.targetTableId, source_table_id: payload.sourceTableId ?? null }) });
+  const data = await handleJson<any>(response);
+  return mapTableSession(data.session ?? data);
+};
+export const releaseTableSession = async (sessionId: number): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/release/`, { method: 'POST' });
   const data = await handleJson<any>(response);
   return mapTableSession(data.session ?? data);
 };
