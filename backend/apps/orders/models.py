@@ -265,6 +265,17 @@ class Order(models.Model):
 
 
 class OrderItem(models.Model):
+    KITCHEN_STATUS_PENDING = "pending"
+    KITCHEN_STATUS_SENT = "sent"
+    KITCHEN_STATUS_READY = "ready"
+    KITCHEN_STATUS_DELIVERED = "delivered"
+    KITCHEN_STATUS_CHOICES = [
+        (KITCHEN_STATUS_PENDING, "Pendiente"),
+        (KITCHEN_STATUS_SENT, "En cocina"),
+        (KITCHEN_STATUS_READY, "Listo"),
+        (KITCHEN_STATUS_DELIVERED, "Entregado"),
+    ]
+
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="order_items", null=True, blank=True)
     product_name_snapshot = models.CharField(max_length=160)
@@ -277,9 +288,13 @@ class OrderItem(models.Model):
     assigned_name = models.CharField(max_length=80, blank=True, default="")
     table_guest = models.ForeignKey(TableGuest, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
     applied_special_price_rule = models.ForeignKey(ProductSpecialPriceRule, on_delete=models.SET_NULL, null=True, blank=True, related_name="order_items")
+    kitchen_status = models.CharField(max_length=16, choices=KITCHEN_STATUS_CHOICES, default=KITCHEN_STATUS_PENDING)
+    kitchen_sent_at = models.DateTimeField(null=True, blank=True)
+    kitchen_ready_at = models.DateTimeField(null=True, blank=True)
+    kitchen_delivered_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        indexes = [models.Index(fields=["order"]) ]
+        indexes = [models.Index(fields=["order"]), models.Index(fields=["order", "kitchen_status"]) ]
 
     def __str__(self) -> str:
         return f"{self.product_name_snapshot} x{self.quantity}"

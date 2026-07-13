@@ -1,5 +1,6 @@
+from decimal import Decimal
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import Max, Q, Sum
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -7,9 +8,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.models import Branch, FeatureFlag
+from apps.core.audit import log_audit
+from apps.core.money import to_cents
 from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, RestaurantTableSerializer, TableSessionSerializer
+from apps.payments.models import Payment
+from apps.users.models import UserProfile
+from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
 
 
 def _table_map_enabled() -> bool:
@@ -100,6 +106,65 @@ def _session_response(session: TableSession, *, status_code=status.HTTP_200_OK):
     data["table_id"] = data["table_ids"][0] if data.get("table_ids") else None
     data["guest_count"] = session.guests_count
     return Response(data, status=status_code)
+
+
+def _is_admin_or_superadmin(user) -> bool:
+    profile = UserProfile.objects.filter(user=user, is_active=True).first()
+    return bool(getattr(user, "is_superuser", False) or (profile and profile.role in {"superadmin", "admin"}))
+
+
+def _authorize_admin_or_superadmin_pin(pin: str):
+    if not is_valid_pin_format(pin):
+        return None
+    profiles = UserProfile.objects.select_related("user").filter(
+        is_active=True,
+        role__in=["superadmin", "admin"],
+        user__is_active=True,
+    )
+    for profile in profiles:
+        if profile.user and user_matches_pin(profile.user, pin):
+            return profile.user
+    return None
+
+
+def _serialize_kitchen_item(item: OrderItem):
+    return {
+        "id": item.id,
+        "product_name": item.product_name_snapshot,
+        "quantity": item.quantity,
+        "assigned_name": item.assigned_name,
+        "kitchen_status": item.kitchen_status,
+        "kitchen_sent_at": item.kitchen_sent_at,
+        "kitchen_ready_at": item.kitchen_ready_at,
+        "kitchen_delivered_at": item.kitchen_delivered_at,
+        "line_total": str((item.effective_unit_price * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))),
+    }
+
+
+def _serialize_kitchen_session(session: TableSession):
+    order = session.primary_order
+    table_names = list(session.session_tables.select_related("table").order_by("created_at", "id").values_list("table__name", flat=True))
+    items = list(order.items.select_related("table_guest").prefetch_related("applied_modifiers").order_by("id")) if order else []
+    by_person: dict[str, dict] = {}
+    for item in items:
+        label = item.assigned_name or (item.table_guest.label if item.table_guest_id and item.table_guest else "Cuenta general")
+        bucket = by_person.setdefault(label, {"label": label, "items": [], "total": Decimal("0.00")})
+        line_total = (item.effective_unit_price * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
+        bucket["items"].append(_serialize_kitchen_item(item))
+        bucket["total"] += line_total
+    return {
+        "session_id": session.id,
+        "order_id": session.primary_order_id,
+        "status": session.status,
+        "tables": table_names,
+        "table_label": " + ".join(table_names),
+        "guests_count": session.guests_count,
+        "order_mode": session.order_mode,
+        "total": str(order.total if order else session.total_cached),
+        "remaining": str(max((Decimal(order.amount_due_cents or to_cents(order.total)) / Decimal("100")) - (Payment.objects.filter(order=order).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0")), Decimal("0.00")) if order else Decimal("0.00")),
+        "items": [_serialize_kitchen_item(item) for item in items],
+        "people": [{**value, "total": str(value["total"].quantize(Decimal("0.01")))} for value in by_person.values()],
+    }
 
 
 class TableMapFeatureGuardMixin:
@@ -265,19 +330,70 @@ class TableSessionDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateA
 class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
     permission_classes = [IsCashierOrManagerOrAdmin]
 
+    @transaction.atomic
     def post(self, request, pk: int):
-        session = TableSession.objects.filter(id=pk).first()
+        session = TableSession.objects.select_for_update().filter(id=pk).first()
         if not session or not session.primary_order_id:
             return Response({"detail": "Sesión no encontrada."}, status=404)
         order = session.primary_order
         if not order.items.exists():
             return Response({"detail": "No se puede enviar una orden vacía."}, status=400)
+        pending_items = list(
+            order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+        )
+        if not pending_items:
+            return Response(
+                {"detail": "No hay productos nuevos para enviar.", "sent_count": 0, "session": TableSessionSerializer(session).data},
+                status=status.HTTP_200_OK,
+            )
+        now = timezone.now()
+        for item in pending_items:
+            item.kitchen_status = OrderItem.KITCHEN_STATUS_SENT
+            item.kitchen_sent_at = now
+            item.save(update_fields=["kitchen_status", "kitchen_sent_at"])
         order.send_to_kitchen = True
         order.pending_state = "in_kitchen"
         order.save(update_fields=["send_to_kitchen", "pending_state", "updated_at"])
         session.status = "sent_to_kitchen"
         session.save(update_fields=["status", "updated_at"])
-        return Response({"detail": "Orden enviada a cocina.", "session": TableSessionSerializer(session).data})
+        return Response({"detail": f"{len(pending_items)} productos enviados a cocina.", "sent_count": len(pending_items), "session": TableSessionSerializer(session).data})
+
+
+class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    def get(self, request):
+        sessions = (
+            TableSession.objects.select_related("primary_order")
+            .prefetch_related("session_tables__table", "primary_order__items__table_guest")
+            .filter(status__in=ACTIVE_TABLE_SESSION_STATUSES)
+            .order_by("-updated_at", "-id")
+        )
+        return Response({"sessions": [_serialize_kitchen_session(session) for session in sessions]})
+
+
+class TableOrderItemKitchenStatusView(APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int, target_status: str):
+        item = OrderItem.objects.select_for_update().select_related("order").filter(id=pk).first()
+        if not item:
+            return Response({"detail": "Producto no encontrado."}, status=404)
+        now = timezone.now()
+        if target_status == OrderItem.KITCHEN_STATUS_READY:
+            item.kitchen_status = OrderItem.KITCHEN_STATUS_READY
+            item.kitchen_ready_at = item.kitchen_ready_at or now
+            fields = ["kitchen_status", "kitchen_ready_at"]
+        elif target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+            item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
+            item.kitchen_ready_at = item.kitchen_ready_at or now
+            item.kitchen_delivered_at = item.kitchen_delivered_at or now
+            fields = ["kitchen_status", "kitchen_ready_at", "kitchen_delivered_at"]
+        else:
+            return Response({"detail": "Estado inválido."}, status=400)
+        item.save(update_fields=fields)
+        return Response({"detail": "Estado actualizado.", "item": _serialize_kitchen_item(item)})
 
 
 class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
@@ -397,6 +513,72 @@ class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
         session.closed_at = timezone.now()
         session.save(update_fields=["status", "closed_by", "closed_at", "updated_at"])
         return Response({"detail": "Mesa liberada correctamente.", "session": TableSessionSerializer(session).data})
+
+
+class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [IsCashierOrManagerOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
+        if not session:
+            return Response({"detail": "Sesión no encontrada o ya cerrada."}, status=404)
+        reason = str(request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"reason": "Motivo obligatorio."}, status=400)
+        order = session.primary_order
+        order_total_paid = Decimal("0.00")
+        order_remaining = Decimal("0.00")
+        if order:
+            order.recalculate_financials()
+            order_total_paid = Payment.objects.filter(order=order).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0.00")
+            due = Decimal(order.amount_due_cents or to_cents(order.total)) / Decimal("100")
+            order_remaining = max(due - order_total_paid, Decimal("0.00")).quantize(Decimal("0.01"))
+        authorized_by = request.user if _is_admin_or_superadmin(request.user) else None
+        if order_remaining > 0 and not authorized_by:
+            authorized_by = _authorize_admin_or_superadmin_pin(str(request.data.get("authorization_pin") or "").strip())
+            if not authorized_by:
+                return Response({"detail": "Autorización de admin/superadmin requerida."}, status=status.HTTP_403_FORBIDDEN)
+        if order:
+            order.status = "canceled"
+            order.financial_status = "voided"
+            order.payment_status = "partial" if order_total_paid > 0 else "unpaid"
+            order.net_paid = order_total_paid
+            order.amount_due_cents = to_cents(order_total_paid)
+            order.is_pending = False
+            order.pending_state = "none"
+            order.pending_completed_at = timezone.localtime(timezone.now())
+            order.pending_completion_type = "canceled"
+            order.pending_completion_note = reason[:160]
+            order.save(update_fields=[
+                "status", "financial_status", "payment_status", "net_paid", "amount_due_cents",
+                "is_pending", "pending_state", "pending_completed_at", "pending_completion_type",
+                "pending_completion_note", "updated_at",
+            ])
+        session.status = TableSession.STATUS_CANCELLED
+        session.closed_by = request.user
+        session.closed_at = timezone.now()
+        session.save(update_fields=["status", "closed_by", "closed_at", "updated_at"])
+        log_audit(
+            request,
+            "table_session.force_release",
+            "TableSession",
+            session.id,
+            {
+                "order_id": order.id if order else None,
+                "requested_by": getattr(request.user, "id", None),
+                "authorized_by": getattr(authorized_by, "id", None) if authorized_by else None,
+                "reason": reason,
+                "cancelled_balance": str(order_remaining),
+                "paid_kept": str(order_total_paid),
+            },
+        )
+        return Response({
+            "ok": True,
+            "session": TableSessionSerializer(session).data,
+            "voided_order_id": order.id if order else None,
+            "authorized_by": getattr(authorized_by, "id", None) if authorized_by else None,
+        })
 
 
 class TableSessionMoveItemsView(TableMapFeatureGuardMixin, APIView):

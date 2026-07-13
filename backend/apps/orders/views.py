@@ -96,6 +96,16 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         len(items_data),
     )
     existing_ids = set(order.items.values_list("id", flat=True))
+    previous_kitchen_state = {
+        item.id: {
+            "kitchen_status": item.kitchen_status,
+            "kitchen_sent_at": item.kitchen_sent_at,
+            "kitchen_ready_at": item.kitchen_ready_at,
+            "kitchen_delivered_at": item.kitchen_delivered_at,
+            "table_guest_id": item.table_guest_id,
+        }
+        for item in order.items.all()
+    }
     requested_ids = {
         int(str(item.get("source_order_item_id")))
         for item in items_data
@@ -137,6 +147,19 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
             quantity=quantity,
             assigned_name=assigned_name[:80],
         )
+        source_id = raw.get("source_order_item_id")
+        try:
+            source_id = int(source_id) if source_id is not None else None
+        except (TypeError, ValueError):
+            source_id = None
+        previous_state = previous_kitchen_state.get(source_id)
+        if previous_state:
+            item.kitchen_status = previous_state["kitchen_status"]
+            item.kitchen_sent_at = previous_state["kitchen_sent_at"]
+            item.kitchen_ready_at = previous_state["kitchen_ready_at"]
+            item.kitchen_delivered_at = previous_state["kitchen_delivered_at"]
+            item.table_guest_id = previous_state["table_guest_id"]
+            item.save(update_fields=["kitchen_status", "kitchen_sent_at", "kitchen_ready_at", "kitchen_delivered_at", "table_guest"])
         line_modifier_total = Decimal("0.00")
         for raw_mod in (raw.get("modifiers") or []):
             mod_name = str(raw_mod.get("name") or "").strip()
