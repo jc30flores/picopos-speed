@@ -24,6 +24,7 @@ from apps.payments.serializers import (
     PaymentMethodSerializer,
     InternalPaymentMethodChangeSerializer,
 )
+from apps.orders.models import TableSession
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import (
@@ -324,6 +325,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 if payment.order.status != "delivered":
                     payment.order.status = "delivered"
                     payment.order.save(update_fields=["status", "updated_at"])
+            TableSession.objects.filter(
+                primary_order=payment.order,
+                status__in=["open", "sent_to_kitchen", "partially_paid"],
+            ).update(status=TableSession.STATUS_CLOSED, closed_by=request.user, closed_at=timezone.now(), updated_at=timezone.now())
             runtime_status = get_dte_runtime_status()
             def _after_commit_dte():
                 def _enqueue_dte_async():
@@ -380,6 +385,10 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 dte_meta["dte_status"] = reason
                 dte_meta["dte_last_error"] = "" if reason == "DISABLED" else runtime_status.message
         else:
+            TableSession.objects.filter(
+                primary_order=payment.order,
+                status__in=["open", "sent_to_kitchen"],
+            ).update(status=TableSession.STATUS_PARTIALLY_PAID, updated_at=timezone.now())
             log_audit(
                 request,
                 "payment.partial",
