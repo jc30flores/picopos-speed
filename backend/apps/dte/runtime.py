@@ -32,8 +32,8 @@ def get_dte_runtime_status() -> DTERuntimeStatus:
             base_url="",
         )
 
-    base_url = (config.base_url or getattr(settings, "DTE_BASE_URL", "") or "").strip()
-    token = (config.api_token or getattr(settings, "DTE_API_TOKEN", "") or "").strip()
+    base_url = (config.base_url or "").strip()
+    token = (config.api_token or "").strip()
     issuer_ready = _issuer_config_ready()
     config_ready = bool(base_url and token and issuer_ready)
     status = DTEGlobalSettings.STATUS_CONFIGURED if config_ready else DTEGlobalSettings.STATUS_PENDING
