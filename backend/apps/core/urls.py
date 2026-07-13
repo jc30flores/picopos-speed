@@ -14,6 +14,7 @@ urlpatterns = [
     path("settings/appearance/", views.AppearanceSettingsView.as_view(), name="settings-appearance"),
     path("settings/dte/", views.DTEGlobalSettingsView.as_view(), name="settings-dte"),
     path("settings/dte/correlatives/", views.DTECorrelativesView.as_view(), name="settings-dte-correlatives"),
+    path("settings/dte/correlatives/initialize/", views.DTECorrelativesView.as_view(), name="settings-dte-correlatives-initialize"),
     path("settings/dte/correlatives/<int:pk>/", views.DTECorrelativeDetailView.as_view(), name="settings-dte-correlative-detail"),
     path("settings/dte/test-connection/", views.DTETestConnectionView.as_view(), name="settings-dte-test-connection"),
     path("settings/ticket/", views.TicketSettingsView.as_view(), name="settings-ticket"),

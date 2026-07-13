@@ -242,6 +242,8 @@ class FeatureFlagListView(generics.ListAPIView):
                 {"id": None, "key": "dte_visible", "label": "DTE visible", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
                 {"id": None, "key": "can_view_dte", "label": "Puede ver DTE", "description": "", "is_enabled": can_view_dte(request.user), "enabled": can_view_dte(request.user), "metadata": {}},
                 {"id": None, "key": "can_manage_dte", "label": "Puede administrar DTE", "description": "", "is_enabled": is_superadmin(request.user), "enabled": is_superadmin(request.user), "metadata": {}},
+                {"id": None, "key": "can_send_dte", "label": "Puede enviar DTE", "description": "", "is_enabled": dte_enabled and can_view_dte(request.user), "enabled": dte_enabled and can_view_dte(request.user), "metadata": {}},
+                {"id": None, "key": "hacienda_enabled", "label": "Hacienda activo", "description": "", "is_enabled": dte_enabled, "enabled": dte_enabled, "metadata": {}},
             ]
         )
         response.data = rows

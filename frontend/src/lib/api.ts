@@ -409,7 +409,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
       reportsEnabled: fromMap(byKey, ['module_reports_enabled'], defaults.reportsEnabled),
       clientsEnabled: fromMap(byKey, ['module_clients_enabled'], defaults.clientsEnabled),
       settingsEnabled: fromMap(byKey, ['module_settings_enabled'], defaults.settingsEnabled),
-      dteEnabled: fromMap(byKey, ['module_dte_enabled', 'dte_enabled', 'dte_visible'], defaults.dteEnabled),
+      dteEnabled: fromMap(byKey, ['module_dte_enabled', 'dte_enabled', 'dte_visible', 'hacienda_enabled', 'can_send_dte'], defaults.dteEnabled),
       whatsappEnabled: fromMap(byKey, ['module_whatsapp_enabled'], defaults.whatsappEnabled),
       emailEnabled: fromMap(byKey, ['module_email_enabled'], defaults.emailEnabled),
       cashCloseExpectedTotalsControlEnabled: fromMap(byKey, ['FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
@@ -433,7 +433,7 @@ export const normalizeFeatureFlags = (raw: any): FeatureFlagsNormalized => {
     reportsEnabled: fromMap(raw, ['reportsEnabled', 'reports_enabled'], defaults.reportsEnabled),
     clientsEnabled: fromMap(raw, ['clientsEnabled', 'clients_enabled'], defaults.clientsEnabled),
     settingsEnabled: fromMap(raw, ['settingsEnabled', 'settings_enabled'], defaults.settingsEnabled),
-    dteEnabled: fromMap(raw, ['dteEnabled', 'dte_enabled'], defaults.dteEnabled),
+    dteEnabled: fromMap(raw, ['dteEnabled', 'dte_enabled', 'hacienda_enabled', 'can_send_dte'], defaults.dteEnabled),
     whatsappEnabled: fromMap(raw, ['whatsappEnabled', 'whatsapp_enabled'], defaults.whatsappEnabled),
     emailEnabled: fromMap(raw, ['emailEnabled', 'email_enabled'], defaults.emailEnabled),
     cashCloseExpectedTotalsControlEnabled: fromMap(raw, ['cashCloseExpectedTotalsControlEnabled', 'cash_close_expected_totals_control_enabled', 'FF_CASH_CLOSE_EXPECTED_TOTALS_CONTROL_ENABLED'], defaults.cashCloseExpectedTotalsControlEnabled),
@@ -1628,7 +1628,7 @@ export const updateDteSettings = async (payload: Partial<DteSettings> & { apiTok
 };
 
 export const initializeDteCorrelatives = async (): Promise<DteCorrelative[]> => {
-  const response = await request("/settings/dte/correlatives/", { method: "POST", body: JSON.stringify({}) });
+  const response = await request("/settings/dte/correlatives/initialize/", { method: "POST", body: JSON.stringify({}) });
   const data = await handleJson<any>(response);
   return mapDteSettings({ correlatives: data.correlatives ?? [] } as any).correlatives;
 };
