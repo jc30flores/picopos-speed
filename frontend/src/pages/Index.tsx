@@ -1603,8 +1603,9 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!serviceType) return;
+    if (isOpeningTablePayment || tablePaymentScope) return;
     void loadActiveDiscounts();
-  }, [serviceType, itemsGross]);
+  }, [isOpeningTablePayment, itemsGross, serviceType, tablePaymentScope]);
 
   useEffect(() => {
     if (cart.length > 0 || activeOrder) return;
@@ -4606,12 +4607,12 @@ type TableConfirmDialogState =
                     {!session && allowTableMerge && canManageTableStructure ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: null, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session ? menuButton(isJoined ? "Agregar productos" : "Agregar productos", <Plus className="h-4 w-4" />, () => { void openTableSession(table.id); close(); }) : null}
                     {session ? menuButton(isJoined ? "Ver cuenta conjunta" : "Ver cuenta", <Eye className="h-4 w-4" />, () => { void openTableBill(table.id, session); close(); }) : null}
-                    {session && canCollectTablePayments ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session && canCollectTablePayments ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect || isOpeningTablePayment || isPaymentOpen) : null}
                     {session ? menuButton("Enviar cocina", <ChefHat className="h-4 w-4" />, () => { void handleSendTableSession(session); close(); }, session.status === "sent_to_kitchen") : null}
                     {session && allowTableTransfer && canManageTableStructure ? menuButton(isJoined ? "Mover grupo" : "Mover mesa", <MoveRight className="h-4 w-4" />, () => { setTransferMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona la mesa destino"); close(); }) : null}
                     {session && allowTableMerge && canManageTableStructure ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session && isJoined && canManageTableStructure ? menuButton("Separar mesa", <SplitSquareHorizontal className="h-4 w-4" />, () => { handleSplitTableSession(session, table.id); close(); }) : null}
-                    {session && (allowSplitByGuest || allowSplitByItem) && canCollectTablePayments ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session && (allowSplitByGuest || allowSplitByItem) && canCollectTablePayments ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect || isOpeningTablePayment || isPaymentOpen) : null}
                     {session && canManageTableStructure ? menuButton(isJoined ? "Liberar grupo" : "Liberar mesa", <DoorOpen className="h-4 w-4" />, () => { void handleReleaseTableSession(session); close(); }) : null}
                     {menuButton("Cerrar", <X className="h-4 w-4" />, close)}
                   </div>
@@ -4873,12 +4874,12 @@ type TableConfirmDialogState =
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
                 return (
-                  <Button type="button" variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true, order: tableBillDialog.order, payments: tableBillDialog.payments })}>
+                  <Button type="button" variant="outline" disabled={scope.remainingCents <= 0 || isOpeningTablePayment || isPaymentOpen} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true, order: tableBillDialog.order, payments: tableBillDialog.payments })}>
                     {scope.remainingCents <= 0 ? "Persona pagada" : `Cobrar ${guest.label}`}
                   </Button>
                 );
               })() : null}
-              {canCollectTablePayments && tableBillDialog.order ? <Button type="button" onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
+              {canCollectTablePayments && tableBillDialog.order ? <Button type="button" disabled={isOpeningTablePayment || isPaymentOpen} onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -4940,7 +4941,7 @@ type TableConfirmDialogState =
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTableBill(tableId, tableSession); }}>Ver cuenta</Button>
-                          {canCollectTablePayments ? <Button type="button" size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button> : null}
+                          {canCollectTablePayments ? <Button type="button" size="sm" variant="outline" disabled={isOpeningTablePayment || isPaymentOpen} onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button> : null}
                         </div>
                       </div>
                       <div className="space-y-3">
@@ -4975,6 +4976,254 @@ type TableConfirmDialogState =
               <Button variant="outline" onClick={() => setKitchenSummaryDialog({ open: false, loading: false, sessions: [] })}>Cerrar</Button>
               <Button onClick={() => void refreshKitchenSummary()}>Actualizar</Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={isPaymentOpen} onOpenChange={handlePaymentDialogOpenChange}>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-3xl flex-col overflow-hidden p-0">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <DialogHeader className="border-b px-4 py-3 sm:px-6">
+                <DialogTitle>{tablePaymentScope?.kind === "guest" ? `Cobrando ${tablePaymentScope.guestLabel || "persona"}` : tablePaymentScope ? "Cobrando cuenta completa" : "Cobrar pedido"}</DialogTitle>
+                <DialogDescription>{tablePaymentScope ? "Pago de mesa. La mesa sigue abierta hasta saldar todo el saldo." : "Confirma el pago y envía a cocina"}</DialogDescription>
+              </DialogHeader>
+              {checkoutDraft ? (
+                <>
+                  <div ref={checkoutModalScrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
+                    <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
+                      <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm font-semibold">
+                        <span>Detalle</span>
+                        <span className="text-xs text-muted-foreground">
+                          {activeOrder?.orderNumber ? `Pedido #${activeOrder.orderNumber}` : createdOrderNumber ? `Pedido #${createdOrderNumber}` : "Pedido (pendiente)"}
+                        </span>
+                      </div>
+                      <div className="rounded-md border">
+                        <div className="max-h-80 divide-y divide-border overflow-y-auto text-sm">
+                          {(paymentDialogItems?.length ? paymentDialogItems : checkoutDraft.items.map((item) => ({
+                            id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
+                            productName: item.name,
+                            quantity: item.quantity,
+                            unitPriceBeforeDiscount: getItemUnitTotal(item),
+                            unitPriceFinal: getItemUnitTotal(item),
+                            discountAmount: 0,
+                            lineTotalFinal: getItemUnitTotal(item) * item.quantity,
+                            lineTotalDiscount: 0,
+                          }))).map((item) => (
+                            <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-start gap-3 p-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{item.productName}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {(item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? 0) > (item.unitPriceFinal ?? 0) && (
+                                    <span className="mr-1 line-through">{formatMoney(item.unitPriceBeforeDiscount ?? 0)}</span>
+                                  )}
+                                  {formatMoney(item.unitPriceFinal ?? item.unitPriceBeforeDiscount ?? 0)} c/u
+                                </div>
+                                {(item.discountAmount ?? 0) > 0 && (
+                                  <div className="text-[11px] gp-primary-text">
+                                    Descuento {formatMoney(item.discountAmount ?? 0)}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-center text-xs text-muted-foreground">x{item.quantity}</div>
+                              <div className="text-right font-semibold">{formatMoney(item.lineTotalFinal ?? ((item.unitPriceFinal ?? 0) * item.quantity))}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border p-3 text-sm">
+                      <div className="mb-2 font-semibold">Resumen</div>
+                      <div className="space-y-1 text-muted-foreground">
+                        <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
+                        {checkoutDiscountLines.length > 0
+                          ? checkoutDiscountLines.map((line) => (
+                              <div key={`checkout-table-${line.source}-${line.id}`} className="flex justify-between gp-primary-text">
+                                <span>Descuento ({line.name})</span>
+                                <span>-{formatMoney(line.amount)}</span>
+                              </div>
+                            ))
+                          : checkoutSummaryDiscount > 0
+                            ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
+                            : null}
+                        {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
+                        <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
+                      </div>
+                    </div>
+
+                    {splitEnabled && activeSplitPart ? (
+                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
+                        Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
+                      </div>
+                    ) : null}
+
+                    {selectedPaymentIsCash && showCashPanel ? (
+                      <CashPaymentPanel
+                        totalCents={expectedPaymentCents}
+                        paymentAmount={paymentAmount}
+                        tipAmount={tipAmount}
+                        activeTenderField={activeTenderField}
+                        changeCents={changeCents}
+                        isExactPayment={isExactPayment}
+                        onPaymentAmountChange={setPaymentAmount}
+                        onTipAmountChange={setTipAmount}
+                        onFocusTenderField={focusTenderField}
+                        onApplyDenomination={applyTenderDenomination}
+                        onClear={clearTenderField}
+                        onBackspace={backspaceTenderField}
+                        onExact={setExactTenderAmount}
+                        panelRef={cashPanelRef}
+                        paymentInputRef={cashAmountInputRef}
+                      />
+                    ) : null}
+                  </div>
+
+                  <div className="sticky bottom-0 z-30 shrink-0 space-y-2 border-t bg-background px-4 py-3 sm:px-6">
+                    <div className="space-y-2 rounded-xl border bg-muted/20 p-2" role="group" aria-label="Métodos de pago">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                        {paymentMethodButtons.map((option) => {
+                          const selected = selectedPaymentMethodCode === option.code;
+                          return (
+                            <Button
+                              key={option.code}
+                              type="button"
+                              variant={selected ? "default" : "outline"}
+                              className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
+                              style={getPaymentButtonStyle(option, selected)}
+                              onClick={() => selectPaymentMethodOption(option, false)}
+                            >
+                              {option.label}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                      {!selectedPaymentMethodCode ? <p className="text-xs text-muted-foreground">Selecciona un método de pago para continuar.</p> : null}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={handleOpenCustomerDte}>
+                        <span className="min-w-0 truncate text-left">
+                          Cliente: {selectedCustomer ? `${selectedCustomer.fullName}${dteEnabled ? ` (${dteDocumentType})` : ""}` : dteEnabled ? `Consumidor final (${dteDocumentType})` : "Consumidor final"}
+                        </span>
+                      </Button>
+                      <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                        Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
+                      </Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" className="h-12 flex-1 text-sm" onClick={() => handlePaymentDialogOpenChange(false)}>Cerrar</Button>
+                      <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                        {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              ) : isOpeningTablePayment ? (
+                <div className="flex min-h-48 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <div>
+                    <p className="font-medium text-foreground">Preparando cobro de mesa...</p>
+                    <p>Estamos cargando el saldo y los pagos previos.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={isPaymentMethodOpen} onOpenChange={setIsPaymentMethodOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Pago</DialogTitle>
+              <DialogDescription>{splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="rounded-xl border bg-muted/30 p-4 text-center">
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">Total a pagar</div>
+                <div className="text-4xl font-extrabold text-secondary">{formatMoney(expectedPaymentCents / 100)}</div>
+              </div>
+              <Label>Método</Label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {paymentMethodButtons.map((option) => (
+                  <Button
+                    key={option.code}
+                    type="button"
+                    variant={selectedPaymentMethodCode === option.code ? "default" : "outline"}
+                    className="h-14 text-base"
+                    style={getPaymentButtonStyle(option, selectedPaymentMethodCode === option.code)}
+                    onClick={() => selectPaymentMethodOption(option, false)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              {selectedPaymentIsCash ? (
+                <>
+                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label>Monto recibido</Label>
+                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Propina</Label>
+                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "rounded-lg border p-3 text-center font-semibold",
+                      isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
+                    )}
+                  >
+                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
+                    {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
+                  </div>
+                  {activeTenderField ? (
+                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
+                      {DENOMINATION_CENTS.map((value) => (
+                        <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
+                          {formatMoney(value / 100)}
+                        </Button>
+                      ))}
+                      <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
+                      <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
+                      <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              <div className="flex gap-2">
+                <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
+                <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                  {isProcessingPayment ? "Procesando..." : "Registrar pago"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Dividir cuenta</DialogTitle>
+              <DialogDescription>Define partes de la cuenta antes de cobrar con uno o varios métodos de pago.</DialogDescription>
+            </DialogHeader>
+            <SplitPanel
+              enabled={splitEnabled}
+              onEnabledChange={setSplitEnabled}
+              totalCents={checkoutTotalCents}
+              parts={parts}
+              onPartsChange={setParts}
+              activePartId={activePartId}
+              onActivePartIdChange={setActivePartId}
+            />
+            <div className="flex gap-2">
+              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cerrar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aceptar</Button>
+            </div>
           </DialogContent>
         </Dialog>
       </div>

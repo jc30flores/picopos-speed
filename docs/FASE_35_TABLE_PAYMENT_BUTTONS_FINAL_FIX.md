@@ -8,21 +8,26 @@ Esta fase corrige el flujo de cobro desde mesas sin tocar infraestructura, puert
 
 Los botones de `Cobrar` dependían de un flujo asíncrono que cargaba orden y pagos antes de abrir el modal. Si ese estado quedaba bloqueado, desmontado por el modal de cuenta, o mezclado con efectos del carrito POS, el usuario no veía respuesta clara al click. Además, el carrito temporal usado para cobrar mesa podía disparar efectos del POS rápido como disponibilidad de inventario y persistencia de draft.
 
+En la corrección final se confirmó una causa adicional y principal: el componente del mapa de mesas tenía un `return` temprano cuando `posMode === "tables"`. El `Dialog` de `Cobrar pedido` estaba renderizado solamente en la rama del POS de productos, por debajo de ese `return`. Entonces el click sí preparaba `isPaymentOpen` y cargaba orden/pagos, pero la UI activa del mapa no montaba ningún modal de pago; por eso la cuenta se cerraba y el usuario volvía al mapa sin ver el cobro.
+
 ## Cambios
 
 - `openTablePayment` ahora centraliza la apertura de cobro de mesas.
 - El modal `Cobrar pedido` se abre inmediatamente con estado de carga mientras se consultan orden y pagos.
+- El mapa de mesas ahora monta el modal `Cobrar pedido` y el diálogo `Dividir cuenta` en su propia rama de renderizado, sin navegar al POS de productos.
 - El mismo flujo se usa para:
   - menú contextual de mesa;
   - `Cuenta de mesa > Cobrar`;
   - `Cuenta de mesa > Cobrar Persona X`;
   - resumen de cocina/mesa.
 - Los botones de cobro de mesas usan `type="button"` y detienen propagación cuando están dentro del menú contextual.
+- Los botones de cobro se deshabilitan mientras se está preparando o mostrando un cobro para evitar aperturas duplicadas.
 - Cerrar el modal de pago usa el handler central para limpiar estado y reabrir `Cuenta de mesa` cuando corresponde.
 - Durante cobro de mesa se evita:
   - persistir el carrito temporal como draft del POS rápido;
   - recalcular precios del carrito temporal;
   - ejecutar `cart-availability` mientras el modal de cobro está abierto.
+  - recalcular descuentos del POS rápido durante el cobro de mesa.
 
 ## Pago por persona y restante
 
