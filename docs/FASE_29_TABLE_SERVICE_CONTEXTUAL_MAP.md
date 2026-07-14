@@ -218,6 +218,57 @@ El endpoint de mesa envia solo items `pending`. Si no hay nuevos productos, resp
 
 Cuando un producto se marca como `delivered`, si la orden ya no tiene items `pending`, `sent` ni `ready`, la sesion vuelve a estado `open`. Asi `En cocina` deja de contar mesas que ya fueron servidas pero aun no han sido cobradas.
 
+## Iteracion - pedidos por persona, cocina y contraste
+
+El POS contextual mantiene un carrito interno con todos los productos pendientes de la mesa, pero el panel `Pedido Actual` filtra por la persona activa. Si la mesa esta en modo `per_person`, Persona 1 solo ve sus productos `pending`, Persona 2 solo ve los suyos y asi sucesivamente. Los productos enviados a cocina ya no aparecen en ese panel; siguen visibles en `Cuenta de mesa` con su estado.
+
+Al agregar o modificar productos en mesa se ejecuta un guardado automatico con debounce contra la orden pendiente. El payload conserva las lineas que ya estaban `sent`, `ready` o `delivered` para no borrarlas al persistir nuevos pendientes. En backend, si la sesion esta en modo por persona, cada linea debe traer `table_guest_id` valido de la sesion; si falta, el API responde 400 con un mensaje claro.
+
+`POST /api/orders/tables/sessions/<id>/send-to-kitchen/` acepta:
+
+```json
+{
+  "scope": "guest",
+  "guest_id": 1,
+  "guest_number": 1
+}
+```
+
+Tambien acepta `scope: "table"` para enviar todos los productos `pending` de la mesa. El frontend abre un modal rapido cuando existen pendientes en varias personas: `Solo Persona X`, `Toda la mesa` y `Cancelar`. El envio individual deja vacia solo la persona actual; el envio de mesa deja vacios todos los pendientes enviados.
+
+La pantalla `/kitchen` muestra cards grandes por producto con cantidad, mesa, persona, modificadores, tiempo desde envio, estado y boton grande `Terminado`. Las lineas de mesa usan `GET /api/orders/tables/kitchen-summary/` y `POST /api/kitchen/items/<id>/complete/`. Los pedidos rapidos/kiosk siguen apareciendo desde las ordenes activas para no romper el POS rapido.
+
+`Cuenta de mesa` se simplifico:
+
+- header compacto con mesa, personas, total, pagado y pendiente
+- filtros `Todos`, `Persona 1..N`, `Pendiente de enviar`, `En cocina`, `Terminados` y `Servidos`
+- `Todos` agrupa por persona con total por persona
+- una persona muestra solo sus productos y total de filtro
+- pagos realizados solo se muestran si existen
+- cobro directo de mesa se mantiene; cobro por persona queda visible como base deshabilitada
+
+Los estados visibles por producto son:
+
+- `pending`: Pendiente de enviar
+- `sent`: En cocina
+- `ready`: Terminado
+- `delivered`: Servido
+
+Contraste visual:
+
+- se agregaron variables globales `--app-bg`, `--app-surface`, `--app-surface-soft`, `--app-card`, `--app-border`, `--app-text`, `--app-text-muted`, `--app-text-soft`, `--color-danger`, `--color-warning` y `--color-success`
+- el color primario personalizado calcula automaticamente `--color-primary-contrast`
+- mesas, badges y superficies usan texto calculado o variables del tema para claro/oscuro
+
+Validaciones ejecutadas en esta iteracion:
+
+- `backend/venv/bin/python backend/manage.py check`
+- `npm run build`
+
+Validaciones pendientes de base:
+
+- La base configurada para este proyecto es `roseedb`. No se ejecutaron migraciones ni comandos de inicializacion en esta iteracion porque la instruccion vigente fue no tocar la base de datos.
+
 Cuando no hay productos de cocina, el CTA principal es `Guardar orden`; guarda los items en la mesa sin abrir cobro.
 
 ## Conteos y estados visuales
