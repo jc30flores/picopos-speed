@@ -188,6 +188,13 @@ type TablePaymentReturnTarget = {
   reopenBill: boolean;
 } | null;
 
+type OpenTablePaymentOptions = {
+  guest?: TableSession["guests"][number];
+  returnToBill?: boolean;
+  order?: Order | null;
+  payments?: Payment[] | null;
+};
+
 type ThermalTicketState = {
   open: boolean;
   title: string;
@@ -567,7 +574,7 @@ type TableConfirmDialogState =
   const tableMapDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const opsMenuRef = useRef<HTMLDivElement | null>(null);
   const [tableMapTransform, setTableMapTransform] = useState({ scale: 1, x: 0, y: 0 });
-  const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, isSheet: false });
+  const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; width: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, width: 320, isSheet: false });
   const [viewportReflowTick, setViewportReflowTick] = useState(0);
   const longPressOpsRef = useRef<number | null>(null);
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
@@ -850,15 +857,19 @@ type TableConfirmDialogState =
     }
   }, [navigate, setContextFromTableSession, upsertTableSession]);
 
-  const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: { guest?: TableSession["guests"][number]; returnToBill?: boolean }) => {
-    if (!session.primaryOrder) {
+  const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: OpenTablePaymentOptions) => {
+    const orderId = options?.order?.id ?? session.primaryOrder;
+    if (!orderId) {
       toast.error("La mesa no tiene orden activa.");
       return;
     }
     try {
       upsertTableSession(session);
       setTableOrderContext(null);
-      const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
+      const [order, payments] = await Promise.all([
+        options?.order ? Promise.resolve(options.order) : getOrderById(orderId),
+        options?.payments ? Promise.resolve(options.payments) : getPaymentsByOrder(orderId),
+      ]);
       const scope = options?.guest ? buildGuestPaymentScope(tableId, session, order, payments, options.guest) : buildTablePaymentScope(tableId, session, order);
       if (scope.remainingCents <= 0) {
         toast.info(`${scope.guestLabel || "La persona"} ya no tiene saldo pendiente.`);
@@ -1231,21 +1242,29 @@ type TableConfirmDialogState =
   useLayoutEffect(() => {
     if (!opsContextMenu.open) return;
     const safe = 16;
-    const isSheet = window.innerWidth < 640 || window.matchMedia("(pointer: coarse)").matches;
+    const menuWidth = Math.min(340, Math.max(280, window.innerWidth - safe * 2));
+    const isSheet = window.innerWidth < 520;
     const maxHeight = Math.max(280, window.innerHeight - safe * 2);
     if (isSheet) {
-      setOpsMenuPosition({ left: safe, top: Math.max(safe, window.innerHeight - Math.min(Math.round(window.innerHeight * 0.78), maxHeight) - safe), maxHeight: Math.min(Math.round(window.innerHeight * 0.78), maxHeight), isSheet: true });
+      const sheetHeight = Math.min(Math.round(window.innerHeight * 0.76), maxHeight);
+      setOpsMenuPosition({
+        left: Math.max(safe, Math.round((window.innerWidth - menuWidth) / 2)),
+        top: Math.max(safe, window.innerHeight - sheetHeight - safe),
+        maxHeight: sheetHeight,
+        width: menuWidth,
+        isSheet: true,
+      });
       requestAnimationFrame(() => opsMenuRef.current?.focus());
       return;
     }
     const menuRect = opsMenuRef.current?.getBoundingClientRect();
-    const menuWidth = Math.min(menuRect?.width || 320, window.innerWidth - safe * 2);
+    const measuredWidth = Math.min(Math.max(menuRect?.width || menuWidth, 280), menuWidth);
     const menuHeight = Math.min(menuRect?.height || 560, maxHeight);
     const preferredLeft = opsContextMenu.x + 12;
     const preferredTop = opsContextMenu.y + 8;
-    const left = Math.max(safe, Math.min(preferredLeft, window.innerWidth - menuWidth - safe));
+    const left = Math.max(safe, Math.min(preferredLeft, window.innerWidth - measuredWidth - safe));
     const top = Math.max(safe, Math.min(preferredTop, window.innerHeight - menuHeight - safe));
-    setOpsMenuPosition({ left, top, maxHeight, isSheet: false });
+    setOpsMenuPosition({ left, top, maxHeight, width: measuredWidth, isSheet: false });
     requestAnimationFrame(() => opsMenuRef.current?.focus());
   }, [opsContextMenu.open, opsContextMenu.x, opsContextMenu.y, opsContextMenu.tableId, viewportReflowTick]);
 
@@ -1528,11 +1547,11 @@ type TableConfirmDialogState =
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [activeTenderField]);
 
-  const filteredProducts = products.filter((product) => {
+  const filteredProducts = useMemo(() => products.filter((product) => {
     const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch && product.available;
-  });
+  }), [products, searchQuery, selectedCategory]);
 
   const cartAvailabilityItems = useMemo(() => {
     const grouped = new Map<number, number>();
@@ -1541,6 +1560,12 @@ type TableConfirmDialogState =
     });
     return Array.from(grouped.entries()).map(([productId, quantity]) => ({ productId, quantity }));
   }, [cart]);
+  const cartAvailabilitySignature = useMemo(
+    () => cartAvailabilityItems.map((item) => `${item.productId}:${item.quantity}`).join("|"),
+    [cartAvailabilityItems]
+  );
+  const candidateProductIds = useMemo(() => filteredProducts.map((product) => product.id), [filteredProducts]);
+  const candidateProductIdsSignature = useMemo(() => candidateProductIds.join(","), [candidateProductIds]);
 
   const productAvailability = (productId: number | null | undefined) => (productId ? cartAvailability[productId] : undefined);
   const canAddProductByStock = (productId: number | null | undefined) => {
@@ -1555,14 +1580,13 @@ type TableConfirmDialogState =
   };
 
   useEffect(() => {
-    const candidateProductIds = filteredProducts.map((product) => product.id);
     const timeout = window.setTimeout(() => {
       void checkCartInventoryAvailability({ cartItems: cartAvailabilityItems, candidateProductIds })
         .then((result) => setCartAvailability(Object.fromEntries(result.items.map((item) => [item.productId, item]))))
         .catch((error) => console.error("Failed to check cart inventory", error));
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [cartAvailabilityItems, products, selectedCategory, searchQuery]);
+  }, [cartAvailabilityItems, cartAvailabilitySignature, candidateProductIds, candidateProductIdsSignature]);
 
   const getPosModifierGroups = (product: Product | null) => {
     const visibleGroupIds = product?.modifierGroupsPos ?? product?.modifierGroups ?? [];
@@ -3923,6 +3947,53 @@ type TableConfirmDialogState =
   const getTableBillItemStatusTone = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments)
     ? "border-emerald-400 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
     : getKitchenStatusTone(item.kitchenStatus);
+  const formatTicketQuantity = (quantity: number) => {
+    const value = Number(quantity || 0);
+    return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+  };
+  const getTicketItemUnitPrice = (item: Order["items"][number]) => Number(item.unitPriceFinal ?? item.price ?? 0);
+  const getTicketItemLineSubtotal = (item: Order["items"][number]) => Number(item.quantity || 0) * getTicketItemUnitPrice(item);
+  const wrapTicketText = (value: string, chars: number, indent = "") => {
+    const maxWidth = Math.max(8, chars - indent.length);
+    const words = String(value || "").trim().split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = "";
+    words.forEach((rawWord) => {
+      let word = rawWord;
+      while (word.length > maxWidth) {
+        if (current) {
+          lines.push(`${indent}${current}`);
+          current = "";
+        }
+        lines.push(`${indent}${word.slice(0, maxWidth)}`);
+        word = word.slice(maxWidth);
+      }
+      if (!current) {
+        current = word;
+      } else if (`${current} ${word}`.length <= maxWidth) {
+        current = `${current} ${word}`;
+      } else {
+        lines.push(`${indent}${current}`);
+        current = word;
+      }
+    });
+    if (current) lines.push(`${indent}${current}`);
+    return lines.length ? lines : [indent.trimEnd()];
+  };
+  const appendTicketItemLines = (
+    lines: string[],
+    item: Order["items"][number],
+    chars: number,
+    row: (left: string, right?: string) => string,
+    payments?: Payment[],
+  ) => {
+    wrapTicketText(`${formatTicketQuantity(item.quantity)}x ${item.productName}`, chars).forEach((line) => lines.push(line));
+    lines.push(row(`  P.Unit ${formatMoney(getTicketItemUnitPrice(item))}`, formatMoney(getTicketItemLineSubtotal(item))));
+    if (payments) lines.push(`  ${getTableBillItemStatusLabel(item, payments)}`.slice(0, chars));
+    getOrderItemModifiers(item).forEach((modifier) => {
+      wrapTicketText(`+ ${modifier}`, chars, "  ").forEach((line) => lines.push(line));
+    });
+  };
 
   const buildTableAccountTicketText = (order: Order, session: TableSession | null, payments: Payment[], tableLabel: string, width: "58mm" | "80mm") => {
     const chars = width === "58mm" ? 32 : 42;
@@ -3962,10 +4033,7 @@ type TableConfirmDialogState =
     Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).forEach((group) => {
       lines.push(group.label.toUpperCase(), row("Subtotal", formatMoney(group.total)));
       group.items.forEach((item) => {
-        lines.push(row(`${item.quantity}x ${item.productName}`, formatMoney(getOrderItemTotal(item))));
-        lines.push(`  ${getTableBillItemStatusLabel(item, payments)}`);
-        const modifiers = getOrderItemModifiers(item);
-        if (modifiers.length) lines.push(`  Modificadores: ${modifiers.join(", ")}`.slice(0, chars));
+        appendTicketItemLines(lines, item, chars, row, payments);
       });
       lines.push(rule);
     });
@@ -4006,9 +4074,7 @@ type TableConfirmDialogState =
       rule,
     ];
     paidItems.forEach((item) => {
-      lines.push(row(`${item.quantity}x ${item.productName}`, formatMoney(getOrderItemTotal(item))));
-      const modifiers = getOrderItemModifiers(item);
-      if (modifiers.length) lines.push(`  Modificadores: ${modifiers.join(", ")}`.slice(0, chars));
+      appendTicketItemLines(lines, item, chars, row);
     });
     lines.push(
       rule,
@@ -4247,13 +4313,13 @@ type TableConfirmDialogState =
               role={opsMenuPosition.isSheet ? "dialog" : "menu"}
               tabIndex={-1}
               className={cn(
-                "fixed z-50 overflow-y-auto overscroll-contain rounded-xl border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl outline-none backdrop-blur scrollbar-thin",
-                opsMenuPosition.isSheet ? "left-4 right-4 w-auto" : "w-80"
+                "fixed z-50 overflow-y-auto overscroll-contain rounded-xl border-border bg-popover/95 p-2 text-popover-foreground shadow-2xl outline-none backdrop-blur scrollbar-thin"
               )}
               style={{
-                left: opsMenuPosition.isSheet ? 16 : opsMenuPosition.left,
-                right: opsMenuPosition.isSheet ? 16 : undefined,
+                left: opsMenuPosition.left,
                 top: opsMenuPosition.top,
+                width: opsMenuPosition.width,
+                maxWidth: "calc(100vw - 32px)",
                 maxHeight: opsMenuPosition.isSheet ? `${opsMenuPosition.maxHeight}px` : `min(560px, ${opsMenuPosition.maxHeight}px)`,
                 scrollbarWidth: "thin",
               }}
@@ -4267,12 +4333,12 @@ type TableConfirmDialogState =
                 const isJoined = Boolean(session && session.tableIds.length > 1);
                 const balance = Number(session?.totalCached ?? 0);
                 const hasOrder = Boolean(session?.primaryOrder);
-                const canCollect = hasOrder && balance > 0;
+                const canCollect = hasOrder;
                 const groupLabel = session?.tableIds?.map((id) => getTableLabel(id)).join(" + ") || table.name;
                 const menuButton = (label: string, icon: JSX.Element, onClick: () => void, disabled = false) => (
-                  <Button className="h-11 w-full justify-start gap-2 text-popover-foreground hover:bg-muted" variant="ghost" disabled={disabled} onClick={onClick}>
-                    {icon}
-                    <span>{label}</span>
+                  <Button className="h-auto min-h-11 w-full justify-start gap-2 whitespace-normal px-3 py-2 text-left text-popover-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" variant="ghost" disabled={disabled} onClick={onClick}>
+                    <span className="shrink-0">{icon}</span>
+                    <span className="min-w-0 break-words">{label}</span>
                   </Button>
                 );
                 return (
@@ -4559,12 +4625,12 @@ type TableConfirmDialogState =
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
                 return (
-                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true })}>
+                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true, order: tableBillDialog.order, payments: tableBillDialog.payments })}>
                     {scope.remainingCents <= 0 ? "Persona pagada" : `Cobrar ${guest.label}`}
                   </Button>
                 );
               })() : null}
-              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true }); }}>Cobrar</Button> : null}
+              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
