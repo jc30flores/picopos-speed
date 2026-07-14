@@ -3825,6 +3825,24 @@ type TableConfirmDialogState =
           <Home className="h-4 w-4" />
           <span>Menú</span>
         </Button>
+        {operationMode === "both" ? (
+          <Button
+            className="fixed left-3 top-14 z-50 h-9 gap-2 border-border bg-popover/95 px-3 text-popover-foreground shadow-lg backdrop-blur hover:bg-muted"
+            variant="outline"
+            onClick={() => {
+              resetTableOrderDraft();
+              setTableOrderContext(null);
+              setIsPendingChoiceOpen(false);
+              setPosMode("pos");
+              navigate("/pos?mode=quick");
+            }}
+            title="Abrir POS rápido"
+            aria-label="Abrir POS rápido"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            <span>POS rápido</span>
+          </Button>
+        ) : null}
 
         <div
           ref={tableMapViewportRef}
