@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bluetooth, BluetoothConnected, Printer, Unplug } from "lucide-react";
 import { toast } from "sonner";
 
@@ -24,6 +24,7 @@ type BluetoothServerLike = {
 };
 
 type BluetoothDeviceLike = {
+  id?: string;
   name?: string;
   gatt?: {
     connected?: boolean;
@@ -31,14 +32,25 @@ type BluetoothDeviceLike = {
     disconnect: () => void;
   };
   addEventListener?: (type: string, listener: () => void) => void;
+  removeEventListener?: (type: string, listener: () => void) => void;
+};
+
+type BluetoothDeviceFilter = {
+  name?: string;
+  namePrefix?: string;
+  services?: Array<number | string>;
+};
+
+type BluetoothRequestOptions = {
+  acceptAllDevices?: boolean;
+  filters?: BluetoothDeviceFilter[];
+  optionalServices: Array<number | string>;
 };
 
 type BluetoothNavigator = Navigator & {
   bluetooth?: {
-    requestDevice: (options: {
-      acceptAllDevices: boolean;
-      optionalServices: Array<number | string>;
-    }) => Promise<BluetoothDeviceLike>;
+    requestDevice: (options: BluetoothRequestOptions) => Promise<BluetoothDeviceLike>;
+    getDevices?: () => Promise<BluetoothDeviceLike[]>;
   };
 };
 
@@ -61,6 +73,140 @@ const THERMAL_SERVICE_UUIDS: Array<number | string> = [
   "0000ff00-0000-1000-8000-00805f9b34fb",
   "49535343-fe7d-4ae5-8fa9-9fafd205e455",
 ];
+
+const PRINTER_NAME_FILTERS: BluetoothDeviceFilter[] = [
+  { namePrefix: "Printer" },
+  { namePrefix: "printer" },
+  { namePrefix: "POS" },
+  { namePrefix: "PT-" },
+  { namePrefix: "MTP" },
+  { namePrefix: "RPP" },
+  { namePrefix: "XP-" },
+  { namePrefix: "BlueTooth Printer" },
+  { namePrefix: "Thermal" },
+  { namePrefix: "58" },
+  { namePrefix: "80" },
+  { namePrefix: "POS58" },
+  { namePrefix: "POS-58" },
+];
+
+type PrinterStatus = "disconnected" | "connecting" | "connected" | "printing" | "error";
+
+type PrinterSnapshot = {
+  device: BluetoothDeviceLike | null;
+  characteristic: BluetoothCharacteristicLike | null;
+  status: PrinterStatus;
+  error: string | null;
+  deviceName: string | null;
+};
+
+const printerState: PrinterSnapshot & { listeners: Set<() => void>; disconnectHandler: (() => void) | null } = {
+  device: null,
+  characteristic: null,
+  status: "disconnected",
+  error: null,
+  deviceName: null,
+  listeners: new Set(),
+  disconnectHandler: null,
+};
+
+const getPrinterSnapshot = (): PrinterSnapshot => ({
+  device: printerState.device,
+  characteristic: printerState.characteristic,
+  status: printerState.status,
+  error: printerState.error,
+  deviceName: printerState.deviceName,
+});
+
+const notifyPrinterListeners = () => {
+  printerState.listeners.forEach((listener) => listener());
+};
+
+const updatePrinterState = (next: Partial<PrinterSnapshot>) => {
+  Object.assign(printerState, next);
+  notifyPrinterListeners();
+};
+
+const subscribePrinterState = (listener: () => void) => {
+  printerState.listeners.add(listener);
+  return () => printerState.listeners.delete(listener);
+};
+
+const isPrinterLikeName = (name?: string | null) => {
+  if (!name) return false;
+  return /(printer|pos|pt-|mtp|rpp|xp-|bluetooth printer|thermal|pos58|pos-58|\b58\b|\b80\b)/i.test(name);
+};
+
+const attachDisconnectListener = (device: BluetoothDeviceLike) => {
+  if (printerState.disconnectHandler && printerState.device?.removeEventListener) {
+    printerState.device.removeEventListener("gattserverdisconnected", printerState.disconnectHandler);
+  }
+  const handler = () => {
+    updatePrinterState({ characteristic: null, status: "disconnected", error: null });
+  };
+  printerState.disconnectHandler = handler;
+  device.addEventListener?.("gattserverdisconnected", handler);
+};
+
+const resolveWritableCharacteristic = async (device: BluetoothDeviceLike) => {
+  const server = await device.gatt?.connect();
+  if (!server) throw new Error("No se pudo conectar con la impresora.");
+  const services = await server.getPrimaryServices();
+  for (const service of services) {
+    const characteristics = await service.getCharacteristics();
+    const writable = characteristics.find((candidate) => candidate.properties?.write || candidate.properties?.writeWithoutResponse);
+    if (writable) return writable;
+  }
+  throw new Error("No se pudo preparar la impresora para recibir el ticket.");
+};
+
+const rememberPrinterDevice = (device: BluetoothDeviceLike) => {
+  try {
+    if (device.name) localStorage.setItem("thermal_printer_name", device.name);
+  } catch {
+    // localStorage puede no estar disponible en modo privado.
+  }
+};
+
+const connectKnownPrinter = async () => {
+  if (printerState.device?.gatt?.connected && printerState.characteristic) return printerState.characteristic;
+  if (!printerState.device) return null;
+  updatePrinterState({ status: "connecting", error: null });
+  const characteristic = await resolveWritableCharacteristic(printerState.device);
+  updatePrinterState({
+    characteristic,
+    status: "connected",
+    error: null,
+    deviceName: printerState.device.name || printerState.deviceName || "Impresora Bluetooth",
+  });
+  return characteristic;
+};
+
+const loadAuthorizedPrinter = async () => {
+  if (printerState.device) return;
+  const bluetooth = (navigator as BluetoothNavigator).bluetooth;
+  if (!bluetooth?.getDevices) return;
+  try {
+    const devices = await bluetooth.getDevices();
+    let preferredName = "";
+    try {
+      preferredName = localStorage.getItem("thermal_printer_name") || "";
+    } catch {
+      preferredName = "";
+    }
+    const device = devices.find((candidate) => preferredName && candidate.name === preferredName) ?? devices.find((candidate) => isPrinterLikeName(candidate.name)) ?? devices[0] ?? null;
+    if (!device) return;
+    attachDisconnectListener(device);
+    updatePrinterState({
+      device,
+      deviceName: device.name || "Impresora Bluetooth",
+      status: device.gatt?.connected ? "connected" : "disconnected",
+      error: null,
+    });
+  } catch {
+    // Recuperar dispositivos autorizados es opcional; no debe bloquear el modal.
+  }
+};
 
 const chunkBytes = (bytes: Uint8Array, size = 180) => {
   const chunks: Uint8Array[] = [];
@@ -87,14 +233,18 @@ export const ThermalTicketDialog = ({
   onWidthChange,
   onOpenChange,
 }: ThermalTicketDialogProps) => {
-  const [device, setDevice] = useState<BluetoothDeviceLike | null>(null);
-  const [characteristic, setCharacteristic] = useState<BluetoothCharacteristicLike | null>(null);
-  const [status, setStatus] = useState<"disconnected" | "connecting" | "connected" | "printing" | "error">("disconnected");
-  const [error, setError] = useState<string | null>(null);
+  const [printerSnapshot, setPrinterSnapshot] = useState<PrinterSnapshot>(() => getPrinterSnapshot());
 
   const previewWidth = width === "58mm" ? 384 : 576;
+  const { device, characteristic, status, error, deviceName } = printerSnapshot;
   const connected = Boolean(device?.gatt?.connected && characteristic);
   const statusLabel = connected ? "Conectada" : status === "connecting" ? "Conectando" : status === "printing" ? "Imprimiendo" : status === "error" ? "Error" : "Desconectada";
+
+  useEffect(() => {
+    const unsubscribe = subscribePrinterState(() => setPrinterSnapshot(getPrinterSnapshot()));
+    if (open) void loadAuthorizedPrinter();
+    return unsubscribe;
+  }, [open]);
 
   const printableHtml = useMemo(() => {
     const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
@@ -117,68 +267,65 @@ export const ThermalTicketDialog = ({
     window.setTimeout(() => win.print(), 250);
   };
 
-  const connectPrinter = async () => {
-    setError(null);
+  const connectPrinter = async (showAllDevices = false) => {
     const bluetooth = (navigator as BluetoothNavigator).bluetooth;
     if (!bluetooth) {
-      setStatus("error");
-      setError("Bluetooth no está disponible en este navegador. Puedes usar impresión del navegador.");
+      updatePrinterState({ status: "error", error: "Bluetooth no está disponible en este navegador. Puedes usar impresión del navegador." });
       return;
     }
     try {
-      setStatus("connecting");
+      updatePrinterState({ status: "connecting", error: null });
       const nextDevice = await bluetooth.requestDevice({
-        acceptAllDevices: true,
+        ...(showAllDevices ? { acceptAllDevices: true } : { filters: PRINTER_NAME_FILTERS }),
         optionalServices: THERMAL_SERVICE_UUIDS,
       });
-      nextDevice.addEventListener?.("gattserverdisconnected", () => {
-        setCharacteristic(null);
-        setStatus("disconnected");
+      attachDisconnectListener(nextDevice);
+      const writable = await resolveWritableCharacteristic(nextDevice);
+      rememberPrinterDevice(nextDevice);
+      updatePrinterState({
+        device: nextDevice,
+        characteristic: writable,
+        status: "connected",
+        error: null,
+        deviceName: nextDevice.name || "Impresora Bluetooth",
       });
-      const server = await nextDevice.gatt?.connect();
-      if (!server) throw new Error("No se pudo conectar con la impresora.");
-      const services = await server.getPrimaryServices();
-      for (const service of services) {
-        const characteristics = await service.getCharacteristics();
-        const writable = characteristics.find((candidate) => candidate.properties?.write || candidate.properties?.writeWithoutResponse);
-        if (writable) {
-          setDevice(nextDevice);
-          setCharacteristic(writable);
-          setStatus("connected");
-          toast.success(`Impresora conectada${nextDevice.name ? `: ${nextDevice.name}` : ""}.`);
-          return;
-        }
-      }
-      throw new Error("No se pudo preparar la impresora para recibir el ticket.");
+      toast.success(`Impresora conectada${nextDevice.name ? `: ${nextDevice.name}` : ""}.`);
     } catch (err) {
       if (isBluetoothChooserCancelled(err)) {
-        setStatus("disconnected");
-        setError(null);
+        updatePrinterState({ status: "disconnected", error: null });
         toast.info("No se seleccionó ninguna impresora.");
         return;
       }
-      const message = "No se pudo conectar con la impresora. Verifica que esté encendida y cerca.";
-      setStatus("error");
-      setError(message);
+      const message = showAllDevices
+        ? "No se pudo conectar con la impresora. Verifica que esté encendida y cerca."
+        : "No se encontró una impresora con los filtros iniciales. Puedes usar Buscar todos los dispositivos.";
+      updatePrinterState({ status: "error", error: message });
       toast.error(message);
     }
   };
 
   const disconnectPrinter = () => {
     device?.gatt?.disconnect();
-    setDevice(null);
-    setCharacteristic(null);
-    setStatus("disconnected");
+    updatePrinterState({ device: null, characteristic: null, status: "disconnected", error: null, deviceName: null });
   };
 
   const printBluetooth = async () => {
-    if (!characteristic) {
-      toast.info("No hay impresora Bluetooth conectada. Se abrirá impresión del navegador.");
-      openBrowserPrint();
-      return;
-    }
     try {
-      setStatus("printing");
+      let writable = connected ? characteristic : null;
+      if (!writable && device) {
+        writable = await connectKnownPrinter();
+      }
+      if (!writable) {
+        const bluetooth = (navigator as BluetoothNavigator).bluetooth;
+        if (!bluetooth) {
+          toast.info("Bluetooth no está disponible en este navegador. Se abrirá impresión del navegador.");
+          openBrowserPrint();
+        } else {
+          toast.info("Conecta una impresora Bluetooth antes de imprimir.");
+        }
+        return;
+      }
+      updatePrinterState({ status: "printing", error: null });
       const encoder = new TextEncoder();
       const escpos = new Uint8Array([
         0x1b, 0x40,
@@ -187,14 +334,13 @@ export const ThermalTicketDialog = ({
         0x1d, 0x56, 0x41, 0x10,
       ]);
       for (const chunk of chunkBytes(escpos)) {
-        await characteristic.writeValue(chunk);
+        await writable.writeValue(chunk);
       }
-      setStatus("connected");
+      updatePrinterState({ status: "connected", error: null });
       toast.success("Ticket enviado a impresora.");
     } catch {
       const message = "No se pudo imprimir. Revisa la conexión de la impresora.";
-      setStatus("error");
-      setError(message);
+      updatePrinterState({ characteristic: null, status: "error", error: message });
       toast.error(message);
     }
   };
@@ -207,6 +353,7 @@ export const ThermalTicketDialog = ({
             <div>
               <DialogTitle>{title}</DialogTitle>
               <DialogDescription>{subtitle}</DialogDescription>
+              {deviceName ? <p className="mt-1 text-xs text-muted-foreground">Impresora: {deviceName}</p> : null}
             </div>
             <Badge
               variant="outline"
@@ -257,9 +404,14 @@ export const ThermalTicketDialog = ({
                 <Unplug className="mr-2 h-4 w-4" /> Desconectar
               </Button>
             ) : (
-              <Button type="button" variant="outline" onClick={() => void connectPrinter()} disabled={status === "connecting"}>
-                <Bluetooth className="mr-2 h-4 w-4" /> Conectar impresora
-              </Button>
+              <>
+                <Button type="button" variant="outline" onClick={() => void connectPrinter(false)} disabled={status === "connecting"}>
+                  <Bluetooth className="mr-2 h-4 w-4" /> Conectar impresora
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => void connectPrinter(true)} disabled={status === "connecting"}>
+                  Buscar todos los dispositivos
+                </Button>
+              </>
             )}
           </div>
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
