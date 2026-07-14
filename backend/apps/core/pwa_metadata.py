@@ -44,44 +44,60 @@ def app_name() -> str:
     return configured or PROJECT_APP_NAME or DEFAULT_APP_NAME
 
 
-def ticket_logo_path() -> Path | None:
+def customer_logo_file() -> tuple[TicketSettings | None, Path | None]:
     try:
-        settings = TicketSettings.objects.filter(pk=1).first()
-        if not settings or not settings.ticket_logo:
-            return None
-        path = Path(settings.ticket_logo.path)
-        return path if path.exists() else None
+        ticket_settings = TicketSettings.objects.filter(pk=1).first()
+        if not ticket_settings or not ticket_settings.ticket_logo:
+            return None, None
+        path = Path(ticket_settings.ticket_logo.path)
+        return (ticket_settings, path) if path.exists() else (ticket_settings, None)
     except (OSError, ValueError):
         logger.warning("pwa.ticket_logo_path_unavailable", exc_info=True)
-        return None
+        return None, None
 
 
-def branding_version(name: str, short: str, appearance: SystemAppearanceSettings, ticket_settings: TicketSettings | None) -> str:
+def ticket_logo_path() -> Path | None:
+    _ticket_settings, path = customer_logo_file()
+    return path
+
+
+def _logo_signature(ticket_settings: TicketSettings | None, path: Path | None) -> str:
     logo_name = ""
     logo_updated = ""
+    logo_file_state = "missing"
     if ticket_settings and ticket_settings.ticket_logo:
         logo_name = ticket_settings.ticket_logo.name or ""
         logo_updated = ticket_settings.updated_at.isoformat() if ticket_settings.updated_at else ""
+    if path:
+        try:
+            stat = path.stat()
+            logo_file_state = f"{stat.st_size}:{stat.st_mtime_ns}"
+        except OSError:
+            logo_file_state = "unreadable"
+    return "|".join([logo_name, logo_updated, logo_file_state])
+
+
+def branding_version(name: str, short: str, appearance: SystemAppearanceSettings, ticket_settings: TicketSettings | None, logo_path: Path | None) -> str:
     source = "|".join(
         [
             name,
             short,
             appearance.primary_color,
             appearance.updated_at.isoformat() if appearance.updated_at else "",
-            logo_name,
-            logo_updated,
+            _logo_signature(ticket_settings, logo_path),
         ]
     )
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
 
 
-def get_public_pwa_metadata() -> dict[str, str | bool]:
+def get_public_pwa_metadata() -> dict[str, str | bool | None]:
     appearance, _ = SystemAppearanceSettings.objects.get_or_create(pk=1)
-    ticket_settings = TicketSettings.objects.filter(pk=1).first()
+    ticket_settings, logo_path = customer_logo_file()
     name = app_name()
     short = PROJECT_SHORT_NAME if name == PROJECT_APP_NAME else short_name(name)
-    version = branding_version(name, short, appearance, ticket_settings)
+    version = branding_version(name, short, appearance, ticket_settings, logo_path)
     theme_color = safe_hex(getattr(appearance, "color_primary", None) or appearance.primary_color)
+    customer_logo_url = f"/api/public/pwa/customer-logo.png?v={version}" if logo_path else None
     return {
         "app_name": name,
         "short_name": short,
@@ -93,7 +109,11 @@ def get_public_pwa_metadata() -> dict[str, str | bool]:
         "start_url": "/",
         "scope": "/",
         "version": version,
-        "has_customer_logo": bool(ticket_logo_path()),
+        "branding_version": version,
+        "logo_version": version if logo_path else "",
+        "has_customer_logo": bool(logo_path),
+        "customer_logo_url": customer_logo_url,
+        "ticket_logo_url": customer_logo_url,
         "manifest_url": f"/api/public/manifest.webmanifest?v={version}",
         "icon_192_url": f"/api/public/pwa/icon-192.png?v={version}",
         "icon_512_url": f"/api/public/pwa/icon-512.png?v={version}",

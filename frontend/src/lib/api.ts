@@ -653,7 +653,11 @@ export type PublicPwaMetadata = {
   startUrl: string;
   scope: string;
   version: string;
+  brandingVersion: string;
+  logoVersion: string;
   hasCustomerLogo: boolean;
+  customerLogoUrl: string | null;
+  ticketLogoUrl: string | null;
   manifestUrl: string;
   icon192Url: string;
   icon512Url: string;
@@ -742,6 +746,9 @@ export type DteSettings = {
 
 export type TicketSettings = {
   ticketLogoUrl: string | null;
+  ticketLogoVersion: string;
+  ticketLogoName: string | null;
+  hasTicketLogo: boolean;
 };
 
 export type FeatureSettingsOptions = {
@@ -1689,7 +1696,11 @@ const mapPublicPwaMetadata = (data: any): PublicPwaMetadata => ({
   startUrl: String(data.start_url ?? "/"),
   scope: String(data.scope ?? "/"),
   version: String(data.version ?? "default"),
+  brandingVersion: String(data.branding_version ?? data.version ?? "default"),
+  logoVersion: String(data.logo_version ?? data.branding_version ?? data.version ?? ""),
   hasCustomerLogo: Boolean(data.has_customer_logo),
+  customerLogoUrl: data.customer_logo_url ? String(data.customer_logo_url) : null,
+  ticketLogoUrl: data.ticket_logo_url ? String(data.ticket_logo_url) : null,
   manifestUrl: String(data.manifest_url ?? "/api/public/manifest.webmanifest"),
   icon192Url: String(data.icon_192_url ?? "/api/public/pwa/icon-192.png"),
   icon512Url: String(data.icon_512_url ?? "/api/public/pwa/icon-512.png"),
@@ -1860,6 +1871,9 @@ export const testDteConnectionSettings = async (): Promise<{ ok: boolean; status
 
 const mapTicketSettings = (data: any): TicketSettings => ({
   ticketLogoUrl: data.ticket_logo_url ?? null,
+  ticketLogoVersion: String(data.ticket_logo_version ?? data.logo_version ?? ""),
+  ticketLogoName: data.ticket_logo_name ?? null,
+  hasTicketLogo: Boolean(data.has_ticket_logo ?? data.ticket_logo_url),
 });
 
 export const getTicketSettings = async (): Promise<TicketSettings> => {

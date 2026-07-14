@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
+import { loadAppearanceSettings } from "@/lib/theme";
 
 const defaultState: FeatureSettings = {
   posEnabled: true,
@@ -141,6 +142,7 @@ export const FeatureFlagsTab = () => {
   const [settings, setSettings] = useState<FeatureSettings>(defaultState);
   const [options, setOptions] = useState<FeatureSettingsOptions>({ roles: [], cashCloseExpectedTotalFields: [] });
   const [ticketLogoUrl, setTicketLogoUrl] = useState<string | null>(null);
+  const [ticketLogoError, setTicketLogoError] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,6 +155,7 @@ export const FeatureFlagsTab = () => {
       setSettings(s);
       setOptions(o);
       setTicketLogoUrl(ticket.ticketLogoUrl);
+      setTicketLogoError(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron cargar funciones");
     } finally {
@@ -202,6 +205,8 @@ export const FeatureFlagsTab = () => {
     try {
       const saved = await uploadTicketLogo(file);
       setTicketLogoUrl(saved.ticketLogoUrl);
+      setTicketLogoError(false);
+      void loadAppearanceSettings();
       toast.success("Logo de ticket guardado");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo guardar el logo");
@@ -215,6 +220,8 @@ export const FeatureFlagsTab = () => {
     try {
       const saved = await deleteTicketLogo();
       setTicketLogoUrl(saved.ticketLogoUrl);
+      setTicketLogoError(false);
+      void loadAppearanceSettings();
       toast.success("Logo de ticket eliminado");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo quitar el logo");
@@ -435,15 +442,23 @@ export const FeatureFlagsTab = () => {
           <CardContent className="flex flex-col gap-4 pt-0 md:flex-row md:items-center md:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-24 w-36 items-center justify-center overflow-hidden rounded-lg border bg-muted/30 p-2">
-                {ticketLogoUrl ? (
-                  <img src={ticketLogoUrl} alt="Logo para ticket" className="max-h-full max-w-full object-contain" />
+                {ticketLogoUrl && !ticketLogoError ? (
+                  <img
+                    src={ticketLogoUrl}
+                    alt="Logo para ticket"
+                    className="max-h-full max-w-full object-contain"
+                    onError={() => setTicketLogoError(true)}
+                  />
                 ) : (
-                  <span className="px-3 text-center text-xs text-muted-foreground">Sin logo configurado</span>
+                  <span className="px-3 text-center text-xs text-muted-foreground">
+                    {ticketLogoUrl ? "No se pudo cargar el logo. Sube otro archivo." : "Sin logo configurado"}
+                  </span>
                 )}
               </div>
               <div className="space-y-1 text-sm">
                 <div className="font-medium">Preview del logo actual</div>
                 <p className="max-w-md text-xs text-muted-foreground">Si no hay logo, el ticket conserva el encabezado de texto y se imprime normalmente.</p>
+                <p className="max-w-md text-xs text-muted-foreground">Si la app ya fue instalada, puede requerir reinstalar el acceso directo para ver un icono nuevo.</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">

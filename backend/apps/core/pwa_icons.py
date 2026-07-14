@@ -77,6 +77,16 @@ def _render_png_icon(size: int, *, maskable: bool = False) -> bytes:
     return output.getvalue()
 
 
+def _render_customer_logo() -> bytes | None:
+    logo = _load_logo()
+    if logo is None:
+        return None
+    logo.thumbnail((1024, 512), Image.Resampling.LANCZOS)
+    output = BytesIO()
+    logo.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def _render_ico() -> bytes:
     images = [Image.open(BytesIO(_render_png_icon(size))).convert("RGBA") for size in (32, 48)]
     output = BytesIO()
@@ -102,14 +112,21 @@ class PublicPwaIconView(APIView):
         not_modified = etag_response(request, version)
         if not_modified:
             return not_modified
+        versioned = request.GET.get("v") == version
+        if icon_name == "customer-logo.png":
+            payload = _render_customer_logo()
+            if payload is None:
+                return HttpResponse(status=404)
+            response = HttpResponse(payload, content_type="image/png")
+            return set_cache_headers(response, version, max_age=86400, versioned=versioned)
         if icon_name == "favicon.ico":
             payload = _render_ico()
             response = HttpResponse(payload, content_type="image/x-icon")
-            return set_cache_headers(response, version)
+            return set_cache_headers(response, version, max_age=86400, versioned=versioned)
         spec = self.ICON_SPECS.get(icon_name)
         if not spec:
             return HttpResponse(status=404)
         size, content_type, maskable = spec
         payload = _render_png_icon(size, maskable=maskable)
         response = HttpResponse(payload, content_type=content_type)
-        return set_cache_headers(response, version)
+        return set_cache_headers(response, version, max_age=86400, versioned=versioned)

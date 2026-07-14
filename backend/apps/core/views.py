@@ -416,14 +416,26 @@ _TICKET_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 def _ticket_logo_payload(request, settings: TicketSettings) -> dict:
     if not settings.ticket_logo:
-        return {"ticket_logo_url": None, "ticket_logo_name": None, "has_ticket_logo": False}
+        return {"ticket_logo_url": None, "ticket_logo_name": None, "ticket_logo_version": "", "has_ticket_logo": False}
     try:
-        logo_url = settings.ticket_logo.url
-    except ValueError:
-        logo_url = None
+        logo_path = Path(settings.ticket_logo.path)
+    except (NotImplementedError, ValueError):
+        logo_path = None
+    if not logo_path or not logo_path.exists():
+        return {
+            "ticket_logo_url": None,
+            "ticket_logo_name": Path(settings.ticket_logo.name).name if settings.ticket_logo.name else None,
+            "ticket_logo_version": "",
+            "has_ticket_logo": False,
+        }
+    from apps.core.pwa_metadata import get_public_pwa_metadata
+
+    metadata = get_public_pwa_metadata()
+    logo_url = metadata.get("customer_logo_url")
     return {
         "ticket_logo_url": logo_url,
         "ticket_logo_name": Path(settings.ticket_logo.name).name if settings.ticket_logo.name else None,
+        "ticket_logo_version": metadata.get("logo_version") or metadata.get("version") or "",
         "has_ticket_logo": bool(logo_url),
     }
 
