@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from apps.core.models import Branch, FeatureFlag
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
-from apps.core.permissions import CanManageKitchenItems, CanViewKitchen, IsAdminOrManager, IsCashierOrManagerOrAdmin
+from apps.core.permissions import CanAccessTablePos, CanManageKitchenItems, CanServeKitchenItems, CanViewKitchen, IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableSessionSerializer
 from apps.payments.models import Payment
@@ -198,6 +198,26 @@ def _serialize_kitchen_session(session: TableSession):
     }
 
 
+def _serialize_ready_session(session: TableSession):
+    order = session.primary_order
+    table_links = list(session.session_tables.select_related("table").order_by("created_at", "id"))
+    table_names = [link.table.name for link in table_links]
+    ready_items = list(
+        order.items.select_related("table_guest").prefetch_related("applied_modifiers").filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY).order_by("kitchen_ready_at", "id")
+    ) if order else []
+    group_label = f"Grupo {session.group_number}" if session.group_number else None
+    return {
+        "table_id": table_links[0].table_id if table_links else None,
+        "table_ids": [link.table_id for link in table_links],
+        "table_name": " + ".join(table_names),
+        "session_id": session.id,
+        "order_id": session.primary_order_id,
+        "ready_count": sum(int(item.quantity or 0) for item in ready_items),
+        "group_label": group_label,
+        "items": [_serialize_kitchen_item(item) for item in ready_items],
+    }
+
+
 class TableMapFeatureGuardMixin:
     def initial(self, request, *args, **kwargs):
         if not _table_map_enabled():
@@ -209,12 +229,12 @@ class TableMapFeatureGuardMixin:
 class DiningAreaListCreateView(TableMapFeatureGuardMixin, generics.ListCreateAPIView):
     queryset = DiningArea.objects.all().order_by("sort_order", "id")
     serializer_class = DiningAreaSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     def get_permissions(self):
         if self.request.method in {"POST"}:
             return [IsAdminOrManager()]
-        return [IsCashierOrManagerOrAdmin()]
+        return [CanAccessTablePos()]
 
 
 class DiningAreaDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateDestroyAPIView):
@@ -234,12 +254,12 @@ class DiningAreaDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateDes
 class RestaurantTableListCreateView(TableMapFeatureGuardMixin, generics.ListCreateAPIView):
     queryset = RestaurantTable.objects.select_related("area").all().order_by("area__sort_order", "sort_order", "id")
     serializer_class = RestaurantTableSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     def get_permissions(self):
         if self.request.method in {"POST"}:
             return [IsAdminOrManager()]
-        return [IsCashierOrManagerOrAdmin()]
+        return [CanAccessTablePos()]
 
 
 class RestaurantTableDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateDestroyAPIView):
@@ -290,7 +310,7 @@ class TableLayoutView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     def get(self, request):
         qs = TableSession.objects.select_related("primary_order").filter(status__in=ACTIVE_TABLE_SESSION_STATUSES).order_by("-opened_at")
@@ -363,11 +383,11 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
 class TableSessionDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateAPIView):
     queryset = TableSession.objects.all()
     serializer_class = TableSessionSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
 
 class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -446,15 +466,35 @@ class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
     def get(self, request):
         sessions = (
             TableSession.objects.select_related("primary_order")
-            .prefetch_related("session_tables__table", "primary_order__items__table_guest")
+            .prefetch_related("session_tables__table", "primary_order__items__table_guest", "primary_order__items__applied_modifiers")
             .filter(status__in=ACTIVE_TABLE_SESSION_STATUSES)
             .order_by("-updated_at", "-id")
         )
         return Response({"sessions": [_serialize_kitchen_session(session) for session in sessions]})
 
 
+class TableReadySummaryView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [CanViewKitchen]
+
+    def get(self, request):
+        sessions = (
+            TableSession.objects.select_related("primary_order")
+            .prefetch_related("session_tables__table", "primary_order__items__table_guest", "primary_order__items__applied_modifiers")
+            .filter(status__in=ACTIVE_TABLE_SESSION_STATUSES, primary_order__items__kitchen_status=OrderItem.KITCHEN_STATUS_READY)
+            .distinct()
+            .order_by("-updated_at", "-id")
+        )
+        rows = [_serialize_ready_session(session) for session in sessions]
+        return Response({"tables": rows, "total_ready": sum(row["ready_count"] for row in rows)})
+
+
 class TableOrderItemKitchenStatusView(APIView):
     permission_classes = [CanManageKitchenItems]
+
+    def get_permissions(self):
+        if self.kwargs.get("target_status") == OrderItem.KITCHEN_STATUS_DELIVERED:
+            return [CanServeKitchenItems()]
+        return [CanManageKitchenItems()]
 
     @transaction.atomic
     def post(self, request, pk: int, target_status: str):
@@ -471,10 +511,13 @@ class TableOrderItemKitchenStatusView(APIView):
             item.kitchen_ready_at = item.kitchen_ready_at or now
             fields = ["kitchen_status", "kitchen_ready_at"]
         elif target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+            if item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+                return Response({"detail": "El producto ya estaba servido.", "code": "ALREADY_SERVED", "item": _serialize_kitchen_item(item)}, status=200)
+            if item.kitchen_status != OrderItem.KITCHEN_STATUS_READY:
+                return Response({"detail": "Solo puedes servir productos terminados.", "code": "NOT_READY_TO_SERVE"}, status=400)
             item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
-            item.kitchen_ready_at = item.kitchen_ready_at or now
             item.kitchen_delivered_at = item.kitchen_delivered_at or now
-            fields = ["kitchen_status", "kitchen_ready_at", "kitchen_delivered_at"]
+            fields = ["kitchen_status", "kitchen_delivered_at"]
         else:
             return Response({"detail": "Estado inválido."}, status=400)
         item.save(update_fields=fields)
@@ -495,6 +538,54 @@ class TableOrderItemKitchenStatusView(APIView):
                 active_session.status = TableSession.STATUS_OPEN
                 active_session.save(update_fields=["status", "updated_at"])
         return Response({"detail": "Estado actualizado.", "item": _serialize_kitchen_item(item)})
+
+
+class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [CanServeKitchenItems]
+
+    @transaction.atomic
+    def post(self, request, pk: int):
+        session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
+        if not session or not session.primary_order_id:
+            return Response({"detail": "Sesión no encontrada."}, status=404)
+        raw_item_ids = request.data.get("item_ids")
+        item_ids = []
+        if isinstance(raw_item_ids, list):
+            for value in raw_item_ids:
+                try:
+                    item_ids.append(int(value))
+                except (TypeError, ValueError):
+                    return Response({"item_ids": "Lista de productos inválida."}, status=400)
+        items_qs = session.primary_order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY)
+        if item_ids:
+            items_qs = items_qs.filter(id__in=item_ids)
+        items = list(items_qs)
+        if not items:
+            return Response({"detail": "No hay productos listos para servir.", "served_count": 0, "summary": _serialize_ready_session(session)}, status=200)
+        now = timezone.now()
+        for item in items:
+            item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
+            item.kitchen_delivered_at = item.kitchen_delivered_at or now
+            item.save(update_fields=["kitchen_status", "kitchen_delivered_at"])
+        has_open_kitchen_items = session.primary_order.items.filter(
+            kitchen_status__in=[
+                OrderItem.KITCHEN_STATUS_PENDING,
+                OrderItem.KITCHEN_STATUS_SENT,
+                OrderItem.KITCHEN_STATUS_READY,
+            ]
+        ).exists()
+        if session.status == TableSession.STATUS_SENT_TO_KITCHEN and not has_open_kitchen_items:
+            session.status = TableSession.STATUS_OPEN
+            session.save(update_fields=["status", "updated_at"])
+        refreshed = TableSession.objects.select_related("primary_order").prefetch_related(
+            "session_tables__table", "primary_order__items__table_guest", "primary_order__items__applied_modifiers"
+        ).get(id=session.id)
+        return Response({
+            "detail": f"{len(items)} productos servidos.",
+            "served_count": len(items),
+            "summary": _serialize_ready_session(refreshed),
+            "session": TableSessionSerializer(refreshed).data,
+        })
 
 
 class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):

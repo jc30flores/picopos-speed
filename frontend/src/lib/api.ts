@@ -1183,7 +1183,7 @@ export type AuthUser = {
   id: number;
   username: string;
   email: string;
-  role: "superadmin" | "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant";
+  role: "superadmin" | "admin" | "manager" | "cashier" | "waiter" | "kitchen" | "kiosk" | "worker" | "accountant";
   isSuperuser: boolean;
   isStaff: boolean;
   redirectTo?: string;
@@ -4529,6 +4529,7 @@ export const deleteDiscount = async (discountId: number): Promise<void> => {
 
 const ROLE_LABELS: Record<string, string> = {
   cashier: "Cajero",
+  waiter: "Mesero",
   kitchen: "Cocina",
   manager: "Gerente",
   admin: "Administrador",
@@ -4624,11 +4625,11 @@ export const createEmployee = async (
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = resolveRoleKey(payload.role);
   if (!roleKey) {
-    throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+    throw new Error("Rol inválido. Usa Cajero, Mesero, Cocinero, Gerente o Administrador.");
   }
   const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
   if (payload.user?.role && !userRoleKey) {
-    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero, Mesero o Cocinero.");
   }
   const response = await request("/employees/", {
     method: "POST",
@@ -4703,11 +4704,11 @@ export const updateEmployee = async (
 ): Promise<import("@/types/employee").Employee> => {
   const roleKey = payload.role ? resolveRoleKey(payload.role) : undefined;
   if (payload.role && !roleKey) {
-    throw new Error("Rol inválido. Usa Cajero, Cocinero, Gerente o Administrador.");
+    throw new Error("Rol inválido. Usa Cajero, Mesero, Cocinero, Gerente o Administrador.");
   }
   const userRoleKey = payload.user?.role ? resolveRoleKey(payload.user.role) : undefined;
   if (payload.user?.role && !userRoleKey) {
-    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero o Cocinero.");
+    throw new Error("Rol de usuario inválido. Usa Administrador, Gerente, Cajero, Mesero o Cocinero.");
   }
   const response = await request(`/employees/${id}/`, {
     method: "PATCH",
@@ -6797,6 +6798,7 @@ export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sess
 export type TableKitchenItem = { id: number; productName: string; quantity: number; assignedName?: string; guestNumber?: number | null; guestLabel?: string; tableGuestId?: number | null; tableGuestLabel?: string; tableGuestSeatNumber?: number | null; kitchenStatus: "pending"|"sent"|"ready"|"delivered"; kitchenStatusLabel?: string; kitchenSentAt?: string | null; kitchenReadyAt?: string | null; kitchenDeliveredAt?: string | null; kitchenCompletedAt?: string | null; kitchenServedAt?: string | null; isPendingKitchen?: boolean; isInKitchen?: boolean; isCompleted?: boolean; isServed?: boolean; modifiers: string[]; lineTotal: number };
 export type TableKitchenPerson = { label: string; items: TableKitchenItem[]; total: number };
 export type TableKitchenSessionSummary = { sessionId: number; orderId?: number | null; status: string; tables: string[]; tableLabel: string; guestsCount: number; orderMode: "table"|"per_person"; total: number; remaining: number; items: TableKitchenItem[]; people: TableKitchenPerson[] };
+export type TableReadySummary = { tableId: number | null; tableIds: number[]; tableName: string; sessionId: number; orderId?: number | null; readyCount: number; groupLabel?: string | null; items: TableKitchenItem[] };
 type RawDiningArea = Partial<Record<"id"|"name"|"sort_order"|"is_active"|"x"|"y"|"width"|"height"|"color"|"operational_zoom"|"operational_offset_x"|"operational_offset_y", unknown>>;
 type RawRestaurantTable = Partial<Record<"id"|"area"|"area_name"|"name"|"number"|"capacity"|"shape"|"x"|"y"|"width"|"height"|"rotation"|"color"|"is_active"|"sort_order", unknown>>;
 type RawTableGuest = Partial<Record<"id"|"label"|"seat_number"|"is_active"|"is_paid", unknown>>;
@@ -6804,6 +6806,7 @@ type RawTableSession = Partial<Record<"id"|"status"|"guests_count"|"guest_count"
 type RawTableKitchenItem = Partial<Record<"id"|"product_name"|"productName"|"quantity"|"assigned_name"|"guest_number"|"guest_label"|"table_guest_id"|"table_guest_label"|"table_guest_seat_number"|"kitchen_status"|"kitchen_status_label"|"kitchen_sent_at"|"kitchen_ready_at"|"kitchen_delivered_at"|"kitchen_completed_at"|"kitchen_served_at"|"is_pending_kitchen"|"is_in_kitchen"|"is_completed"|"is_served"|"modifiers"|"line_total", unknown>>;
 type RawTableKitchenPerson = Partial<Record<"label"|"total"|"items", unknown>>;
 type RawTableKitchenSession = Partial<Record<"session_id"|"order_id"|"status"|"tables"|"table_label"|"guests_count"|"order_mode"|"total"|"remaining"|"items"|"people", unknown>>;
+type RawTableReadySummary = Partial<Record<"table_id"|"table_ids"|"table_name"|"session_id"|"order_id"|"ready_count"|"group_label"|"items", unknown>>;
 type TableKitchenStatus = TableKitchenItem["kitchenStatus"];
 
 const normalizeKitchenStatus = (value: unknown): TableKitchenStatus => {
@@ -6898,10 +6901,25 @@ const mapTableKitchenSession = (session: RawTableKitchenSession): TableKitchenSe
     };
   }),
 });
+const mapTableReadySummary = (row: RawTableReadySummary): TableReadySummary => ({
+  tableId: row.table_id == null ? null : Number(row.table_id),
+  tableIds: (Array.isArray(row.table_ids) ? row.table_ids : []).map(Number),
+  tableName: String(row.table_name ?? ""),
+  sessionId: Number(row.session_id),
+  orderId: typeof row.order_id === "number" || typeof row.order_id === "string" ? Number(row.order_id) : null,
+  readyCount: Number(row.ready_count ?? 0),
+  groupLabel: row.group_label == null ? null : String(row.group_label),
+  items: (Array.isArray(row.items) ? row.items : []).map((item) => mapTableKitchenItem(item as RawTableKitchenItem)),
+});
 export const getTableKitchenSummary = async (): Promise<TableKitchenSessionSummary[]> => {
   const response = await request('/orders/tables/kitchen-summary/');
   const data = await handleJson<{ sessions?: RawTableKitchenSession[] }>(response);
   return (data.sessions ?? []).map(mapTableKitchenSession);
+};
+export const getTableReadySummary = async (): Promise<{ tables: TableReadySummary[]; totalReady: number }> => {
+  const response = await request('/orders/tables/ready-summary/');
+  const data = await handleJson<{ tables?: RawTableReadySummary[]; total_ready?: unknown }>(response);
+  return { tables: (data.tables ?? []).map(mapTableReadySummary), totalReady: Number(data.total_ready ?? 0) };
 };
 export const saveTableLayout = async (payload: { tables: Array<{ id: number; x: number; y: number; width: number; height: number; rotation: number }> }): Promise<{ detail: string }> => {
   const response = await request('/orders/tables/layout/', { method: 'PATCH', body: JSON.stringify(payload) });
@@ -6961,9 +6979,22 @@ export const markTableKitchenItemReady = async (itemId: number): Promise<TableKi
   return mapTableKitchenItem(data.item ?? data);
 };
 export const markTableKitchenItemDelivered = async (itemId: number): Promise<TableKitchenItem> => {
-  const response = await request(`/orders/items/${itemId}/mark-delivered/`, { method: 'POST' });
+  const response = await request(`/kitchen/items/${itemId}/serve/`, { method: 'POST' });
   const data = await handleJson<{ item?: RawTableKitchenItem } & RawTableKitchenItem>(response);
   return mapTableKitchenItem(data.item ?? data);
+};
+export const serveTableSessionReadyItems = async (sessionId: number, itemIds?: number[]): Promise<{ servedCount: number; summary?: TableReadySummary; session?: TableSession; detail?: string }> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/serve-ready/`, {
+    method: 'POST',
+    body: JSON.stringify({ item_ids: itemIds ?? [] }),
+  });
+  const data = await handleJson<{ served_count?: unknown; summary?: RawTableReadySummary; session?: RawTableSession; detail?: unknown }>(response);
+  return {
+    servedCount: Number(data.served_count ?? 0),
+    summary: data.summary ? mapTableReadySummary(data.summary) : undefined,
+    session: data.session ? mapTableSession(data.session) : undefined,
+    detail: data.detail ? String(data.detail) : undefined,
+  };
 };
 export const moveTableSessionTable = async (sessionId: number, payload: { targetTableId: number; sourceTableId?: number | null }): Promise<TableSession> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/move-table/`, { method: 'POST', body: JSON.stringify({ target_table_id: payload.targetTableId, source_table_id: payload.sourceTableId ?? null }) });
