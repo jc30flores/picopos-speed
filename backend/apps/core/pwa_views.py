@@ -17,8 +17,11 @@ def etag_response(request, version: str) -> HttpResponseNotModified | None:
     return None
 
 
-def set_cache_headers(response: HttpResponse, version: str, max_age: int = 3600) -> HttpResponse:
-    response["Cache-Control"] = f"public, max-age={max_age}"
+def set_cache_headers(response: HttpResponse, version: str, max_age: int = 3600, versioned: bool = False) -> HttpResponse:
+    if versioned:
+        response["Cache-Control"] = f"public, max-age={max_age}, immutable"
+    else:
+        response["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
     response["ETag"] = f'"{version}"'
     response["X-Branding-Version"] = version
     return response
@@ -31,7 +34,7 @@ class PublicPwaMetadataView(APIView):
     def get(self, request):
         metadata = get_public_pwa_metadata()
         response = JsonResponse(metadata)
-        return set_cache_headers(response, str(metadata["version"]), max_age=300)
+        return set_cache_headers(response, str(metadata["version"]), max_age=0, versioned=False)
 
 
 class PublicPwaManifestView(APIView):
@@ -64,4 +67,4 @@ class PublicPwaManifestView(APIView):
             json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
             content_type="application/manifest+json",
         )
-        return set_cache_headers(response, version, max_age=300)
+        return set_cache_headers(response, version, max_age=300, versioned=request.GET.get("v") == version)

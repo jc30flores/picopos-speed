@@ -59,22 +59,30 @@ const upsertMeta = (selector: string, attributes: Record<string, string>) => {
   Object.entries(attributes).forEach(([key, value]) => element?.setAttribute(key, value));
 };
 
-const upsertLink = (selector: string, attributes: Record<string, string>) => {
-  let element = document.head.querySelector<HTMLLinkElement>(selector);
+const setOrUpdateLinkRel = (rel: string, href: string, attributes: Record<string, string> = {}) => {
+  const existingLinks = Array.from(document.head.querySelectorAll<HTMLLinkElement>(`link[rel="${rel}"]`));
+  let element = existingLinks[0];
+  existingLinks.slice(1).forEach((link) => link.remove());
   if (!element) {
     element = document.createElement("link");
     document.head.appendChild(element);
   }
+  element.setAttribute("rel", rel);
+  element.setAttribute("href", href);
   Object.entries(attributes).forEach(([key, value]) => element?.setAttribute(key, value));
+};
+
+export const updatePwaLinks = (metadata: PublicPwaMetadata) => {
+  setOrUpdateLinkRel("manifest", metadata.manifestUrl);
+  setOrUpdateLinkRel("icon", metadata.faviconUrl);
+  setOrUpdateLinkRel("shortcut icon", metadata.faviconUrl);
+  setOrUpdateLinkRel("apple-touch-icon", metadata.appleTouchIconUrl);
 };
 
 export const applyPwaMetadata = (metadata: PublicPwaMetadata) => {
   const title = `${metadata.appName} - Sistema de Punto de Venta`;
   document.title = title;
-  upsertLink('link[rel="manifest"]', { rel: "manifest", href: metadata.manifestUrl });
-  upsertLink('link[rel="icon"]', { rel: "icon", href: metadata.faviconUrl });
-  upsertLink('link[rel="shortcut icon"]', { rel: "shortcut icon", href: metadata.faviconUrl });
-  upsertLink('link[rel="apple-touch-icon"]', { rel: "apple-touch-icon", href: metadata.appleTouchIconUrl });
+  updatePwaLinks(metadata);
   upsertMeta('meta[name="theme-color"]', { name: "theme-color", content: metadata.themeColor });
   upsertMeta('meta[name="application-name"]', { name: "application-name", content: metadata.appName });
   upsertMeta('meta[name="apple-mobile-web-app-title"]', { name: "apple-mobile-web-app-title", content: metadata.shortName });
@@ -86,6 +94,17 @@ export const applyPwaMetadata = (metadata: PublicPwaMetadata) => {
 
 const APPEARANCE_CACHE_KEY = "gastroposv.publicAppearance";
 const PWA_METADATA_CACHE_KEY = "gastroposv.publicPwaMetadata";
+const PWA_METADATA_VERSION_KEY = "gastroposv.publicPwaMetadataVersion";
+
+const clearDynamicPwaCaches = async () => {
+  if (!("caches" in window)) return;
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key.startsWith("gastroposv-pwa-")).map((key) => caches.delete(key)));
+  } catch {
+    // Cache cleanup is best-effort; fresh metadata links still force the current version.
+  }
+};
 
 export const loadAppearanceSettings = async () => {
   try {
@@ -93,13 +112,10 @@ export const loadAppearanceSettings = async () => {
     if (cached) {
       applyAppearanceSettings(JSON.parse(cached) as AppearanceSettings);
     }
-    const cachedPwa = localStorage.getItem(PWA_METADATA_CACHE_KEY);
-    if (cachedPwa) {
-      applyPwaMetadata(JSON.parse(cachedPwa) as PublicPwaMetadata);
-    }
   } catch {
     localStorage.removeItem(APPEARANCE_CACHE_KEY);
     localStorage.removeItem(PWA_METADATA_CACHE_KEY);
+    localStorage.removeItem(PWA_METADATA_VERSION_KEY);
   }
   const [appearanceResult, pwaResult] = await Promise.allSettled([getPublicAppearanceSettings(), getPublicPwaMetadata()]);
   if (appearanceResult.status === "fulfilled") {
@@ -107,7 +123,13 @@ export const loadAppearanceSettings = async () => {
     localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearanceResult.value));
   }
   if (pwaResult.status === "fulfilled") {
+    const currentVersion = pwaResult.value.brandingVersion || pwaResult.value.version;
+    const previousVersion = localStorage.getItem(PWA_METADATA_VERSION_KEY);
     applyPwaMetadata(pwaResult.value);
     localStorage.setItem(PWA_METADATA_CACHE_KEY, JSON.stringify(pwaResult.value));
+    localStorage.setItem(PWA_METADATA_VERSION_KEY, currentVersion);
+    if (previousVersion && previousVersion !== currentVersion) {
+      void clearDynamicPwaCaches();
+    }
   }
 };
