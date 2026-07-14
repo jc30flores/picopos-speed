@@ -11,6 +11,7 @@ import { AttendancePanel } from "@/components/attendance/AttendancePanel";
 import { useAttendanceAccess } from "@/context/useAttendanceAccess";
 import { toast } from "sonner";
 import { APP_DISPLAY_NAME } from "@/lib/branding";
+import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 
 const isProductSuperadmin = (user: ReturnType<typeof useAuth>["user"]) =>
   Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
@@ -124,6 +125,7 @@ const MainMenu = () => {
     <div className="min-h-screen bg-background p-3 sm:p-4">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-7xl flex-col justify-start gap-4">
         <div className="flex items-center justify-end gap-2">
+          <InstallAppButton compact className="h-11 rounded-full" />
           <Button
             className="h-11 w-11 rounded-full border-border/70 p-0 hover:bg-accent/70 active:scale-[0.98]"
             variant="outline"

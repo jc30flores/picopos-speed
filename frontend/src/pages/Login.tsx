@@ -11,6 +11,7 @@ import { ClockSV } from "@/components/ClockSV";
 import { getLandingRouteForRole } from "@/lib/roleAccess";
 import { isApiStatusError, isNetworkApiError } from "@/lib/api";
 import { APP_DISPLAY_NAME } from "@/lib/branding";
+import { InstallAppButton } from "@/components/pwa/InstallAppButton";
 
 const PIN_LENGTH = 6;
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
@@ -232,6 +233,7 @@ const Login = () => {
           >
             {usePassword ? "Usar PIN táctil" : "Usar usuario/contraseña (admin)"}
           </button>
+          <InstallAppButton className="mt-3 w-full" />
         </CardContent>
       </Card>
       </div>

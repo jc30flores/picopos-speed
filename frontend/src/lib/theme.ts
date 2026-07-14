@@ -1,4 +1,4 @@
-import { getPublicAppearanceSettings, type AppearanceSettings } from "@/lib/api";
+import { getPublicAppearanceSettings, getPublicPwaMetadata, type AppearanceSettings, type PublicPwaMetadata } from "@/lib/api";
 import { deriveThemeTokens, ensureReadableColor, getReadableTextColor, isValidHexColor } from "@/lib/color";
 
 const hexToHsl = (hex: string): string => {
@@ -50,7 +50,42 @@ export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   root.style.setProperty("--gradient-accent", `linear-gradient(135deg, ${settings.colorPrimary}, ${settings.colorPrimaryHover})`);
 };
 
+const upsertMeta = (selector: string, attributes: Record<string, string>) => {
+  let element = document.head.querySelector<HTMLMetaElement>(selector);
+  if (!element) {
+    element = document.createElement("meta");
+    document.head.appendChild(element);
+  }
+  Object.entries(attributes).forEach(([key, value]) => element?.setAttribute(key, value));
+};
+
+const upsertLink = (selector: string, attributes: Record<string, string>) => {
+  let element = document.head.querySelector<HTMLLinkElement>(selector);
+  if (!element) {
+    element = document.createElement("link");
+    document.head.appendChild(element);
+  }
+  Object.entries(attributes).forEach(([key, value]) => element?.setAttribute(key, value));
+};
+
+export const applyPwaMetadata = (metadata: PublicPwaMetadata) => {
+  const title = `${metadata.appName} - Sistema de Punto de Venta`;
+  document.title = title;
+  upsertLink('link[rel="manifest"]', { rel: "manifest", href: metadata.manifestUrl });
+  upsertLink('link[rel="icon"]', { rel: "icon", href: metadata.faviconUrl });
+  upsertLink('link[rel="shortcut icon"]', { rel: "shortcut icon", href: metadata.faviconUrl });
+  upsertLink('link[rel="apple-touch-icon"]', { rel: "apple-touch-icon", href: metadata.appleTouchIconUrl });
+  upsertMeta('meta[name="theme-color"]', { name: "theme-color", content: metadata.themeColor });
+  upsertMeta('meta[name="application-name"]', { name: "application-name", content: metadata.appName });
+  upsertMeta('meta[name="apple-mobile-web-app-title"]', { name: "apple-mobile-web-app-title", content: metadata.shortName });
+  upsertMeta('meta[name="apple-mobile-web-app-capable"]', { name: "apple-mobile-web-app-capable", content: "yes" });
+  upsertMeta('meta[name="mobile-web-app-capable"]', { name: "mobile-web-app-capable", content: "yes" });
+  upsertMeta('meta[property="og:title"]', { property: "og:title", content: title });
+  upsertMeta('meta[property="og:description"]', { property: "og:description", content: metadata.description });
+};
+
 const APPEARANCE_CACHE_KEY = "gastroposv.publicAppearance";
+const PWA_METADATA_CACHE_KEY = "gastroposv.publicPwaMetadata";
 
 export const loadAppearanceSettings = async () => {
   try {
@@ -58,14 +93,21 @@ export const loadAppearanceSettings = async () => {
     if (cached) {
       applyAppearanceSettings(JSON.parse(cached) as AppearanceSettings);
     }
+    const cachedPwa = localStorage.getItem(PWA_METADATA_CACHE_KEY);
+    if (cachedPwa) {
+      applyPwaMetadata(JSON.parse(cachedPwa) as PublicPwaMetadata);
+    }
   } catch {
     localStorage.removeItem(APPEARANCE_CACHE_KEY);
+    localStorage.removeItem(PWA_METADATA_CACHE_KEY);
   }
-  try {
-    const settings = await getPublicAppearanceSettings();
-    applyAppearanceSettings(settings);
-    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(settings));
-  } catch {
-    // Apariencia no debe bloquear el arranque de la app.
+  const [appearanceResult, pwaResult] = await Promise.allSettled([getPublicAppearanceSettings(), getPublicPwaMetadata()]);
+  if (appearanceResult.status === "fulfilled") {
+    applyAppearanceSettings(appearanceResult.value);
+    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearanceResult.value));
+  }
+  if (pwaResult.status === "fulfilled") {
+    applyPwaMetadata(pwaResult.value);
+    localStorage.setItem(PWA_METADATA_CACHE_KEY, JSON.stringify(pwaResult.value));
   }
 };
