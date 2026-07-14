@@ -203,3 +203,69 @@ Cuando se sube o elimina un logo, Configuracion refresca metadata PWA para actua
 ## Nota para apps ya instaladas
 
 Chrome/Android puede conservar el icono de un acceso directo ya instalado aunque el manifest cambie correctamente. Para verificar el nuevo icono del cliente, desinstalar/eliminar el acceso directo anterior y volver a instalar la PWA despues de recargar el sistema.
+
+## OpenGraph / WhatsApp sin branding externo
+
+El HTML inicial ya no contiene metadata, imagenes ni referencias externas de herramientas de prototipado. Los tags base quedan con branding propio:
+
+- `title`: `La Rosee POS - Sistema de Punto de Venta`
+- `description`: `Sistema POS para restaurante`
+- `og:title`: `La Rosee POS - Sistema de Punto de Venta`
+- `og:description`: `Sistema POS para restaurante`
+- `og:site_name`: `GastroPOSV`
+- `og:image`: `/api/public/pwa/share-image.png`
+- `twitter:image`: `/api/public/pwa/share-image.png`
+
+WhatsApp y otras redes normalmente no ejecutan JavaScript, por eso estos valores existen directamente en `frontend/index.html`. En navegadores normales React tambien refresca esos tags con la metadata publica actual.
+
+## Share image dinamica
+
+La vista previa social usa:
+
+- `/api/public/pwa/share-image.png?v=<branding_version>`
+
+La imagen se genera en backend con tamano `1200x630`, `Content-Type: image/png` y la misma version de branding que manifest/iconos.
+
+Reglas:
+
+- Si hay logo valido del cliente, se usa ese logo en la imagen social.
+- No se mezcla el monograma `GP` si existe logo del cliente.
+- Si no hay logo, se usa fallback propio GastroPOSV/GP.
+- Si el logo esta corrupto o no existe, no hay 500; se genera fallback.
+
+## Iconos con logo del cliente
+
+Cuando existe logo valido:
+
+- `favicon.ico`
+- `apple-touch-icon.png`
+- `icon-192.png`
+- `icon-512.png`
+- `icon-maskable-512.png`
+
+usan un canvas transparente con el logo centrado y padding seguro. No se agrega fondo GP ni monograma sobre el logo del cliente. El fallback GP solo se usa cuando no hay logo valido.
+
+## Version sincronizada
+
+`/api/public/pwa/metadata/` devuelve tambien:
+
+- `site_name`
+- `share_image_url`
+
+Todas las rutas versionadas comparten `branding_version`, incluyendo manifest, favicon, iconos y share image.
+
+## Cache de WhatsApp y shortcuts
+
+WhatsApp, Facebook, Telegram, iMessage, Android y Chrome pueden cachear previews o iconos instalados fuera del control de la app.
+
+Para probar cambios de preview:
+
+- compartir `https://la-rosee.cuskatech.com/?v=<branding_version>`
+- usar Facebook Sharing Debugger si aplica
+- esperar invalidacion de cache de WhatsApp si la URL base ya fue compartida
+
+Para probar icono de shortcut:
+
+- desinstalar/eliminar el acceso directo anterior
+- limpiar cache del navegador si hace falta
+- reinstalar la PWA desde Chrome
