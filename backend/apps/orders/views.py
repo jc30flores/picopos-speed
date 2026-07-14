@@ -492,14 +492,21 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         payload = render_customer_ticket(order)
         logger.info("[TICKET_TRACE] endpoint=orders.receipt-pdf order_id=%s", order.id)
         filename = f"venta_{order.order_number}_{timezone.localtime(timezone.now()).strftime('%Y-%m-%d_%H-%M')}.pdf"
-        result = build_receipt_pdf_from_text(
-            text=payload.get("text", ""),
-            filename=filename,
-            logo_path=payload.get("meta", {}).get("logo_path"),
-            qr_value=payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
-            receipt_context=payload.get("meta", {}).get("receipt_context"),
-            suppress_qr_url_lines=True,
-        )
+        try:
+            result = build_receipt_pdf_from_text(
+                text=payload.get("text", ""),
+                filename=filename,
+                logo_path=payload.get("meta", {}).get("logo_path"),
+                qr_value=payload.get("meta", {}).get("qr_value") or payload.get("meta", {}).get("public_url"),
+                receipt_context=payload.get("meta", {}).get("receipt_context"),
+                suppress_qr_url_lines=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - receipt fallback must avoid user-facing 500s
+            logger.exception("orders.receipt_pdf.fallback_failed order_id=%s error=%s", order.id, exc)
+            return Response(
+                {"detail": "No se pudo generar el PDF del ticket. Usa la vista previa de impresion local."},
+                status=status.HTTP_200_OK,
+            )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'inline; filename="{result.filename}"'
         response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"

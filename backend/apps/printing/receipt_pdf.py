@@ -317,7 +317,12 @@ def build_receipt_pdf_from_text(*, text: str, filename: str, **kwargs) -> Receip
                 exc,
                 filename,
             )
-            raise
+        except Exception as exc:
+            logger.exception(
+                "[TICKET_TRACE] generator=V2_LOGO_QR_RENDERER active=False fallback=simple_text error=%s filename=%s",
+                exc,
+                filename,
+            )
     lines = sanitize_receipt_text(text).split("\n")
     return build_receipt_pdf(lines=lines, filename=filename, **kwargs)
 
@@ -327,10 +332,10 @@ def _money(value: Decimal | str | float | int) -> Decimal:
 
 
 def _brand_name(ctx: dict) -> str:
-    raw = str(ctx.get("tagline") or ctx.get("restaurant_name") or "GastroPOSV").strip()
+    raw = str(ctx.get("tagline") or ctx.get("restaurant_name") or "La Rosee POS").strip()
     if raw.lower().startswith("pico de gallo"):
-        return "GastroPOSV"
-    return raw or "GastroPOSV"
+        return "La Rosee POS"
+    return raw or "La Rosee POS"
 
 
 def clean_display(value, fallback: str = "") -> str:
@@ -676,7 +681,7 @@ def build_sale_receipt_pdf(
 
     hr()
     footer = "Gracias por su visita"
-    brand_footer = "GastroPOSV by MEKA"
+    brand_footer = "La Rosee POS by MEKA"
     pdf.setFont(font_name, small_size)
     pdf.setFillColorRGB(0, 0, 0)
     move(leading)
