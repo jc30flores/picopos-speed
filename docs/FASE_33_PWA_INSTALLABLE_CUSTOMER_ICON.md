@@ -144,3 +144,62 @@ Textos:
 - Validar instalacion en dispositivo Android fisico.
 - Los accesos directos ya instalados pueden mantener icono viejo por cache del sistema.
 - Si el logo es muy claro u oscuro contra el color principal, puede requerir un logo especifico para app en una fase futura.
+
+## Correccion de preview, manifest e iconos
+
+Se corrigio la carga del logo de ticket para que Configuracion no use una ruta `/media/...` que puede quedar fuera del proxy del frontend. El endpoint `/api/settings/ticket/` ahora devuelve una URL publica y versionada de logo:
+
+- `/api/public/pwa/customer-logo.png?v=<branding_version>`
+
+Si el archivo no existe o esta corrupto, el endpoint devuelve `null` para el preview y los iconos PWA usan el fallback default, sin imagen rota ni 500.
+
+La metadata publica de PWA queda centralizada en:
+
+- `/api/public/pwa/metadata/`
+
+Campos relevantes:
+
+- `branding_version`
+- `logo_version`
+- `customer_logo_url`
+- `ticket_logo_url`
+- `manifest_url`
+- `favicon_url`
+- `apple_touch_icon_url`
+- `icon_192_url`
+- `icon_512_url`
+- `maskable_icon_url`
+
+El frontend actualiza `manifest`, `favicon`, `shortcut icon` y `apple-touch-icon` reemplazando links existentes en lugar de agregar duplicados. En consola, `document.querySelectorAll('link[rel="manifest"]').length` debe quedar en `1`.
+
+## Versionado unico
+
+El `branding_version` ahora cambia cuando cambia cualquiera de estos datos:
+
+- nombre de app
+- nombre corto
+- color principal
+- `updated_at` de apariencia
+- nombre del logo
+- `updated_at` del logo
+- tamano del archivo de logo
+- `mtime` del archivo de logo
+
+El manifest usa esa misma version para todos los iconos. Asi se evita mezclar `/manifest.webmanifest?v=<viejo>` con iconos `?v=<nuevo>`.
+
+## Cache y service worker
+
+El service worker usa caches `gastroposv-static-v2` y `gastroposv-pwa-v2`, elimina caches PWA anteriores durante `activate` y trata manifest/metadata como `network-fresh`.
+
+Reglas:
+
+- manifest y metadata: siempre red primero, cache solo como respaldo.
+- iconos PWA con `?v=<branding_version>`: cacheables por URL versionada.
+- iconos PWA sin version: red primero.
+- APIs normales, pagos, clientes, reportes, DTE, caja y configuracion sensible: no se cachean.
+
+Cuando se sube o elimina un logo, Configuracion refresca metadata PWA para actualizar favicon/manifest en la sesion actual.
+
+## Nota para apps ya instaladas
+
+Chrome/Android puede conservar el icono de un acceso directo ya instalado aunque el manifest cambie correctamente. Para verificar el nuevo icono del cliente, desinstalar/eliminar el acceso directo anterior y volver a instalar la PWA despues de recargar el sistema.
