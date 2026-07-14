@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, Loader2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, CreditCard, DoorOpen, Eye, Link2, Loader2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -197,6 +197,17 @@ type OpenTablePaymentOptions = {
   order?: Order | null;
   payments?: Payment[] | null;
 };
+
+type TableBillStatusFilter = "all" | "pending" | "in_kitchen" | "completed" | "served" | "paid";
+
+const TABLE_BILL_STATUS_OPTIONS: Array<{ value: TableBillStatusFilter; label: string }> = [
+  { value: "all", label: "Todos" },
+  { value: "pending", label: "Pendiente de enviar" },
+  { value: "in_kitchen", label: "En cocina" },
+  { value: "completed", label: "Terminados" },
+  { value: "served", label: "Servidos" },
+  { value: "paid", label: "Pagados" },
+];
 
 type ThermalTicketState = {
   open: boolean;
@@ -563,7 +574,8 @@ type TableConfirmDialogState =
   const [transferMode, setTransferMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
   const [tableConfirmDialog, setTableConfirmDialog] = useState<TableConfirmDialogState>({ open: false, type: null, sourceTableId: null, targetTableId: null, session: null });
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
-  const [tableBillView, setTableBillView] = useState<string>("all");
+  const [tableBillGuestFilter, setTableBillGuestFilter] = useState<string>("all");
+  const [tableBillStatusFilter, setTableBillStatusFilter] = useState<TableBillStatusFilter>("all");
   const [tablePaymentScope, setTablePaymentScope] = useState<TablePaymentScope | null>(null);
   const [tablePaymentReturn, setTablePaymentReturn] = useState<TablePaymentReturnTarget>(null);
   const [isOpeningTablePayment, setIsOpeningTablePayment] = useState(false);
@@ -1108,7 +1120,8 @@ type TableConfirmDialogState =
       return;
     }
     setPosMode("tables");
-    setTableBillView("all");
+    setTableBillGuestFilter("all");
+    setTableBillStatusFilter("all");
     setTableBillDialog({ open: true, loading: true, tableId, session, order: null, payments: [] });
     try {
       const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
@@ -1147,16 +1160,6 @@ type TableConfirmDialogState =
       }
     }
     setTablePaymentReturn(null);
-  };
-
-  const handleSendTableSession = async (session: TableSession) => {
-    try {
-      const updated = await sendTableSessionToKitchen(session.id);
-      toast.success(updated.detail || (updated.sentCount === 0 ? "No hay productos nuevos para enviar." : "Orden enviada a cocina."));
-      await refreshTableSessions();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo enviar a cocina.");
-    }
   };
 
   const handleReleaseTableSession = async (session: TableSession) => {
@@ -4117,9 +4120,9 @@ type TableConfirmDialogState =
   };
   const getKitchenStatusTone = (status?: Order["items"][number]["kitchenStatus"]) => {
     if (status === "sent") return "border-amber-300 bg-amber-500/10 text-amber-700 dark:text-amber-200";
-    if (status === "ready") return "border-blue-300 bg-blue-500/10 text-blue-700 dark:text-blue-200";
-    if (status === "delivered") return "border-emerald-300 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
-    return "border-muted-foreground/20 bg-muted text-muted-foreground";
+    if (status === "ready") return "border-emerald-300 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
+    if (status === "delivered") return "border-blue-300 bg-blue-500/10 text-blue-700 dark:text-blue-200";
+    return "border-sky-300 bg-sky-500/10 text-sky-700 dark:text-sky-200";
   };
   const getItemAllocatedCents = (item: Order["items"][number], payments: Payment[]) =>
     payments.reduce((sum, payment) => (
@@ -4130,7 +4133,7 @@ type TableConfirmDialogState =
   const isTableBillItemPaid = (item: Order["items"][number], payments: Payment[]) => getItemAllocatedCents(item, payments) >= Math.max(getOrderItemTotalCents(item) - 1, 0);
   const getTableBillItemStatusLabel = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments) ? "Pagado" : getKitchenStatusLabel(item.kitchenStatus);
   const getTableBillItemStatusTone = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments)
-    ? "border-emerald-400 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+    ? "border-violet-300 bg-violet-500/10 text-violet-700 dark:text-violet-200"
     : getKitchenStatusTone(item.kitchenStatus);
   const formatTicketQuantity = (quantity: number) => {
     const value = Number(quantity || 0);
@@ -4608,13 +4611,10 @@ type TableConfirmDialogState =
                     {session ? menuButton(isJoined ? "Agregar productos" : "Agregar productos", <Plus className="h-4 w-4" />, () => { void openTableSession(table.id); close(); }) : null}
                     {session ? menuButton(isJoined ? "Ver cuenta conjunta" : "Ver cuenta", <Eye className="h-4 w-4" />, () => { void openTableBill(table.id, session); close(); }) : null}
                     {session && canCollectTablePayments ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect || isOpeningTablePayment || isPaymentOpen) : null}
-                    {session ? menuButton("Enviar cocina", <ChefHat className="h-4 w-4" />, () => { void handleSendTableSession(session); close(); }, session.status === "sent_to_kitchen") : null}
                     {session && allowTableTransfer && canManageTableStructure ? menuButton(isJoined ? "Mover grupo" : "Mover mesa", <MoveRight className="h-4 w-4" />, () => { setTransferMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona la mesa destino"); close(); }) : null}
                     {session && allowTableMerge && canManageTableStructure ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session && isJoined && canManageTableStructure ? menuButton("Separar mesa", <SplitSquareHorizontal className="h-4 w-4" />, () => { handleSplitTableSession(session, table.id); close(); }) : null}
-                    {session && (allowSplitByGuest || allowSplitByItem) && canCollectTablePayments ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect || isOpeningTablePayment || isPaymentOpen) : null}
                     {session && canManageTableStructure ? menuButton(isJoined ? "Liberar grupo" : "Liberar mesa", <DoorOpen className="h-4 w-4" />, () => { void handleReleaseTableSession(session); close(); }) : null}
-                    {menuButton("Cerrar", <X className="h-4 w-4" />, close)}
                   </div>
                 );
               })()}
@@ -4729,37 +4729,48 @@ type TableConfirmDialogState =
           </DialogContent>
         </Dialog>
         <Dialog open={tableBillDialog.open} onOpenChange={(open) => setTableBillDialog((prev) => ({ ...prev, open }))}>
-          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(96vw,72rem)] max-w-6xl flex-col overflow-hidden p-0">
-            <DialogHeader className="shrink-0 border-b bg-background px-5 py-4">
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[48rem] flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b bg-background px-4 py-3">
               <DialogTitle>Cuenta de mesa</DialogTitle>
-              <DialogDescription>Productos por persona, estados de cocina y pagos aplicados.</DialogDescription>
+              <DialogDescription>Productos por persona, estados y pagos aplicados.</DialogDescription>
             </DialogHeader>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               {tableBillDialog.loading ? (
                 <div className="py-8 text-sm text-muted-foreground">Cargando cuenta...</div>
               ) : tableBillDialog.order ? (() => {
                 const order = tableBillDialog.order;
                 const session = tableBillDialog.session;
-                const selectedGuest = tableBillView.startsWith("guest:")
-                  ? (session?.guests ?? []).find((guest) => guest.id === Number(tableBillView.replace("guest:", ""))) ?? null
+                const selectedGuest = tableBillGuestFilter.startsWith("guest:")
+                  ? (session?.guests ?? []).find((guest) => guest.id === Number(tableBillGuestFilter.replace("guest:", ""))) ?? null
                   : null;
-                const filterItem = (item: Order["items"][number]) => {
-                  if (tableBillView === "pending") return (item.kitchenStatus ?? "pending") === "pending" && !isTableBillItemPaid(item, tableBillDialog.payments);
-                  if (tableBillView === "sent") return item.kitchenStatus === "sent" && !isTableBillItemPaid(item, tableBillDialog.payments);
-                  if (tableBillView === "ready") return item.kitchenStatus === "ready" && !isTableBillItemPaid(item, tableBillDialog.payments);
-                  if (tableBillView === "delivered") return item.kitchenStatus === "delivered" && !isTableBillItemPaid(item, tableBillDialog.payments);
-                  if (tableBillView === "paid") return isTableBillItemPaid(item, tableBillDialog.payments);
-                  if (selectedGuest) return getGuestItems(order, selectedGuest).some((guestItem) => guestItem.id === item.id);
+                const selectedGuestItems = selectedGuest ? getGuestItems(order, selectedGuest) : [];
+                const selectedGuestItemIds = selectedGuest ? new Set(selectedGuestItems.map((item) => item.id)) : null;
+                const statusFilterLabel = TABLE_BILL_STATUS_OPTIONS.find((option) => option.value === tableBillStatusFilter)?.label ?? "Todos";
+                const matchesStatusFilter = (item: Order["items"][number]) => {
+                  const paid = isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (tableBillStatusFilter === "all") return true;
+                  if (tableBillStatusFilter === "paid") return paid;
+                  if (paid) return false;
+                  const status = item.kitchenStatus ?? "pending";
+                  if (tableBillStatusFilter === "pending") return status === "pending";
+                  if (tableBillStatusFilter === "in_kitchen") return status === "sent";
+                  if (tableBillStatusFilter === "completed") return status === "ready";
+                  if (tableBillStatusFilter === "served") return status === "delivered";
                   return true;
+                };
+                const filterItem = (item: Order["items"][number]) => {
+                  if (selectedGuestItemIds && !selectedGuestItemIds.has(item.id)) return false;
+                  return matchesStatusFilter(item);
                 };
                 const visibleItems = order.items.filter(filterItem);
                 const selectedTotal = visibleItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0);
+                const selectedGuestTotal = selectedGuest ? selectedGuestItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0) : 0;
                 const selectedPaidCents = selectedGuest ? getGuestPaidCents(tableBillDialog.payments, selectedGuest) : 0;
-                const selectedPendingCents = selectedGuest ? Math.max(toCents(selectedTotal) - selectedPaidCents, 0) : 0;
+                const selectedPendingCents = selectedGuest ? Math.max(toCents(selectedGuestTotal) - selectedPaidCents, 0) : 0;
                 const renderItem = (item: Order["items"][number]) => {
                   const modifiers = getOrderItemModifiers(item);
                   return (
-                    <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b px-3 py-3 last:border-b-0">
+                    <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b px-3 py-2.5 last:border-b-0">
                       <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="font-medium text-foreground">{item.productName}</p>
@@ -4775,50 +4786,56 @@ type TableConfirmDialogState =
                   );
                 };
                 return (
-                  <div className="space-y-4">
-                    <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="space-y-3">
+                    <div className="rounded-lg border bg-muted/20 px-3 py-2.5 text-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <p className="font-semibold text-foreground">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p>
                           <p className="text-xs text-muted-foreground">{session?.guestsCount ?? 1} personas · {getSessionStateLabel(session ?? undefined)}</p>
                         </div>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 font-semibold text-foreground">
+                        <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs font-semibold text-foreground sm:text-sm">
                           <span>Total: {formatMoney(order.totalPayable ?? order.total)}</span>
                           <span>Pagado: {formatMoney(order.totalPaid)}</span>
                           <span>Pendiente: {formatMoney(order.remaining)}</span>
                         </div>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" size="sm" variant={tableBillView === "all" ? "default" : "outline"} onClick={() => setTableBillView("all")}>Todos</Button>
-                      {(session?.guests ?? []).map((guest) => (
-                        <Button key={guest.id} type="button" size="sm" variant={tableBillView === `guest:${guest.id}` ? "default" : "outline"} onClick={() => setTableBillView(`guest:${guest.id}`)}>
-                          {guest.label}
-                        </Button>
-                      ))}
-                      {[
-                        ["pending", "Pendiente de enviar"],
-                        ["sent", "En cocina"],
-                        ["ready", "Terminados"],
-                        ["delivered", "Servidos"],
-                        ["paid", "Pagados"],
-                      ].map(([value, label]) => (
-                        <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value)}>
-                          {label}
-                        </Button>
-                      ))}
+                    <div className="space-y-2">
+                      <div className="flex max-h-20 flex-wrap gap-2 overflow-y-auto pr-1">
+                        <Button type="button" size="sm" variant={tableBillGuestFilter === "all" ? "default" : "outline"} onClick={() => setTableBillGuestFilter("all")}>Todos</Button>
+                        {(session?.guests ?? []).map((guest) => (
+                          <Button key={guest.id} type="button" size="sm" variant={tableBillGuestFilter === `guest:${guest.id}` ? "default" : "outline"} onClick={() => setTableBillGuestFilter(`guest:${guest.id}`)}>
+                            {guest.label}
+                          </Button>
+                        ))}
+                      </div>
+                      <div className="grid gap-2 rounded-lg border bg-card px-3 py-2 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-center">
+                        <p className="text-xs text-muted-foreground">
+                          Total filtro: <span className="font-semibold text-foreground">{formatMoney(selectedTotal)}</span>
+                        </p>
+                        <Select value={tableBillStatusFilter} onValueChange={(value) => setTableBillStatusFilter(value as TableBillStatusFilter)}>
+                          <SelectTrigger className="h-9">
+                            <span className="truncate">Estado: {statusFilterLabel}</span>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TABLE_BILL_STATUS_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                     {selectedGuest ? (
-                      <div className="rounded-lg border border-[color:var(--app-border-strong)] bg-[var(--app-surface)] p-3 text-sm">
+                      <div className="rounded-lg border border-[color:var(--app-border-strong)] bg-[var(--app-surface)] px-3 py-2 text-sm">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="font-semibold">{selectedGuest.label}</span>
-                          <span className="font-medium">Total: {formatMoney(selectedTotal)} | Pagado: {formatMoney(selectedPaidCents / 100)} | Pendiente: {formatMoney(selectedPendingCents / 100)}</span>
+                          <span className="font-medium">Total: {formatMoney(selectedGuestTotal)} · Pagado: {formatMoney(selectedPaidCents / 100)} · Pendiente: {formatMoney(selectedPendingCents / 100)}</span>
                         </div>
                       </div>
                     ) : null}
                     <div className="overflow-hidden rounded-lg border">
                       {visibleItems.length ? (
-                        tableBillView === "all" ? (() => {
+                        tableBillGuestFilter === "all" ? (() => {
                           const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number; paidCents: number }>();
                           visibleItems.forEach((item) => {
                             const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
@@ -4832,9 +4849,9 @@ type TableConfirmDialogState =
                           });
                           return Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).map((group) => (
                             <div key={group.label} className="border-b last:border-b-0">
-                              <div className="sticky top-0 z-10 flex items-center justify-between bg-muted/80 px-3 py-2 text-sm font-semibold backdrop-blur">
+                              <div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-muted/80 px-3 py-2 text-sm font-semibold backdrop-blur">
                                 <span>{group.label}</span>
-                                <span>{formatMoney(group.total)} · pagado {formatMoney(group.paidCents / 100)}</span>
+                                <span className="whitespace-nowrap">{formatMoney(group.total)} · pagado {formatMoney(group.paidCents / 100)}</span>
                               </div>
                               {group.items.map(renderItem)}
                             </div>
@@ -4865,12 +4882,12 @@ type TableConfirmDialogState =
                 );
               })() : null}
             </div>
-            <DialogFooter className="shrink-0 gap-2 border-t bg-background px-5 py-4">
+            <DialogFooter className="shrink-0 gap-2 border-t bg-background px-4 py-3">
               <Button variant="outline" onClick={() => setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] })}>Cerrar</Button>
               {tableBillDialog.order ? <Button variant="outline" onClick={() => void openTableLocalTicket()}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
-              {canCollectTablePayments && tableBillDialog.order && tableBillDialog.session && tableBillDialog.tableId && tableBillView.startsWith("guest:") ? (() => {
-                const guest = tableBillDialog.session.guests.find((row) => row.id === Number(tableBillView.replace("guest:", "")));
+              {canCollectTablePayments && tableBillDialog.order && tableBillDialog.session && tableBillDialog.tableId && tableBillGuestFilter.startsWith("guest:") ? (() => {
+                const guest = tableBillDialog.session.guests.find((row) => row.id === Number(tableBillGuestFilter.replace("guest:", "")));
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
                 return (
