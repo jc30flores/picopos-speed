@@ -608,7 +608,13 @@ class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
     def post(self, request, pk: int):
         session = TableSession.objects.select_for_update().filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES).first()
         if not session:
-            return Response({"detail": "Sesión no encontrada o ya cerrada."}, status=404)
+            closed_session = TableSession.objects.filter(id=pk, status__in=[TableSession.STATUS_CLOSED, TableSession.STATUS_CANCELLED]).first()
+            if closed_session:
+                return Response(
+                    {"detail": "La mesa ya estaba liberada.", "session": TableSessionSerializer(closed_session).data},
+                    status=status.HTTP_200_OK,
+                )
+            return Response({"detail": "Sesión no encontrada."}, status=404)
         order = session.primary_order
         if order:
             order.recalculate_financials()
