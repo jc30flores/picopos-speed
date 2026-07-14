@@ -186,6 +186,8 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
+const isPendingKitchenItem = (item: Order["items"][number]) => (item.kitchenStatus ?? "pending") === "pending";
+
 const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
   const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
   const modifiers = Array.isArray(item.modifiers)
@@ -195,7 +197,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     id: `order-item-${item.id}`,
     sourceOrderItemId: item.id,
     productId: item.productId ?? null,
-    name: item.assignedName || item.productName,
+    name: item.productName,
     basePrice,
     originalBasePrice: item.unitPriceBeforeDiscount ?? basePrice,
     price: basePrice,
@@ -209,6 +211,8 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     modifiers,
   };
 };
+
+const mapOrderPendingItemsToCart = (order: Order): CartItem[] => (order.items || []).filter(isPendingKitchenItem).map((item) => mapOrderItemToCartItem(item));
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -515,8 +519,9 @@ type TableConfirmDialogState =
   const [transferMode, setTransferMode] = useState<{ active: boolean; sessionId: number | null; sourceTableId: number | null }>({ active: false, sessionId: null, sourceTableId: null });
   const [tableConfirmDialog, setTableConfirmDialog] = useState<TableConfirmDialogState>({ open: false, type: null, sourceTableId: null, targetTableId: null, session: null });
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
-  const [tableBillView, setTableBillView] = useState<"all" | "person" | "pending" | "kitchen" | "served">("person");
+  const [tableBillView, setTableBillView] = useState<string>("all");
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
+  const [tableKitchenSendDialog, setTableKitchenSendDialog] = useState<{ open: boolean; pendingGuestCount: number }>({ open: false, pendingGuestCount: 0 });
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
   const [kitchenSummaryDialog, setKitchenSummaryDialog] = useState<{ open: boolean; loading: boolean; sessions: TableKitchenSessionSummary[] }>({ open: false, loading: false, sessions: [] });
@@ -528,6 +533,8 @@ type TableConfirmDialogState =
   const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, isSheet: false });
   const [viewportReflowTick, setViewportReflowTick] = useState(0);
   const longPressOpsRef = useRef<number | null>(null);
+  const tableAutoSaveTimeoutRef = useRef<number | null>(null);
+  const tableAutoSaveSignatureRef = useRef("");
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -607,17 +614,37 @@ type TableConfirmDialogState =
     [selectedBranchId, user?.id]
   );
 
+  const activeTableGuestNumber = tableOrderContext?.guests.find((guest) => guest.id === tableOrderContext.activeGuestId)?.seatNumber ?? null;
+  const tableGuestMatchesActive = useCallback((item: CartItem) => {
+    if (!tableOrderContext || tableOrderContext.orderMode !== "per_person") return true;
+    if (tableOrderContext.activeGuestId != null && item.tableGuestId != null) {
+      return item.tableGuestId === tableOrderContext.activeGuestId;
+    }
+    return (item.assignedName || "") === (tableOrderContext.activeGuestLabel || "");
+  }, [tableOrderContext]);
+  const visibleCart = useMemo(() => tableOrderContext ? cart.filter(tableGuestMatchesActive) : cart, [cart, tableOrderContext, tableGuestMatchesActive]);
+  const pricingCart = tableOrderContext ? visibleCart : cart;
+  const pendingGuestKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!tableOrderContext) return keys;
+    cart.forEach((item) => {
+      keys.add(item.tableGuestId != null ? `guest:${item.tableGuestId}` : `label:${item.assignedName || "Mesa completa"}`);
+    });
+    return keys;
+  }, [cart, tableOrderContext]);
+  const pendingGuestCount = pendingGuestKeys.size;
+
   const cartPricing = useMemo(
     () =>
       calculatePosPricing({
-        items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+        items: pricingCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
         products,
         serviceType,
         serviceTypes,
         selectedDiscount,
         availableDiscounts,
       }),
-    [availableDiscounts, cart, products, selectedDiscount, serviceType, serviceTypes]
+    [availableDiscounts, pricingCart, products, selectedDiscount, serviceType, serviceTypes]
   );
   const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
 
@@ -869,6 +896,7 @@ type TableConfirmDialogState =
       return;
     }
     setPosMode("tables");
+    setTableBillView("all");
     setTableBillDialog({ open: true, loading: true, tableId, session, order: null, payments: [] });
     try {
       const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
@@ -1122,7 +1150,11 @@ type TableConfirmDialogState =
     posDebug("open_order.pos_loader.source", { order_id: pendingOrderId, mode, total_db: null, items: 0 });
     getOrderById(pendingOrderId)
       .then((order) => {
-        const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
+        const navState = location.state as { tableSession?: TableSession; tableId?: number } | null;
+        const isTableEditHydration = Boolean(navState?.tableSession) && mode !== "pay";
+        const restoredCart = isTableEditHydration
+          ? mapOrderPendingItemsToCart(order)
+          : (order.items || []).map((item) => mapOrderItemToCartItem(item));
         const hydratedPricing = calculatePosPricing({
           items: restoredCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
           products,
@@ -1186,7 +1218,7 @@ type TableConfirmDialogState =
         navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
-  }, [navigate, searchParams, serviceType, taxRate, products, serviceTypes]);
+  }, [location.state, navigate, searchParams, serviceType, taxRate, products, serviceTypes]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -2567,6 +2599,33 @@ type TableConfirmDialogState =
       modifiers: item.modifiers.map((mod) => ({ id: mod.id, name: mod.name, price: mod.price })),
     }));
 
+  const getTablePersistenceCart = (pendingItems: CartItem[], order: Order) => {
+    if (!tableOrderContext) return pendingItems;
+    const pendingSourceIds = new Set(
+      pendingItems
+        .map((item) => item.sourceOrderItemId)
+        .filter((id): id is number => typeof id === "number" && Number.isFinite(id))
+    );
+    const lockedItems = (order.items || [])
+      .filter((item) => !isPendingKitchenItem(item))
+      .filter((item) => !pendingSourceIds.has(item.id))
+      .map((item) => mapOrderItemToCartItem(item));
+    return [...lockedItems, ...pendingItems];
+  };
+
+  const cartSignature = (items: CartItem[]) => JSON.stringify(
+    items.map((item) => ({
+      id: item.id,
+      sourceOrderItemId: item.sourceOrderItemId ?? null,
+      productId: item.productId,
+      quantity: item.quantity,
+      price: getItemBaseEffective(item),
+      guestId: item.tableGuestId ?? null,
+      assignedName: item.assignedName ?? "",
+      modifiers: item.modifiers.map((modifier) => `${modifier.id ?? ""}:${modifier.name}:${modifier.price}`),
+    }))
+  );
+
   const buildQuickPrintPendingReference = () => {
     const existing = pendingReferenceDraft.trim();
     if (existing) return existing;
@@ -2640,9 +2699,11 @@ type TableConfirmDialogState =
     }
   };
 
-  const syncExistingOpenOrder = async (order: Order) => {
+  const syncExistingOpenOrder = async (order: Order, itemsOverride?: CartItem[]) => {
+    const itemsToPersist = itemsOverride ?? cart;
+    const persistenceCart = getTablePersistenceCart(itemsToPersist, order);
     const pricing = calculatePosPricing({
-      items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
+      items: persistenceCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
       products,
       serviceType,
       serviceTypes,
@@ -2653,7 +2714,7 @@ type TableConfirmDialogState =
     posDebug("open_order.save.payload", {
       id: order.id,
       total_front: pricing.total,
-      items: cart.length,
+      items: persistenceCart.length,
       subtotal_front: pricing.subtotal,
       discount_front: pricing.discountTotal,
       fees_front: pricing.disposableTotal,
@@ -2663,7 +2724,7 @@ type TableConfirmDialogState =
       pendingState: order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment",
       pendingReference: pendingReferenceDraft.trim() || order.pendingReference || "",
       authorizationPin: pendingEditAuthorizationPin,
-      items: buildPendingPayloadItems(cart),
+      items: buildPendingPayloadItems(persistenceCart),
     });
     posDebug("open_order.save.done", {
       id: saved.id,
@@ -2674,6 +2735,29 @@ type TableConfirmDialogState =
     });
     return saved;
   };
+
+  useEffect(() => {
+    if (!tableOrderContext || !activeOrder || isSendingToPending) return;
+    const signature = cartSignature(cart);
+    if (signature === tableAutoSaveSignatureRef.current) return;
+    if (tableAutoSaveTimeoutRef.current) window.clearTimeout(tableAutoSaveTimeoutRef.current);
+    tableAutoSaveTimeoutRef.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const saved = await syncExistingOpenOrder(activeOrder, cart);
+          const nextCart = mapOrderPendingItemsToCart(saved);
+          tableAutoSaveSignatureRef.current = cartSignature(nextCart);
+          setActiveOrder(saved);
+          setCart(nextCart);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "No se pudo guardar el pedido de mesa.");
+        }
+      })();
+    }, 650);
+    return () => {
+      if (tableAutoSaveTimeoutRef.current) window.clearTimeout(tableAutoSaveTimeoutRef.current);
+    };
+  }, [activeOrder, cart, isSendingToPending, tableOrderContext]);
 
   const handleSendOrderToPending = async () => {
     if (isSendingToPending) return;
@@ -2753,41 +2837,74 @@ type TableConfirmDialogState =
     clearPersistedDraft();
   };
 
-  const saveTableOrder = async ({ sendKitchen, returnToMap }: { sendKitchen: boolean; returnToMap: boolean }) => {
+  const saveTableOrder = async ({ returnToMap }: { returnToMap: boolean }) => {
     if (!tableOrderContext || isSendingToPending) return;
     if (!activeOrder) {
       toast.error("No hay una orden de mesa activa.");
-      return;
-    }
-    if (cart.length === 0 && !activeOrder.items?.length) {
-      toast.error("Agrega productos antes de guardar.");
       return;
     }
     setIsSendingToPending(true);
     try {
       const saved = await syncExistingOpenOrder(activeOrder);
       setActiveOrder(saved);
-      let session: TableSession | null = null;
-      if (sendKitchen) {
-        session = await sendTableSessionToKitchen(tableOrderContext.sessionId);
-        upsertTableSession(session);
-        toast.success(session.detail || (session.sentCount === 0 ? "No hay productos nuevos para enviar." : `${session.sentCount ?? 0} productos enviados a cocina.`));
-      } else {
-        toast.success("Orden guardada en mesa.");
-      }
+      tableAutoSaveSignatureRef.current = cartSignature(mapOrderPendingItemsToCart(saved));
+      toast.success("Pendientes guardados en mesa.");
       await refreshTableSessions();
       if (returnToMap) {
         resetTableOrderDraft();
         setTableOrderContext(null);
         setPosMode("tables");
-      } else if (session) {
-        setContextFromTableSession(session.tableIds[0] ?? selectedOpsTableId ?? 0, session);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden de mesa.");
     } finally {
       setIsSendingToPending(false);
     }
+  };
+
+  const sendCurrentTableOrderToKitchen = async (scope: "guest" | "table") => {
+    if (!tableOrderContext || !activeOrder || isSendingToPending) return;
+    const guestId = tableOrderContext.orderMode === "per_person" ? tableOrderContext.activeGuestId : null;
+    if (scope === "guest" && visibleCart.length === 0) {
+      toast.info("No hay productos pendientes para enviar.");
+      return;
+    }
+    setTableKitchenSendDialog({ open: false, pendingGuestCount: 0 });
+    setIsSendingToPending(true);
+    try {
+      const savedBeforeSend = await syncExistingOpenOrder(activeOrder, cart);
+      setActiveOrder(savedBeforeSend);
+      const session = await sendTableSessionToKitchen(tableOrderContext.sessionId, {
+        scope,
+        guestId: scope === "guest" ? guestId : null,
+        guestNumber: scope === "guest" ? activeTableGuestNumber : null,
+      });
+      upsertTableSession(session);
+      const refreshed = await getOrderById(savedBeforeSend.id);
+      const nextCart = mapOrderPendingItemsToCart(refreshed);
+      tableAutoSaveSignatureRef.current = cartSignature(nextCart);
+      setActiveOrder(refreshed);
+      setCart(nextCart);
+      await refreshTableSessions();
+      toast.success(session.detail || (session.sentCount === 0 ? "No hay productos pendientes para enviar." : `${session.sentCount ?? 0} productos enviados a cocina.`));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo enviar a cocina.");
+    } finally {
+      setIsSendingToPending(false);
+    }
+  };
+
+  const requestSendCurrentTableOrderToKitchen = () => {
+    if (!tableOrderContext) return;
+    if (visibleCart.length === 0) {
+      toast.info("No hay productos pendientes para enviar.");
+      return;
+    }
+    if (tableOrderContext.orderMode === "per_person" && pendingGuestCount > 1) {
+      setTableKitchenSendDialog({ open: true, pendingGuestCount });
+      return;
+    }
+    void sendCurrentTableOrderToKitchen(tableOrderContext.orderMode === "per_person" ? "guest" : "table");
   };
 
   const returnToTables = (force = false) => {
@@ -2822,7 +2939,7 @@ type TableConfirmDialogState =
       if (target === "ready") await markTableKitchenItemReady(itemId);
       else await markTableKitchenItemDelivered(itemId);
       await refreshKitchenSummary();
-      toast.success(target === "ready" ? "Producto marcado listo." : "Producto marcado entregado.");
+      toast.success(target === "ready" ? "Producto marcado terminado." : "Producto marcado servido.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo actualizar cocina.");
     }
@@ -3598,14 +3715,10 @@ type TableConfirmDialogState =
     }
   };
 
-  const tableOrderHasKitchenItems = Boolean(tableOrderContext) && (
-    Boolean(activeOrder?.requiresKitchen) ||
-    cart.some((item) => item.requiresKitchen || products.find((product) => product.id === item.productId)?.requiresKitchen)
-  );
-  const tableOrderPrimaryLabel = tableOrderHasKitchenItems ? "Enviar a cocina" : "Guardar orden";
+  const tableOrderPrimaryLabel = "Enviar a cocina";
   const getKitchenStatusLabel = (status?: Order["items"][number]["kitchenStatus"]) => {
     if (status === "sent") return "En cocina";
-    if (status === "ready") return "Listo";
+    if (status === "ready") return "Terminado";
     if (status === "delivered") return "Servido";
     return "Pendiente de enviar";
   };
@@ -3772,7 +3885,7 @@ type TableConfirmDialogState =
                         {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
                         <span className="mt-1 rounded bg-background/70 px-1 text-[10px] shadow-sm">{stateLabel}</span>
                         {session ? <span className="mt-1 rounded bg-background/60 px-1 text-[10px] shadow-sm">{session.guestsCount} pers.</span> : null}
-                        {isJoined ? <span className="mt-1 rounded px-1 text-[10px] text-white" style={{ backgroundColor: groupColor ?? "var(--color-primary)" }}>Grupo {groupNumber}</span> : null}
+                        {isJoined ? <span className="mt-1 rounded px-1 text-[10px]" style={{ backgroundColor: groupColor ?? "var(--color-primary)", color: getReadableTextColor(groupColor ?? undefined) ?? "var(--color-primary-contrast)" }}>Grupo {groupNumber}</span> : null}
                       </div>
                     </button>
                   );
@@ -3954,7 +4067,7 @@ type TableConfirmDialogState =
           </DialogContent>
         </Dialog>
         <Dialog open={tableBillDialog.open} onOpenChange={(open) => setTableBillDialog((prev) => ({ ...prev, open }))}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-h-[92dvh] max-w-3xl overflow-hidden">
             <DialogHeader>
               <DialogTitle>Cuenta de mesa</DialogTitle>
               <DialogDescription>Resumen local de productos, pagos y saldo pendiente.</DialogDescription>
@@ -3963,46 +4076,65 @@ type TableConfirmDialogState =
               <div className="py-8 text-sm text-muted-foreground">Cargando cuenta...</div>
             ) : tableBillDialog.order ? (
               <div className="space-y-4">
-                <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-3">
-                  <div><p className="text-muted-foreground">Mesa</p><p className="font-semibold">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p></div>
-                  <div><p className="text-muted-foreground">Personas</p><p className="font-semibold">{tableBillDialog.session?.guestsCount ?? 1}</p></div>
-                  <div><p className="text-muted-foreground">Saldo</p><p className="font-semibold">{formatMoney(tableBillDialog.order.remaining)}</p></div>
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p>
+                      <p className="text-xs text-muted-foreground">{tableBillDialog.session?.guestsCount ?? 1} personas · {getSessionStateLabel(tableBillDialog.session ?? undefined)}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3 font-semibold">
+                      <span>Total: {formatMoney(tableBillDialog.order.totalPayable ?? tableBillDialog.order.total)}</span>
+                      <span>Pagado: {formatMoney(tableBillDialog.order.totalPaid)}</span>
+                      <span>Pendiente: {formatMoney(tableBillDialog.order.remaining)}</span>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant={tableBillView === "all" ? "default" : "outline"} onClick={() => setTableBillView("all")}>Todos</Button>
+                  {(tableBillDialog.session?.guests ?? []).map((guest) => (
+                    <Button key={guest.id} type="button" size="sm" variant={tableBillView === `guest:${guest.id}` ? "default" : "outline"} onClick={() => setTableBillView(`guest:${guest.id}`)}>
+                      {guest.label}
+                    </Button>
+                  ))}
                   {[
-                    ["person", "Por persona"],
-                    ["all", "Todos"],
                     ["pending", "Pendiente de enviar"],
-                    ["kitchen", "En cocina"],
-                    ["served", "Servido"],
+                    ["sent", "En cocina"],
+                    ["ready", "Terminados"],
+                    ["delivered", "Servidos"],
                   ].map(([value, label]) => (
-                    <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value as typeof tableBillView)}>
+                    <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value)}>
                       {label}
                     </Button>
                   ))}
                 </div>
-                <div className="max-h-[46vh] overflow-auto rounded-lg border">
+                <div className="max-h-[48vh] overflow-auto rounded-lg border">
                   {tableBillDialog.order.items.length ? (() => {
                     const filterItem = (item: Order["items"][number]) => {
                       if (tableBillView === "pending") return (item.kitchenStatus ?? "pending") === "pending";
-                      if (tableBillView === "kitchen") return item.kitchenStatus === "sent" || item.kitchenStatus === "ready";
-                      if (tableBillView === "served") return item.kitchenStatus === "delivered";
+                      if (tableBillView === "sent") return item.kitchenStatus === "sent";
+                      if (tableBillView === "ready") return item.kitchenStatus === "ready";
+                      if (tableBillView === "delivered") return item.kitchenStatus === "delivered";
+                      if (tableBillView.startsWith("guest:")) return item.tableGuestId === Number(tableBillView.replace("guest:", ""));
                       return true;
                     };
                     const visibleItems = tableBillDialog.order!.items.filter(filterItem);
                     if (!visibleItems.length) return <div className="p-4 text-sm text-muted-foreground">No hay productos para este filtro.</div>;
-                    if (tableBillView === "all" || tableBillView === "pending" || tableBillView === "kitchen" || tableBillView === "served") {
+                    if (tableBillView !== "all") {
+                      const selectedTotal = visibleItems.reduce((sum, item) => sum + Number(item.lineTotalFinal ?? item.price * item.quantity), 0);
                       return visibleItems.map((item) => (
-                        <div key={item.id} className="flex items-start justify-between gap-3 border-b p-3 last:border-b-0">
-                          <div className="min-w-0">
-                            <p className="font-medium">{item.productName}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
-                            </p>
-                            {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
-                            <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
+                        <div key={item.id} className="border-b p-3 last:border-b-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium">{item.productName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
+                              </p>
+                              {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
+                              <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
+                            </div>
+                            <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
                           </div>
-                          <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
+                          {item.id === visibleItems[visibleItems.length - 1].id ? <div className="mt-3 border-t pt-2 text-right text-sm font-semibold">Total filtro: {formatMoney(selectedTotal)}</div> : null}
                         </div>
                       ));
                     }
@@ -4037,29 +4169,22 @@ type TableConfirmDialogState =
                     ));
                   })() : <div className="p-4 text-sm text-muted-foreground">Esta mesa todavía no tiene productos.</div>}
                 </div>
-                <div className="grid gap-2 text-sm sm:grid-cols-3">
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Subtotal</p><p className="font-semibold">{formatMoney(tableBillDialog.order.subtotalBeforeDiscounts ?? tableBillDialog.order.subtotalAfterDiscounts ?? tableBillDialog.order.total)}</p></div>
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Descuentos</p><p className="font-semibold">{formatMoney(Math.max((tableBillDialog.order.subtotalBeforeDiscounts ?? tableBillDialog.order.total) - (tableBillDialog.order.subtotalAfterDiscounts ?? tableBillDialog.order.total), 0))}</p></div>
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Impuestos</p><p className="font-semibold">{formatMoney(tableBillDialog.order.taxTotal ?? 0)}</p></div>
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Total</p><p className="font-semibold">{formatMoney(tableBillDialog.order.totalPayable ?? tableBillDialog.order.total)}</p></div>
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Pagado</p><p className="font-semibold">{formatMoney(tableBillDialog.order.totalPaid)}</p></div>
-                  <div className="rounded-lg border p-3"><p className="text-muted-foreground">Pendiente</p><p className="font-semibold">{formatMoney(tableBillDialog.order.remaining)}</p></div>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
+                {tableBillDialog.payments.length ? <div className="rounded-lg border p-3 text-sm">
                   <p className="mb-2 font-medium">Pagos realizados</p>
-                  {tableBillDialog.payments.length ? tableBillDialog.payments.map((payment) => (
+                  {tableBillDialog.payments.map((payment) => (
                     <div key={payment.id} className="flex justify-between border-b py-2 last:border-b-0">
                       <span className="capitalize text-muted-foreground">{payment.method}</span>
                       <span className="font-semibold">{formatMoney(payment.amount)}</span>
                     </div>
-                  )) : <p className="text-muted-foreground">Sin pagos registrados.</p>}
-                </div>
+                  ))}
+                </div> : null}
               </div>
             ) : null}
             <DialogFooter>
               <Button variant="outline" onClick={() => setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] })}>Cerrar</Button>
               {tableBillDialog.order ? <Button variant="outline" onClick={() => void smartPrintTicket({ orderId: tableBillDialog.order!.id, preferDirect: false })}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
+              {tableBillDialog.order && tableBillView.startsWith("guest:") ? <Button variant="outline" disabled>Cobro por persona próximamente</Button> : null}
               {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
@@ -4124,11 +4249,11 @@ type TableConfirmDialogState =
                                 <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background p-2 text-sm">
                                   <div>
                                     <p className="font-medium">{item.productName}</p>
-                                    <p className="text-xs text-muted-foreground">x{item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Listo" : "Entregado"}</p>
+                                    <p className="text-xs text-muted-foreground">x{item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Terminado" : "Servido"}</p>
                                   </div>
                                   <div className="flex gap-2">
-                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Listo</Button>
-                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Entregado</Button>
+                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Terminado</Button>
+                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Servido</Button>
                                   </div>
                                 </div>
                               ))}
@@ -4438,15 +4563,15 @@ type TableConfirmDialogState =
             </div> : null}
 
             <div ref={cartItemsScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
-              {cart.length === 0 ? (
+              {visibleCart.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                   <ShoppingCart className="h-16 w-16 mb-3 opacity-50" />
-                  <p>Carrito vacío</p>
-                  <p className="text-sm">Agrega productos para empezar</p>
+                  <p>{tableOrderContext ? "Sin productos pendientes" : "Carrito vacío"}</p>
+                  <p className="text-sm">{tableOrderContext ? "Agrega productos para esta persona" : "Agrega productos para empezar"}</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {cart.map((item) => (
+                  {visibleCart.map((item) => (
                     <Card key={item.id} className="p-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -4590,8 +4715,8 @@ type TableConfirmDialogState =
                   variant="default"
                   className="h-14 flex-1 text-base font-bold"
                   size="lg"
-                  disabled={cart.length === 0 || isProcessingPayment || requiresCashOpen}
-                  onClick={() => tableOrderContext ? void saveTableOrder({ sendKitchen: tableOrderHasKitchenItems, returnToMap: true }) : handleCheckout()}
+                  disabled={(tableOrderContext ? visibleCart.length === 0 : cart.length === 0) || isProcessingPayment || requiresCashOpen}
+                  onClick={() => tableOrderContext ? requestSendCurrentTableOrderToKitchen() : handleCheckout()}
                 >
                   <span className="flex flex-col leading-tight">
                     <span className="text-base font-semibold">{tableOrderContext ? tableOrderPrimaryLabel : "Cobrar"}</span>
@@ -4602,7 +4727,8 @@ type TableConfirmDialogState =
                   variant="outline"
                   className="h-14 w-14 p-0"
                   onClick={() => {
-                    setCart([]);
+                    if (tableOrderContext) setCart((previous) => previous.filter((item) => !tableGuestMatchesActive(item)));
+                    else setCart([]);
                     setSelectedDiscount(null);
                     clearPersistedDraft();
                   }}
@@ -4647,9 +4773,29 @@ type TableConfirmDialogState =
           <DialogFooter className="gap-2 sm:justify-end">
             <Button variant="outline" onClick={() => setTableBackDialogOpen(false)}>Cancelar</Button>
             <Button variant="outline" onClick={() => { setTableBackDialogOpen(false); returnToTables(true); }}>Volver sin guardar</Button>
-            <Button onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ sendKitchen: tableOrderHasKitchenItems, returnToMap: true }); }}>
-              Guardar y volver
+            <Button onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ returnToMap: true }); }}>
+              Guardar pendientes y volver
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={tableKitchenSendDialog.open} onOpenChange={(open) => setTableKitchenSendDialog((prev) => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enviar a cocina</DialogTitle>
+            <DialogDescription>Hay productos pendientes en varias personas.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button className="h-14 text-base font-semibold" onClick={() => void sendCurrentTableOrderToKitchen("guest")}>
+              Solo {tableOrderContext?.activeGuestLabel || "persona actual"}
+            </Button>
+            <Button className="h-14 text-base font-semibold" variant="secondary" onClick={() => void sendCurrentTableOrderToKitchen("table")}>
+              Toda la mesa
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTableKitchenSendDialog({ open: false, pendingGuestCount: 0 })}>Cancelar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
