@@ -978,6 +978,19 @@ export type Payment = {
   printError?: string | null;
   drawerOpened?: boolean;
   drawerError?: string | null;
+  allocations?: PaymentAllocation[];
+};
+
+export type PaymentAllocation = {
+  id: number;
+  tableSessionId?: number | null;
+  tableGuestId?: number | null;
+  orderItemId?: number | null;
+  guestNumber?: number | null;
+  guestLabel?: string;
+  amount: number;
+  amountCents: number;
+  createdAt?: Date | null;
 };
 
 export type PrintJob = {
@@ -5211,6 +5224,12 @@ export const createPayment = async (payload: {
   tipAmount?: number;
   reference?: string;
   splitPart?: number;
+  paymentScope?: "order" | "guest" | "custom" | "items";
+  tableSessionId?: number | null;
+  tableGuestId?: number | null;
+  guestNumber?: number | null;
+  guestLabel?: string;
+  orderItemIds?: number[];
   inventoryWarningConfirmed?: boolean;
 }): Promise<Payment> => {
   if (!payload.orderId) {
@@ -5233,6 +5252,12 @@ export const createPayment = async (payload: {
       card_type: payload.cardType ?? "",
       reference: payload.reference ?? "",
       split_part: payload.splitPart ?? null,
+      payment_scope: payload.paymentScope ?? "order",
+      table_session: payload.tableSessionId ?? null,
+      table_guest: payload.tableGuestId ?? null,
+      guest_number: payload.guestNumber ?? null,
+      guest_label: payload.guestLabel ?? "",
+      order_item_ids: payload.orderItemIds ?? [],
       inventory_warning_confirmed: Boolean(payload.inventoryWarningConfirmed),
     }),
   });
@@ -5250,6 +5275,17 @@ export const createPayment = async (payload: {
     print_error?: string | null;
     drawer_opened?: boolean;
     drawer_error?: string | null;
+    allocations?: Array<{
+      id: number;
+      table_session?: number | null;
+      table_guest?: number | null;
+      order_item?: number | null;
+      guest_number?: number | null;
+      guest_label?: string;
+      amount: string;
+      amount_cents: number;
+      created_at?: string | null;
+    }>;
   }>(response);
   return {
     id: data.id,
@@ -5266,6 +5302,17 @@ export const createPayment = async (payload: {
     printError: data.print_error ?? null,
     drawerOpened: Boolean(data.drawer_opened),
     drawerError: data.drawer_error ?? null,
+    allocations: (data.allocations ?? []).map((allocation) => ({
+      id: allocation.id,
+      tableSessionId: allocation.table_session ?? null,
+      tableGuestId: allocation.table_guest ?? null,
+      orderItemId: allocation.order_item ?? null,
+      guestNumber: allocation.guest_number ?? null,
+      guestLabel: allocation.guest_label ?? "",
+      amount: Number(allocation.amount),
+      amountCents: Number(allocation.amount_cents ?? Math.round(Number(allocation.amount || 0) * 100)),
+      createdAt: allocation.created_at ? new Date(allocation.created_at) : null,
+    })),
   };
 };
 
@@ -5399,6 +5446,17 @@ export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> =>
       reference: string;
       received_by: string | null;
       created_at: string;
+      allocations?: Array<{
+        id: number;
+        table_session?: number | null;
+        table_guest?: number | null;
+        order_item?: number | null;
+        guest_number?: number | null;
+        guest_label?: string;
+        amount: string;
+        amount_cents: number;
+        created_at?: string | null;
+      }>;
     }>
   >(response);
   return data.map((payment) => ({
@@ -5410,6 +5468,17 @@ export const getPaymentsByOrder = async (orderId: number): Promise<Payment[]> =>
     reference: payment.reference ?? undefined,
     receivedBy: payment.received_by,
     createdAt: new Date(payment.created_at),
+    allocations: (payment.allocations ?? []).map((allocation) => ({
+      id: allocation.id,
+      tableSessionId: allocation.table_session ?? null,
+      tableGuestId: allocation.table_guest ?? null,
+      orderItemId: allocation.order_item ?? null,
+      guestNumber: allocation.guest_number ?? null,
+      guestLabel: allocation.guest_label ?? "",
+      amount: Number(allocation.amount),
+      amountCents: Number(allocation.amount_cents ?? Math.round(Number(allocation.amount || 0) * 100)),
+      createdAt: allocation.created_at ? new Date(allocation.created_at) : null,
+    })),
   }));
 };
 

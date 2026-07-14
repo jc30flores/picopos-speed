@@ -2,6 +2,7 @@ from decimal import Decimal
 import logging
 import threading
 from django.db import transaction
+from django.db.models import Sum
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -11,7 +12,7 @@ from rest_framework.response import Response
 from apps.core.audit import log_audit
 from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager, IsAdmin
 from apps.cashier.models import Register, CashSession, CashTransaction
-from apps.payments.models import Payment, Refund, PaymentMethod, PaymentMethodChangeLog
+from apps.payments.models import Payment, PaymentAllocation, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
 from apps.printing.serializers import PrintJobSerializer
 from apps.printing.services.jobs import create_print_job, create_refund_print_job
@@ -24,7 +25,7 @@ from apps.payments.serializers import (
     PaymentMethodSerializer,
     InternalPaymentMethodChangeSerializer,
 )
-from apps.orders.models import TableSession
+from apps.orders.models import OrderItem, TableGuest, TableSession
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
 from apps.dte.services.dte_service import (
@@ -133,6 +134,98 @@ def _create_transaction_for_payment(payment: Payment, user) -> tuple[CashTransac
     return None, False
 
 
+def _extract_payment_allocation_payload(validated_data: dict) -> dict:
+    return {
+        "scope": str(validated_data.pop("payment_scope", "") or "order").strip().lower(),
+        "table_session_id": validated_data.pop("table_session", None),
+        "table_guest_id": validated_data.pop("table_guest", None),
+        "guest_number": validated_data.pop("guest_number", None),
+        "guest_label": str(validated_data.pop("guest_label", "") or "").strip(),
+        "order_item_ids": list(validated_data.pop("order_item_ids", []) or []),
+    }
+
+
+def _order_item_total_cents(item: OrderItem) -> int:
+    unit = item.unit_price_override if item.unit_price_override is not None else item.price_snapshot
+    total = (unit * item.quantity) - (item.discount_amount or Decimal("0"))
+    return max(to_cents(total), 0)
+
+
+def _refresh_guest_paid_state(table_guest: TableGuest, order_id: int) -> None:
+    guest_total_cents = sum(_order_item_total_cents(item) for item in table_guest.order_items.filter(order_id=order_id))
+    paid_cents = (
+        PaymentAllocation.objects.filter(payment__order_id=order_id, table_guest=table_guest).aggregate(total=Sum("amount_cents"))["total"]
+        or 0
+    )
+    next_paid = guest_total_cents > 0 and paid_cents >= max(guest_total_cents - 1, 0)
+    if table_guest.is_paid != next_paid:
+        table_guest.is_paid = next_paid
+        table_guest.save(update_fields=["is_paid", "updated_at"])
+
+
+def _create_payment_allocations(payment: Payment, payload: dict, applied_cents: int) -> None:
+    scope = str(payload.get("scope") or "order").lower()
+    if scope not in {"guest", "items", "custom"} or applied_cents <= 0:
+        return
+
+    table_session = None
+    if payload.get("table_session_id"):
+        table_session = TableSession.objects.filter(id=payload["table_session_id"], primary_order=payment.order).first()
+    if table_session is None:
+        table_session = TableSession.objects.filter(primary_order=payment.order).order_by("-id").first()
+
+    table_guest = None
+    if payload.get("table_guest_id"):
+        table_guest_qs = TableGuest.objects.filter(id=payload["table_guest_id"])
+        if table_session:
+            table_guest_qs = table_guest_qs.filter(session=table_session)
+        table_guest = table_guest_qs.first()
+    if table_guest is None and table_session and payload.get("guest_number"):
+        table_guest = TableGuest.objects.filter(session=table_session, seat_number=payload["guest_number"]).first()
+
+    guest_number = payload.get("guest_number") or getattr(table_guest, "seat_number", None)
+    guest_label = payload.get("guest_label") or getattr(table_guest, "label", "") or (f"Persona {guest_number}" if guest_number else "")
+    item_ids = [int(item_id) for item_id in payload.get("order_item_ids") or [] if str(item_id).isdigit()]
+    items = list(OrderItem.objects.filter(order=payment.order, id__in=item_ids).order_by("id")) if item_ids else []
+
+    if not items:
+        PaymentAllocation.objects.create(
+            payment=payment,
+            table_session=table_session,
+            table_guest=table_guest,
+            guest_number=guest_number,
+            guest_label=guest_label,
+            amount=from_cents(applied_cents),
+            amount_cents=applied_cents,
+        )
+        if table_guest:
+            _refresh_guest_paid_state(table_guest, payment.order_id)
+        return
+
+    item_totals = [(item, _order_item_total_cents(item)) for item in items]
+    total_item_cents = sum(cents for _, cents in item_totals) or applied_cents
+    remaining = applied_cents
+    for index, (item, item_cents) in enumerate(item_totals):
+        if remaining <= 0:
+            break
+        amount_cents = remaining if index == len(item_totals) - 1 else min(remaining, round(applied_cents * (item_cents / total_item_cents)))
+        if amount_cents <= 0:
+            continue
+        remaining -= amount_cents
+        PaymentAllocation.objects.create(
+            payment=payment,
+            table_session=table_session,
+            table_guest=table_guest or item.table_guest,
+            order_item=item,
+            guest_number=guest_number or getattr(item.table_guest, "seat_number", None),
+            guest_label=guest_label or getattr(item.table_guest, "label", ""),
+            amount=from_cents(amount_cents),
+            amount_cents=amount_cents,
+        )
+    if table_guest:
+        _refresh_guest_paid_state(table_guest, payment.order_id)
+
+
 
 
 class PaymentMethodListView(generics.ListCreateAPIView):
@@ -213,6 +306,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = serializer.validated_data["order"]
+        allocation_payload = _extract_payment_allocation_payload(serializer.validated_data)
         branch_has_register = Register.objects.filter(branch_id=order.branch_id, is_active=True).exists()
         if branch_has_register and not _get_open_session_for_branch(order.branch_id):
             return Response(
@@ -268,6 +362,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             tip_cents=tip_cents,
             cash_received=from_cents(received_cents) if is_cash_payment else None,
         )
+        _create_payment_allocations(payment, allocation_payload, applied_cents)
         _create_transaction_for_payment(payment, request.user)
         logger.info(
             "payment.created order_id=%s payment_id=%s amount=%s method=%s",

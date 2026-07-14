@@ -177,7 +177,19 @@ class PaymentSerializer(serializers.ModelSerializer):
     payment_method_name = serializers.CharField(source="payment_method.name", read_only=True)
     card_type = serializers.CharField(required=False, allow_blank=True)
     split_part = serializers.IntegerField(required=False, allow_null=True)
+    payment_scope = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    table_session = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    table_guest = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    guest_number = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    guest_label = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    order_item_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
     inventory_warning_confirmed = serializers.BooleanField(required=False, default=False, write_only=True)
+    allocations = serializers.SerializerMethodField()
 
     class Meta:
         model = Payment
@@ -201,6 +213,13 @@ class PaymentSerializer(serializers.ModelSerializer):
             "split_part",
             "inventory_warning_confirmed",
             "card_type",
+            "payment_scope",
+            "table_session",
+            "table_guest",
+            "guest_number",
+            "guest_label",
+            "order_item_ids",
+            "allocations",
             "reference",
             "received_by",
             "created_at",
@@ -264,7 +283,32 @@ class PaymentSerializer(serializers.ModelSerializer):
         if order.financial_status == "voided":
             raise serializers.ValidationError("Voided orders cannot accept payments")
 
+        payment_scope = str(attrs.get("payment_scope") or "").strip().lower()
+        if payment_scope and payment_scope not in {"order", "guest", "custom", "items"}:
+            raise serializers.ValidationError({"payment_scope": "Alcance de pago inválido."})
+        if payment_scope == "guest" and not (attrs.get("table_guest") or attrs.get("guest_number")):
+            raise serializers.ValidationError({"guest_number": "Selecciona una persona para este pago."})
+
         return attrs
+
+    def get_allocations(self, obj: Payment) -> list[dict]:
+        rows = getattr(obj, "allocations", None)
+        if rows is None:
+            return []
+        return [
+            {
+                "id": allocation.id,
+                "table_session": allocation.table_session_id,
+                "table_guest": allocation.table_guest_id,
+                "order_item": allocation.order_item_id,
+                "guest_number": allocation.guest_number,
+                "guest_label": allocation.guest_label,
+                "amount": str(allocation.amount),
+                "amount_cents": allocation.amount_cents,
+                "created_at": allocation.created_at,
+            }
+            for allocation in rows.all()
+        ]
 
     def _normalize_money(self, value: Decimal | str | float | None, *, field: str) -> Decimal:
         try:

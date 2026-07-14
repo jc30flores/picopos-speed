@@ -123,6 +123,49 @@ class Payment(models.Model):
         return f"{self.order_id} {self.method} {self.amount}"
 
 
+class PaymentAllocation(models.Model):
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="allocations")
+    table_session = models.ForeignKey(
+        "orders.TableSession",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_allocations",
+    )
+    table_guest = models.ForeignKey(
+        "orders.TableGuest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_allocations",
+    )
+    order_item = models.ForeignKey(
+        "orders.OrderItem",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payment_allocations",
+    )
+    guest_number = models.PositiveIntegerField(null=True, blank=True)
+    guest_label = models.CharField(max_length=64, blank=True, default="")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount_cents = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [
+            models.Index(fields=["payment", "created_at"], name="payments_pa_payment_a3c90e_idx"),
+            models.Index(fields=["table_session", "guest_number"], name="payments_pa_table_s_f0c5f2_idx"),
+            models.Index(fields=["table_guest"], name="payments_pa_table_g_2fb5a8_idx"),
+            models.Index(fields=["order_item"], name="payments_pa_order_i_c9b65a_idx"),
+        ]
+
+    def __str__(self) -> str:
+        label = self.guest_label or (f"Persona {self.guest_number}" if self.guest_number else "Cuenta")
+        return f"Payment#{self.payment_id} {label} {self.amount}"
+
+
 class Refund(models.Model):
     METHOD_CHOICES = Payment.METHOD_CHOICES
 
