@@ -15,6 +15,7 @@ PROJECT_APP_NAME = "La Rosee POS"
 PROJECT_SHORT_NAME = "La Rosee"
 PWA_DESCRIPTION = "Sistema POS para restaurante"
 SITE_NAME = "GastroPOSV"
+ICON_ALGO_VERSION = "transparent-customer-logo-v2"
 
 
 def safe_hex(value: str | None, fallback: str = "#1F7A4D") -> str:
@@ -86,6 +87,7 @@ def branding_version(name: str, short: str, appearance: SystemAppearanceSettings
             appearance.primary_color,
             appearance.updated_at.isoformat() if appearance.updated_at else "",
             _logo_signature(ticket_settings, logo_path),
+            ICON_ALGO_VERSION,
         ]
     )
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
@@ -112,6 +114,7 @@ def get_public_pwa_metadata() -> dict[str, str | bool | None]:
         "scope": "/",
         "version": version,
         "branding_version": version,
+        "icon_algo_version": ICON_ALGO_VERSION,
         "logo_version": version if logo_path else "",
         "has_customer_logo": bool(logo_path),
         "customer_logo_url": customer_logo_url,
