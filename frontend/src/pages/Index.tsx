@@ -182,6 +182,12 @@ type TablePaymentScope = {
   orderItemIds: number[];
 };
 
+type TablePaymentReturnTarget = {
+  tableId: number;
+  session: TableSession;
+  reopenBill: boolean;
+} | null;
+
 type ThermalTicketState = {
   open: boolean;
   title: string;
@@ -548,6 +554,7 @@ type TableConfirmDialogState =
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
   const [tableBillView, setTableBillView] = useState<string>("all");
   const [tablePaymentScope, setTablePaymentScope] = useState<TablePaymentScope | null>(null);
+  const [tablePaymentReturn, setTablePaymentReturn] = useState<TablePaymentReturnTarget>(null);
   const [thermalTicketWidth, setThermalTicketWidth] = useState<"58mm" | "80mm">("58mm");
   const [thermalTicket, setThermalTicket] = useState<ThermalTicketState>({ open: false, title: "", subtitle: "", text: "", logoUrl: null });
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
@@ -814,6 +821,26 @@ type TableConfirmDialogState =
     };
   }, [getGuestItems, getGuestPaidCents]);
 
+  const buildTablePaymentScope = useCallback((
+    tableId: number,
+    session: TableSession,
+    order: Order,
+  ): TablePaymentScope => {
+    const remainingCents = typeof order.remainingCents === "number" ? Math.max(order.remainingCents, 0) : toCents(order.remaining);
+    return {
+      kind: "table",
+      tableId,
+      tableSessionId: session.id,
+      tableGuestId: null,
+      guestNumber: null,
+      guestLabel: "Cuenta completa",
+      totalCents: toCents(order.totalPayable ?? order.total),
+      paidCents: toCents(order.totalPaid),
+      remainingCents,
+      orderItemIds: (order.items || []).map((item) => item.id),
+    };
+  }, []);
+
   const openTableOrderContext = useCallback((tableId: number, session: TableSession, mode: "edit" | "pay" = "edit") => {
     upsertTableSession(session);
     setContextFromTableSession(tableId, session);
@@ -823,21 +850,21 @@ type TableConfirmDialogState =
     }
   }, [navigate, setContextFromTableSession, upsertTableSession]);
 
-  const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: { guest?: TableSession["guests"][number] }) => {
+  const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: { guest?: TableSession["guests"][number]; returnToBill?: boolean }) => {
     if (!session.primaryOrder) {
       toast.error("La mesa no tiene orden activa.");
       return;
     }
     try {
       upsertTableSession(session);
-      setContextFromTableSession(tableId, session);
+      setTableOrderContext(null);
       const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
-      const scope = options?.guest ? buildGuestPaymentScope(tableId, session, order, payments, options.guest) : null;
-      if (scope && scope.remainingCents <= 0) {
+      const scope = options?.guest ? buildGuestPaymentScope(tableId, session, order, payments, options.guest) : buildTablePaymentScope(tableId, session, order);
+      if (scope.remainingCents <= 0) {
         toast.info(`${scope.guestLabel || "La persona"} ya no tiene saldo pendiente.`);
         return;
       }
-      const sourceItems = scope ? (order.items || []).filter((item) => scope.orderItemIds.includes(item.id)) : (order.items || []);
+      const sourceItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
       const restoredCart = sourceItems.map((item) => mapOrderItemToCartItem(item));
       const serviceKey = order.serviceType || serviceType;
       setActiveOrder(order);
@@ -850,12 +877,12 @@ type TableConfirmDialogState =
         items: restoredCart,
         subtotal: order.subtotalBeforeDiscounts ?? order.total,
         tax: order.taxTotal ?? 0,
-        total: scope ? scope.remainingCents / 100 : order.totalPayable ?? order.total,
+        total: scope.remainingCents / 100,
         taxRate,
         serviceType: serviceKey,
         createdAt: Date.now(),
       });
-      const dueCents = scope ? scope.remainingCents : typeof order.remainingCents === "number" ? order.remainingCents : toCents(order.remaining);
+      const dueCents = scope.remainingCents;
       setPaymentAmount(centsToInput(dueCents));
       setTipAmount("0");
       setPaymentReference("");
@@ -866,18 +893,19 @@ type TableConfirmDialogState =
       setShowCashPanel(false);
       setActiveTenderField(null);
       setSplitEnabled(false);
-      const initialParts = splitEvenly(Math.max(dueCents, 0), 1);
+      const initialParts = splitEvenly(scope.remainingCents, 1);
       setParts(initialParts);
       setActivePartId(initialParts[0]?.id ?? null);
       setTablePaymentScope(scope);
+      setTablePaymentReturn({ tableId, session, reopenBill: Boolean(options?.returnToBill) });
       setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
-      setPosMode("pos");
+      setPosMode("tables");
       setIsPaymentMethodOpen(false);
       setIsPaymentOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cobro de mesa.");
     }
-  }, [buildGuestPaymentScope, serviceType, setContextFromTableSession, taxRate, upsertTableSession]);
+  }, [buildGuestPaymentScope, buildTablePaymentScope, serviceType, taxRate, upsertTableSession]);
 
   const openTableSession = async (tableId: number) => {
     const existing = sessionByTableId.get(tableId);
@@ -994,6 +1022,34 @@ type TableConfirmDialogState =
       setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
       toast.error(error instanceof Error ? error.message : "No se pudo cargar la cuenta.");
     }
+  };
+
+  const handlePaymentDialogOpenChange = (open: boolean) => {
+    setIsPaymentOpen(open);
+    if (open) return;
+    const returnTarget = tablePaymentReturn;
+    setSelectedPaymentMethodCode("");
+    setPaymentMethodAutoSelectedFromOrderType(false);
+    setShowCashPanel(false);
+    setActiveTenderField(null);
+    if (tablePaymentScope) {
+      setActiveOrder(null);
+      setCart([]);
+      setCheckoutDraft(null);
+      setCreatedOrderId(null);
+      setCreatedOrderNumber(null);
+      setSplitEnabled(false);
+      setParts([]);
+      setActivePartId(null);
+      setTablePaymentScope(null);
+      setPosMode("tables");
+      if (returnTarget?.reopenBill) {
+        window.setTimeout(() => {
+          void openTableBill(returnTarget.tableId, returnTarget.session);
+        }, 0);
+      }
+    }
+    setTablePaymentReturn(null);
   };
 
   const handleSendTableSession = async (session: TableSession) => {
@@ -3468,7 +3524,7 @@ type TableConfirmDialogState =
             paymentMethodCode: selectedPaymentMethodCode,
           })
         );
-        if (refreshed.isPending) {
+        if (refreshed.isPending && !tablePaymentScope) {
           try {
             const finalizedOrder = await setOrderPending(refreshed.id, {
               isPending: false,
@@ -3488,17 +3544,18 @@ type TableConfirmDialogState =
           }
         }
         const isKiosk = String(refreshed.serviceType || "").toUpperCase() === "KIOSK";
-        if (tableOrderContext) {
-          try {
-            await releaseTableSession(tableOrderContext.sessionId);
-            await refreshTableSessions();
-          } catch (releaseError) {
-            console.error("Failed to release paid table session", releaseError);
-          }
+        if (tablePaymentScope) {
+          const paidScope = tablePaymentScope;
+          await refreshTableSessions();
           toast.success("Pago registrado. Mesa liberada.");
+          setTablePaymentReturn(null);
           finalizePaidSale();
           setTableOrderContext(null);
+          setTablePaymentScope(null);
           setPosMode("tables");
+          if (postSalePrintChoice || selectedPaymentAutoPrint) {
+            void openPaidReceiptTicket(refreshed, paymentResult, paidScope);
+          }
         } else if (isKiosk) {
           toast.success("Pago y factura registrados. Enviado a cocina.");
           finalizePaidSale();
@@ -3521,6 +3578,7 @@ type TableConfirmDialogState =
           setIsPaymentMethodOpen(false);
           setCheckoutDraft(null);
           setTablePaymentScope(null);
+          setTablePaymentReturn(null);
           setTableOrderContext(null);
           setPosMode("tables");
           if (latestSession) {
@@ -3881,9 +3939,9 @@ type TableConfirmDialogState =
     };
     const lines: string[] = [
       center("CUENTA DE MESA"),
-      center("Ticket para revision"),
+      center("Ticket para revisión"),
       center("Cuenta no pagada"),
-      center("NO VALIDO COMO COMPROBANTE FISCAL"),
+      center("NO VÁLIDO COMO COMPROBANTE FISCAL"),
       rule,
       row("Mesa", tableLabel),
       row("Personas", String(session?.guestsCount ?? 1)),
@@ -3921,6 +3979,50 @@ type TableConfirmDialogState =
     return lines.join("\n");
   };
 
+  const buildPaidReceiptTicketText = (order: Order, payment: Payment, scope: TablePaymentScope, tableLabel: string, width: "58mm" | "80mm") => {
+    const chars = width === "58mm" ? 32 : 42;
+    const rule = "-".repeat(chars);
+    const center = (value: string) => {
+      const text = value.slice(0, chars);
+      const pad = Math.max(0, Math.floor((chars - text.length) / 2));
+      return `${" ".repeat(pad)}${text}`;
+    };
+    const row = (left: string, right = "") => {
+      const safeRight = right.slice(0, Math.min(12, chars));
+      const safeLeft = left.slice(0, Math.max(1, chars - safeRight.length - 1));
+      return `${safeLeft}${" ".repeat(Math.max(1, chars - safeLeft.length - safeRight.length))}${safeRight}`;
+    };
+    const paidItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
+    const received = payment.cashReceived ?? payment.amount;
+    const change = Math.max(received - payment.amount - (payment.tipAmount || 0), 0);
+    const lines: string[] = [
+      center("RECIBO DE PAGO"),
+      center("Cuenta pagada"),
+      rule,
+      row("Mesa", tableLabel),
+      row("Alcance", scope.kind === "guest" ? scope.guestLabel || "Persona" : "Cuenta completa"),
+      row("Fecha", formatDateTimeSV(new Date().toISOString())),
+      row("Pedido", order.orderNumber ? `#${order.orderNumber}` : `#${order.id}`),
+      rule,
+    ];
+    paidItems.forEach((item) => {
+      lines.push(row(`${item.quantity}x ${item.productName}`, formatMoney(getOrderItemTotal(item))));
+      const modifiers = getOrderItemModifiers(item);
+      if (modifiers.length) lines.push(`  Modificadores: ${modifiers.join(", ")}`.slice(0, chars));
+    });
+    lines.push(
+      rule,
+      row("Metodo", payment.method),
+      row("Pagado", formatMoney(payment.amount)),
+      payment.cashReceived != null ? row("Recibido", formatMoney(received)) : "",
+      change > 0 ? row("Cambio", formatMoney(change)) : "",
+      row("Total pagado", formatMoney(payment.amount)),
+      rule,
+      center("Gracias por su visita"),
+    );
+    return lines.filter(Boolean).join("\n");
+  };
+
   const openTableLocalTicket = async () => {
     if (!tableBillDialog.order) return;
     let logoUrl: string | null = null;
@@ -3935,6 +4037,23 @@ type TableConfirmDialogState =
       title: "Vista previa de ticket",
       subtitle: "Cuenta local 58mm/80mm. No marca la mesa como pagada.",
       text: buildTableAccountTicketText(tableBillDialog.order, tableBillDialog.session, tableBillDialog.payments, tableLabel, thermalTicketWidth),
+      logoUrl,
+    });
+  };
+
+  const openPaidReceiptTicket = async (order: Order, payment: Payment, scope: TablePaymentScope) => {
+    let logoUrl: string | null = null;
+    try {
+      logoUrl = (await getTicketSettings()).ticketLogoUrl;
+    } catch {
+      logoUrl = null;
+    }
+    const tableLabel = restaurantTables.find((table) => table.id === scope.tableId)?.name ?? "Mesa";
+    setThermalTicket({
+      open: true,
+      title: "Vista previa de recibo",
+      subtitle: "Recibo de pago 58mm/80mm. Cuenta pagada.",
+      text: buildPaidReceiptTicketText(order, payment, scope, tableLabel, thermalTicketWidth),
       logoUrl,
     });
   };
@@ -4190,7 +4309,7 @@ type TableConfirmDialogState =
         <AlertDialog open={tableConfirmDialog.open} onOpenChange={(open) => {
           if (!open) setTableConfirmDialog({ open: false, type: null, sourceTableId: null, targetTableId: null, session: null });
         }}>
-          <AlertDialogContent>
+          <AlertDialogContent className="max-w-lg">
             <AlertDialogHeader>
               <AlertDialogTitle>
                 {tableConfirmDialog.open && tableConfirmDialog.type === "merge"
@@ -4236,8 +4355,8 @@ type TableConfirmDialogState =
           </AlertDialogContent>
         </AlertDialog>
         <Dialog open={mergeSetupDialog.open} onOpenChange={(open) => { if (!isStartingTableSession) setMergeSetupDialog((prev) => ({ ...prev, open })); }}>
-          <DialogContent>
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-xl flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b px-5 py-4">
               <DialogTitle>Unir mesas</DialogTitle>
               <DialogDescription>
                 {mergeSetupDialog.sourceTableId && mergeSetupDialog.targetTableId
@@ -4245,7 +4364,7 @@ type TableConfirmDialogState =
                   : "Configura el grupo de mesas."}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <div>
                 <Label>Personas del grupo</Label>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -4261,7 +4380,7 @@ type TableConfirmDialogState =
               </div>
               <div>
                 <Label>Modo de orden</Label>
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex flex-wrap gap-2">
                   <Button type="button" variant={mergeSetupDialog.orderMode === "per_person" ? "default" : "outline"} onClick={() => setMergeSetupDialog((prev) => ({ ...prev, orderMode: "per_person" }))}>Orden por persona</Button>
                   <Button type="button" variant={mergeSetupDialog.orderMode === "table" ? "default" : "outline"} onClick={() => setMergeSetupDialog((prev) => ({ ...prev, orderMode: "table" }))}>Orden en grupo</Button>
                 </div>
@@ -4271,24 +4390,24 @@ type TableConfirmDialogState =
                 <Textarea value={mergeSetupDialog.notes} onChange={(event) => setMergeSetupDialog((prev) => ({ ...prev, notes: event.target.value }))} />
               </div>
             </div>
-            <DialogFooter>
+            <DialogFooter className="shrink-0 border-t px-5 py-4">
               <Button variant="outline" disabled={isStartingTableSession} onClick={() => setMergeSetupDialog({ open: false, sourceTableId: null, targetTableId: null, guests: 2, orderMode: "per_person", notes: "" })}>Cancelar</Button>
               <Button disabled={isStartingTableSession} onClick={() => void confirmMergeSetup()}>{isStartingTableSession ? "Uniendo..." : "Unir mesas"}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
         <Dialog open={newSessionDialog.open} onOpenChange={(open) => { if (!isStartingTableSession) setNewSessionDialog((prev) => ({ ...prev, open })); }}>
-          <DialogContent>
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-xl flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b px-5 py-4">
               <DialogTitle>Nueva orden</DialogTitle>
               <DialogDescription>Configura personas, modo de pedido y notas antes de abrir la orden de mesa.</DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <div><Label>Personas</Label><div className="mt-2 flex flex-wrap gap-2">{[1,2,3,4,5,6].map((n)=><Button key={n} type="button" variant={newSessionDialog.guests===n?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,guests:n}))}>{n}</Button>)}<div className="ml-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1"><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.max(1,p.guests-1)}))}>-</Button><span className="min-w-8 text-center font-semibold">{newSessionDialog.guests}</span><Button type="button" size="sm" variant="ghost" onClick={()=>setNewSessionDialog((p)=>({...p,guests:Math.min(99,p.guests+1)}))}>+</Button></div></div></div>{(() => { const table = restaurantTables.find((t) => t.id === newSessionDialog.tableId); const cap = Number(table?.capacity || 0); return cap > 0 && newSessionDialog.guests > cap ? <p className="text-xs text-amber-500">Sobre capacidad sugerida de la mesa.</p> : null; })()}
-              <div><Label>Modo de orden</Label><div className="mt-2 flex gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
+              <div><Label>Modo de orden</Label><div className="mt-2 flex flex-wrap gap-2"><Button type="button" variant={newSessionDialog.orderMode==="table"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"table"}))}>Orden completa</Button><Button type="button" variant={newSessionDialog.orderMode==="per_person"?"default":"outline"} onClick={()=>setNewSessionDialog((p)=>({...p,orderMode:"per_person"}))}>Por persona</Button></div></div>
               <div><Label>Notas</Label><Textarea value={newSessionDialog.notes} onChange={(e)=>setNewSessionDialog((p)=>({...p,notes:e.target.value}))} /></div>
             </div>
-            <DialogFooter>
+            <DialogFooter className="shrink-0 border-t px-5 py-4">
               <Button variant="outline" disabled={isStartingTableSession} onClick={()=>setNewSessionDialog({ open:false, tableId:null, guests:2, orderMode:"per_person", notes:"" })}>Cancelar</Button>
               <Button disabled={isStartingTableSession} onClick={() => void beginSessionFromDialog()}>{isStartingTableSession ? "Iniciando..." : "Iniciar orden"}</Button>
             </DialogFooter>
@@ -4440,12 +4559,12 @@ type TableConfirmDialogState =
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
                 return (
-                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest })}>
+                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true })}>
                     {scope.remainingCents <= 0 ? "Persona pagada" : `Cobrar ${guest.label}`}
                   </Button>
                 );
               })() : null}
-              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session); }}>Cobrar</Button> : null}
+              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true }); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -4460,12 +4579,12 @@ type TableConfirmDialogState =
           onOpenChange={(open) => setThermalTicket((prev) => ({ ...prev, open }))}
         />
         <Dialog open={forceReleaseDialog.open} onOpenChange={(open) => !forceReleaseDialog.loading && setForceReleaseDialog((prev) => ({ ...prev, open }))}>
-          <DialogContent>
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b px-5 py-4">
               <DialogTitle>Liberar mesa con saldo pendiente</DialogTitle>
               <DialogDescription>Esta acción cancelará la cuenta pendiente y dejará la mesa disponible. Los pagos existentes se conservan.</DialogDescription>
             </DialogHeader>
-            <div className="space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <div className="rounded-lg border bg-muted/20 p-3 text-sm">
                 <div className="flex justify-between"><span>Saldo a cancelar</span><span className="font-semibold">{formatMoney(forceReleaseDialog.session?.totalCached ?? 0)}</span></div>
                 <div className="mt-1 text-xs text-muted-foreground">{forceReleaseDialog.requiresPin ? "Requiere PIN de admin o superadmin." : "Tu rol permite autorizar esta liberación."}</div>
@@ -4481,7 +4600,7 @@ type TableConfirmDialogState =
                 </div>
               ) : null}
             </div>
-            <DialogFooter>
+            <DialogFooter className="shrink-0 border-t px-5 py-4">
               <Button variant="outline" disabled={forceReleaseDialog.loading} onClick={() => setForceReleaseDialog({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false })}>Cancelar</Button>
               <Button disabled={forceReleaseDialog.loading} onClick={() => void confirmForceReleaseTableSession()}>{forceReleaseDialog.loading ? "Liberando..." : "Liberar mesa"}</Button>
             </DialogFooter>
@@ -4555,11 +4674,11 @@ type TableConfirmDialogState =
           {/* Products Section */}
           <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
             {tableOrderContext ? (
-              <Card className="shrink-0 border-[var(--color-primary-border)] bg-[var(--color-primary-soft)] p-3">
+              <Card className="shrink-0 border-[var(--color-primary-border)] bg-[var(--color-primary-surface)] p-3 text-[var(--color-primary-text)]">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Orden de mesa</p>
-                    <h2 className="text-lg font-semibold">{tableOrderContext.tableLabel}</h2>
+                    <p className="text-xs font-extrabold uppercase tracking-wide text-[var(--color-primary-text)]">Orden de mesa</p>
+                    <h2 className="text-lg font-extrabold text-[var(--color-primary-text)]">{tableOrderContext.tableLabel}</h2>
                   </div>
                   {tableOrderContext.orderMode === "per_person" && tableOrderContext.guests.length ? (
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -5035,15 +5154,15 @@ type TableConfirmDialogState =
       </Dialog>
 
       <Dialog open={tableBackDialogOpen} onOpenChange={setTableBackDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-xl flex-col overflow-hidden p-0">
+          <DialogHeader className="shrink-0 border-b px-5 py-4">
             <DialogTitle>Productos sin guardar</DialogTitle>
             <DialogDescription>Tienes productos sin guardar. ¿Deseas guardar antes de volver a mesas?</DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2 sm:justify-end">
+          <DialogFooter className="shrink-0 border-t px-5 py-4">
             <Button variant="outline" onClick={() => setTableBackDialogOpen(false)}>Cancelar</Button>
             <Button variant="outline" onClick={() => { setTableBackDialogOpen(false); returnToTables(true); }}>Volver sin guardar</Button>
-            <Button onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ returnToMap: true }); }}>
+            <Button className="whitespace-normal text-center" onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ returnToMap: true }); }}>
               Guardar pendientes y volver
             </Button>
           </DialogFooter>
@@ -5585,12 +5704,12 @@ type TableConfirmDialogState =
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isPaymentOpen} onOpenChange={(open) => { setIsPaymentOpen(open); if (!open) { setSelectedPaymentMethodCode(""); setPaymentMethodAutoSelectedFromOrderType(false); setShowCashPanel(false); setActiveTenderField(null); } }}>
-        <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
+      <Dialog open={isPaymentOpen} onOpenChange={handlePaymentDialogOpenChange}>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
-              <DialogTitle>{tablePaymentScope?.kind === "guest" ? `Cobrar ${tablePaymentScope.guestLabel || "persona"}` : "Cobrar pedido"}</DialogTitle>
-              <DialogDescription>{tablePaymentScope?.kind === "guest" ? "Pago parcial asociado a esta persona. La mesa sigue abierta si queda saldo." : "Confirma el pago y envía a cocina"}</DialogDescription>
+              <DialogTitle>{tablePaymentScope?.kind === "guest" ? `Cobrando ${tablePaymentScope.guestLabel || "persona"}` : tablePaymentScope ? "Cobrando cuenta completa" : "Cobrar pedido"}</DialogTitle>
+              <DialogDescription>{tablePaymentScope ? "Pago de mesa. La mesa sigue abierta hasta saldar todo el saldo." : "Confirma el pago y envía a cocina"}</DialogDescription>
             </DialogHeader>
             {checkoutDraft ? (
               <>
