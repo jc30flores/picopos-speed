@@ -17,6 +17,7 @@ def _role_is(user, roles: set[str]) -> bool:
 
 
 KITCHEN_ROLES = {"kitchen", "cocina"}
+WAITER_ROLES = {"waiter", "mesero"}
 
 
 def is_superadmin(user) -> bool:
@@ -35,12 +36,24 @@ def user_is_kitchen(user) -> bool:
     return _role_is(user, KITCHEN_ROLES)
 
 
+def user_is_waiter(user) -> bool:
+    return _role_is(user, WAITER_ROLES)
+
+
 def user_can_view_kitchen(user) -> bool:
-    return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | {"admin", "manager", "cashier"}))
+    return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | WAITER_ROLES | {"admin", "manager", "cashier"}))
 
 
 def user_can_manage_kitchen_items(user) -> bool:
     return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | {"admin", "manager"}))
+
+
+def user_can_mark_item_served(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | WAITER_ROLES | {"admin", "manager"}))
+
+
+def user_can_access_table_pos(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, WAITER_ROLES | {"cashier", "admin", "manager"}))
 
 
 def can_manage_features(user) -> bool:
@@ -137,6 +150,11 @@ class IsCashierOrManagerOrAdmin(BasePermission):
         return bool(is_superadmin(request.user) or _role_is(request.user, {"cashier", "admin", "manager"}))
 
 
+class CanAccessTablePos(BasePermission):
+    def has_permission(self, request, view):
+        return user_can_access_table_pos(request.user)
+
+
 class IsKitchenOrManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
         return user_can_manage_kitchen_items(request.user)
@@ -157,6 +175,13 @@ class CanManageKitchenItems(BasePermission):
 
     def has_permission(self, request, view):
         return user_can_manage_kitchen_items(request.user)
+
+
+class CanServeKitchenItems(BasePermission):
+    message = "No tienes permiso para marcar pedidos como servidos."
+
+    def has_permission(self, request, view):
+        return user_can_mark_item_served(request.user)
 
 
 class IsAuthenticatedOrReadOnly(BasePermission):

@@ -39,7 +39,7 @@ const App = () => (
             <Route
               path="/"
               element={
-                <ProtectedRoute allowedRoles={["admin", "manager", "worker", "cashier"]}>
+                <ProtectedRoute allowedRoles={["admin", "manager", "worker", "cashier", "waiter"]}>
                   <MainMenu />
                 </ProtectedRoute>
               }
@@ -47,7 +47,7 @@ const App = () => (
             <Route
               path="/pos"
               element={
-                <ProtectedRoute allowedRoles={["cashier", "admin", "manager"]}>
+                <ProtectedRoute allowedRoles={["cashier", "waiter", "admin", "manager"]}>
                   <Index />
                 </ProtectedRoute>
               }
@@ -72,7 +72,7 @@ const App = () => (
             <Route
               path="/kitchen"
               element={
-                <ProtectedRoute allowedRoles={["kitchen", "admin"]}>
+                <ProtectedRoute allowedRoles={["kitchen", "waiter", "admin", "manager"]}>
                   <FeatureRouteGuard feature="kitchen"><Kitchen /></FeatureRouteGuard>
                 </ProtectedRoute>
               }

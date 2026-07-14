@@ -22,7 +22,7 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
   const lastUserIdRef = useRef<number | null>(null);
   const loadedForUserIdRef = useRef<number | null>(null);
 
-  const bypassAttendance = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "kitchen");
+  const bypassAttendance = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "kitchen" || user?.role === "waiter");
 
   const refreshAttendance = useCallback(
     async (reason = "manual") => {

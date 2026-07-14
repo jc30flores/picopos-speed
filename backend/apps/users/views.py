@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 ROLE_LANDING_ROUTE = {
     "superadmin": "/",
     "kitchen": "/kitchen",
+    "waiter": "/pos",
     "kiosk": "/kiosk",
     "worker": "/",
 }

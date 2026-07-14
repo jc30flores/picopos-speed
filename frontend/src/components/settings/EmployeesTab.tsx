@@ -21,6 +21,7 @@ import { ManualTimeCardModal } from "@/components/employees/ManualTimeCardModal"
 const ROLE_OPTIONS = [
   { value: "all", label: "Todos" },
   { value: "cashier", label: "Cajero" },
+  { value: "waiter", label: "Mesero" },
   { value: "kitchen", label: "Cocina" },
   { value: "manager", label: "Gerente" },
   { value: "admin", label: "Administrador" },

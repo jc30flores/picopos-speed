@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { getLandingRouteForRole, isRouteAllowed } from "@/lib/roleAccess";
 
 interface ProtectedRouteProps {
-  allowedRoles?: Array<"superadmin" | "admin" | "manager" | "cashier" | "kitchen" | "kiosk" | "worker" | "accountant">;
+  allowedRoles?: Array<"superadmin" | "admin" | "manager" | "cashier" | "waiter" | "kitchen" | "kiosk" | "worker" | "accountant">;
   deniedRedirectTo?: string;
   deniedMessage?: string;
   children: React.ReactElement;

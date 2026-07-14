@@ -17,6 +17,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from apps.core.audit import log_audit
 from apps.core.permissions import (
+    CanAccessTablePos,
     IsAuthenticatedAndActive,
     IsCashierOrManagerOrAdmin,
     IsKitchenOrManagerOrAdmin,
@@ -291,7 +292,12 @@ class ValidatePricePinView(APIView):
 
 class OrderDetailView(generics.RetrieveUpdateAPIView):
     queryset = Order.objects.all()
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
+
+    def get_permissions(self):
+        if self.request.method in {"GET", "HEAD", "OPTIONS"}:
+            return [CanAccessTablePos()]
+        return [IsCashierOrManagerOrAdmin()]
 
     def get_serializer_class(self):
         if self.request.method in {"PATCH", "PUT"}:
@@ -580,7 +586,7 @@ class PendingOrderListView(generics.ListAPIView):
 class PendingOrderToggleView(generics.GenericAPIView):
     queryset = Order.objects.all()
     serializer_class = OrderSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):

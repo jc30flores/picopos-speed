@@ -6,6 +6,7 @@ from apps.core.models import Branch
 class Employee(models.Model):
     ROLE_CHOICES = [
         ("cashier", "Cashier"),
+        ("waiter", "Mesero"),
         ("kitchen", "Cocina"),
         ("manager", "Manager"),
         ("admin", "Admin"),
