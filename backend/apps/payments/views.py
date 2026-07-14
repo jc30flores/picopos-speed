@@ -202,7 +202,30 @@ def _create_payment_allocations(payment: Payment, payload: dict, applied_cents: 
             _refresh_guest_paid_state(table_guest, payment.order_id)
         return
 
-    item_totals = [(item, _order_item_total_cents(item)) for item in items]
+    item_totals = []
+    for item in items:
+        item_total_cents = _order_item_total_cents(item)
+        already_paid_cents = (
+            PaymentAllocation.objects.filter(payment__order=payment.order, order_item=item).aggregate(total=Sum("amount_cents"))["total"]
+            or 0
+        )
+        remaining_item_cents = max(item_total_cents - already_paid_cents, 0)
+        if remaining_item_cents > 0:
+            item_totals.append((item, remaining_item_cents))
+    if not item_totals:
+        PaymentAllocation.objects.create(
+            payment=payment,
+            table_session=table_session,
+            table_guest=table_guest,
+            guest_number=guest_number,
+            guest_label=guest_label,
+            amount=from_cents(applied_cents),
+            amount_cents=applied_cents,
+        )
+        if table_guest:
+            _refresh_guest_paid_state(table_guest, payment.order_id)
+        return
+
     total_item_cents = sum(cents for _, cents in item_totals) or applied_cents
     remaining = applied_cents
     for index, (item, item_cents) in enumerate(item_totals):
