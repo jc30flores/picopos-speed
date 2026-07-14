@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { PageLayout } from "@/components/layout/PageLayout";
 import { toast } from "sonner";
+import { useAuth } from "@/context/useAuth";
 
 type KitchenFilter = "all" | "in_kitchen" | "ready" | "tables" | "takeout" | "kiosk";
 
@@ -106,10 +107,12 @@ const quickItemsFromOrders = (orders: Order[]): KitchenCardItem[] =>
     );
 
 const Kitchen = () => {
+  const { user } = useAuth();
   const [tableSessions, setTableSessions] = useState<TableKitchenSessionSummary[]>([]);
   const [quickOrders, setQuickOrders] = useState<Order[]>([]);
-  const [filter, setFilter] = useState<KitchenFilter>("all");
+  const [filter, setFilter] = useState<KitchenFilter>("in_kitchen");
   const [isLoading, setIsLoading] = useState(true);
+  const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
 
   const loadKitchen = useCallback(async () => {
     const branchId = localStorage.getItem("selected_branch_id") || undefined;
@@ -128,8 +131,9 @@ const Kitchen = () => {
       setIsLoading(false);
     });
     const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       loadKitchen().catch((error) => console.error("Failed to refresh kitchen", error));
-    }, 6000);
+    }, 5000);
     return () => window.clearInterval(interval);
   }, [loadKitchen]);
 
@@ -236,15 +240,21 @@ const Kitchen = () => {
                   ) : null}
                 </div>
 
-                <Button
-                  className="mt-5 min-h-16 rounded-lg text-xl font-black"
-                  size="lg"
-                  disabled={item.status === "ready"}
-                  onClick={() => void completeItem(item)}
-                >
-                  <CheckCircle2 className="mr-2 h-6 w-6" />
-                  {item.status === "ready" ? "Terminado" : "Terminado"}
-                </Button>
+                {canCompleteKitchenItems ? (
+                  <Button
+                    className="mt-5 min-h-16 rounded-lg text-xl font-black"
+                    size="lg"
+                    disabled={item.status === "ready"}
+                    onClick={() => void completeItem(item)}
+                  >
+                    <CheckCircle2 className="mr-2 h-6 w-6" />
+                    {item.status === "ready" ? "Terminado" : "Terminado"}
+                  </Button>
+                ) : (
+                  <div className="mt-5 rounded-lg border bg-background/70 p-4 text-center text-sm font-semibold text-muted-foreground">
+                    Solo cocina puede marcar como terminado.
+                  </div>
+                )}
               </Card>
             ))}
           </div>
