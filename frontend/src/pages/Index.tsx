@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
+import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, ChefHat, CreditCard, DoorOpen, Eye, Link2, Loader2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
@@ -566,6 +566,7 @@ type TableConfirmDialogState =
   const [tableBillView, setTableBillView] = useState<string>("all");
   const [tablePaymentScope, setTablePaymentScope] = useState<TablePaymentScope | null>(null);
   const [tablePaymentReturn, setTablePaymentReturn] = useState<TablePaymentReturnTarget>(null);
+  const [isOpeningTablePayment, setIsOpeningTablePayment] = useState(false);
   const [thermalTicketWidth, setThermalTicketWidth] = useState<"58mm" | "80mm">("58mm");
   const [thermalTicket, setThermalTicket] = useState<ThermalTicketState>({ open: false, title: "", subtitle: "", text: "", logoUrl: null });
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
@@ -582,6 +583,7 @@ type TableConfirmDialogState =
   const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; width: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, width: 320, isSheet: false });
   const [viewportReflowTick, setViewportReflowTick] = useState(0);
   const longPressOpsRef = useRef<number | null>(null);
+  const tablePaymentOpenRequestRef = useRef(0);
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
   const tableAutoSaveSignatureRef = useRef("");
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
@@ -908,16 +910,41 @@ type TableConfirmDialogState =
       toast.error("La mesa no tiene orden activa.");
       return;
     }
+    const requestId = tablePaymentOpenRequestRef.current + 1;
+    tablePaymentOpenRequestRef.current = requestId;
+    const returnTarget = { tableId, session, reopenBill: Boolean(options?.returnToBill) };
+    upsertTableSession(session);
+    setTableOrderContext(null);
+    setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
+    setTablePaymentScope(null);
+    setTablePaymentReturn(returnTarget);
+    setActiveOrder(null);
+    setCart([]);
+    setCheckoutDraft(null);
+    setCreatedOrderId(null);
+    setCreatedOrderNumber(null);
+    setSelectedDiscount(null);
+    setIsPaymentMethodOpen(false);
+    setIsOpeningTablePayment(true);
+    setPosMode("tables");
+    setIsPaymentOpen(true);
     try {
-      upsertTableSession(session);
-      setTableOrderContext(null);
       const [order, payments] = await Promise.all([
         options?.order ? Promise.resolve(options.order) : getOrderById(orderId),
         options?.payments ? Promise.resolve(options.payments) : getPaymentsByOrder(orderId),
       ]);
+      if (tablePaymentOpenRequestRef.current !== requestId) return;
       const scope = options?.guest ? buildGuestPaymentScope(tableId, session, order, payments, options.guest) : buildTablePaymentScope(tableId, session, order);
       if (scope.remainingCents <= 0) {
         toast.info(`${scope.guestLabel || "La persona"} ya no tiene saldo pendiente.`);
+        setIsPaymentOpen(false);
+        setTablePaymentScope(null);
+        setTablePaymentReturn(null);
+        setCheckoutDraft(null);
+        setActiveOrder(null);
+        if (options?.returnToBill) {
+          setTableBillDialog({ open: true, loading: false, tableId, session, order, payments });
+        }
         return;
       }
       const sourceItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
@@ -953,13 +980,25 @@ type TableConfirmDialogState =
       setParts(initialParts);
       setActivePartId(initialParts[0]?.id ?? null);
       setTablePaymentScope(scope);
-      setTablePaymentReturn({ tableId, session, reopenBill: Boolean(options?.returnToBill) });
-      setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
       setPosMode("tables");
       setIsPaymentMethodOpen(false);
       setIsPaymentOpen(true);
     } catch (error) {
+      if (tablePaymentOpenRequestRef.current === requestId) {
+        setIsPaymentOpen(false);
+        setTablePaymentScope(null);
+        setTablePaymentReturn(null);
+        setCheckoutDraft(null);
+        setActiveOrder(null);
+        if (options?.returnToBill && options.order) {
+          setTableBillDialog({ open: true, loading: false, tableId, session, order: options.order, payments: options.payments ?? [] });
+        }
+      }
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cobro de mesa.");
+    } finally {
+      if (tablePaymentOpenRequestRef.current === requestId) {
+        setIsOpeningTablePayment(false);
+      }
     }
   }, [buildGuestPaymentScope, buildTablePaymentScope, serviceType, taxRate, upsertTableSession]);
 
@@ -1083,6 +1122,8 @@ type TableConfirmDialogState =
   const handlePaymentDialogOpenChange = (open: boolean) => {
     setIsPaymentOpen(open);
     if (open) return;
+    tablePaymentOpenRequestRef.current += 1;
+    setIsOpeningTablePayment(false);
     const returnTarget = tablePaymentReturn;
     setSelectedPaymentMethodCode("");
     setPaymentMethodAutoSelectedFromOrderType(false);
@@ -1483,6 +1524,7 @@ type TableConfirmDialogState =
   useEffect(() => {
     if (!draftRestoreDoneRef.current) return;
     if (draftPersistTimeoutRef.current) window.clearTimeout(draftPersistTimeoutRef.current);
+    if (isOpeningTablePayment || tablePaymentScope) return;
     draftPersistTimeoutRef.current = window.setTimeout(() => {
       if (cart.length === 0 && !selectedDiscount && !selectedCustomerId) {
         localStorage.removeItem(posDraftStorageKey);
@@ -1505,7 +1547,7 @@ type TableConfirmDialogState =
     return () => {
       if (draftPersistTimeoutRef.current) window.clearTimeout(draftPersistTimeoutRef.current);
     };
-  }, [cart, dteDocumentType, ivaExempt, posDraftStorageKey, selectedCustomerId, selectedDiscount, serviceType, whatsappClientCountry, whatsappClientInput]);
+  }, [cart, dteDocumentType, isOpeningTablePayment, ivaExempt, posDraftStorageKey, selectedCustomerId, selectedDiscount, serviceType, tablePaymentScope, whatsappClientCountry, whatsappClientInput]);
 
   useEffect(() => {
     if (!serviceTypes.length || !serviceType) return;
@@ -1527,6 +1569,7 @@ type TableConfirmDialogState =
   }, [serviceType, serviceTypes]);
 
   useEffect(() => {
+    if (isOpeningTablePayment || tablePaymentScope) return;
     if (!products.length) return;
     setCart((prev) =>
       prev.map((item) => {
@@ -1543,7 +1586,7 @@ type TableConfirmDialogState =
         };
       })
     );
-  }, [products, serviceType]);
+  }, [isOpeningTablePayment, products, serviceType, tablePaymentScope]);
 
   const loadActiveDiscounts = async () => {
     try {
@@ -1611,6 +1654,7 @@ type TableConfirmDialogState =
   );
   const candidateProductIds = useMemo(() => filteredProducts.map((product) => product.id), [filteredProducts]);
   const candidateProductIdsSignature = useMemo(() => candidateProductIds.join(","), [candidateProductIds]);
+  const shouldCheckCartInventory = posMode === "pos" && !isPaymentOpen;
 
   const productAvailability = (productId: number | null | undefined) => (productId ? cartAvailability[productId] : undefined);
   const canAddProductByStock = (productId: number | null | undefined) => {
@@ -1625,13 +1669,21 @@ type TableConfirmDialogState =
   };
 
   useEffect(() => {
+    if (!shouldCheckCartInventory) {
+      setCartAvailability({});
+      return;
+    }
+    if (!cartAvailabilityItems.length && !candidateProductIds.length) {
+      setCartAvailability({});
+      return;
+    }
     const timeout = window.setTimeout(() => {
       void checkCartInventoryAvailability({ cartItems: cartAvailabilityItems, candidateProductIds })
         .then((result) => setCartAvailability(Object.fromEntries(result.items.map((item) => [item.productId, item]))))
         .catch((error) => console.error("Failed to check cart inventory", error));
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [cartAvailabilityItems, cartAvailabilitySignature, candidateProductIds, candidateProductIdsSignature]);
+  }, [cartAvailabilityItems, cartAvailabilitySignature, candidateProductIds, candidateProductIdsSignature, shouldCheckCartInventory]);
 
   const getPosModifierGroups = (product: Product | null) => {
     const visibleGroupIds = product?.modifierGroupsPos ?? product?.modifierGroups ?? [];
@@ -4532,7 +4584,7 @@ type TableConfirmDialogState =
                 const canCollect = hasOrder;
                 const groupLabel = session?.tableIds?.map((id) => getTableLabel(id)).join(" + ") || table.name;
                 const menuButton = (label: string, icon: JSX.Element, onClick: () => void, disabled = false) => (
-                  <Button className="h-auto min-h-11 w-full justify-start gap-2 whitespace-normal px-3 py-2 text-left text-popover-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" variant="ghost" disabled={disabled} onClick={onClick}>
+                  <Button type="button" className="h-auto min-h-11 w-full justify-start gap-2 whitespace-normal px-3 py-2 text-left text-popover-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" variant="ghost" disabled={disabled} onClick={(event) => { event.stopPropagation(); onClick(); }}>
                     <span className="shrink-0">{icon}</span>
                     <span className="min-w-0 break-words">{label}</span>
                   </Button>
@@ -4821,12 +4873,12 @@ type TableConfirmDialogState =
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
                 return (
-                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true, order: tableBillDialog.order, payments: tableBillDialog.payments })}>
+                  <Button type="button" variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest, returnToBill: true, order: tableBillDialog.order, payments: tableBillDialog.payments })}>
                     {scope.remainingCents <= 0 ? "Persona pagada" : `Cobrar ${guest.label}`}
                   </Button>
                 );
               })() : null}
-              {canCollectTablePayments && tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
+              {canCollectTablePayments && tableBillDialog.order ? <Button type="button" onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -4888,7 +4940,7 @@ type TableConfirmDialogState =
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTableBill(tableId, tableSession); }}>Ver cuenta</Button>
-                          {canCollectTablePayments ? <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button> : null}
+                          {canCollectTablePayments ? <Button type="button" size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button> : null}
                         </div>
                       </div>
                       <div className="space-y-3">
@@ -6101,13 +6153,21 @@ type TableConfirmDialogState =
                     </Button>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" className="h-12 flex-1 text-sm" onClick={() => setIsPaymentOpen(false)}>Cerrar</Button>
+                    <Button type="button" variant="outline" className="h-12 flex-1 text-sm" onClick={() => handlePaymentDialogOpenChange(false)}>Cerrar</Button>
                     <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                       {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
                 </div>
               </>
+            ) : isOpeningTablePayment ? (
+              <div className="flex min-h-48 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+                <div>
+                  <p className="font-medium text-foreground">Preparando cobro de mesa...</p>
+                  <p>Estamos cargando el saldo y los pagos previos.</p>
+                </div>
+              </div>
             ) : (
               <div className="p-4 text-sm text-muted-foreground">No hay pedido activo.</div>
             )}
