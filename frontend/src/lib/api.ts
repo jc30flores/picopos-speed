@@ -758,13 +758,22 @@ export type OrderItem = {
   pricingMetadata?: Record<string, unknown> | null;
   unitPriceOverride?: number | null;
   assignedName?: string;
+  guestNumber?: number | null;
+  guestLabel?: string;
   tableGuestId?: number | null;
   tableGuestLabel?: string;
   tableGuestSeatNumber?: number | null;
   kitchenStatus?: "pending" | "sent" | "ready" | "delivered";
+  kitchenStatusLabel?: string;
   kitchenSentAt?: string | null;
   kitchenReadyAt?: string | null;
   kitchenDeliveredAt?: string | null;
+  kitchenCompletedAt?: string | null;
+  kitchenServedAt?: string | null;
+  isPendingKitchen?: boolean;
+  isInKitchen?: boolean;
+  isCompleted?: boolean;
+  isServed?: boolean;
 };
 
 export type Order = {
@@ -1772,7 +1781,7 @@ export const updateDteSettings = async (payload: Partial<DteSettings> & { apiTok
 };
 
 export const initializeDteCorrelatives = async (): Promise<DteCorrelative[]> => {
-  const response = await request("/settings/dte/correlatives/initialize/", { method: "POST", body: JSON.stringify({}) });
+  const response = await request("/settings/dte/correlatives/initialize/", { method: "POST", body: JSON.stringify({ ambientes: ["00", "01"] }) });
   const data = await handleJson<any>(response);
   return mapDteSettings({ correlatives: data.correlatives ?? [] } as any).correlatives;
 };
@@ -3332,6 +3341,8 @@ const mapOrder = (order: {
     is_custom?: boolean;
     quantity: number;
     assigned_name?: string;
+    guest_number?: number | null;
+    guest_label?: string;
     table_guest_id?: number | null;
     table_guest_label?: string;
     table_guest_seat_number?: number | null;
@@ -3346,9 +3357,16 @@ const mapOrder = (order: {
     line_total_final?: string;
     pricing_metadata?: Record<string, unknown> | null;
     kitchen_status?: "pending" | "sent" | "ready" | "delivered";
+    kitchen_status_label?: string;
     kitchen_sent_at?: string | null;
     kitchen_ready_at?: string | null;
     kitchen_delivered_at?: string | null;
+    kitchen_completed_at?: string | null;
+    kitchen_served_at?: string | null;
+    is_pending_kitchen?: boolean;
+    is_in_kitchen?: boolean;
+    is_completed?: boolean;
+    is_served?: boolean;
     applied_modifiers: Array<{ modifier_name_snapshot: string }>;
   }>;
   payment_status: Order["paymentStatus"];
@@ -3407,13 +3425,22 @@ const mapOrder = (order: {
       pricingMetadata: item.pricing_metadata ?? null,
       unitPriceOverride: item.unit_price_override != null ? Number(item.unit_price_override) : null,
       assignedName: item.assigned_name || undefined,
+      guestNumber: item.guest_number ?? item.table_guest_seat_number ?? null,
+      guestLabel: item.guest_label || item.table_guest_label || item.assigned_name || undefined,
       tableGuestId: item.table_guest_id ?? null,
       tableGuestLabel: item.table_guest_label || item.assigned_name || undefined,
       tableGuestSeatNumber: item.table_guest_seat_number ?? null,
       kitchenStatus: item.kitchen_status ?? "pending",
+      kitchenStatusLabel: item.kitchen_status_label || undefined,
       kitchenSentAt: item.kitchen_sent_at ?? null,
       kitchenReadyAt: item.kitchen_ready_at ?? null,
       kitchenDeliveredAt: item.kitchen_delivered_at ?? null,
+      kitchenCompletedAt: item.kitchen_completed_at ?? item.kitchen_ready_at ?? null,
+      kitchenServedAt: item.kitchen_served_at ?? item.kitchen_delivered_at ?? null,
+      isPendingKitchen: Boolean(item.is_pending_kitchen ?? (item.kitchen_status ?? "pending") === "pending"),
+      isInKitchen: Boolean(item.is_in_kitchen ?? item.kitchen_status === "sent"),
+      isCompleted: Boolean(item.is_completed ?? item.kitchen_status === "ready"),
+      isServed: Boolean(item.is_served ?? item.kitchen_status === "delivered"),
     })),
     total: Number(order.total),
     status: order.status,
@@ -6635,14 +6662,14 @@ export type RestaurantTable = { id: number; area: number; areaName?: string; nam
 export type TableGuest = { id: number; label: string; seatNumber: number; isActive: boolean; isPaid: boolean };
 export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number; groupNumber?: number | null; sentCount?: number; detail?: string };
 export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
-export type TableKitchenItem = { id: number; productName: string; quantity: number; assignedName?: string; kitchenStatus: "pending"|"sent"|"ready"|"delivered"; kitchenSentAt?: string | null; kitchenReadyAt?: string | null; kitchenDeliveredAt?: string | null; lineTotal: number };
+export type TableKitchenItem = { id: number; productName: string; quantity: number; assignedName?: string; guestNumber?: number | null; guestLabel?: string; tableGuestId?: number | null; tableGuestLabel?: string; tableGuestSeatNumber?: number | null; kitchenStatus: "pending"|"sent"|"ready"|"delivered"; kitchenStatusLabel?: string; kitchenSentAt?: string | null; kitchenReadyAt?: string | null; kitchenDeliveredAt?: string | null; kitchenCompletedAt?: string | null; kitchenServedAt?: string | null; isPendingKitchen?: boolean; isInKitchen?: boolean; isCompleted?: boolean; isServed?: boolean; modifiers: string[]; lineTotal: number };
 export type TableKitchenPerson = { label: string; items: TableKitchenItem[]; total: number };
 export type TableKitchenSessionSummary = { sessionId: number; orderId?: number | null; status: string; tables: string[]; tableLabel: string; guestsCount: number; orderMode: "table"|"per_person"; total: number; remaining: number; items: TableKitchenItem[]; people: TableKitchenPerson[] };
 type RawDiningArea = Partial<Record<"id"|"name"|"sort_order"|"is_active"|"x"|"y"|"width"|"height"|"color"|"operational_zoom"|"operational_offset_x"|"operational_offset_y", unknown>>;
 type RawRestaurantTable = Partial<Record<"id"|"area"|"area_name"|"name"|"number"|"capacity"|"shape"|"x"|"y"|"width"|"height"|"rotation"|"color"|"is_active"|"sort_order", unknown>>;
 type RawTableGuest = Partial<Record<"id"|"label"|"seat_number"|"is_active"|"is_paid", unknown>>;
 type RawTableSession = Partial<Record<"id"|"status"|"guests_count"|"guest_count"|"order_mode"|"primary_order"|"order_id"|"table_ids"|"table_id"|"guests"|"opened_at"|"total_cached"|"group_number", unknown>>;
-type RawTableKitchenItem = Partial<Record<"id"|"product_name"|"productName"|"quantity"|"assigned_name"|"kitchen_status"|"kitchen_sent_at"|"kitchen_ready_at"|"kitchen_delivered_at"|"line_total", unknown>>;
+type RawTableKitchenItem = Partial<Record<"id"|"product_name"|"productName"|"quantity"|"assigned_name"|"guest_number"|"guest_label"|"table_guest_id"|"table_guest_label"|"table_guest_seat_number"|"kitchen_status"|"kitchen_status_label"|"kitchen_sent_at"|"kitchen_ready_at"|"kitchen_delivered_at"|"kitchen_completed_at"|"kitchen_served_at"|"is_pending_kitchen"|"is_in_kitchen"|"is_completed"|"is_served"|"modifiers"|"line_total", unknown>>;
 type RawTableKitchenPerson = Partial<Record<"label"|"total"|"items", unknown>>;
 type RawTableKitchenSession = Partial<Record<"session_id"|"order_id"|"status"|"tables"|"table_label"|"guests_count"|"order_mode"|"total"|"remaining"|"items"|"people", unknown>>;
 type TableKitchenStatus = TableKitchenItem["kitchenStatus"];
@@ -6700,10 +6727,23 @@ const mapTableKitchenItem = (item: RawTableKitchenItem): TableKitchenItem => ({
   productName: String(item.product_name ?? item.productName ?? ""),
   quantity: Number(item.quantity ?? 0),
   assignedName: item.assigned_name ? String(item.assigned_name) : undefined,
+  guestNumber: item.guest_number == null ? item.table_guest_seat_number == null ? null : Number(item.table_guest_seat_number) : Number(item.guest_number),
+  guestLabel: item.guest_label ? String(item.guest_label) : item.table_guest_label ? String(item.table_guest_label) : undefined,
+  tableGuestId: item.table_guest_id == null ? null : Number(item.table_guest_id),
+  tableGuestLabel: item.table_guest_label ? String(item.table_guest_label) : undefined,
+  tableGuestSeatNumber: item.table_guest_seat_number == null ? null : Number(item.table_guest_seat_number),
   kitchenStatus: normalizeKitchenStatus(item.kitchen_status),
+  kitchenStatusLabel: item.kitchen_status_label ? String(item.kitchen_status_label) : undefined,
   kitchenSentAt: item.kitchen_sent_at ? String(item.kitchen_sent_at) : null,
   kitchenReadyAt: item.kitchen_ready_at ? String(item.kitchen_ready_at) : null,
   kitchenDeliveredAt: item.kitchen_delivered_at ? String(item.kitchen_delivered_at) : null,
+  kitchenCompletedAt: item.kitchen_completed_at ? String(item.kitchen_completed_at) : item.kitchen_ready_at ? String(item.kitchen_ready_at) : null,
+  kitchenServedAt: item.kitchen_served_at ? String(item.kitchen_served_at) : item.kitchen_delivered_at ? String(item.kitchen_delivered_at) : null,
+  isPendingKitchen: Boolean(item.is_pending_kitchen ?? normalizeKitchenStatus(item.kitchen_status) === "pending"),
+  isInKitchen: Boolean(item.is_in_kitchen ?? item.kitchen_status === "sent"),
+  isCompleted: Boolean(item.is_completed ?? item.kitchen_status === "ready"),
+  isServed: Boolean(item.is_served ?? item.kitchen_status === "delivered"),
+  modifiers: Array.isArray(item.modifiers) ? item.modifiers.map(String) : [],
   lineTotal: Number(item.line_total ?? 0),
 });
 const mapTableKitchenSession = (session: RawTableKitchenSession): TableKitchenSessionSummary => ({
@@ -6766,9 +6806,16 @@ export const splitTableSessionTable = async (sessionId: number, tableId: number)
   const data = await handleJson<{ session?: RawTableSession } & RawTableSession>(response);
   return mapTableSession(data.session ?? data);
 };
-export const sendTableSessionToKitchen = async (sessionId: number): Promise<TableSession> => {
-  const response = await request(`/orders/tables/sessions/${sessionId}/send-to-kitchen/`, { method: 'POST' });
-  const data = await handleJson<({ session?: RawTableSession; sent_count?: unknown; detail?: unknown } & RawTableSession)>(response);
+export const sendTableSessionToKitchen = async (sessionId: number, payload?: { scope?: "guest" | "table"; guestId?: number | null; guestNumber?: number | null }): Promise<TableSession> => {
+  const response = await request(`/orders/tables/sessions/${sessionId}/send-to-kitchen/`, {
+    method: 'POST',
+    body: JSON.stringify({
+      scope: payload?.scope ?? "table",
+      guest_id: payload?.guestId ?? null,
+      guest_number: payload?.guestNumber ?? null,
+    }),
+  });
+  const data = await handleJson<({ session?: RawTableSession; sent_count?: unknown; detail?: unknown; order?: unknown; summary?: unknown } & RawTableSession)>(response);
   return { ...mapTableSession(data.session ?? data), sentCount: Number(data.sent_count ?? 0), detail: data.detail ? String(data.detail) : undefined };
 };
 export const forceReleaseTableSession = async (sessionId: number, payload: { reason: string; authorizationPin?: string }): Promise<TableSession> => {
@@ -6777,7 +6824,7 @@ export const forceReleaseTableSession = async (sessionId: number, payload: { rea
   return mapTableSession(data.session ?? data);
 };
 export const markTableKitchenItemReady = async (itemId: number): Promise<TableKitchenItem> => {
-  const response = await request(`/orders/items/${itemId}/mark-ready/`, { method: 'POST' });
+  const response = await request(`/kitchen/items/${itemId}/complete/`, { method: 'POST' });
   const data = await handleJson<{ item?: RawTableKitchenItem } & RawTableKitchenItem>(response);
   return mapTableKitchenItem(data.item ?? data);
 };

@@ -10,9 +10,9 @@ from rest_framework.views import APIView
 from apps.core.models import Branch, FeatureFlag
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin
+from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsKitchenOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
-from apps.orders.serializers import DiningAreaSerializer, RestaurantTableSerializer, TableSessionSerializer
+from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableSessionSerializer
 from apps.payments.models import Payment
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -139,19 +139,35 @@ def _authorize_admin_or_superadmin_pin(pin: str):
 
 
 def _serialize_kitchen_item(item: OrderItem):
-    guest_label = item.assigned_name or (item.table_guest.label if item.table_guest_id and item.table_guest else "")
+    guest_label = (item.table_guest.label if item.table_guest_id and item.table_guest else "") or item.assigned_name
+    status_label = {
+        OrderItem.KITCHEN_STATUS_PENDING: "Pendiente de enviar",
+        OrderItem.KITCHEN_STATUS_SENT: "En cocina",
+        OrderItem.KITCHEN_STATUS_READY: "Terminado",
+        OrderItem.KITCHEN_STATUS_DELIVERED: "Servido",
+    }.get(item.kitchen_status, "Pendiente de enviar")
     return {
         "id": item.id,
         "product_name": item.product_name_snapshot,
         "quantity": item.quantity,
         "assigned_name": item.assigned_name,
+        "guest_number": item.table_guest.seat_number if item.table_guest_id and item.table_guest else None,
+        "guest_label": guest_label,
         "table_guest_id": item.table_guest_id,
         "table_guest_label": guest_label,
         "table_guest_seat_number": item.table_guest.seat_number if item.table_guest_id and item.table_guest else None,
         "kitchen_status": item.kitchen_status,
+        "kitchen_status_label": status_label,
         "kitchen_sent_at": item.kitchen_sent_at,
         "kitchen_ready_at": item.kitchen_ready_at,
         "kitchen_delivered_at": item.kitchen_delivered_at,
+        "kitchen_completed_at": item.kitchen_ready_at,
+        "kitchen_served_at": item.kitchen_delivered_at,
+        "is_pending_kitchen": item.kitchen_status == OrderItem.KITCHEN_STATUS_PENDING,
+        "is_in_kitchen": item.kitchen_status == OrderItem.KITCHEN_STATUS_SENT,
+        "is_completed": item.kitchen_status == OrderItem.KITCHEN_STATUS_READY,
+        "is_served": item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED,
+        "modifiers": [mod.modifier_name_snapshot for mod in item.applied_modifiers.all()],
         "line_total": str((item.effective_unit_price * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))),
     }
 
@@ -361,12 +377,45 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         order = session.primary_order
         if not order.items.exists():
             return Response({"detail": "No se puede enviar una orden vacía."}, status=400)
-        pending_items = list(
-            order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
-        )
+        scope = str(request.data.get("scope") or "table").strip().lower()
+        if scope not in {"guest", "table"}:
+            return Response({"scope": "Usa guest o table."}, status=400)
+        pending_qs = order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+        guest = None
+        if scope == "guest":
+            if session.order_mode != TableSession.ORDER_MODE_PER_PERSON:
+                return Response({"scope": "El envío individual solo aplica a orden por persona."}, status=400)
+            raw_guest_id = request.data.get("guest_id") or request.data.get("table_guest_id")
+            raw_guest_number = request.data.get("guest_number") or request.data.get("seat_number")
+            try:
+                guest_id = int(raw_guest_id) if raw_guest_id not in (None, "") else None
+            except (TypeError, ValueError):
+                guest_id = None
+            try:
+                guest_number = int(raw_guest_number) if raw_guest_number not in (None, "") else None
+            except (TypeError, ValueError):
+                guest_number = None
+            guests = session.guests.select_for_update().all()
+            if guest_id:
+                guest = guests.filter(id=guest_id).first()
+            if guest is None and guest_number:
+                guest = guests.filter(seat_number=guest_number).first()
+            if guest is None:
+                return Response({"guest_number": "Selecciona una persona válida de la mesa."}, status=400)
+            pending_qs = pending_qs.filter(table_guest=guest)
+        pending_items = list(pending_qs)
         if not pending_items:
+            detail = "No hay productos pendientes para enviar."
+            if guest:
+                detail = f"No hay productos pendientes para {guest.label}."
             return Response(
-                {"detail": "No hay productos nuevos para enviar.", "sent_count": 0, "session": TableSessionSerializer(session).data},
+                {
+                    "detail": detail,
+                    "sent_count": 0,
+                    "session": TableSessionSerializer(session).data,
+                    "order": OrderSerializer(order).data,
+                    "summary": _serialize_kitchen_session(session),
+                },
                 status=status.HTTP_200_OK,
             )
         now = timezone.now()
@@ -379,7 +428,16 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         order.save(update_fields=["send_to_kitchen", "pending_state", "updated_at"])
         session.status = "sent_to_kitchen"
         session.save(update_fields=["status", "updated_at"])
-        return Response({"detail": f"{len(pending_items)} productos enviados a cocina.", "sent_count": len(pending_items), "session": TableSessionSerializer(session).data})
+        detail = f"{len(pending_items)} productos enviados a cocina."
+        if guest:
+            detail = f"Productos de {guest.label} enviados a cocina."
+        return Response({
+            "detail": detail,
+            "sent_count": len(pending_items),
+            "session": TableSessionSerializer(session).data,
+            "order": OrderSerializer(order).data,
+            "summary": _serialize_kitchen_session(session),
+        })
 
 
 class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
@@ -396,7 +454,7 @@ class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableOrderItemKitchenStatusView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [IsKitchenOrManagerOrAdmin]
 
     @transaction.atomic
     def post(self, request, pk: int, target_status: str):
