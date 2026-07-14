@@ -12,6 +12,7 @@ import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
 import { calculatePosPricing } from "@/lib/posPricing";
 import { SplitPanel } from "@/components/pos/SplitPanel";
+import { ThermalTicketDialog } from "@/components/printing/ThermalTicketDialog";
 import { SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
 import {
   Dialog,
@@ -93,6 +94,7 @@ import {
   getFeatureFlags,
   getRuntimeFeatureSettings,
   getDteSettings,
+  getTicketSettings,
   getRestaurantTables,
   getTableSessions,
   createTableSession,
@@ -167,6 +169,27 @@ interface SaleCompletionSummary {
   paymentMethodCode: string;
 }
 
+type TablePaymentScope = {
+  kind: "table" | "guest";
+  tableId: number;
+  tableSessionId: number;
+  tableGuestId?: number | null;
+  guestNumber?: number | null;
+  guestLabel?: string;
+  totalCents: number;
+  paidCents: number;
+  remainingCents: number;
+  orderItemIds: number[];
+};
+
+type ThermalTicketState = {
+  open: boolean;
+  title: string;
+  subtitle: string;
+  text: string;
+  logoUrl: string | null;
+};
+
 const DEFAULT_CUSTOMER_EMAIL = "facturasPDG23@gmail.com";
 const digitsOnly = (value: string) => value.replace(/\D+/g, "");
 const formatPhone = (raw: string) => {
@@ -179,6 +202,9 @@ const formatPhone = (raw: string) => {
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
 const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
+const getOrderItemTotal = (item: Order["items"][number]) => Number(item.lineTotalFinal ?? (item.unitPriceFinal ?? item.price) * item.quantity);
+const getOrderItemTotalCents = (item: Order["items"][number]) => toCents(getOrderItemTotal(item));
+const getOrderItemModifiers = (item: Order["items"][number]) => Array.isArray(item.modifiers) ? item.modifiers.filter(Boolean) : [];
 
 const getPaidExtrasLines = (item: CartItem) =>
   (item.modifiers || []).filter((modifier) => modifier.price > 0).map((modifier) => ({
@@ -521,6 +547,9 @@ type TableConfirmDialogState =
   const [tableConfirmDialog, setTableConfirmDialog] = useState<TableConfirmDialogState>({ open: false, type: null, sourceTableId: null, targetTableId: null, session: null });
   const [tableBillDialog, setTableBillDialog] = useState<{ open: boolean; loading: boolean; tableId: number | null; session: TableSession | null; order: Order | null; payments: Payment[] }>({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
   const [tableBillView, setTableBillView] = useState<string>("all");
+  const [tablePaymentScope, setTablePaymentScope] = useState<TablePaymentScope | null>(null);
+  const [thermalTicketWidth, setThermalTicketWidth] = useState<"58mm" | "80mm">("58mm");
+  const [thermalTicket, setThermalTicket] = useState<ThermalTicketState>({ open: false, title: "", subtitle: "", text: "", logoUrl: null });
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
   const [tableKitchenSendDialog, setTableKitchenSendDialog] = useState<{ open: boolean; pendingGuestCount: number }>({ open: false, pendingGuestCount: 0 });
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
@@ -744,6 +773,47 @@ type TableConfirmDialogState =
     });
   }, [restaurantTables]);
 
+  const getGuestItems = useCallback((order: Order, guest: TableSession["guests"][number]) => {
+    return (order.items || []).filter((item) => {
+      if (item.tableGuestId != null && guest.id != null) return item.tableGuestId === guest.id;
+      return item.tableGuestSeatNumber === guest.seatNumber || item.guestNumber === guest.seatNumber;
+    });
+  }, []);
+
+  const getGuestPaidCents = useCallback((payments: Payment[], guest: TableSession["guests"][number]) => {
+    return payments.reduce((sum, payment) => {
+      return sum + (payment.allocations || []).reduce((allocationSum, allocation) => {
+        const sameGuestId = allocation.tableGuestId != null && allocation.tableGuestId === guest.id;
+        const sameGuestNumber = allocation.guestNumber != null && allocation.guestNumber === guest.seatNumber;
+        return sameGuestId || sameGuestNumber ? allocationSum + Number(allocation.amountCents || 0) : allocationSum;
+      }, 0);
+    }, 0);
+  }, []);
+
+  const buildGuestPaymentScope = useCallback((
+    tableId: number,
+    session: TableSession,
+    order: Order,
+    payments: Payment[],
+    guest: TableSession["guests"][number],
+  ): TablePaymentScope => {
+    const guestItems = getGuestItems(order, guest);
+    const totalCents = guestItems.reduce((sum, item) => sum + getOrderItemTotalCents(item), 0);
+    const paidCents = getGuestPaidCents(payments, guest);
+    return {
+      kind: "guest",
+      tableId,
+      tableSessionId: session.id,
+      tableGuestId: guest.id,
+      guestNumber: guest.seatNumber,
+      guestLabel: guest.label,
+      totalCents,
+      paidCents,
+      remainingCents: Math.max(totalCents - paidCents, 0),
+      orderItemIds: guestItems.map((item) => item.id),
+    };
+  }, [getGuestItems, getGuestPaidCents]);
+
   const openTableOrderContext = useCallback((tableId: number, session: TableSession, mode: "edit" | "pay" = "edit") => {
     upsertTableSession(session);
     setContextFromTableSession(tableId, session);
@@ -753,7 +823,7 @@ type TableConfirmDialogState =
     }
   }, [navigate, setContextFromTableSession, upsertTableSession]);
 
-  const openTablePayment = useCallback(async (tableId: number, session: TableSession) => {
+  const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: { guest?: TableSession["guests"][number] }) => {
     if (!session.primaryOrder) {
       toast.error("La mesa no tiene orden activa.");
       return;
@@ -761,8 +831,14 @@ type TableConfirmDialogState =
     try {
       upsertTableSession(session);
       setContextFromTableSession(tableId, session);
-      const order = await getOrderById(session.primaryOrder);
-      const restoredCart = (order.items || []).map((item) => mapOrderItemToCartItem(item));
+      const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
+      const scope = options?.guest ? buildGuestPaymentScope(tableId, session, order, payments, options.guest) : null;
+      if (scope && scope.remainingCents <= 0) {
+        toast.info(`${scope.guestLabel || "La persona"} ya no tiene saldo pendiente.`);
+        return;
+      }
+      const sourceItems = scope ? (order.items || []).filter((item) => scope.orderItemIds.includes(item.id)) : (order.items || []);
+      const restoredCart = sourceItems.map((item) => mapOrderItemToCartItem(item));
       const serviceKey = order.serviceType || serviceType;
       setActiveOrder(order);
       setCreatedOrderId(order.id);
@@ -774,12 +850,12 @@ type TableConfirmDialogState =
         items: restoredCart,
         subtotal: order.subtotalBeforeDiscounts ?? order.total,
         tax: order.taxTotal ?? 0,
-        total: order.totalPayable ?? order.total,
+        total: scope ? scope.remainingCents / 100 : order.totalPayable ?? order.total,
         taxRate,
         serviceType: serviceKey,
         createdAt: Date.now(),
       });
-      const dueCents = typeof order.remainingCents === "number" ? order.remainingCents : toCents(order.remaining);
+      const dueCents = scope ? scope.remainingCents : typeof order.remainingCents === "number" ? order.remainingCents : toCents(order.remaining);
       setPaymentAmount(centsToInput(dueCents));
       setTipAmount("0");
       setPaymentReference("");
@@ -793,6 +869,7 @@ type TableConfirmDialogState =
       const initialParts = splitEvenly(Math.max(dueCents, 0), 1);
       setParts(initialParts);
       setActivePartId(initialParts[0]?.id ?? null);
+      setTablePaymentScope(scope);
       setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
       setPosMode("pos");
       setIsPaymentMethodOpen(false);
@@ -800,7 +877,7 @@ type TableConfirmDialogState =
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el cobro de mesa.");
     }
-  }, [serviceType, setContextFromTableSession, taxRate, upsertTableSession]);
+  }, [buildGuestPaymentScope, serviceType, setContextFromTableSession, taxRate, upsertTableSession]);
 
   const openTableSession = async (tableId: number) => {
     const existing = sessionByTableId.get(tableId);
@@ -1206,6 +1283,7 @@ type TableConfirmDialogState =
           setWhatsappClientInput("");
         }
         setCart(restoredCart);
+        setTablePaymentScope(null);
         setCheckoutDraft({
           items: restoredCart,
           subtotal: hydratedPricing.subtotal,
@@ -1529,6 +1607,7 @@ type TableConfirmDialogState =
     const initialParts = splitEvenly(Math.round(draft.total * 100), 1);
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
+    setTablePaymentScope(null);
     setIsPaymentOpen(true);
     setIsPaymentMethodOpen(false);
   };
@@ -1694,7 +1773,9 @@ type TableConfirmDialogState =
     setIsManualProductOpen(false);
   };
 
-  const canonicalDueCents = activeOrder
+  const canonicalDueCents = tablePaymentScope
+    ? tablePaymentScope.remainingCents
+    : activeOrder
     ? (() => {
       const hasItems = activeOrder.items.length > 0;
       const remainingFromCents = Number.isFinite(activeOrder.remainingCents) ? Math.max(activeOrder.remainingCents ?? 0, 0) : 0;
@@ -1744,8 +1825,13 @@ type TableConfirmDialogState =
   const checkoutDisposableTotal = checkoutDraftPricing?.disposableTotal ?? 0;
   const checkoutSummarySubtotalBefore = checkoutDraftPricing?.subtotal ?? activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
   const checkoutSummaryDiscount = checkoutDraftPricing?.discountTotal ?? (activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount);
-  const checkoutSummaryTotal = checkoutDraftPricing?.total ?? activeOrder?.totalPayable ?? paymentTotal;
+  const checkoutSummaryTotal = tablePaymentScope ? paymentTotal : checkoutDraftPricing?.total ?? activeOrder?.totalPayable ?? paymentTotal;
   const checkoutDiscountLines = checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
+  const paymentDialogItems = useMemo(() => {
+    if (!activeOrder?.items?.length) return null;
+    if (!tablePaymentScope) return activeOrder.items;
+    return activeOrder.items.filter((item) => tablePaymentScope.orderItemIds.includes(item.id));
+  }, [activeOrder, tablePaymentScope]);
   const filteredDiscounts = availableDiscounts.filter((discount) =>
     discount.name.toLowerCase().includes(discountSearch.toLowerCase().trim())
   );
@@ -1845,6 +1931,7 @@ type TableConfirmDialogState =
     const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
+    setTablePaymentScope(null);
     setIsPaymentOpen(true);
   };
 
@@ -3130,6 +3217,7 @@ type TableConfirmDialogState =
     setSplitEnabled(false);
     setParts([]);
     setActivePartId(null);
+    setTablePaymentScope(null);
     setKitchenPromptOrderId(null);
     setIsKitchenPromptOpen(false);
     setPostSaleKitchenChoice(true);
@@ -3279,9 +3367,9 @@ type TableConfirmDialogState =
     const amountReceived = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : rawAmountReceived;
     const tipValue = selectedPaymentIsCash && !showCashPanel ? 0 : rawTipValue;
     const totalDue = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : totalDueCents / 100;
-    const remainingOrderAmount = Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
+    const remainingOrderAmount = tablePaymentScope ? tablePaymentScope.remainingCents / 100 : Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
     const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
-    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : remainingOrderAmount;
+    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : tablePaymentScope ? expectedPaymentCents / 100 : remainingOrderAmount;
 
     if (selectedPaymentIsCash && (!amountReceived || amountReceived <= 0)) {
       toast.error("Ingresa un monto válido");
@@ -3324,12 +3412,10 @@ type TableConfirmDialogState =
       const latestOrder = await getOrderById(Number(orderId));
       setActiveOrder(latestOrder);
       const latestRemaining = Math.max(0, toNumber(latestOrder.remaining));
-      const amountForApi =
-        splitEnabled
-          ? Math.min(paymentAmountForApi, latestRemaining)
-          : paymentMethod === "cash"
-            ? latestRemaining
-            : Math.min(paymentAmountForApi, latestRemaining);
+      let amountForApi = Math.min(paymentAmountForApi, latestRemaining);
+      if (!splitEnabled && !tablePaymentScope && paymentMethod === "cash") {
+        amountForApi = latestRemaining;
+      }
       const receivedForApi = selectedPaymentIsCash ? amountReceived : amountForApi;
 
       const inventoryWarningConfirmed = amountForApi >= latestRemaining - 0.01 ? await validateInventoryBeforeFinalPayment(Number(orderId)) : false;
@@ -3346,6 +3432,12 @@ type TableConfirmDialogState =
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
+        paymentScope: tablePaymentScope?.kind === "guest" ? "guest" : tablePaymentScope ? "custom" : "order",
+        tableSessionId: tablePaymentScope?.tableSessionId ?? null,
+        tableGuestId: tablePaymentScope?.tableGuestId ?? null,
+        guestNumber: tablePaymentScope?.guestNumber ?? null,
+        guestLabel: tablePaymentScope?.guestLabel ?? "",
+        orderItemIds: tablePaymentScope?.orderItemIds ?? [],
         inventoryWarningConfirmed,
       });
       setLastPaymentId(paymentResult.id);
@@ -3355,12 +3447,13 @@ type TableConfirmDialogState =
       }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
+      let nextUnpaidPart: SplitPart | undefined;
       if (splitEnabled) {
         const paidPartId = activeSplitPart?.id;
         const nextParts = parts.map((part) => (part.id === paidPartId ? { ...part, isPaid: true, locked: true } : part));
         setParts(nextParts);
-        const nextUnpaid = nextParts.find((part) => !part.isPaid);
-        setActivePartId(nextUnpaid?.id ?? nextParts[0]?.id ?? null);
+        nextUnpaidPart = nextParts.find((part) => !part.isPaid);
+        setActivePartId(nextUnpaidPart?.id ?? nextParts[0]?.id ?? null);
       }
       setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
       setTipAmount("0");
@@ -3419,6 +3512,22 @@ type TableConfirmDialogState =
           setIsKitchenPromptOpen(true);
         }
       } else {
+        if (tablePaymentScope && (!splitEnabled || !nextUnpaidPart)) {
+          const scope = tablePaymentScope;
+          toast.success(`Pago de ${scope.guestLabel || "persona"} registrado. La mesa sigue abierta.`);
+          const sessions = await refreshTableSessions();
+          const latestSession = sessions.find((row) => row.id === scope.tableSessionId) ?? tableSessions.find((row) => row.id === scope.tableSessionId) ?? null;
+          setIsPaymentOpen(false);
+          setIsPaymentMethodOpen(false);
+          setCheckoutDraft(null);
+          setTablePaymentScope(null);
+          setTableOrderContext(null);
+          setPosMode("tables");
+          if (latestSession) {
+            await openTableBill(scope.tableId, latestSession);
+          }
+          return;
+        }
         toast.success("Pago registrado");
       }
     } catch (error) {
@@ -3744,6 +3853,90 @@ type TableConfirmDialogState =
     if (status === "ready") return "border-blue-300 bg-blue-500/10 text-blue-700 dark:text-blue-200";
     if (status === "delivered") return "border-emerald-300 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
     return "border-muted-foreground/20 bg-muted text-muted-foreground";
+  };
+  const getItemAllocatedCents = (item: Order["items"][number], payments: Payment[]) =>
+    payments.reduce((sum, payment) => (
+      sum + (payment.allocations || []).reduce((allocationSum, allocation) => (
+        allocation.orderItemId === item.id ? allocationSum + Number(allocation.amountCents || 0) : allocationSum
+      ), 0)
+    ), 0);
+  const isTableBillItemPaid = (item: Order["items"][number], payments: Payment[]) => getItemAllocatedCents(item, payments) >= Math.max(getOrderItemTotalCents(item) - 1, 0);
+  const getTableBillItemStatusLabel = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments) ? "Pagado" : getKitchenStatusLabel(item.kitchenStatus);
+  const getTableBillItemStatusTone = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments)
+    ? "border-emerald-400 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+    : getKitchenStatusTone(item.kitchenStatus);
+
+  const buildTableAccountTicketText = (order: Order, session: TableSession | null, payments: Payment[], tableLabel: string, width: "58mm" | "80mm") => {
+    const chars = width === "58mm" ? 32 : 42;
+    const rule = "-".repeat(chars);
+    const center = (value: string) => {
+      const text = value.slice(0, chars);
+      const pad = Math.max(0, Math.floor((chars - text.length) / 2));
+      return `${" ".repeat(pad)}${text}`;
+    };
+    const row = (left: string, right = "") => {
+      const safeRight = right.slice(0, Math.min(12, chars));
+      const safeLeft = left.slice(0, Math.max(1, chars - safeRight.length - 1));
+      return `${safeLeft}${" ".repeat(Math.max(1, chars - safeLeft.length - safeRight.length))}${safeRight}`;
+    };
+    const lines: string[] = [
+      center("CUENTA DE MESA"),
+      center("Ticket para revision"),
+      center("Cuenta no pagada"),
+      center("NO VALIDO COMO COMPROBANTE FISCAL"),
+      rule,
+      row("Mesa", tableLabel),
+      row("Personas", String(session?.guestsCount ?? 1)),
+      row("Fecha", formatDateTimeSV(new Date().toISOString())),
+      rule,
+    ];
+    const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number; paidCents: number }>();
+    (order.items || []).forEach((item) => {
+      const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
+      const seat = item.tableGuestSeatNumber ?? item.guestNumber ?? 999;
+      const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
+      const group = groups.get(key) ?? { label, seat, items: [], total: 0, paidCents: 0 };
+      group.items.push(item);
+      group.total += getOrderItemTotal(item);
+      group.paidCents += getItemAllocatedCents(item, payments);
+      groups.set(key, group);
+    });
+    Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).forEach((group) => {
+      lines.push(group.label.toUpperCase(), row("Subtotal", formatMoney(group.total)));
+      group.items.forEach((item) => {
+        lines.push(row(`${item.quantity}x ${item.productName}`, formatMoney(getOrderItemTotal(item))));
+        lines.push(`  ${getTableBillItemStatusLabel(item, payments)}`);
+        const modifiers = getOrderItemModifiers(item);
+        if (modifiers.length) lines.push(`  Modificadores: ${modifiers.join(", ")}`.slice(0, chars));
+      });
+      lines.push(rule);
+    });
+    lines.push(
+      row("Total", formatMoney(order.totalPayable ?? order.total)),
+      row("Pagado", formatMoney(order.totalPaid)),
+      row("Pendiente", formatMoney(order.remaining)),
+      rule,
+      center("Pendiente de pago"),
+    );
+    return lines.join("\n");
+  };
+
+  const openTableLocalTicket = async () => {
+    if (!tableBillDialog.order) return;
+    let logoUrl: string | null = null;
+    try {
+      logoUrl = (await getTicketSettings()).ticketLogoUrl;
+    } catch {
+      logoUrl = null;
+    }
+    const tableLabel = restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa";
+    setThermalTicket({
+      open: true,
+      title: "Vista previa de ticket",
+      subtitle: "Cuenta local 58mm/80mm. No marca la mesa como pagada.",
+      text: buildTableAccountTicketText(tableBillDialog.order, tableBillDialog.session, tableBillDialog.payments, tableLabel, thermalTicketWidth),
+      logoUrl,
+    });
   };
   const handleTableMapWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (!tableMapEnabled || posMode !== "tables") return;
@@ -4102,128 +4295,170 @@ type TableConfirmDialogState =
           </DialogContent>
         </Dialog>
         <Dialog open={tableBillDialog.open} onOpenChange={(open) => setTableBillDialog((prev) => ({ ...prev, open }))}>
-          <DialogContent className="max-h-[92dvh] max-w-3xl overflow-hidden">
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(96vw,72rem)] max-w-6xl flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b bg-background px-5 py-4">
               <DialogTitle>Cuenta de mesa</DialogTitle>
-              <DialogDescription>Resumen local de productos, pagos y saldo pendiente.</DialogDescription>
+              <DialogDescription>Productos por persona, estados de cocina y pagos aplicados.</DialogDescription>
             </DialogHeader>
-            {tableBillDialog.loading ? (
-              <div className="py-8 text-sm text-muted-foreground">Cargando cuenta...</div>
-            ) : tableBillDialog.order ? (
-              <div className="space-y-4">
-                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="font-semibold">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p>
-                      <p className="text-xs text-muted-foreground">{tableBillDialog.session?.guestsCount ?? 1} personas · {getSessionStateLabel(tableBillDialog.session ?? undefined)}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-3 font-semibold">
-                      <span>Total: {formatMoney(tableBillDialog.order.totalPayable ?? tableBillDialog.order.total)}</span>
-                      <span>Pagado: {formatMoney(tableBillDialog.order.totalPaid)}</span>
-                      <span>Pendiente: {formatMoney(tableBillDialog.order.remaining)}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" variant={tableBillView === "all" ? "default" : "outline"} onClick={() => setTableBillView("all")}>Todos</Button>
-                  {(tableBillDialog.session?.guests ?? []).map((guest) => (
-                    <Button key={guest.id} type="button" size="sm" variant={tableBillView === `guest:${guest.id}` ? "default" : "outline"} onClick={() => setTableBillView(`guest:${guest.id}`)}>
-                      {guest.label}
-                    </Button>
-                  ))}
-                  {[
-                    ["pending", "Pendiente de enviar"],
-                    ["sent", "En cocina"],
-                    ["ready", "Terminados"],
-                    ["delivered", "Servidos"],
-                  ].map(([value, label]) => (
-                    <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value)}>
-                      {label}
-                    </Button>
-                  ))}
-                </div>
-                <div className="max-h-[48vh] overflow-auto rounded-lg border">
-                  {tableBillDialog.order.items.length ? (() => {
-                    const filterItem = (item: Order["items"][number]) => {
-                      if (tableBillView === "pending") return (item.kitchenStatus ?? "pending") === "pending";
-                      if (tableBillView === "sent") return item.kitchenStatus === "sent";
-                      if (tableBillView === "ready") return item.kitchenStatus === "ready";
-                      if (tableBillView === "delivered") return item.kitchenStatus === "delivered";
-                      if (tableBillView.startsWith("guest:")) return item.tableGuestId === Number(tableBillView.replace("guest:", ""));
-                      return true;
-                    };
-                    const visibleItems = tableBillDialog.order!.items.filter(filterItem);
-                    if (!visibleItems.length) return <div className="p-4 text-sm text-muted-foreground">No hay productos para este filtro.</div>;
-                    if (tableBillView !== "all") {
-                      const selectedTotal = visibleItems.reduce((sum, item) => sum + Number(item.lineTotalFinal ?? item.price * item.quantity), 0);
-                      return visibleItems.map((item) => (
-                        <div key={item.id} className="border-b p-3 last:border-b-0">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="font-medium">{item.productName}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
-                              </p>
-                              {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
-                              <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
-                            </div>
-                            <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
-                          </div>
-                          {item.id === visibleItems[visibleItems.length - 1].id ? <div className="mt-3 border-t pt-2 text-right text-sm font-semibold">Total filtro: {formatMoney(selectedTotal)}</div> : null}
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {tableBillDialog.loading ? (
+                <div className="py-8 text-sm text-muted-foreground">Cargando cuenta...</div>
+              ) : tableBillDialog.order ? (() => {
+                const order = tableBillDialog.order;
+                const session = tableBillDialog.session;
+                const selectedGuest = tableBillView.startsWith("guest:")
+                  ? (session?.guests ?? []).find((guest) => guest.id === Number(tableBillView.replace("guest:", ""))) ?? null
+                  : null;
+                const filterItem = (item: Order["items"][number]) => {
+                  if (tableBillView === "pending") return (item.kitchenStatus ?? "pending") === "pending" && !isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (tableBillView === "sent") return item.kitchenStatus === "sent" && !isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (tableBillView === "ready") return item.kitchenStatus === "ready" && !isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (tableBillView === "delivered") return item.kitchenStatus === "delivered" && !isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (tableBillView === "paid") return isTableBillItemPaid(item, tableBillDialog.payments);
+                  if (selectedGuest) return getGuestItems(order, selectedGuest).some((guestItem) => guestItem.id === item.id);
+                  return true;
+                };
+                const visibleItems = order.items.filter(filterItem);
+                const selectedTotal = visibleItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0);
+                const selectedPaidCents = selectedGuest ? getGuestPaidCents(tableBillDialog.payments, selectedGuest) : 0;
+                const selectedPendingCents = selectedGuest ? Math.max(toCents(selectedTotal) - selectedPaidCents, 0) : 0;
+                const renderItem = (item: Order["items"][number]) => {
+                  const modifiers = getOrderItemModifiers(item);
+                  return (
+                    <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b px-3 py-3 last:border-b-0">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-foreground">{item.productName}</p>
+                          <Badge variant="outline" className={cn(getTableBillItemStatusTone(item, tableBillDialog.payments))}>{getTableBillItemStatusLabel(item, tableBillDialog.payments)}</Badge>
                         </div>
-                      ));
-                    }
-                    const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number }>();
-                    visibleItems.forEach((item) => {
-                      const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
-                      const seat = item.tableGuestSeatNumber ?? 999;
-                      const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
-                      const group = groups.get(key) ?? { label, seat, items: [], total: 0 };
-                      group.items.push(item);
-                      group.total += Number(item.lineTotalFinal ?? item.price * item.quantity);
-                      groups.set(key, group);
-                    });
-                    return Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).map((group) => (
-                      <div key={group.label} className="border-b last:border-b-0">
-                        <div className="sticky top-0 z-10 flex items-center justify-between bg-muted/70 px-3 py-2 text-sm font-semibold backdrop-blur">
-                          <span>{group.label}</span>
-                          <span>{formatMoney(group.total)}</span>
+                        <p className="text-xs text-muted-foreground">
+                          {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
+                        </p>
+                        {modifiers.length ? <p className="text-xs text-muted-foreground">Modificadores: {modifiers.join(", ")}</p> : null}
+                      </div>
+                      <p className="whitespace-nowrap text-right font-semibold">{formatMoney(getOrderItemTotal(item))}</p>
+                    </div>
+                  );
+                };
+                return (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="font-semibold text-foreground">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p>
+                          <p className="text-xs text-muted-foreground">{session?.guestsCount ?? 1} personas · {getSessionStateLabel(session ?? undefined)}</p>
                         </div>
-                        {group.items.map((item) => (
-                          <div key={item.id} className="flex items-start justify-between gap-3 px-3 py-3">
-                            <div className="min-w-0">
-                              <p className="font-medium">{item.productName}</p>
-                              <p className="text-xs text-muted-foreground">Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u</p>
-                              {item.modifiers.length ? <p className="text-xs text-muted-foreground">Extras: {item.modifiers.join(", ")}</p> : null}
-                              <Badge variant="outline" className={cn("mt-2", getKitchenStatusTone(item.kitchenStatus))}>{getKitchenStatusLabel(item.kitchenStatus)}</Badge>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 font-semibold text-foreground">
+                          <span>Total: {formatMoney(order.totalPayable ?? order.total)}</span>
+                          <span>Pagado: {formatMoney(order.totalPaid)}</span>
+                          <span>Pendiente: {formatMoney(order.remaining)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant={tableBillView === "all" ? "default" : "outline"} onClick={() => setTableBillView("all")}>Todos</Button>
+                      {(session?.guests ?? []).map((guest) => (
+                        <Button key={guest.id} type="button" size="sm" variant={tableBillView === `guest:${guest.id}` ? "default" : "outline"} onClick={() => setTableBillView(`guest:${guest.id}`)}>
+                          {guest.label}
+                        </Button>
+                      ))}
+                      {[
+                        ["pending", "Pendiente de enviar"],
+                        ["sent", "En cocina"],
+                        ["ready", "Terminados"],
+                        ["delivered", "Servidos"],
+                        ["paid", "Pagados"],
+                      ].map(([value, label]) => (
+                        <Button key={value} type="button" size="sm" variant={tableBillView === value ? "default" : "outline"} onClick={() => setTableBillView(value)}>
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    {selectedGuest ? (
+                      <div className="rounded-lg border border-[color:var(--app-border-strong)] bg-[var(--app-surface)] p-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold">{selectedGuest.label}</span>
+                          <span className="font-medium">Total: {formatMoney(selectedTotal)} | Pagado: {formatMoney(selectedPaidCents / 100)} | Pendiente: {formatMoney(selectedPendingCents / 100)}</span>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="overflow-hidden rounded-lg border">
+                      {visibleItems.length ? (
+                        tableBillView === "all" ? (() => {
+                          const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number; paidCents: number }>();
+                          visibleItems.forEach((item) => {
+                            const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
+                            const seat = item.tableGuestSeatNumber ?? item.guestNumber ?? 999;
+                            const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
+                            const group = groups.get(key) ?? { label, seat, items: [], total: 0, paidCents: 0 };
+                            group.items.push(item);
+                            group.total += getOrderItemTotal(item);
+                            group.paidCents += getItemAllocatedCents(item, tableBillDialog.payments);
+                            groups.set(key, group);
+                          });
+                          return Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).map((group) => (
+                            <div key={group.label} className="border-b last:border-b-0">
+                              <div className="sticky top-0 z-10 flex items-center justify-between bg-muted/80 px-3 py-2 text-sm font-semibold backdrop-blur">
+                                <span>{group.label}</span>
+                                <span>{formatMoney(group.total)} · pagado {formatMoney(group.paidCents / 100)}</span>
+                              </div>
+                              {group.items.map(renderItem)}
                             </div>
-                            <p className="font-semibold">{formatMoney(item.lineTotalFinal ?? item.price * item.quantity)}</p>
+                          ));
+                        })() : (
+                          <>
+                            {visibleItems.map(renderItem)}
+                            <div className="bg-muted/40 px-3 py-2 text-right text-sm font-semibold">Total filtro: {formatMoney(selectedTotal)}</div>
+                          </>
+                        )
+                      ) : <div className="p-4 text-sm text-muted-foreground">No hay productos para este filtro.</div>}
+                    </div>
+                    {tableBillDialog.payments.length ? (
+                      <div className="rounded-lg border p-3 text-sm">
+                        <p className="mb-2 font-medium">Pagos realizados</p>
+                        {tableBillDialog.payments.map((payment) => (
+                          <div key={payment.id} className="flex flex-wrap justify-between gap-2 border-b py-2 last:border-b-0">
+                            <span className="capitalize text-muted-foreground">
+                              {payment.method}
+                              {payment.allocations?.length ? ` · ${payment.allocations.map((allocation) => allocation.guestLabel || "Cuenta").join(", ")}` : ""}
+                            </span>
+                            <span className="font-semibold">{formatMoney(payment.amount)}</span>
                           </div>
                         ))}
                       </div>
-                    ));
-                  })() : <div className="p-4 text-sm text-muted-foreground">Esta mesa todavía no tiene productos.</div>}
-                </div>
-                {tableBillDialog.payments.length ? <div className="rounded-lg border p-3 text-sm">
-                  <p className="mb-2 font-medium">Pagos realizados</p>
-                  {tableBillDialog.payments.map((payment) => (
-                    <div key={payment.id} className="flex justify-between border-b py-2 last:border-b-0">
-                      <span className="capitalize text-muted-foreground">{payment.method}</span>
-                      <span className="font-semibold">{formatMoney(payment.amount)}</span>
-                    </div>
-                  ))}
-                </div> : null}
-              </div>
-            ) : null}
-            <DialogFooter>
+                    ) : null}
+                  </div>
+                );
+              })() : null}
+            </div>
+            <DialogFooter className="shrink-0 gap-2 border-t bg-background px-5 py-4">
               <Button variant="outline" onClick={() => setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] })}>Cerrar</Button>
-              {tableBillDialog.order ? <Button variant="outline" onClick={() => void smartPrintTicket({ orderId: tableBillDialog.order!.id, preferDirect: false })}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
+              {tableBillDialog.order ? <Button variant="outline" onClick={() => void openTableLocalTicket()}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
-              {tableBillDialog.order && tableBillView.startsWith("guest:") ? <Button variant="outline" disabled>Cobro por persona próximamente</Button> : null}
+              {tableBillDialog.order && tableBillDialog.session && tableBillDialog.tableId && tableBillView.startsWith("guest:") ? (() => {
+                const guest = tableBillDialog.session.guests.find((row) => row.id === Number(tableBillView.replace("guest:", "")));
+                if (!guest) return null;
+                const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
+                return (
+                  <Button variant="outline" disabled={scope.remainingCents <= 0} onClick={() => void openTablePayment(tableBillDialog.tableId!, tableBillDialog.session!, { guest })}>
+                    {scope.remainingCents <= 0 ? "Persona pagada" : `Cobrar ${guest.label}`}
+                  </Button>
+                );
+              })() : null}
               {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); if (session && tableId) void openTablePayment(tableId, session); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <ThermalTicketDialog
+          open={thermalTicket.open}
+          title={thermalTicket.title || "Vista previa de ticket"}
+          subtitle={thermalTicket.subtitle}
+          ticketText={thermalTicket.text}
+          logoUrl={thermalTicket.logoUrl}
+          width={thermalTicketWidth}
+          onWidthChange={setThermalTicketWidth}
+          onOpenChange={(open) => setThermalTicket((prev) => ({ ...prev, open }))}
+        />
         <Dialog open={forceReleaseDialog.open} onOpenChange={(open) => !forceReleaseDialog.loading && setForceReleaseDialog((prev) => ({ ...prev, open }))}>
           <DialogContent>
             <DialogHeader>
@@ -5354,8 +5589,8 @@ type TableConfirmDialogState =
         <DialogContent className="flex h-[92vh] w-[96vw] max-h-[92vh] max-w-3xl flex-col overflow-hidden p-0">
           <div className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="border-b px-4 py-3 sm:px-6">
-              <DialogTitle>Cobrar pedido</DialogTitle>
-              <DialogDescription>Confirma el pago y envía a cocina</DialogDescription>
+              <DialogTitle>{tablePaymentScope?.kind === "guest" ? `Cobrar ${tablePaymentScope.guestLabel || "persona"}` : "Cobrar pedido"}</DialogTitle>
+              <DialogDescription>{tablePaymentScope?.kind === "guest" ? "Pago parcial asociado a esta persona. La mesa sigue abierta si queda saldo." : "Confirma el pago y envía a cocina"}</DialogDescription>
             </DialogHeader>
             {checkoutDraft ? (
               <>
@@ -5374,7 +5609,7 @@ type TableConfirmDialogState =
                     </div>
                     <div className="rounded-md border">
                       <div className="max-h-80 divide-y divide-border overflow-y-auto text-sm">
-                        {(activeOrder?.items?.length ? activeOrder.items : checkoutDraft.items.map((item) => ({
+                        {(paymentDialogItems?.length ? paymentDialogItems : checkoutDraft.items.map((item) => ({
                           id: Number(String(item.id).replace(/\D/g, "")) || Date.now(),
                           productName: item.name,
                           quantity: item.quantity,
