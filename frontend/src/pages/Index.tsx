@@ -97,6 +97,7 @@ import {
   getTicketSettings,
   getRestaurantTables,
   getTableSessions,
+  getTableReadySummary,
   createTableSession,
   mergeTableSessionTables,
   splitTableSessionTable,
@@ -107,6 +108,7 @@ import {
   getTableKitchenSummary,
   markTableKitchenItemReady,
   markTableKitchenItemDelivered,
+  serveTableSessionReadyItems,
   Category,
   Discount,
   ModifierGroup,
@@ -124,6 +126,7 @@ import {
   TableSession,
   RestaurantTable,
   TableKitchenSessionSummary,
+  TableReadySummary,
 } from "@/lib/api";
 import { getCashSessionStatus } from "@/lib/cashSessionStatus";
 import { toast } from "sonner";
@@ -550,6 +553,7 @@ type TableConfirmDialogState =
   const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
   const [restaurantTables, setRestaurantTables] = useState<RestaurantTable[]>([]);
   const [tableSessions, setTableSessions] = useState<TableSession[]>([]);
+  const [tableReadySummaries, setTableReadySummaries] = useState<TableReadySummary[]>([]);
   const [selectedOpsTableId, setSelectedOpsTableId] = useState<number | null>(null);
   const [newSessionDialog, setNewSessionDialog] = useState<{ open: boolean; tableId: number | null; guests: number; orderMode: "table"|"per_person"; notes: string }>({ open: false, tableId: null, guests: 2, orderMode: "per_person", notes: "" });
   const [isStartingTableSession, setIsStartingTableSession] = useState(false);
@@ -569,6 +573,7 @@ type TableConfirmDialogState =
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
   const [kitchenSummaryDialog, setKitchenSummaryDialog] = useState<{ open: boolean; loading: boolean; sessions: TableKitchenSessionSummary[] }>({ open: false, loading: false, sessions: [] });
+  const [readyServeDialog, setReadyServeDialog] = useState<{ open: boolean; tableId: number | null; summary: TableReadySummary | null; loading: boolean }>({ open: false, tableId: null, summary: null, loading: false });
   const tableMapViewportRef = useRef<HTMLDivElement | null>(null);
   const tableMapUserAdjustedRef = useRef(false);
   const tableMapDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
@@ -632,6 +637,10 @@ type TableConfirmDialogState =
   const canManageCashPayouts = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canCloseCash = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
+  const isWaiterRole = user?.role === "waiter";
+  const canCollectTablePayments = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canManageTableStructure = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
   const canUseLastSaleQuickAction = quickSalesMode === "last_sale" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewRecentSalesActions = quickSalesMode === "history" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const shouldShowQuickSalesButton = quickSalesMode !== "hidden" && (canUseLastSaleQuickAction || canViewRecentSalesActions);
@@ -725,10 +734,14 @@ type TableConfirmDialogState =
   };
 
   useEffect(() => {
+    if (isWaiterRole) {
+      setDteEnabled(false);
+      return;
+    }
     getDteSettings()
       .then((settings) => setDteEnabled(settings.haciendaEnabled))
       .catch(() => setDteEnabled(false));
-  }, []);
+  }, [isWaiterRole]);
 
   useEffect(() => {
     loadMenuData().catch((error) => {
@@ -744,10 +757,11 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!tableMapEnabled) return;
-    Promise.all([getRestaurantTables().catch(() => []), getTableSessions().catch(() => [])])
-      .then(([tables, sessions]) => {
+    Promise.all([getRestaurantTables().catch(() => []), getTableSessions().catch(() => []), getTableReadySummary().catch(() => ({ tables: [], totalReady: 0 }))])
+      .then(([tables, sessions, readySummary]) => {
         setRestaurantTables(tables);
         setTableSessions(sessions);
+        setTableReadySummaries(readySummary.tables);
       })
       .catch(() => undefined);
   }, [tableMapEnabled]);
@@ -766,12 +780,43 @@ type TableConfirmDialogState =
     return sessions;
   }, []);
 
+  const refreshTableReadySummaries = useCallback(async () => {
+    const summary = await getTableReadySummary();
+    setTableReadySummaries(summary.tables);
+    return summary.tables;
+  }, []);
+
+  const readySummaryByTableId = useMemo(() => {
+    const map = new Map<number, TableReadySummary>();
+    tableReadySummaries.forEach((summary) => {
+      summary.tableIds.forEach((tableId) => map.set(tableId, summary));
+      if (summary.tableId != null && !map.has(summary.tableId)) map.set(summary.tableId, summary);
+    });
+    return map;
+  }, [tableReadySummaries]);
+
   const upsertTableSession = useCallback((session: TableSession) => {
     setTableSessions((previous) => {
       const exists = previous.some((row) => row.id === session.id);
       return exists ? previous.map((row) => row.id === session.id ? session : row) : [session, ...previous];
     });
   }, []);
+
+  useEffect(() => {
+    if (!tableMapEnabled || posMode !== "tables") return;
+    const refreshMapState = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        await Promise.all([refreshTableSessions(), refreshTableReadySummaries()]);
+      } catch (error) {
+        posDebug("table.map.refresh.failed", error);
+      }
+    };
+    const interval = window.setInterval(() => {
+      void refreshMapState();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [posMode, refreshTableReadySummaries, refreshTableSessions, tableMapEnabled]);
 
   const setContextFromTableSession = useCallback((tableId: number, session: TableSession) => {
     const table = restaurantTables.find((row) => row.id === tableId);
@@ -2382,8 +2427,11 @@ type TableConfirmDialogState =
     }).catch(() => {
       setRuntimeSettingsLoaded(true);
     });
-    loadCashData().catch(() => undefined);
+    if (canManageCashOperations) {
+      loadCashData().catch(() => undefined);
+    }
     const forceCashGate = () => {
+      if (!canManageCashOperations) return;
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
       if (cashCloseFlowState === "pendingUserAck" || cashCloseFlowState === "closingInProgress") {
         return;
@@ -2398,13 +2446,17 @@ type TableConfirmDialogState =
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, [cashCloseFlowState, isQuickPosRequested]);
+  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested]);
 
   const refreshPaymentMethods = useCallback(() => {
+    if (!canCollectTablePayments) {
+      setPaymentMethods([]);
+      return;
+    }
     getPaymentMethods().then((methods) => {
       setPaymentMethods(methods.filter((method) => method.isActive !== false));
     }).catch(() => undefined);
-  }, []);
+  }, [canCollectTablePayments]);
 
   useEffect(() => {
     refreshPaymentMethods();
@@ -2419,6 +2471,14 @@ type TableConfirmDialogState =
   };
 
   useEffect(() => {
+    if (isWaiterRole) {
+      setCustomers([]);
+      setDefaultConsumerCustomer(null);
+      setSelectedCustomerId("");
+      setDepartments([]);
+      setActivities([]);
+      return;
+    }
     refreshCustomers().catch(() => undefined);
     Promise.all([listDepartments(), listActivities(""), getDefaultConsumerCustomer()])
       .then(([deptRows, activityRows, consumerFinal]) => {
@@ -2429,7 +2489,7 @@ type TableConfirmDialogState =
         setDteDocumentType("CF");
       })
       .catch(() => undefined);
-  }, []);
+  }, [isWaiterRole]);
 
   useEffect(() => {
     const departmentCode = customerForm.departmentCode;
@@ -3123,9 +3183,71 @@ type TableConfirmDialogState =
       if (target === "ready") await markTableKitchenItemReady(itemId);
       else await markTableKitchenItemDelivered(itemId);
       await refreshKitchenSummary();
+      await refreshTableReadySummaries();
+      await refreshTableSessions();
       toast.success(target === "ready" ? "Producto marcado terminado." : "Producto marcado servido.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo actualizar cocina.");
+    }
+  };
+
+  const openReadyServeDialog = (tableId: number, summary: TableReadySummary) => {
+    setSelectedOpsTableId(tableId);
+    setOpsContextMenu({ open: false, x: 0, y: 0, tableId: null });
+    setReadyServeDialog({ open: true, tableId, summary, loading: false });
+  };
+
+  const openTableActions = (tableId: number, x: number, y: number, forceOptions = false) => {
+    const readySummary = readySummaryByTableId.get(tableId);
+    if (!forceOptions && readySummary && readySummary.readyCount > 0) {
+      openReadyServeDialog(tableId, readySummary);
+      return;
+    }
+    setSelectedOpsTableId(tableId);
+    setOpsContextMenu({ open: true, x, y, tableId });
+  };
+
+  const refreshReadyServeDialog = async (tableId: number | null, sessionId: number | null) => {
+    const summaries = await refreshTableReadySummaries();
+    const nextSummary = summaries.find((summary) => (sessionId != null && summary.sessionId === sessionId) || (tableId != null && summary.tableIds.includes(tableId)));
+    if (nextSummary && nextSummary.readyCount > 0) {
+      setReadyServeDialog((prev) => ({ ...prev, summary: nextSummary, loading: false }));
+    } else {
+      setReadyServeDialog({ open: false, tableId: null, summary: null, loading: false });
+      toast.success("Todos los productos listos fueron servidos.");
+    }
+  };
+
+  const serveReadyItem = async (itemId: number) => {
+    const tableId = readyServeDialog.tableId;
+    const sessionId = readyServeDialog.summary?.sessionId ?? null;
+    setReadyServeDialog((prev) => ({ ...prev, loading: true }));
+    try {
+      await markTableKitchenItemDelivered(itemId);
+      await Promise.all([refreshTableSessions(), refreshReadyServeDialog(tableId, sessionId)]);
+      if (tableBillDialog.open && tableBillDialog.session && tableBillDialog.tableId) {
+        void openTableBill(tableBillDialog.tableId, tableBillDialog.session);
+      }
+    } catch (error) {
+      setReadyServeDialog((prev) => ({ ...prev, loading: false }));
+      toast.error(error instanceof Error ? error.message : "No se pudo marcar como servido.");
+    }
+  };
+
+  const serveAllReadyItems = async () => {
+    const tableId = readyServeDialog.tableId;
+    const sessionId = readyServeDialog.summary?.sessionId;
+    if (!sessionId) return;
+    setReadyServeDialog((prev) => ({ ...prev, loading: true }));
+    try {
+      await serveTableSessionReadyItems(sessionId);
+      await Promise.all([refreshTableSessions(), refreshReadyServeDialog(tableId, sessionId)]);
+      if (tableBillDialog.open && tableBillDialog.session && tableBillDialog.tableId) {
+        void openTableBill(tableBillDialog.tableId, tableBillDialog.session);
+      }
+    } catch (error) {
+      setReadyServeDialog((prev) => ({ ...prev, loading: false }));
+      toast.error(error instanceof Error ? error.message : "No se pudieron servir los productos.");
     }
   };
 
@@ -3924,9 +4046,19 @@ type TableConfirmDialogState =
   };
 
   const tableOrderPrimaryLabel = "Enviar a cocina";
+  const elapsedServiceLabel = (value?: string | null) => {
+    if (!value) return "Ahora";
+    const time = new Date(value).getTime();
+    if (!Number.isFinite(time)) return "Ahora";
+    const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
+    if (minutes < 1) return "Ahora";
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  };
   const getKitchenStatusLabel = (status?: Order["items"][number]["kitchenStatus"]) => {
     if (status === "sent") return "En cocina";
-    if (status === "ready") return "Terminado";
+    if (status === "ready") return "Terminado / listo para servir";
     if (status === "delivered") return "Servido";
     return "Pendiente de enviar";
   };
@@ -4203,7 +4335,7 @@ type TableConfirmDialogState =
           <Home className="h-4 w-4" />
           <span>Menú</span>
         </Button>
-        {operationMode === "both" ? (
+        {operationMode === "both" && !isWaiterRole ? (
           <Button
             className="fixed left-3 top-14 z-50 h-9 gap-2 border-border bg-popover/95 px-3 text-popover-foreground shadow-lg backdrop-blur hover:bg-muted"
             variant="outline"
@@ -4273,6 +4405,8 @@ type TableConfirmDialogState =
                   const isJoined = Boolean(session && session.tableIds.length > 1);
                   const groupNumber = session ? joinedGroupNumberBySessionId.get(session.id) ?? null : null;
                   const groupColor = groupNumber ? groupColorFor(groupNumber) : null;
+                  const readySummary = readySummaryByTableId.get(table.id);
+                  const readyCount = readySummary?.readyCount ?? 0;
                   const canSelectForMerge = mergeMode.active && table.id !== mergeMode.sourceTableId && (!session || session.id === mergeMode.sessionId);
                   const canSelectForMove = transferMode.active && table.id !== transferMode.sourceTableId && !session;
                   const tableTone = session?.status === "sent_to_kitchen"
@@ -4292,7 +4426,12 @@ type TableConfirmDialogState =
                           ? "color-mix(in srgb, hsl(var(--destructive)) 58%, hsl(var(--border)))"
                           : table.color || "var(--color-primary-border)";
                   return (
-                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); longPressOpsRef.current = window.setTimeout(()=>setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }),900); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={(e) => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } if (transferMode.active) { void handleMoveToTable(table.id); return; } setSelectedOpsTableId(table.id); setOpsContextMenu({ open:true, x:e.clientX, y:e.clientY, tableId: table.id }); }} className={cn("absolute border-2 shadow-xl transition hover:scale-[1.02] focus:outline-none", selected && "ring-2 ring-white/80", isJoined && "border-4 shadow-2xl", (canSelectForMerge || canSelectForMove) && "ring-4 ring-[var(--color-primary)]", (mergeMode.active || transferMode.active) && !(canSelectForMerge || canSelectForMove) && "opacity-45", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: table.color && !session ? `${table.color}33` : tableTone, borderColor: tableBorder, boxShadow: groupColor ? `0 0 0 4px color-mix(in srgb, ${groupColor} 28%, transparent), 0 18px 36px color-mix(in srgb, ${groupColor} 22%, transparent)` : undefined }}>
+                    <button key={table.id} onContextMenu={(e)=>{ e.preventDefault(); openTableActions(table.id, e.clientX, e.clientY); }} onPointerDown={(e)=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); const x = e.clientX; const y = e.clientY; longPressOpsRef.current = window.setTimeout(()=>openTableActions(table.id, x, y),900); }} onPointerUp={()=>{ if (longPressOpsRef.current) window.clearTimeout(longPressOpsRef.current); }} onClick={(e) => { if (mergeMode.active) { void handleMergeWithTable(table.id); return; } if (transferMode.active) { void handleMoveToTable(table.id); return; } openTableActions(table.id, e.clientX, e.clientY); }} className={cn("absolute border-2 shadow-xl transition hover:scale-[1.02] focus:outline-none", selected && "ring-2 ring-white/80", isJoined && "border-4 shadow-2xl", (canSelectForMerge || canSelectForMove) && "ring-4 ring-[var(--color-primary)]", (mergeMode.active || transferMode.active) && !(canSelectForMerge || canSelectForMove) && "opacity-45", table.shape === "round" && "rounded-full", table.shape === "square" && "rounded-md", table.shape === "rectangle" && "rounded-lg", table.shape === "booth" && "rounded-xl", table.shape === "bar" && "rounded-sm")} style={{ left: table.x, top: table.y, width: table.width, height: table.height, transform: `rotate(${table.rotation}deg)`, backgroundColor: table.color && !session ? `${table.color}33` : tableTone, borderColor: tableBorder, boxShadow: groupColor ? `0 0 0 4px color-mix(in srgb, ${groupColor} 28%, transparent), 0 18px 36px color-mix(in srgb, ${groupColor} 22%, transparent)` : undefined }}>
+                      {readyCount > 0 ? (
+                        <span className="absolute -right-3 -top-3 z-10 flex h-8 min-w-8 items-center justify-center rounded-full border-2 border-background bg-red-600 px-2 text-sm font-black text-white shadow-xl">
+                          {readyCount}
+                        </span>
+                      ) : null}
                       <div className="flex h-full w-full flex-col items-center justify-center px-1 text-center text-foreground">
                         <p className="max-w-full truncate text-sm font-semibold">{table.name}</p>
                         {Math.min(table.width, table.height) > 80 ? <p className="text-[11px] opacity-90">Cap. {table.capacity}</p> : null}
@@ -4305,6 +4444,63 @@ type TableConfirmDialogState =
                 })}
           </div>
         </div>
+
+        <Dialog open={readyServeDialog.open} onOpenChange={(open) => {
+          if (!open) setReadyServeDialog({ open: false, tableId: null, summary: null, loading: false });
+        }}>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(94vw,42rem)] flex-col overflow-hidden p-0">
+            <DialogHeader className="shrink-0 border-b bg-background px-5 py-4">
+              <DialogTitle>Pedidos listos para servir</DialogTitle>
+              <DialogDescription>
+                {readyServeDialog.summary?.groupLabel || readyServeDialog.summary?.tableName || "Mesa"} · {readyServeDialog.summary?.readyCount ?? 0} productos listos
+              </DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {readyServeDialog.summary?.items.length ? (
+                <div className="space-y-3">
+                  {readyServeDialog.summary.items.map((item) => (
+                    <div key={item.id} className="rounded-lg border bg-card p-3 shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge className="bg-red-600 text-white">Listo para servir</Badge>
+                            <Badge variant="outline">x{item.quantity}</Badge>
+                            <span className="text-xs font-semibold text-muted-foreground">{elapsedServiceLabel(item.kitchenReadyAt || item.kitchenCompletedAt)}</span>
+                          </div>
+                          <p className="break-words text-lg font-black text-foreground">{item.productName}</p>
+                          <p className="text-sm font-medium text-muted-foreground">{item.guestLabel || item.tableGuestLabel || item.assignedName || "Mesa completa"}</p>
+                          {item.modifiers.length ? <p className="text-xs text-muted-foreground">Modificadores: {item.modifiers.join(", ")}</p> : null}
+                        </div>
+                        <Button className="min-h-11 shrink-0" disabled={readyServeDialog.loading} onClick={() => void serveReadyItem(item.id)}>
+                          Servir
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No hay pedidos listos para esta mesa.
+                </div>
+              )}
+            </div>
+            <DialogFooter className="shrink-0 flex-wrap gap-2 border-t bg-background px-5 py-4">
+              <Button variant="outline" disabled={readyServeDialog.loading} onClick={() => setReadyServeDialog({ open: false, tableId: null, summary: null, loading: false })}>Cerrar</Button>
+              {readyServeDialog.tableId ? (
+                <Button variant="outline" disabled={readyServeDialog.loading} onClick={() => {
+                  const tableId = readyServeDialog.tableId!;
+                  setReadyServeDialog({ open: false, tableId: null, summary: null, loading: false });
+                  openTableActions(tableId, window.innerWidth / 2, window.innerHeight / 2, true);
+                }}>
+                  Más opciones
+                </Button>
+              ) : null}
+              <Button disabled={readyServeDialog.loading || !readyServeDialog.summary?.items.length} onClick={() => void serveAllReadyItems()}>
+                {readyServeDialog.loading ? "Sirviendo..." : "Servir todo"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {opsContextMenu.open ? (
           <div className="fixed inset-0 z-50" onClick={() => setOpsContextMenu({ open:false, x:0, y:0, tableId:null })}>
@@ -4355,16 +4551,16 @@ type TableConfirmDialogState =
                       {session ? <div className="mt-1 text-xs text-muted-foreground">Total: {formatMoney(balance)}</div> : null}
                     </div>
                     {!session ? menuButton("Nueva orden", <Utensils className="h-4 w-4" />, () => { setSelectedOpsTableId(table.id); setNewSessionDialog({ open:true, tableId: table.id, guests: Math.max(2, Number(table.capacity || 2)), orderMode:"per_person", notes:"" }); close(); }) : null}
-                    {!session && allowTableMerge ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: null, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
+                    {!session && allowTableMerge && canManageTableStructure ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: null, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
                     {session ? menuButton(isJoined ? "Agregar productos" : "Agregar productos", <Plus className="h-4 w-4" />, () => { void openTableSession(table.id); close(); }) : null}
                     {session ? menuButton(isJoined ? "Ver cuenta conjunta" : "Ver cuenta", <Eye className="h-4 w-4" />, () => { void openTableBill(table.id, session); close(); }) : null}
-                    {session ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session && canCollectTablePayments ? menuButton(isJoined ? "Cobrar grupo" : "Cobrar", <CreditCard className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
                     {session ? menuButton("Enviar cocina", <ChefHat className="h-4 w-4" />, () => { void handleSendTableSession(session); close(); }, session.status === "sent_to_kitchen") : null}
-                    {session && allowTableTransfer ? menuButton(isJoined ? "Mover grupo" : "Mover mesa", <MoveRight className="h-4 w-4" />, () => { setTransferMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona la mesa destino"); close(); }) : null}
-                    {session && allowTableMerge ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
-                    {session && isJoined ? menuButton("Separar mesa", <SplitSquareHorizontal className="h-4 w-4" />, () => { handleSplitTableSession(session, table.id); close(); }) : null}
-                    {session && (allowSplitByGuest || allowSplitByItem) ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
-                    {session ? menuButton(isJoined ? "Liberar grupo" : "Liberar mesa", <DoorOpen className="h-4 w-4" />, () => { void handleReleaseTableSession(session); close(); }) : null}
+                    {session && allowTableTransfer && canManageTableStructure ? menuButton(isJoined ? "Mover grupo" : "Mover mesa", <MoveRight className="h-4 w-4" />, () => { setTransferMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message("Selecciona la mesa destino"); close(); }) : null}
+                    {session && allowTableMerge && canManageTableStructure ? menuButton("Unir mesa", <Link2 className="h-4 w-4" />, () => { setMergeMode({ active:true, sessionId: session.id, sourceTableId: table.id }); toast.message(`Selecciona la mesa que deseas unir con ${table.name}`); close(); }) : null}
+                    {session && isJoined && canManageTableStructure ? menuButton("Separar mesa", <SplitSquareHorizontal className="h-4 w-4" />, () => { handleSplitTableSession(session, table.id); close(); }) : null}
+                    {session && (allowSplitByGuest || allowSplitByItem) && canCollectTablePayments ? menuButton("Dividir cuenta", <SplitSquareHorizontal className="h-4 w-4" />, () => { close(); void openTablePayment(table.id, session); }, !canCollect) : null}
+                    {session && canManageTableStructure ? menuButton(isJoined ? "Liberar grupo" : "Liberar mesa", <DoorOpen className="h-4 w-4" />, () => { void handleReleaseTableSession(session); close(); }) : null}
                     {menuButton("Cerrar", <X className="h-4 w-4" />, close)}
                   </div>
                 );
@@ -4620,7 +4816,7 @@ type TableConfirmDialogState =
               <Button variant="outline" onClick={() => setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] })}>Cerrar</Button>
               {tableBillDialog.order ? <Button variant="outline" onClick={() => void openTableLocalTicket()}><Printer className="mr-2 h-4 w-4" />Imprimir cuenta local</Button> : null}
               {tableBillDialog.order ? <Button variant="outline" onClick={() => { setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] }); void openTableSession(tableBillDialog.tableId ?? 0); }}>Agregar productos</Button> : null}
-              {tableBillDialog.order && tableBillDialog.session && tableBillDialog.tableId && tableBillView.startsWith("guest:") ? (() => {
+              {canCollectTablePayments && tableBillDialog.order && tableBillDialog.session && tableBillDialog.tableId && tableBillView.startsWith("guest:") ? (() => {
                 const guest = tableBillDialog.session.guests.find((row) => row.id === Number(tableBillView.replace("guest:", "")));
                 if (!guest) return null;
                 const scope = buildGuestPaymentScope(tableBillDialog.tableId!, tableBillDialog.session!, tableBillDialog.order!, tableBillDialog.payments, guest);
@@ -4630,7 +4826,7 @@ type TableConfirmDialogState =
                   </Button>
                 );
               })() : null}
-              {tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
+              {canCollectTablePayments && tableBillDialog.order ? <Button onClick={() => { const session = tableBillDialog.session; const tableId = tableBillDialog.tableId; const order = tableBillDialog.order; const payments = tableBillDialog.payments; if (session && tableId) void openTablePayment(tableId, session, { returnToBill: true, order, payments }); }}>Cobrar</Button> : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -4692,7 +4888,7 @@ type TableConfirmDialogState =
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTableBill(tableId, tableSession); }}>Ver cuenta</Button>
-                          <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button>
+                          {canCollectTablePayments ? <Button size="sm" variant="outline" onClick={() => { const tableId = tableSessions.find((row) => row.id === session.sessionId)?.tableIds[0] ?? 0; const tableSession = tableSessions.find((row) => row.id === session.sessionId); if (tableSession) void openTablePayment(tableId, tableSession); }}>Cobrar</Button> : null}
                         </div>
                       </div>
                       <div className="space-y-3">
@@ -4707,8 +4903,8 @@ type TableConfirmDialogState =
                                     <p className="text-xs text-muted-foreground">x{item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Terminado" : "Servido"}</p>
                                   </div>
                                   <div className="flex gap-2">
-                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Terminado</Button>
-                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Servido</Button>
+                                    {canCompleteKitchenItems ? <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Terminado</Button> : null}
+                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus !== "ready"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Servido</Button>
                                   </div>
                                 </div>
                               ))}
