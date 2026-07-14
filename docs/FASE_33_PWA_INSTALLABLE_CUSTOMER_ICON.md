@@ -269,3 +269,16 @@ Para probar icono de shortcut:
 - desinstalar/eliminar el acceso directo anterior
 - limpiar cache del navegador si hace falta
 - reinstalar la PWA desde Chrome
+
+## Iconos transparentes con logo real
+
+El generador separa dos rutas:
+
+- logo valido del cliente: canvas `RGBA` transparente, logo centrado, padding transparente y alpha preservado.
+- sin logo valido: fallback propio GastroPOSV/GP, donde si puede existir fondo de color.
+
+Cuando hay logo del cliente no se agrega fondo rosado, color primario, fondo blanco, tarjeta, monograma `GP` ni texto `GastroPOSV` detras del logo. Si el archivo original del cliente trae un fondo propio, ese fondo se conserva porque forma parte de la imagen subida.
+
+El `favicon.ico` se genera desde imagenes `RGBA` y conserva transparencia en los tamanos `16x16`, `32x32` y `48x48`. Para evitar que Android/Chrome seleccione una variante adaptativa con fondo generado, el manifest anuncia el icono maskable como `any` cuando existe logo del cliente; el fallback mantiene `maskable` solo cuando no hay logo.
+
+El `branding_version` incluye la version del algoritmo de iconos. Si cambia la forma de renderizar iconos, las URLs versionadas cambian aunque el archivo del logo no cambie, evitando que el navegador reutilice iconos viejos con fondo.
