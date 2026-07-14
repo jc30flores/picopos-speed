@@ -1,4 +1,5 @@
 import { getPublicAppearanceSettings, type AppearanceSettings } from "@/lib/api";
+import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 
 const hexToHsl = (hex: string): string => {
   const cleaned = hex.replace("#", "");
@@ -23,7 +24,13 @@ const hexToHsl = (hex: string): string => {
 
 export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   const root = document.documentElement;
+  const primaryContrast = getReadableTextColor(settings.colorPrimary) ?? settings.colorPrimaryContrast;
+  const primaryText = isValidHexColor(settings.colorPrimarySoft)
+    ? getReadableTextColor(settings.colorPrimarySoft) ?? settings.colorPrimaryText
+    : settings.colorPrimaryText;
   Object.entries(settings.cssVariables).forEach(([key, value]) => root.style.setProperty(key, value));
+  root.style.setProperty("--color-primary-contrast", primaryContrast);
+  root.style.setProperty("--color-primary-text", primaryText);
   root.style.setProperty("--color-primary-active", settings.cssVariables["--color-primary-active"] ?? settings.colorPrimaryHover);
   root.style.setProperty("--color-primary-ring", settings.cssVariables["--color-primary-ring"] ?? settings.colorPrimaryBorder);
   root.style.setProperty("--color-primary-chart", settings.cssVariables["--color-primary-chart"] ?? settings.colorPrimary);
@@ -31,11 +38,11 @@ export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   root.style.setProperty("--color-primary-surface", settings.cssVariables["--color-primary-surface"] ?? settings.colorPrimarySoft);
   root.style.setProperty("--primary", hexToHsl(settings.colorPrimary));
   root.style.setProperty("--primary-light", hexToHsl(settings.colorPrimaryHover));
-  root.style.setProperty("--primary-foreground", hexToHsl(settings.colorPrimaryContrast));
+  root.style.setProperty("--primary-foreground", hexToHsl(primaryContrast));
   root.style.setProperty("--secondary", hexToHsl(settings.colorPrimary));
   root.style.setProperty("--secondary-light", hexToHsl(settings.colorPrimarySoft));
   root.style.setProperty("--accent", hexToHsl(settings.colorPrimarySoft));
-  root.style.setProperty("--accent-foreground", hexToHsl(settings.colorPrimaryText));
+  root.style.setProperty("--accent-foreground", hexToHsl(primaryText));
   root.style.setProperty("--ring", hexToHsl(settings.colorPrimary));
   root.style.setProperty("--gradient-accent", `linear-gradient(135deg, ${settings.colorPrimary}, ${settings.colorPrimaryHover})`);
 };

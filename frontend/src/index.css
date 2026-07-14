@@ -70,6 +70,17 @@ All colors MUST be HSL.
     --color-primary-muted: #DDF3E8;
     --color-primary-surface: #DDF3E8;
     --color-primary-chart: #1F7A4D;
+    --app-bg: hsl(var(--background));
+    --app-surface: hsl(var(--card));
+    --app-surface-soft: hsl(var(--muted));
+    --app-card: hsl(var(--card));
+    --app-border: hsl(var(--border));
+    --app-text: hsl(var(--foreground));
+    --app-text-muted: hsl(var(--muted-foreground));
+    --app-text-soft: color-mix(in srgb, hsl(var(--foreground)) 72%, transparent);
+    --color-danger: hsl(var(--danger));
+    --color-warning: hsl(var(--warning));
+    --color-success: hsl(var(--success));
     --gradient-subtle: linear-gradient(180deg, hsl(0, 0%, 100%), hsl(220, 9%, 98%));
 
     /* Shadows */
@@ -129,6 +140,17 @@ All colors MUST be HSL.
     --gradient-primary: linear-gradient(135deg, hsl(209, 61%, 16%), hsl(209, 34%, 30%));
     --gradient-accent: linear-gradient(135deg, hsl(152, 62%, 42%), hsl(156, 48%, 36%));
     --gradient-subtle: linear-gradient(180deg, hsl(222, 47%, 8%), hsl(222, 47%, 5%));
+    --app-bg: hsl(var(--background));
+    --app-surface: hsl(var(--card));
+    --app-surface-soft: hsl(var(--muted));
+    --app-card: hsl(var(--card));
+    --app-border: hsl(var(--border));
+    --app-text: hsl(var(--foreground));
+    --app-text-muted: hsl(var(--muted-foreground));
+    --app-text-soft: color-mix(in srgb, hsl(var(--foreground)) 72%, transparent);
+    --color-danger: hsl(var(--danger));
+    --color-warning: hsl(var(--warning));
+    --color-success: hsl(var(--success));
 
     --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);
     --shadow-md: 0 4px 6px -1px hsl(0 0% 0% / 0.4);
@@ -144,6 +166,8 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    background-color: var(--app-bg);
+    color: var(--app-text);
   }
 
   .time-input {
@@ -202,10 +226,23 @@ All colors MUST be HSL.
 
   .gp-primary-soft {
     background-color: color-mix(in srgb, var(--color-primary-soft) 64%, transparent);
+    color: var(--app-text);
   }
 
   .gp-primary-ring {
     --tw-ring-color: var(--color-primary-ring);
+  }
+
+  .app-surface {
+    background-color: var(--app-surface);
+    color: var(--app-text);
+    border-color: var(--app-border);
+  }
+
+  .app-surface-soft {
+    background-color: var(--app-surface-soft);
+    color: var(--app-text);
+    border-color: var(--app-border);
   }
 
   .hover-lift {
