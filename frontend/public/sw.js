@@ -1,5 +1,5 @@
-const STATIC_CACHE = "gastroposv-static-v2";
-const PWA_CACHE = "gastroposv-pwa-v2";
+const STATIC_CACHE = "gastroposv-static-v3";
+const PWA_CACHE = "gastroposv-pwa-v3";
 const APP_SHELL = ["/"];
 
 self.addEventListener("install", (event) => {
