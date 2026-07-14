@@ -1,5 +1,5 @@
 import { getPublicAppearanceSettings, type AppearanceSettings } from "@/lib/api";
-import { getReadableTextColor, isValidHexColor } from "@/lib/color";
+import { deriveThemeTokens, ensureReadableColor, getReadableTextColor, isValidHexColor } from "@/lib/color";
 
 const hexToHsl = (hex: string): string => {
   const cleaned = hex.replace("#", "");
@@ -24,11 +24,14 @@ const hexToHsl = (hex: string): string => {
 
 export const applyAppearanceSettings = (settings: AppearanceSettings) => {
   const root = document.documentElement;
-  const primaryContrast = getReadableTextColor(settings.colorPrimary) ?? settings.colorPrimaryContrast;
+  const isDark = root.classList.contains("dark");
+  const derivedTokens = deriveThemeTokens(settings.colorPrimary, isDark ? "dark" : "light");
+  const primaryContrast = ensureReadableColor(settings.colorPrimaryContrast, settings.colorPrimary) ?? getReadableTextColor(settings.colorPrimary) ?? settings.colorPrimaryContrast;
   const primaryText = isValidHexColor(settings.colorPrimarySoft)
-    ? getReadableTextColor(settings.colorPrimarySoft) ?? settings.colorPrimaryText
+    ? ensureReadableColor(settings.colorPrimaryText, settings.colorPrimarySoft) ?? getReadableTextColor(settings.colorPrimarySoft) ?? settings.colorPrimaryText
     : settings.colorPrimaryText;
   Object.entries(settings.cssVariables).forEach(([key, value]) => root.style.setProperty(key, value));
+  Object.entries(derivedTokens).forEach(([key, value]) => root.style.setProperty(key, value));
   root.style.setProperty("--color-primary-contrast", primaryContrast);
   root.style.setProperty("--color-primary-text", primaryText);
   root.style.setProperty("--color-primary-active", settings.cssVariables["--color-primary-active"] ?? settings.colorPrimaryHover);
