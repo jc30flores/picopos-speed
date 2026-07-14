@@ -16,6 +16,9 @@ def _role_is(user, roles: set[str]) -> bool:
     return profile.role in roles
 
 
+KITCHEN_ROLES = {"kitchen", "cocina"}
+
+
 def is_superadmin(user) -> bool:
     return _role_is(user, {"superadmin"})
 
@@ -26,6 +29,18 @@ def is_admin(user) -> bool:
 
 def is_manager(user) -> bool:
     return bool(is_admin(user) or _role_is(user, {"manager"}))
+
+
+def user_is_kitchen(user) -> bool:
+    return _role_is(user, KITCHEN_ROLES)
+
+
+def user_can_view_kitchen(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | {"admin", "manager", "cashier"}))
+
+
+def user_can_manage_kitchen_items(user) -> bool:
+    return bool(is_superadmin(user) or _role_is(user, KITCHEN_ROLES | {"admin", "manager"}))
 
 
 def can_manage_features(user) -> bool:
@@ -104,7 +119,7 @@ class IsCashier(BasePermission):
 
 class IsKitchen(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"kitchen"})
+        return user_is_kitchen(request.user)
 
 
 class IsAdminOrManager(BasePermission):
@@ -124,12 +139,24 @@ class IsCashierOrManagerOrAdmin(BasePermission):
 
 class IsKitchenOrManagerOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return _role_is(request.user, {"kitchen", "admin", "manager"})
+        return user_can_manage_kitchen_items(request.user)
 
 
 class IsKitchenOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        return bool(is_superadmin(request.user) or _role_is(request.user, {"kitchen", "admin"}))
+        return bool(is_superadmin(request.user) or _role_is(request.user, KITCHEN_ROLES | {"admin"}))
+
+
+class CanViewKitchen(BasePermission):
+    def has_permission(self, request, view):
+        return user_can_view_kitchen(request.user)
+
+
+class CanManageKitchenItems(BasePermission):
+    message = "No tienes permiso para operar cocina."
+
+    def has_permission(self, request, view):
+        return user_can_manage_kitchen_items(request.user)
 
 
 class IsAuthenticatedOrReadOnly(BasePermission):

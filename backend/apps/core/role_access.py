@@ -14,8 +14,10 @@ ROLE_ALLOWED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "kitchen": (
         re.compile(r"^/api/kitchen/"),
         re.compile(r"^/api/orders/kitchen/?$"),
+        re.compile(r"^/api/orders/tables/kitchen-summary/?$"),
         re.compile(r"^/api/orders/active/?$"),
         re.compile(r"^/api/orders/\d+/status/?$"),
+        re.compile(r"^/api/core/feature-flags/?$"),
         re.compile(r"^/api/core/service-types/?$"),
         re.compile(r"^/api/core/branches/?$"),
         re.compile(r"^/api/printing/jobs/?$"),

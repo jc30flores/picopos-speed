@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from apps.core.models import Branch, FeatureFlag
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin, IsKitchenOrManagerOrAdmin
+from apps.core.permissions import CanManageKitchenItems, CanViewKitchen, IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableSessionSerializer
 from apps.payments.models import Payment
@@ -441,7 +441,7 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanViewKitchen]
 
     def get(self, request):
         sessions = (
@@ -454,7 +454,7 @@ class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableOrderItemKitchenStatusView(APIView):
-    permission_classes = [IsKitchenOrManagerOrAdmin]
+    permission_classes = [CanManageKitchenItems]
 
     @transaction.atomic
     def post(self, request, pk: int, target_status: str):
@@ -463,6 +463,10 @@ class TableOrderItemKitchenStatusView(APIView):
             return Response({"detail": "Producto no encontrado."}, status=404)
         now = timezone.now()
         if target_status == OrderItem.KITCHEN_STATUS_READY:
+            if item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+                return Response({"detail": "El producto ya fue servido.", "code": "ALREADY_SERVED"}, status=400)
+            if item.kitchen_status not in {OrderItem.KITCHEN_STATUS_SENT, OrderItem.KITCHEN_STATUS_READY}:
+                return Response({"detail": "El producto aún no fue enviado a cocina.", "code": "NOT_IN_KITCHEN"}, status=400)
             item.kitchen_status = OrderItem.KITCHEN_STATUS_READY
             item.kitchen_ready_at = item.kitchen_ready_at or now
             fields = ["kitchen_status", "kitchen_ready_at"]

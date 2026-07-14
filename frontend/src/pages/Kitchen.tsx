@@ -156,7 +156,13 @@ const Kitchen = () => {
       await loadKitchen();
       toast.success("Producto marcado como terminado.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo actualizar cocina.");
+      const status = error instanceof Error && "status" in error ? (error as { status?: number }).status : undefined;
+      const message = status === 403
+        ? "Tu usuario no tiene permiso para marcar pedidos como terminados."
+        : error instanceof Error
+          ? error.message
+          : "No se pudo actualizar cocina.";
+      toast.error(message);
     }
   };
 
