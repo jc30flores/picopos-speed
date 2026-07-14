@@ -3,6 +3,7 @@ import App from "./App.tsx";
 import { AuthProvider } from "./context/AuthProvider";
 import { AttendanceAccessProvider } from "./context/AttendanceAccessProvider";
 import { loadAppearanceSettings } from "./lib/theme";
+import { registerServiceWorker } from "./lib/pwa";
 import "./index.css";
 
 const THEME_STORAGE_KEY = "theme";
@@ -17,6 +18,7 @@ const applyInitialTheme = () => {
 
 applyInitialTheme();
 void loadAppearanceSettings();
+registerServiceWorker();
 
 createRoot(document.getElementById("root")!).render(
   <AuthProvider>
