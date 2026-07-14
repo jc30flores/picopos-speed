@@ -30,8 +30,17 @@ class OrderItemModifierSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     applied_modifiers = OrderItemModifierSerializer(many=True, read_only=True)
+    guest_number = serializers.SerializerMethodField()
+    guest_label = serializers.SerializerMethodField()
     table_guest_label = serializers.SerializerMethodField()
     table_guest_seat_number = serializers.SerializerMethodField()
+    kitchen_status_label = serializers.SerializerMethodField()
+    kitchen_completed_at = serializers.SerializerMethodField()
+    kitchen_served_at = serializers.SerializerMethodField()
+    is_pending_kitchen = serializers.SerializerMethodField()
+    is_in_kitchen = serializers.SerializerMethodField()
+    is_completed = serializers.SerializerMethodField()
+    is_served = serializers.SerializerMethodField()
     unit_price_list = serializers.SerializerMethodField()
     unit_price_special = serializers.SerializerMethodField()
     unit_price_before_discount = serializers.SerializerMethodField()
@@ -56,13 +65,22 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "assigned_name",
             "table_guest_id",
+            "guest_number",
+            "guest_label",
             "table_guest_label",
             "table_guest_seat_number",
             "applied_special_price_rule_id",
             "kitchen_status",
+            "kitchen_status_label",
             "kitchen_sent_at",
             "kitchen_ready_at",
             "kitchen_delivered_at",
+            "kitchen_completed_at",
+            "kitchen_served_at",
+            "is_pending_kitchen",
+            "is_in_kitchen",
+            "is_completed",
+            "is_served",
             "applied_modifiers",
             "unit_price_list",
             "unit_price_special",
@@ -75,11 +93,44 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "pricing_metadata",
         ]
 
+    def get_guest_number(self, obj: OrderItem):
+        return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
+
+    def get_guest_label(self, obj: OrderItem):
+        return obj.table_guest.label if obj.table_guest_id and obj.table_guest else (obj.assigned_name or "")
+
     def get_table_guest_label(self, obj: OrderItem):
         return obj.table_guest.label if obj.table_guest_id and obj.table_guest else ""
 
     def get_table_guest_seat_number(self, obj: OrderItem):
         return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
+
+    def get_kitchen_status_label(self, obj: OrderItem):
+        if obj.kitchen_status == OrderItem.KITCHEN_STATUS_SENT:
+            return "En cocina"
+        if obj.kitchen_status == OrderItem.KITCHEN_STATUS_READY:
+            return "Terminado"
+        if obj.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
+            return "Servido"
+        return "Pendiente de enviar"
+
+    def get_kitchen_completed_at(self, obj: OrderItem):
+        return obj.kitchen_ready_at
+
+    def get_kitchen_served_at(self, obj: OrderItem):
+        return obj.kitchen_delivered_at
+
+    def get_is_pending_kitchen(self, obj: OrderItem):
+        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_PENDING
+
+    def get_is_in_kitchen(self, obj: OrderItem):
+        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_SENT
+
+    def get_is_completed(self, obj: OrderItem):
+        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_READY
+
+    def get_is_served(self, obj: OrderItem):
+        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED
 
     def _modifier_total(self, obj: OrderItem) -> Decimal:
         return sum((Decimal(mod.modifier_price_snapshot or 0) for mod in obj.applied_modifiers.all()), Decimal("0.00"))

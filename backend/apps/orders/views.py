@@ -147,8 +147,12 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
             raw_guest_id = None
         if raw_guest_id:
             table_guest = guests_by_id.get(raw_guest_id)
+            if table_guest is None:
+                raise serializers.ValidationError({"table_guest_id": "La persona indicada no pertenece a esta mesa."})
         if table_guest is None and assigned_name:
             table_guest = guests_by_label.get(assigned_name.lower())
+        if table_session and table_session.order_mode == "per_person" and table_guest is None:
+            raise serializers.ValidationError({"table_guest_id": "En orden por persona cada producto debe asignarse a una persona de la mesa."})
         item = OrderItem.objects.create(
             order=order,
             product=product,
