@@ -1,9 +1,11 @@
+import hashlib
+import logging
+
 from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.conf import settings
 from django.middleware.csrf import get_token
 from django.core.cache import cache
 from django.views.decorators.csrf import ensure_csrf_cookie
-import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes, renderer_classes
 from rest_framework.parsers import JSONParser
@@ -14,6 +16,9 @@ from apps.users.models import UserProfile
 from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format, user_matches_pin
 
 logger = logging.getLogger(__name__)
+
+LOGIN_THROTTLE_LIMIT = 8
+LOGIN_THROTTLE_TIMEOUT_SECONDS = 60
 
 
 ROLE_LANDING_ROUTE = {
@@ -67,6 +72,17 @@ def _build_auth_payload(user, role: str):
     }
 
 
+def _client_ip(request):
+    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",", 1)[0].strip()
+    return forwarded_for or request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _login_throttle_key(request, identifier: str):
+    normalized = identifier.strip().lower()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16] if normalized else "missing"
+    return f"auth:login:{_client_ip(request)}:{digest}"
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 @renderer_classes([JSONRenderer])
@@ -89,6 +105,14 @@ def login_view(request):
         email = request.data.get("email")
         username = request.data.get("username")
         password = str(request.data.get("password") or "").strip()
+        identifier = str(email or username or "").strip()
+        throttle_key = _login_throttle_key(request, identifier)
+        attempts = cache.get(throttle_key, 0)
+        if attempts >= LOGIN_THROTTLE_LIMIT:
+            return _json_response(
+                {"detail": "Demasiados intentos. Intenta de nuevo en un minuto."},
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         if not password or not (email or username):
             return _json_response({"detail": "Missing credentials"}, status.HTTP_400_BAD_REQUEST)
         if not is_valid_pin_format(password):
@@ -103,12 +127,14 @@ def login_view(request):
 
         user = authenticate(request, username=username, password=password)
         if user is None:
+            cache.set(throttle_key, attempts + 1, timeout=LOGIN_THROTTLE_TIMEOUT_SECONDS)
             return _json_response({"detail": "Invalid credentials"}, status.HTTP_401_UNAUTHORIZED)
 
         profile = _get_or_create_profile(user)
         if not profile.is_active:
             return _json_response({"detail": "User inactive"}, status.HTTP_403_FORBIDDEN)
 
+        cache.delete(throttle_key)
         login(request, user)
         return _json_response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
@@ -125,7 +151,7 @@ def pin_login_view(request):
         pin = str(request.data.get("pin") or "").strip()
         pin_len = len(pin)
         leading_zero = bool(pin.startswith("0"))
-        logger.info("auth.pin_login.attempt pin_len=%s leading_zero=%s ip=%s", pin_len, leading_zero, request.META.get("REMOTE_ADDR", "unknown"))
+        logger.info("auth.pin_login.attempt pin_len=%s leading_zero=%s ip=%s", pin_len, leading_zero, _client_ip(request))
         if not is_valid_pin_format(pin):
             logger.warning("auth.pin_login.invalid_format pin_len=%s leading_zero=%s", pin_len, leading_zero)
             return Response(
@@ -134,7 +160,7 @@ def pin_login_view(request):
                 content_type="application/json",
             )
 
-        client_ip = request.META.get("REMOTE_ADDR", "unknown")
+        client_ip = _client_ip(request)
         throttle_key = f"auth:pin-login:{client_ip}"
         attempts = cache.get(throttle_key, 0)
         if attempts >= 5:

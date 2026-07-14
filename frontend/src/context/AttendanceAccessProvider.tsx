@@ -75,8 +75,9 @@ export const AttendanceAccessProvider = ({ children }: { children: React.ReactNo
         });
       } finally {
         refreshInFlightRef.current = false;
-        if (seq !== refreshSeqRef.current) return;
-        setAttendanceLoading(false);
+        if (seq === refreshSeqRef.current) {
+          setAttendanceLoading(false);
+        }
       }
     },
     [bypassAttendance, user],

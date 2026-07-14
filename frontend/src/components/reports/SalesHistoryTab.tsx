@@ -56,6 +56,14 @@ type TimeRange = "daily" | "weekly" | "monthly" | "all";
 type ServiceTypeFilter = "all" | string;
 type PaymentMethodFilter = "all" | "cash" | "card" | "transfer" | "pedidos_ya" | "paypal";
 
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
 interface Sale {
   rowKey: string;
   orderId: number;
@@ -363,7 +371,7 @@ export const SalesHistoryTab = () => {
     setTicketHtml("");
     try {
       const payload = await getTransactionTicket(sale.paymentId);
-      setTicketHtml(payload.ticketHtml || `<pre class='whitespace-pre-wrap'>${payload.ticketText}</pre>`);
+      setTicketHtml(payload.ticketHtml || `<pre style="white-space: pre-wrap; margin: 0;">${escapeHtml(payload.ticketText || "")}</pre>`);
     } catch (error) {
       setTicketError(error instanceof Error ? error.message : "No se pudo cargar el ticket.");
     } finally {
@@ -736,7 +744,13 @@ export const SalesHistoryTab = () => {
           {ticketLoading ? <p className="text-sm text-muted-foreground">Cargando ticket...</p> : null}
           {ticketError ? <p className="text-sm text-destructive">{ticketError}</p> : null}
           {!ticketLoading && !ticketError ? (
-            <div className="max-h-[70vh] overflow-auto rounded-md border bg-white p-3 text-black" dangerouslySetInnerHTML={{ __html: ticketHtml }} />
+            <iframe
+              className="h-[70vh] w-full rounded-md border bg-white"
+              sandbox=""
+              referrerPolicy="no-referrer"
+              title="Vista previa de ticket"
+              srcDoc={ticketHtml}
+            />
           ) : null}
         </DialogContent>
       </Dialog>
