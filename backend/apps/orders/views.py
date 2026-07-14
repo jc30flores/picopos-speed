@@ -504,8 +504,11 @@ class OrderReceiptPDFView(generics.GenericAPIView):
         except Exception as exc:  # noqa: BLE001 - receipt fallback must avoid user-facing 500s
             logger.exception("orders.receipt_pdf.fallback_failed order_id=%s error=%s", order.id, exc)
             return Response(
-                {"detail": "No se pudo generar el PDF del ticket. Usa la vista previa de impresion local."},
-                status=status.HTTP_200_OK,
+                {
+                    "code": "RECEIPT_PDF_UNAVAILABLE",
+                    "detail": "No se pudo generar el PDF del ticket. Usa la vista previa de impresión local.",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         response = HttpResponse(result.pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'inline; filename="{result.filename}"'

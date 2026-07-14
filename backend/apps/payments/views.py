@@ -998,4 +998,7 @@ class PaymentTicketPDFView(APIView):
             )
         except Exception:
             logger.exception("payment.ticket_pdf.failed payment_id=%s", payment.id)
-            return Response({"detail": "No se pudo generar el ticket PDF."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"code": "PAYMENT_TICKET_PDF_UNAVAILABLE", "detail": "No se pudo generar el ticket PDF. Usa la vista previa de impresión local."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
