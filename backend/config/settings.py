@@ -61,7 +61,20 @@ def _env_str(name: str, default: str) -> str:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key")
 DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0", "centro-pdg.cuskatech.com"]
+_default_allowed_hosts = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "la-rosee.cuskatech.com",
+    "centro-pdg.cuskatech.com",
+]
+ALLOWED_HOSTS = list(
+    dict.fromkeys(
+        _default_allowed_hosts
+        + _env_list("ALLOWED_HOSTS")
+        + _env_list("ALLOWED_HOSTS_EXTRA")
+    )
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -180,6 +193,9 @@ REST_FRAMEWORK = {
 _default_cors_allowed_origins = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
+    "http://localhost:8386",
+    "http://127.0.0.1:8386",
+    "https://la-rosee.cuskatech.com",
     "https://centro-pdg.cuskatech.com",
 ]
 CORS_ALLOWED_ORIGINS = list(
@@ -196,6 +212,9 @@ _default_csrf_trusted_origins = [
     "http://localhost:8182",
     "http://127.0.0.1:8182",
     "http://localhost:9102",
+    "http://localhost:8386",
+    "http://127.0.0.1:8386",
+    "https://la-rosee.cuskatech.com",
     "https://centro-pdg.cuskatech.com",
 ]
 CSRF_TRUSTED_ORIGINS = list(
