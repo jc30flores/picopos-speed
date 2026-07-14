@@ -1,5 +1,5 @@
-const STATIC_CACHE = "gastroposv-static-v1";
-const PWA_CACHE = "gastroposv-pwa-v1";
+const STATIC_CACHE = "gastroposv-static-v2";
+const PWA_CACHE = "gastroposv-pwa-v2";
 const APP_SHELL = ["/"];
 
 self.addEventListener("install", (event) => {
@@ -14,14 +14,26 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => ![STATIC_CACHE, PWA_CACHE].includes(key)).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(
+        keys
+          .filter((key) => {
+            if ([STATIC_CACHE, PWA_CACHE].includes(key)) return false;
+            return key.startsWith("gastroposv-static-") || key.startsWith("gastroposv-pwa-");
+          })
+          .map((key) => caches.delete(key))
+      ))
       .then(() => self.clients.claim())
   );
 });
 
-const isPwaPublicAsset = (url) =>
+const isPwaFreshAsset = (url) =>
   url.pathname === "/api/public/manifest.webmanifest" ||
-  url.pathname === "/api/public/pwa/metadata/" ||
+  url.pathname === "/api/public/pwa/metadata/";
+
+const isVersionedPwaIcon = (url) =>
+  url.pathname.startsWith("/api/public/pwa/") && url.searchParams.has("v");
+
+const isPwaIcon = (url) =>
   url.pathname.startsWith("/api/public/pwa/");
 
 const isViteDevAsset = (url) =>
@@ -34,6 +46,21 @@ const networkFirst = async (request, cacheName) => {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
+    if (response && response.ok) {
+      cache.put(request, response.clone()).catch(() => undefined);
+    }
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+};
+
+const networkFresh = async (request, cacheName) => {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request, { cache: "no-store" });
     if (response && response.ok) {
       cache.put(request, response.clone()).catch(() => undefined);
     }
@@ -62,8 +89,18 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  if (isPwaPublicAsset(url)) {
-    event.respondWith(networkFirst(request, PWA_CACHE));
+  if (isPwaFreshAsset(url)) {
+    event.respondWith(networkFresh(request, PWA_CACHE));
+    return;
+  }
+
+  if (isVersionedPwaIcon(url)) {
+    event.respondWith(cacheFirst(request, PWA_CACHE));
+    return;
+  }
+
+  if (isPwaIcon(url)) {
+    event.respondWith(networkFresh(request, PWA_CACHE));
     return;
   }
 
