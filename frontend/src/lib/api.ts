@@ -642,6 +642,26 @@ export type AppearanceSettings = {
   palette?: string[];
 };
 
+export type PublicPwaMetadata = {
+  appName: string;
+  shortName: string;
+  description: string;
+  themeColor: string;
+  backgroundColor: string;
+  display: "standalone" | "fullscreen" | "minimal-ui" | "browser";
+  orientation: string;
+  startUrl: string;
+  scope: string;
+  version: string;
+  hasCustomerLogo: boolean;
+  manifestUrl: string;
+  icon192Url: string;
+  icon512Url: string;
+  maskableIconUrl: string;
+  appleTouchIconUrl: string;
+  faviconUrl: string;
+};
+
 export type DteIssuerSettings = {
   legalName: string;
   commercialName: string;
@@ -1656,6 +1676,31 @@ export const getAppearanceSettings = async (): Promise<AppearanceSettings> => {
 export const getPublicAppearanceSettings = async (): Promise<AppearanceSettings> => {
   const response = await request("/public/appearance/");
   return mapAppearanceSettings(await handleJson<any>(response));
+};
+
+const mapPublicPwaMetadata = (data: any): PublicPwaMetadata => ({
+  appName: String(data.app_name ?? "GastroPOSV"),
+  shortName: String(data.short_name ?? data.app_name ?? "GastroPOSV"),
+  description: String(data.description ?? "Sistema POS para restaurante"),
+  themeColor: String(data.theme_color ?? "#1F7A4D"),
+  backgroundColor: String(data.background_color ?? "#0B1020"),
+  display: (data.display ?? "standalone") as PublicPwaMetadata["display"],
+  orientation: String(data.orientation ?? "any"),
+  startUrl: String(data.start_url ?? "/"),
+  scope: String(data.scope ?? "/"),
+  version: String(data.version ?? "default"),
+  hasCustomerLogo: Boolean(data.has_customer_logo),
+  manifestUrl: String(data.manifest_url ?? "/api/public/manifest.webmanifest"),
+  icon192Url: String(data.icon_192_url ?? "/api/public/pwa/icon-192.png"),
+  icon512Url: String(data.icon_512_url ?? "/api/public/pwa/icon-512.png"),
+  maskableIconUrl: String(data.maskable_icon_url ?? "/api/public/pwa/icon-maskable-512.png"),
+  appleTouchIconUrl: String(data.apple_touch_icon_url ?? "/api/public/pwa/apple-touch-icon.png"),
+  faviconUrl: String(data.favicon_url ?? "/api/public/pwa/favicon.ico"),
+});
+
+export const getPublicPwaMetadata = async (): Promise<PublicPwaMetadata> => {
+  const response = await request("/public/pwa/metadata/");
+  return mapPublicPwaMetadata(await handleJson<any>(response));
 };
 
 export const updateAppearanceSettings = async (payload: { primaryColor?: string; restoreDefault?: boolean }): Promise<AppearanceSettings> => {

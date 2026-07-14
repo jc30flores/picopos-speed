@@ -14,6 +14,7 @@ from apps.core.views import (
     TicketLogoView,
     TicketSettingsView,
 )
+from apps.core.pwa_views import PublicPwaManifestView, PublicPwaMetadataView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -36,6 +37,8 @@ urlpatterns = [
     path("api/settings/features/options/", FeatureSettingsOptionsView.as_view(), name="settings-features-options"),
     path("api/settings/appearance/", AppearanceSettingsView.as_view(), name="settings-appearance"),
     path("api/public/appearance/", PublicAppearanceView.as_view(), name="public-appearance"),
+    path("api/public/manifest.webmanifest", PublicPwaManifestView.as_view(), name="public-pwa-manifest"),
+    path("api/public/pwa/metadata/", PublicPwaMetadataView.as_view(), name="public-pwa-metadata"),
     path("api/settings/dte/", DTEGlobalSettingsView.as_view(), name="settings-dte"),
     path("api/settings/dte/correlatives/", DTECorrelativesView.as_view(), name="settings-dte-correlatives"),
     path("api/settings/dte/correlatives/initialize/", DTECorrelativesView.as_view(), name="settings-dte-correlatives-initialize"),
