@@ -503,6 +503,7 @@ type TableConfirmDialogState =
   const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
   const [tableMapEnabled, setTableMapEnabled] = useState(false);
   const [operationMode, setOperationMode] = useState<"quick_pos" | "table_service" | "both">("quick_pos");
+  const [runtimeSettingsLoaded, setRuntimeSettingsLoaded] = useState(false);
   const [allowTableMerge, setAllowTableMerge] = useState(true);
   const [allowTableTransfer, setAllowTableTransfer] = useState(true);
   const [allowSplitByGuest, setAllowSplitByGuest] = useState(true);
@@ -615,6 +616,17 @@ type TableConfirmDialogState =
   );
 
   const activeTableGuestNumber = tableOrderContext?.guests.find((guest) => guest.id === tableOrderContext.activeGuestId)?.seatNumber ?? null;
+  const urlMode = String(searchParams.get("mode") || "").trim().toLowerCase();
+  const isQuickPosRequested = urlMode === "quick";
+  const isTableFlowMode = ["table_order", "table_service", "edit", "pay"].includes(urlMode) || Boolean(searchParams.get("session_id"));
+  const canShowOpenOrdersChoice = Boolean(
+    runtimeSettingsLoaded &&
+    posMode === "pos" &&
+    !tableOrderContext &&
+    !isTableFlowMode &&
+    !isPaymentOpen &&
+    (operationMode === "quick_pos" || operationMode === "both" || !tableMapEnabled)
+  );
   const tableGuestMatchesActive = useCallback((item: CartItem) => {
     if (!tableOrderContext || tableOrderContext.orderMode !== "per_person") return true;
     if (tableOrderContext.activeGuestId != null && item.tableGuestId != null) {
@@ -1113,7 +1125,7 @@ type TableConfirmDialogState =
     getPendingOrders({ branchId: selectedBranchId || undefined })
       .then((res) => {
         setPendingOrdersCount(res.count);
-        if (!shouldSuppressPendingChoice) {
+        if (canShowOpenOrdersChoice && !shouldSuppressPendingChoice) {
           setIsPendingChoiceOpen(res.count > 0);
         } else {
           setIsPendingChoiceOpen(false);
@@ -1122,7 +1134,7 @@ type TableConfirmDialogState =
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, [location.state, searchParams, selectedBranchId]);
+  }, [canShowOpenOrdersChoice, location.state, searchParams, selectedBranchId]);
 
   useEffect(() => {
     const state = location.state as { tableSession?: TableSession; tableId?: number } | null;
@@ -2185,6 +2197,8 @@ type TableConfirmDialogState =
       })
       .catch(() => undefined);
     getRuntimeFeatureSettings().then((settings) => {
+      const canUseTableMap = settings.tableMapEnabled && settings.operationMode !== "quick_pos";
+      const shouldUseQuickPos = isQuickPosRequested && settings.operationMode === "both";
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setOperationMode(settings.operationMode);
@@ -2192,12 +2206,15 @@ type TableConfirmDialogState =
       setAllowTableTransfer(settings.allowTableTransfer);
       setAllowSplitByGuest(settings.allowSplitByGuest);
       setAllowSplitByItem(settings.allowSplitByItem);
-      setTableMapEnabled(settings.tableMapEnabled && settings.operationMode !== "quick_pos");
-      setPosMode(settings.defaultPosEntry === "table_map" && settings.operationMode !== "quick_pos" ? "tables" : "pos");
+      setTableMapEnabled(canUseTableMap);
+      setPosMode(canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map" ? "tables" : "pos");
       setQuickSalesMode(settings.posQuickSalesButtonMode);
       setQuickSalesHistoryScope(settings.posQuickSalesHistoryScope);
       setQuickSalesHistoryWindowMinutes(settings.posQuickSalesHistoryWindowMinutes);
-    }).catch(() => undefined);
+      setRuntimeSettingsLoaded(true);
+    }).catch(() => {
+      setRuntimeSettingsLoaded(true);
+    });
     loadCashData().catch(() => undefined);
     const forceCashGate = () => {
       setCashSnapshot((previous) => ({ ...previous, open: false, hasOpenCashSession: false, session: undefined }));
@@ -2214,7 +2231,7 @@ type TableConfirmDialogState =
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, [cashCloseFlowState]);
+  }, [cashCloseFlowState, isQuickPosRequested]);
 
   const refreshPaymentMethods = useCallback(() => {
     getPaymentMethods().then((methods) => {
@@ -4800,17 +4817,17 @@ type TableConfirmDialogState =
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isPendingChoiceOpen} onOpenChange={setIsPendingChoiceOpen}>
+      <Dialog open={isPendingChoiceOpen && canShowOpenOrdersChoice} onOpenChange={(open) => setIsPendingChoiceOpen(open)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Open orders detected</DialogTitle>
+            <DialogTitle>Órdenes abiertas detectadas</DialogTitle>
             <DialogDescription>
-              There are {pendingOrdersCount} active open orders. Do you want to continue to POS or review Open Orders?
+              Hay {pendingOrdersCount} órdenes abiertas. ¿Deseas continuar en POS o revisar órdenes guardadas?
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Go to POS</Button>
-            <Button onClick={() => navigate("/open-orders")}>Open Orders</Button>
+            <Button variant="outline" onClick={() => setIsPendingChoiceOpen(false)}>Continuar en POS</Button>
+            <Button onClick={() => navigate("/open-orders")}>Órdenes guardadas</Button>
           </div>
         </DialogContent>
       </Dialog>
