@@ -26,7 +26,11 @@ def _load_logo() -> Image.Image | None:
     try:
         image = Image.open(path)
         image.load()
-        return image.convert("RGBA")
+        logo = image.convert("RGBA")
+        if logo.getchannel("A").getbbox() is None:
+            logger.warning("pwa.customer_logo_empty_alpha path=%s", path)
+            return None
+        return logo
     except (UnidentifiedImageError, OSError, ValueError):
         logger.warning("pwa.customer_logo_unusable path=%s", path, exc_info=True)
         return None
@@ -57,7 +61,14 @@ def _fit_logo(logo: Image.Image, max_width: int, max_height: int) -> Image.Image
     return fitted
 
 
-def _render_default_icon(size: int, theme_color: str) -> Image.Image:
+def _trim_transparent_edges(logo: Image.Image) -> Image.Image:
+    bbox = logo.getchannel("A").getbbox()
+    if not bbox:
+        return logo
+    return logo.crop(bbox)
+
+
+def _render_fallback_gp_icon(size: int, theme_color: str) -> Image.Image:
     background = _hex_to_rgb(theme_color)
     canvas = Image.new("RGBA", (size, size), (*background, 255))
     draw = ImageDraw.Draw(canvas)
@@ -70,20 +81,34 @@ def _render_default_icon(size: int, theme_color: str) -> Image.Image:
     return canvas
 
 
+def _customer_icon_padding(size: int, *, maskable: bool = False) -> float:
+    if maskable:
+        return 0.20
+    if size <= 64:
+        return 0.06
+    return 0.10
+
+
+def _render_customer_logo_icon(logo: Image.Image, size: int, *, maskable: bool = False) -> Image.Image:
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    logo = _trim_transparent_edges(logo.convert("RGBA"))
+    padding = _customer_icon_padding(size, maskable=maskable)
+    max_side = max(1, int(size * (1 - padding * 2)))
+    logo = _fit_logo(logo, max_side, max_side)
+    x = (size - logo.width) // 2
+    y = (size - logo.height) // 2
+    canvas.alpha_composite(logo, (x, y))
+    return canvas
+
+
 def _render_png_icon(size: int, *, maskable: bool = False) -> bytes:
     metadata = get_public_pwa_metadata()
     theme_color = str(metadata["theme_color"])
     logo = _load_logo()
     if logo is None:
-        canvas = _render_default_icon(size, theme_color)
+        canvas = _render_fallback_gp_icon(size, theme_color)
     else:
-        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        safe_padding = 0.23 if maskable else 0.14
-        max_side = int(size * (1 - safe_padding * 2))
-        logo = _fit_logo(logo, max_side, max_side)
-        x = (size - logo.width) // 2
-        y = (size - logo.height) // 2
-        canvas.alpha_composite(logo, (x, y))
+        canvas = _render_customer_logo_icon(logo, size, maskable=maskable)
     output = BytesIO()
     canvas.save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -100,9 +125,14 @@ def _render_customer_logo() -> bytes | None:
 
 
 def _render_ico() -> bytes:
-    images = [Image.open(BytesIO(_render_png_icon(size))).convert("RGBA") for size in (32, 48)]
+    images = [Image.open(BytesIO(_render_png_icon(size))).convert("RGBA") for size in (16, 32, 48)]
     output = BytesIO()
-    images[0].save(output, format="ICO", sizes=[(32, 32), (48, 48)], append_images=images[1:])
+    images[0].save(
+        output,
+        format="ICO",
+        sizes=[(image.width, image.height) for image in images],
+        append_images=images[1:],
+    )
     return output.getvalue()
 
 
@@ -119,7 +149,7 @@ def _render_share_image() -> bytes:
     logo = _load_logo()
     panel = (92, 118, 468, 492)
     if logo is None:
-        icon = _render_default_icon(220, theme_color)
+        icon = _render_fallback_gp_icon(220, theme_color)
         x = panel[0] + (panel[2] - panel[0] - icon.width) // 2
         y = panel[1] + (panel[3] - panel[1] - icon.height) // 2
         canvas.alpha_composite(icon, (x, y))
