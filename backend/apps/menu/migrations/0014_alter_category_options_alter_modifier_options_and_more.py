@@ -26,10 +26,6 @@ class Migration(migrations.Migration):
             model_name='discountruletarget',
             name='discount_rule_target_product_or_category',
         ),
-        migrations.RemoveIndex(
-            model_name='discount',
-            name='menu_discou_active_b4fadc_idx',
-        ),
         migrations.RenameIndex(
             model_name='discount',
             new_name='menu_discou_is_acti_673081_idx',

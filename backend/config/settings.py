@@ -126,7 +126,7 @@ DATABASES = {
         "HOST": os.environ.get("DB_HOST", "localhost"),
         "USER": os.environ.get("DB_USER", "jarvis"),
         "PASSWORD": os.environ.get("DB_PASSWORD", "diez2030"),
-        "NAME": os.environ.get("DB_NAME", "gallo_db"),
+        "NAME": os.environ.get("DB_NAME", "gastrodb"),
         "PORT": os.environ.get("DB_PORT", "5432"),
         "OPTIONS": {
             "options": "-c timezone=America/El_Salvador",

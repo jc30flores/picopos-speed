@@ -11,11 +11,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RenameIndex(
-            model_name='discount',
-            new_name='menu_discou_active_b4fadc_idx',
-            old_name='menu_discount_active__c4f9aa_idx',
-        ),
-        migrations.RenameIndex(
             model_name='product',
             new_name='menu_produc_categor_2de784_idx',
             old_name='menu_product_category_38490c_idx',
