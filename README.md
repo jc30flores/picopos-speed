@@ -1,4 +1,4 @@
-# Welcome to your Lovable project
+# GastroPOSV / La Rosee POS
 
 ## Runtime ports
 
@@ -258,21 +258,13 @@ python backend/manage.py initdb
 
 ## Project info
 
-**URL**: https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e
+La Rosee POS is a GastroPOSV deployment for restaurant sales, table service, kitchen routing, cashier operations and local receipts.
 
 ## How can I edit this code?
 
-There are several ways of editing your application.
+Use your preferred IDE.
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+If you want to work locally using your own IDE, clone this repo, make changes, run the checks and push the branch.
 
 The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
 
@@ -316,17 +308,9 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
-## How can I deploy this project?
+## Deployment
 
-Simply open [Lovable](https://lovable.dev/projects/911d53b6-ed54-4a17-9c7c-a948722c3f8e) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+This repository is deployed with the existing La Rosee POS service, Caddy configuration and local environment outside version control.
 
 ## POS rápido, ruteo de cocina y DTE
 
