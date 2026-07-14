@@ -47,6 +47,7 @@ class PublicPwaManifestView(APIView):
         not_modified = etag_response(request, version)
         if not_modified:
             return not_modified
+        maskable_purpose = "any" if metadata.get("has_customer_logo") else "maskable"
         manifest = {
             "name": metadata["app_name"],
             "short_name": metadata["short_name"],
@@ -60,7 +61,7 @@ class PublicPwaManifestView(APIView):
             "icons": [
                 {"src": metadata["icon_192_url"], "sizes": "192x192", "type": "image/png", "purpose": "any"},
                 {"src": metadata["icon_512_url"], "sizes": "512x512", "type": "image/png", "purpose": "any"},
-                {"src": metadata["maskable_icon_url"], "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+                {"src": metadata["maskable_icon_url"], "sizes": "512x512", "type": "image/png", "purpose": maskable_purpose},
             ],
         }
         response = HttpResponse(
