@@ -45,6 +45,18 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
+def _text_color_for_background(theme_color: str) -> tuple[int, int, int, int]:
+    r, g, b = _hex_to_rgb(theme_color)
+    luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+    return (17, 24, 39, 255) if luminance > 0.62 else (255, 255, 255, 255)
+
+
+def _fit_logo(logo: Image.Image, max_width: int, max_height: int) -> Image.Image:
+    fitted = logo.copy()
+    fitted.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+    return fitted
+
+
 def _render_default_icon(size: int, theme_color: str) -> Image.Image:
     background = _hex_to_rgb(theme_color)
     canvas = Image.new("RGBA", (size, size), (*background, 255))
@@ -65,10 +77,10 @@ def _render_png_icon(size: int, *, maskable: bool = False) -> bytes:
     if logo is None:
         canvas = _render_default_icon(size, theme_color)
     else:
-        canvas = Image.new("RGBA", (size, size), (*_hex_to_rgb(theme_color), 255))
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         safe_padding = 0.23 if maskable else 0.14
         max_side = int(size * (1 - safe_padding * 2))
-        logo.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        logo = _fit_logo(logo, max_side, max_side)
         x = (size - logo.width) // 2
         y = (size - logo.height) // 2
         canvas.alpha_composite(logo, (x, y))
@@ -91,6 +103,49 @@ def _render_ico() -> bytes:
     images = [Image.open(BytesIO(_render_png_icon(size))).convert("RGBA") for size in (32, 48)]
     output = BytesIO()
     images[0].save(output, format="ICO", sizes=[(32, 32), (48, 48)], append_images=images[1:])
+    return output.getvalue()
+
+
+def _render_share_image() -> bytes:
+    metadata = get_public_pwa_metadata()
+    theme_color = str(metadata["theme_color"])
+    background = _hex_to_rgb(theme_color)
+    canvas = Image.new("RGBA", (1200, 630), (*background, 255))
+    draw = ImageDraw.Draw(canvas)
+    overlay = tuple(max(0, channel - 36) for channel in background)
+    draw.rectangle((0, 390, 1200, 630), fill=(*overlay, 255))
+    draw.rectangle((0, 0, 1200, 18), fill=(255, 255, 255, 50))
+
+    logo = _load_logo()
+    panel = (92, 118, 468, 492)
+    if logo is None:
+        icon = _render_default_icon(220, theme_color)
+        x = panel[0] + (panel[2] - panel[0] - icon.width) // 2
+        y = panel[1] + (panel[3] - panel[1] - icon.height) // 2
+        canvas.alpha_composite(icon, (x, y))
+    else:
+        draw.rounded_rectangle(panel, radius=42, fill=(255, 255, 255, 245))
+        logo = _fit_logo(logo, 300, 230)
+        x = panel[0] + (panel[2] - panel[0] - logo.width) // 2
+        y = panel[1] + (panel[3] - panel[1] - logo.height) // 2
+        canvas.alpha_composite(logo, (x, y))
+
+    title = str(metadata["app_name"])
+    description = str(metadata["description"])
+    text_color = _text_color_for_background(theme_color)
+    muted_color = (*text_color[:3], 220)
+    title_font = _font(68)
+    subtitle_font = _font(34)
+    badge_font = _font(26)
+
+    draw.text((545, 180), title, fill=text_color, font=title_font)
+    draw.text((548, 280), description, fill=muted_color, font=subtitle_font)
+    draw.rounded_rectangle((548, 382, 828, 438), radius=28, fill=(255, 255, 255, 230))
+    draw.text((585, 397), "GastroPOSV", fill=(*_hex_to_rgb(theme_color), 255), font=badge_font)
+    draw.text((548, 468), "Punto de venta para restaurante", fill=muted_color, font=badge_font)
+
+    output = BytesIO()
+    canvas.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()
 
 
@@ -117,6 +172,10 @@ class PublicPwaIconView(APIView):
             payload = _render_customer_logo()
             if payload is None:
                 return HttpResponse(status=404)
+            response = HttpResponse(payload, content_type="image/png")
+            return set_cache_headers(response, version, max_age=86400, versioned=versioned)
+        if icon_name == "share-image.png":
+            payload = _render_share_image()
             response = HttpResponse(payload, content_type="image/png")
             return set_cache_headers(response, version, max_age=86400, versioned=versioned)
         if icon_name == "favicon.ico":

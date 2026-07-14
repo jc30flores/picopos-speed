@@ -14,6 +14,7 @@ DEFAULT_APP_NAME = "GastroPOSV"
 PROJECT_APP_NAME = "La Rosee POS"
 PROJECT_SHORT_NAME = "La Rosee"
 PWA_DESCRIPTION = "Sistema POS para restaurante"
+SITE_NAME = "GastroPOSV"
 
 
 def safe_hex(value: str | None, fallback: str = "#1F7A4D") -> str:
@@ -102,6 +103,7 @@ def get_public_pwa_metadata() -> dict[str, str | bool | None]:
         "app_name": name,
         "short_name": short,
         "description": PWA_DESCRIPTION,
+        "site_name": SITE_NAME,
         "theme_color": theme_color,
         "background_color": "#0B1020",
         "display": "standalone",
@@ -120,4 +122,5 @@ def get_public_pwa_metadata() -> dict[str, str | bool | None]:
         "maskable_icon_url": f"/api/public/pwa/icon-maskable-512.png?v={version}",
         "apple_touch_icon_url": f"/api/public/pwa/apple-touch-icon.png?v={version}",
         "favicon_url": f"/api/public/pwa/favicon.ico?v={version}",
+        "share_image_url": f"/api/public/pwa/share-image.png?v={version}",
     }
