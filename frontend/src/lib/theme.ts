@@ -88,8 +88,19 @@ export const applyPwaMetadata = (metadata: PublicPwaMetadata) => {
   upsertMeta('meta[name="apple-mobile-web-app-title"]', { name: "apple-mobile-web-app-title", content: metadata.shortName });
   upsertMeta('meta[name="apple-mobile-web-app-capable"]', { name: "apple-mobile-web-app-capable", content: "yes" });
   upsertMeta('meta[name="mobile-web-app-capable"]', { name: "mobile-web-app-capable", content: "yes" });
+  upsertMeta('meta[name="description"]', { name: "description", content: metadata.description });
+  upsertMeta('meta[name="author"]', { name: "author", content: metadata.appName });
+  upsertMeta('meta[property="og:type"]', { property: "og:type", content: "website" });
   upsertMeta('meta[property="og:title"]', { property: "og:title", content: title });
   upsertMeta('meta[property="og:description"]', { property: "og:description", content: metadata.description });
+  upsertMeta('meta[property="og:site_name"]', { property: "og:site_name", content: metadata.siteName });
+  upsertMeta('meta[property="og:image"]', { property: "og:image", content: metadata.shareImageUrl });
+  upsertMeta('meta[property="og:image:width"]', { property: "og:image:width", content: "1200" });
+  upsertMeta('meta[property="og:image:height"]', { property: "og:image:height", content: "630" });
+  upsertMeta('meta[name="twitter:card"]', { name: "twitter:card", content: "summary_large_image" });
+  upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: title });
+  upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: metadata.description });
+  upsertMeta('meta[name="twitter:image"]', { name: "twitter:image", content: metadata.shareImageUrl });
 };
 
 const APPEARANCE_CACHE_KEY = "gastroposv.publicAppearance";

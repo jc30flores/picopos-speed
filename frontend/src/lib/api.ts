@@ -646,6 +646,7 @@ export type PublicPwaMetadata = {
   appName: string;
   shortName: string;
   description: string;
+  siteName: string;
   themeColor: string;
   backgroundColor: string;
   display: "standalone" | "fullscreen" | "minimal-ui" | "browser";
@@ -664,6 +665,7 @@ export type PublicPwaMetadata = {
   maskableIconUrl: string;
   appleTouchIconUrl: string;
   faviconUrl: string;
+  shareImageUrl: string;
 };
 
 export type DteIssuerSettings = {
@@ -1689,6 +1691,7 @@ const mapPublicPwaMetadata = (data: any): PublicPwaMetadata => ({
   appName: String(data.app_name ?? "GastroPOSV"),
   shortName: String(data.short_name ?? data.app_name ?? "GastroPOSV"),
   description: String(data.description ?? "Sistema POS para restaurante"),
+  siteName: String(data.site_name ?? "GastroPOSV"),
   themeColor: String(data.theme_color ?? "#1F7A4D"),
   backgroundColor: String(data.background_color ?? "#0B1020"),
   display: (data.display ?? "standalone") as PublicPwaMetadata["display"],
@@ -1707,6 +1710,7 @@ const mapPublicPwaMetadata = (data: any): PublicPwaMetadata => ({
   maskableIconUrl: String(data.maskable_icon_url ?? "/api/public/pwa/icon-maskable-512.png"),
   appleTouchIconUrl: String(data.apple_touch_icon_url ?? "/api/public/pwa/apple-touch-icon.png"),
   faviconUrl: String(data.favicon_url ?? "/api/public/pwa/favicon.ico"),
+  shareImageUrl: String(data.share_image_url ?? "/api/public/pwa/share-image.png"),
 });
 
 export const getPublicPwaMetadata = async (): Promise<PublicPwaMetadata> => {
