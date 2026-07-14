@@ -70,10 +70,17 @@ const chunkBytes = (bytes: Uint8Array, size = 180) => {
   return chunks;
 };
 
+const isBluetoothChooserCancelled = (error: unknown) => {
+  if (!(error instanceof Error)) return false;
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  return name === "notfounderror" || message.includes("cancel") || message.includes("chooser") || message.includes("user cancelled");
+};
+
 export const ThermalTicketDialog = ({
   open,
   title = "Vista previa de ticket",
-  subtitle = "Ticket termico local para impresoras 58mm/80mm.",
+  subtitle = "Ticket térmico local para impresoras 58mm/80mm.",
   ticketText,
   logoUrl = null,
   width = "58mm",
@@ -93,7 +100,7 @@ export const ThermalTicketDialog = ({
     const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
     const escaped = ticketText.replace(/[&<>]/g, (char) => entities[char] ?? char);
     const logo = logoUrl ? `<img src="${logoUrl}" alt="Logo" style="display:block;max-width:160px;max-height:72px;margin:0 auto 10px;object-fit:contain;" />` : "";
-    return `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title><style>@page{margin:0}body{margin:0;background:#fff}.ticket{width:${previewWidth}px;margin:0 auto;padding:14px 12px;color:#111;font:13px/1.32 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;white-space:pre-wrap}.ticket pre{margin:0;white-space:pre-wrap;word-break:break-word}</style></head><body><div class="ticket">${logo}<pre>${escaped}</pre></div></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title><style>@page{margin:0}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;background:#fff;color:#000}.ticket{width:${previewWidth}px;margin:0 auto;padding:14px 12px;background:#fff;color:#000;font:13px/1.34 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;white-space:pre-wrap}.ticket pre{margin:0;color:#000;white-space:pre-wrap;word-break:break-word}</style></head><body><div class="ticket">${logo}<pre>${escaped}</pre></div></body></html>`;
   }, [logoUrl, previewWidth, ticketText, title]);
 
   const openBrowserPrint = () => {
@@ -115,7 +122,7 @@ export const ThermalTicketDialog = ({
     const bluetooth = (navigator as BluetoothNavigator).bluetooth;
     if (!bluetooth) {
       setStatus("error");
-      setError("Este navegador no soporta Web Bluetooth. Usa Chrome/Edge en HTTPS o imprime con el navegador.");
+      setError("Bluetooth no está disponible en este navegador. Puedes usar impresión del navegador.");
       return;
     }
     try {
@@ -129,7 +136,7 @@ export const ThermalTicketDialog = ({
         setStatus("disconnected");
       });
       const server = await nextDevice.gatt?.connect();
-      if (!server) throw new Error("La impresora no expuso servicio Bluetooth.");
+      if (!server) throw new Error("No se pudo conectar con la impresora.");
       const services = await server.getPrimaryServices();
       for (const service of services) {
         const characteristics = await service.getCharacteristics();
@@ -142,9 +149,15 @@ export const ThermalTicketDialog = ({
           return;
         }
       }
-      throw new Error("No se encontro una caracteristica escribible para esta impresora.");
+      throw new Error("No se pudo preparar la impresora para recibir el ticket.");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "No se pudo conectar la impresora.";
+      if (isBluetoothChooserCancelled(err)) {
+        setStatus("disconnected");
+        setError(null);
+        toast.info("No se seleccionó ninguna impresora.");
+        return;
+      }
+      const message = "No se pudo conectar con la impresora. Verifica que esté encendida y cerca.";
       setStatus("error");
       setError(message);
       toast.error(message);
@@ -160,6 +173,7 @@ export const ThermalTicketDialog = ({
 
   const printBluetooth = async () => {
     if (!characteristic) {
+      toast.info("No hay impresora Bluetooth conectada. Se abrirá impresión del navegador.");
       openBrowserPrint();
       return;
     }
@@ -177,8 +191,8 @@ export const ThermalTicketDialog = ({
       }
       setStatus("connected");
       toast.success("Ticket enviado a impresora.");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "No se pudo imprimir por Bluetooth.";
+    } catch {
+      const message = "No se pudo imprimir. Revisa la conexión de la impresora.";
       setStatus("error");
       setError(message);
       toast.error(message);
@@ -210,24 +224,25 @@ export const ThermalTicketDialog = ({
 
         <div className="min-h-0 flex-1 overflow-auto bg-[var(--app-surface-soft)] p-4">
           <div
-            className="mx-auto rounded-md bg-white px-3 py-4 text-[#111827] shadow"
+            className="mx-auto rounded-md bg-white px-3 py-4 text-black shadow"
             style={{
               width: `${previewWidth}px`,
               maxWidth: "100%",
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-              fontSize: width === "58mm" ? 12 : 13,
-              lineHeight: 1.32,
+              fontSize: width === "58mm" ? 13 : 14,
+              lineHeight: 1.34,
+              color: "#000000",
             }}
           >
             {logoUrl ? <img src={logoUrl} alt="Logo" className="mx-auto mb-3 max-h-[72px] max-w-[160px] object-contain" /> : null}
-            <pre className="m-0 whitespace-pre-wrap break-words">{ticketText}</pre>
+            <pre className="m-0 whitespace-pre-wrap break-words text-black opacity-100">{ticketText}</pre>
           </div>
         </div>
 
         {error ? <div className="shrink-0 border-t px-5 py-2 text-sm text-destructive">{error}</div> : null}
 
-        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-5 py-4 sm:justify-between">
-          <div className="flex flex-wrap gap-2">
+        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-5 py-4 sm:justify-between [&>*]:w-full sm:[&>*]:w-auto">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <Select value={width} onValueChange={(value) => onWidthChange?.(value as TicketWidth)}>
               <SelectTrigger className="h-10 w-28">
                 <SelectValue />
@@ -247,7 +262,7 @@ export const ThermalTicketDialog = ({
               </Button>
             )}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cerrar</Button>
             <Button type="button" onClick={() => void printBluetooth()} disabled={status === "printing"}>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
