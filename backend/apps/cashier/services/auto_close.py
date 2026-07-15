@@ -22,7 +22,18 @@ AUTO_CLOSE_SKIPPED_OPEN_ORDERS = "Cierre automático omitido: existen cuentas ab
 
 
 def count_open_orders_for_cash_close(branch_id: int | None) -> int:
-    queryset = Order.objects.filter(is_pending=True).exclude(status__in=["canceled", "delivered"])
+    queryset = (
+        Order.objects.filter(
+            is_pending=True,
+            items__isnull=False,
+            total__gt=Decimal("0.00"),
+            amount_due_cents__gt=0,
+        )
+        .exclude(status__in=["canceled", "delivered"])
+        .exclude(payment_status="paid")
+        .exclude(financial_status__in=["paid", "voided", "refunded_full"])
+        .distinct()
+    )
     if branch_id:
         queryset = queryset.filter(branch_id=branch_id)
     return queryset.count()

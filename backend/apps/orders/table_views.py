@@ -766,6 +766,19 @@ class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
             has_balance = order.items.exists() and order.payment_status != "paid"
             if has_balance:
                 return Response({"detail": "No puedes liberar una mesa con saldo pendiente."}, status=400)
+            order.is_pending = False
+            order.pending_state = "none"
+            order.pending_completed_at = timezone.localtime(timezone.now())
+            order.pending_completion_type = "paid" if order.payment_status == "paid" else "removed"
+            order.pending_completion_note = "Mesa liberada."
+            order.save(update_fields=[
+                "is_pending",
+                "pending_state",
+                "pending_completed_at",
+                "pending_completion_type",
+                "pending_completion_note",
+                "updated_at",
+            ])
         session.status = TableSession.STATUS_CLOSED
         session.closed_by = request.user
         session.closed_at = timezone.now()

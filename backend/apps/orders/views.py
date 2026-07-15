@@ -85,6 +85,21 @@ def _to_money(value: Decimal | int | float | str) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _valid_pending_orders(queryset):
+    return (
+        queryset.filter(
+            is_pending=True,
+            items__isnull=False,
+            total__gt=Decimal("0.00"),
+            amount_due_cents__gt=0,
+        )
+        .exclude(status__in=["canceled", "delivered"])
+        .exclude(payment_status="paid")
+        .exclude(financial_status__in=["paid", "voided", "refunded_full"])
+        .distinct()
+    )
+
+
 def _sync_pending_order_lines(order: Order, items_data: list[dict], request, authorization_pin: str) -> None:
     previous_total = _to_money(order.total or 0)
     logger.info(
@@ -550,8 +565,7 @@ class PendingOrderListView(generics.ListAPIView):
             )
         else:
             queryset = (
-                Order.objects.filter(is_pending=True)
-                .exclude(status__in=["canceled", "delivered"])
+                _valid_pending_orders(Order.objects.all())
                 .prefetch_related("items__applied_modifiers")
                 .order_by("pending_marked_at", "created_at")
             )
@@ -635,6 +649,11 @@ class PendingOrderToggleView(generics.GenericAPIView):
                     order.disposable_total,
                     order.total,
                     len(items_data),
+                )
+            if not order.items.exists() or _to_money(order.total) <= Decimal("0.00") or int(order.amount_due_cents or 0) <= 0:
+                return Response(
+                    {"detail": "No se puede guardar una orden abierta sin productos o con total $0.00."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
             order.is_pending = True
             order.pending_state = pending_state
