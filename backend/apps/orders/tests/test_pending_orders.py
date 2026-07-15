@@ -227,7 +227,7 @@ class PendingOrdersTests(TestCase):
         self.assertEqual(str(self.order.total), "13.80")
         self.assertEqual(self.order.pending_marked_at, old_marked_at)
 
-    def test_cashier_cannot_remove_item_from_pending_without_manager_pin(self):
+    def test_cashier_can_remove_unsent_pending_item_without_manager_pin(self):
         self.order.is_pending = True
         self.order.pending_reference = "Mesa 1"
         self.order.pending_state = "pending_payment"
@@ -238,15 +238,45 @@ class PendingOrdersTests(TestCase):
             {"is_pending": True, "pending_reference": "Mesa 1", "items": []},
             format="json",
         )
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertFalse(OrderItem.objects.filter(id=order_item.id).exists())
+
+    def test_sent_item_requires_authorization_to_remove_from_pending(self):
+        self.order.is_pending = True
+        self.order.pending_reference = "Mesa 2"
+        self.order.pending_state = "in_kitchen"
+        self.order.send_to_kitchen = True
+        self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "send_to_kitchen", "updated_at"])
+        order_item = OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            product_name_snapshot="Soda",
+            price_snapshot="2.00",
+            quantity=1,
+            kitchen_status=OrderItem.KITCHEN_STATUS_SENT,
+        )
+        res = self.client.post(
+            f"/api/orders/{self.order.id}/pending/",
+            {"is_pending": True, "pending_reference": "Mesa 2", "items": []},
+            format="json",
+        )
         self.assertEqual(res.status_code, 403)
         self.assertTrue(OrderItem.objects.filter(id=order_item.id).exists())
 
-    def test_manager_pin_allows_cashier_to_remove_item_from_pending(self):
+    def test_manager_pin_allows_cashier_to_remove_sent_item_from_pending(self):
         self.order.is_pending = True
         self.order.pending_reference = "Mesa 2"
-        self.order.pending_state = "pending_payment"
-        self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "updated_at"])
-        OrderItem.objects.create(order=self.order, product=self.product, product_name_snapshot="Soda", price_snapshot="2.00", quantity=1)
+        self.order.pending_state = "in_kitchen"
+        self.order.send_to_kitchen = True
+        self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "send_to_kitchen", "updated_at"])
+        OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            product_name_snapshot="Soda",
+            price_snapshot="2.00",
+            quantity=1,
+            kitchen_status=OrderItem.KITCHEN_STATUS_SENT,
+        )
         res = self.client.post(
             f"/api/orders/{self.order.id}/pending/",
             {"is_pending": True, "pending_reference": "Mesa 2", "authorization_pin": "222222", "items": []},
@@ -313,7 +343,7 @@ class PendingOrdersTests(TestCase):
         self.assertEqual(pending_res.data["count"], 0)
         self.assertEqual(finalized_res.data["count"], 1)
 
-    def test_cannot_remove_items_when_order_already_sent_to_kitchen(self):
+    def test_cashier_can_remove_unsent_item_even_when_order_was_sent_to_kitchen(self):
         kitchen_product = Product.objects.create(
             name="Hamburguesa",
             description="",
@@ -328,12 +358,11 @@ class PendingOrdersTests(TestCase):
         self.order.send_to_kitchen = True
         self.order.status = "preparing"
         self.order.save(update_fields=["is_pending", "pending_reference", "pending_state", "send_to_kitchen", "status", "updated_at"])
-        OrderItem.objects.create(order=self.order, product=kitchen_product, product_name_snapshot="Hamburguesa", price_snapshot="2.00", quantity=1)
-        manager_client = APIClient()
-        manager_client.force_authenticate(self.manager)
-        res = manager_client.post(
+        order_item = OrderItem.objects.create(order=self.order, product=kitchen_product, product_name_snapshot="Hamburguesa", price_snapshot="2.00", quantity=1)
+        res = self.client.post(
             f"/api/orders/{self.order.id}/pending/",
             {"is_pending": True, "pending_reference": "Mesa 3", "items": []},
             format="json",
         )
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertFalse(OrderItem.objects.filter(id=order_item.id).exists())

@@ -26,7 +26,7 @@ from apps.core.permissions import (
 from apps.printing.models import PrintJob
 from apps.printing.services.jobs import create_print_job, create_void_print_job
 from apps.printing.services.renderers import render_customer_ticket
-from apps.payments.models import Payment
+from apps.payments.models import Payment, PaymentAllocation
 from apps.cashier.services import has_open_cash_session_for_branch, resolve_branch_id
 from apps.printing.receipt_pdf import build_receipt_pdf_from_text
 from apps.users.models import UserProfile
@@ -62,15 +62,15 @@ def _apply_common_filters(request, queryset):
 
 def _require_manager_pin_for_cashier(request, pin: str) -> bool:
     profile = UserProfile.objects.filter(user=request.user, is_active=True).first()
-    if getattr(request.user, "is_superuser", False) or (profile and profile.role in {"admin", "manager"}):
+    if getattr(request.user, "is_superuser", False) or (profile and profile.role in {"superadmin", "admin", "manager"}):
         return True
-    if not profile or profile.role != "cashier":
+    if not profile or profile.role not in {"cashier", "waiter"}:
         return False
     if not is_valid_pin_format(pin):
         return False
     privileged_profiles = UserProfile.objects.select_related("user").filter(
         is_active=True,
-        role__in=["admin", "manager"],
+        role__in=["superadmin", "admin", "manager"],
         user__is_active=True,
     )
     return any(user_matches_pin(p.user, pin) for p in privileged_profiles)
@@ -78,7 +78,7 @@ def _require_manager_pin_for_cashier(request, pin: str) -> bool:
 
 def _is_privileged_user(user) -> bool:
     profile = UserProfile.objects.filter(user=user, is_active=True).first()
-    return bool(getattr(user, "is_superuser", False) or (profile and profile.role in {"admin", "manager"}))
+    return bool(getattr(user, "is_superuser", False) or (profile and profile.role in {"superadmin", "admin", "manager"}))
 
 
 def _to_money(value: Decimal | int | float | str) -> Decimal:
@@ -100,6 +100,14 @@ def _valid_pending_orders(queryset):
     )
 
 
+def _item_requires_protected_removal(item: OrderItem) -> bool:
+    return item.kitchen_status in {
+        OrderItem.KITCHEN_STATUS_SENT,
+        OrderItem.KITCHEN_STATUS_READY,
+        OrderItem.KITCHEN_STATUS_DELIVERED,
+    }
+
+
 def _sync_pending_order_lines(order: Order, items_data: list[dict], request, authorization_pin: str) -> None:
     previous_total = _to_money(order.total or 0)
     logger.info(
@@ -111,7 +119,8 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         order.total,
         len(items_data),
     )
-    existing_ids = set(order.items.values_list("id", flat=True))
+    existing_items = {item.id: item for item in order.items.select_related("product").all()}
+    existing_ids = set(existing_items.keys())
     table_session = order.table_sessions.prefetch_related("guests").order_by("-id").first()
     guests_by_id = {guest.id: guest for guest in table_session.guests.all()} if table_session else {}
     guests_by_label = {}
@@ -135,11 +144,22 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         for item in items_data
         if str(item.get("source_order_item_id") or "").isdigit()
     }
-    removed_ids = existing_ids - requested_ids if requested_ids else set()
+    removed_ids = existing_ids - requested_ids
     if removed_ids:
-        if order.send_to_kitchen or order.status in {"preparing", "ready", "delivered"}:
-            raise PermissionDenied("No se pueden eliminar productos: la orden ya fue enviada a cocina.")
-        if not _is_privileged_user(request.user) and not _require_manager_pin_for_cashier(request, authorization_pin):
+        if order.payment_status == "paid":
+            raise PermissionDenied("Este producto ya fue pagado. Usa devolución o anulación.")
+        paid_removed_ids = set(
+            PaymentAllocation.objects.filter(order_item_id__in=removed_ids, amount_cents__gt=0)
+            .values_list("order_item_id", flat=True)
+        )
+        if paid_removed_ids:
+            raise PermissionDenied("Este producto ya fue pagado. Usa devolución o anulación.")
+        protected_removed = [
+            item
+            for item_id, item in existing_items.items()
+            if item_id in removed_ids and _item_requires_protected_removal(item)
+        ]
+        if protected_removed and not _is_privileged_user(request.user) and not _require_manager_pin_for_cashier(request, authorization_pin):
             raise PermissionDenied("Autorización de gerente/admin requerida para eliminar productos.")
 
     AppliedDiscount.objects.filter(order=order).delete()
