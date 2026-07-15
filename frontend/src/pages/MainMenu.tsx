@@ -109,7 +109,15 @@ const MainMenu = () => {
           if (module.key === "tables_editor") return featureVisibility.tableService !== false;
           return true;
         })
-        .map((module) => ({ ...module, icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON })),
+        .map((module) => ({
+          ...module,
+          label: user?.role === "waiter" && module.key === "pos"
+            ? "POS / Mesas"
+            : user?.role === "waiter" && module.key === "kitchen"
+              ? "Cocina solo lectura"
+              : module.label,
+          icon: iconByModule[module.key] ?? DEFAULT_MENU_ICON,
+        })),
     [featureVisibility, user]
   );
   const isWorker = user?.role === "worker";

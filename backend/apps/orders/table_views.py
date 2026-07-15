@@ -627,7 +627,7 @@ class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -662,7 +662,7 @@ class TableSessionMergeView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionSplitTableView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -694,7 +694,7 @@ class TableSessionSplitTableView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionMoveTableView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -824,7 +824,7 @@ class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionMoveItemsView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):

@@ -57,6 +57,11 @@ ROLE_ALLOWED_PATH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"^/api/printing/status/?$"),
         re.compile(r"^/api/settings/ticket/?$"),
         re.compile(r"^/api/employees/attendance/today/?$"),
+        re.compile(r"^/api/employees/attendance/clock-in/?$"),
+        re.compile(r"^/api/employees/attendance/break-start/?$"),
+        re.compile(r"^/api/employees/attendance/break-end/?$"),
+        re.compile(r"^/api/employees/attendance/clock-out/?$"),
+        re.compile(r"^/api/employees/me/attendance/?$"),
     ),
     "kiosk": (
         re.compile(r"^/api/menu/"),

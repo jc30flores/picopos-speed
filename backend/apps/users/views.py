@@ -24,7 +24,7 @@ LOGIN_THROTTLE_TIMEOUT_SECONDS = 60
 ROLE_LANDING_ROUTE = {
     "superadmin": "/",
     "kitchen": "/kitchen",
-    "waiter": "/pos",
+    "waiter": "/",
     "kiosk": "/kiosk",
     "worker": "/",
 }

@@ -658,7 +658,7 @@ type TableConfirmDialogState =
   const canViewSensitiveCash = Boolean(user?.isSuperuser || user?.role === "admin");
   const isWaiterRole = user?.role === "waiter";
   const canCollectTablePayments = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
-  const canManageTableStructure = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
+  const canManageTableStructure = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier" || user?.role === "waiter");
   const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
   const canUseLastSaleQuickAction = quickSalesMode === "last_sale" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewRecentSalesActions = quickSalesMode === "history" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
