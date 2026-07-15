@@ -138,8 +138,14 @@ def _authorize_admin_or_superadmin_pin(pin: str):
     return None
 
 
+def _guest_display_label(guest: TableGuest | None) -> str:
+    if not guest:
+        return ""
+    return guest.display_label
+
+
 def _serialize_kitchen_item(item: OrderItem):
-    guest_label = (item.table_guest.label if item.table_guest_id and item.table_guest else "") or item.assigned_name
+    guest_label = (_guest_display_label(item.table_guest) if item.table_guest_id and item.table_guest else "") or item.assigned_name
     status_label = {
         OrderItem.KITCHEN_STATUS_PENDING: "Pendiente de enviar",
         OrderItem.KITCHEN_STATUS_SENT: "En cocina",
@@ -178,7 +184,7 @@ def _serialize_kitchen_session(session: TableSession):
     items = list(order.items.select_related("table_guest").prefetch_related("applied_modifiers").order_by("id")) if order else []
     by_person: dict[str, dict] = {}
     for item in items:
-        label = item.assigned_name or (item.table_guest.label if item.table_guest_id and item.table_guest else "Cuenta general")
+        label = (_guest_display_label(item.table_guest) if item.table_guest_id and item.table_guest else "") or item.assigned_name or "Cuenta general"
         bucket = by_person.setdefault(label, {"label": label, "items": [], "total": Decimal("0.00")})
         line_total = (item.effective_unit_price * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
         bucket["items"].append(_serialize_kitchen_item(item))
@@ -459,7 +465,7 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         if not pending_items:
             detail = "No hay productos pendientes para enviar."
             if guest:
-                detail = f"No hay productos pendientes para {guest.label}."
+                detail = f"No hay productos pendientes para {guest.display_label}."
             return Response(
                 {
                     "detail": detail,
@@ -482,7 +488,7 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         session.save(update_fields=["status", "updated_at"])
         detail = f"{len(pending_items)} productos enviados a cocina."
         if guest:
-            detail = f"Productos de {guest.label} enviados a cocina."
+            detail = f"Productos de {guest.display_label} enviados a cocina."
         return Response({
             "detail": detail,
             "sent_count": len(pending_items),

@@ -99,7 +99,12 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
     existing_ids = set(order.items.values_list("id", flat=True))
     table_session = order.table_sessions.prefetch_related("guests").order_by("-id").first()
     guests_by_id = {guest.id: guest for guest in table_session.guests.all()} if table_session else {}
-    guests_by_label = {guest.label.strip().lower(): guest for guest in guests_by_id.values()}
+    guests_by_label = {}
+    for guest in guests_by_id.values():
+        guests_by_label[guest.label.strip().lower()] = guest
+        custom_label = (getattr(guest, "display_name", "") or "").strip()
+        if custom_label:
+            guests_by_label[custom_label.lower()] = guest
     previous_kitchen_state = {
         item.id: {
             "kitchen_status": item.kitchen_status,
@@ -163,7 +168,7 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
             snapshot_sku_or_code=code[:80],
             is_custom=is_custom,
             quantity=quantity,
-            assigned_name=(assigned_name or (table_guest.label if table_guest else ""))[:80],
+            assigned_name=((table_guest.display_label if table_guest else "") or assigned_name)[:80],
             table_guest=table_guest,
         )
         source_id = raw.get("source_order_item_id")

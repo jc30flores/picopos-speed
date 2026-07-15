@@ -97,10 +97,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
 
     def get_guest_label(self, obj: OrderItem):
-        return obj.table_guest.label if obj.table_guest_id and obj.table_guest else (obj.assigned_name or "")
+        return obj.table_guest.display_label if obj.table_guest_id and obj.table_guest else (obj.assigned_name or "")
 
     def get_table_guest_label(self, obj: OrderItem):
-        return obj.table_guest.label if obj.table_guest_id and obj.table_guest else ""
+        return obj.table_guest.display_label if obj.table_guest_id and obj.table_guest else ""
 
     def get_table_guest_seat_number(self, obj: OrderItem):
         return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
