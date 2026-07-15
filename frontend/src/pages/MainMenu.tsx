@@ -198,7 +198,8 @@ const MainMenu = () => {
                     }
                     return;
                   }
-                  navigate(card.path);
+                  const destination = card.key === "pos" && featureVisibility.tableService ? "/pos?mode=tables" : card.path;
+                  navigate(destination);
                 }}
               >
                 <CardIcon className="h-6 w-6" />
