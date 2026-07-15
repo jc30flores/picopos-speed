@@ -866,13 +866,30 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!tableMapEnabled) return;
-    Promise.all([getRestaurantTables().catch(() => []), getTableSessions().catch(() => []), getTableReadySummary().catch(() => ({ tables: [], totalReady: 0 }))])
-      .then(([tables, sessions, readySummary]) => {
-        setRestaurantTables(tables);
-        setTableSessions(sessions);
-        setTableReadySummaries(readySummary.tables);
+    let cancelled = false;
+    Promise.allSettled([getRestaurantTables(), getTableSessions(), getTableReadySummary()])
+      .then(([tablesResult, sessionsResult, readySummaryResult]) => {
+        if (cancelled) return;
+        if (tablesResult.status === "fulfilled") {
+          setRestaurantTables(tablesResult.value);
+        } else {
+          posDebug("table.map.tables.load.failed", tablesResult.reason);
+        }
+        if (sessionsResult.status === "fulfilled") {
+          setTableSessions(sessionsResult.value);
+        } else {
+          posDebug("table.map.sessions.load.failed", sessionsResult.reason);
+        }
+        if (readySummaryResult.status === "fulfilled") {
+          setTableReadySummaries(readySummaryResult.value.tables);
+        } else {
+          posDebug("table.map.ready.load.failed", readySummaryResult.reason);
+        }
       })
-      .catch(() => undefined);
+      .catch((error) => posDebug("table.map.load.failed", error));
+    return () => {
+      cancelled = true;
+    };
   }, [tableMapEnabled]);
 
   const sessionByTableId = useMemo(() => {
@@ -884,16 +901,26 @@ type TableConfirmDialogState =
   }, [tableSessions]);
 
   const refreshTableSessions = useCallback(async () => {
-    const sessions = await getTableSessions();
-    setTableSessions(sessions);
-    return sessions;
-  }, []);
+    try {
+      const sessions = await getTableSessions();
+      setTableSessions(sessions);
+      return sessions;
+    } catch (error) {
+      posDebug("table.sessions.refresh.failed", error);
+      return tableSessions;
+    }
+  }, [tableSessions]);
 
   const refreshTableReadySummaries = useCallback(async () => {
-    const summary = await getTableReadySummary();
-    setTableReadySummaries(summary.tables);
-    return summary.tables;
-  }, []);
+    try {
+      const summary = await getTableReadySummary();
+      setTableReadySummaries(summary.tables);
+      return summary.tables;
+    } catch (error) {
+      posDebug("table.ready.refresh.failed", error);
+      return tableReadySummaries;
+    }
+  }, [tableReadySummaries]);
 
   const readySummaryByTableId = useMemo(() => {
     const map = new Map<number, TableReadySummary>();
@@ -3459,7 +3486,11 @@ type TableConfirmDialogState =
         return nextCart;
       });
       await refreshTableSessions();
-      toast.success((session.sentCount ?? 0) > 0 ? "Pedido enviado a cocina." : "Productos agregados a la cuenta. No hay productos para cocina.");
+      if ((session.sentCount ?? 0) > 0 && (session.savedCount ?? 0) > 0) {
+        toast.success("Pedido enviado. Algunos productos no van a cocina.");
+      } else {
+        toast.success(session.detail || ((session.sentCount ?? 0) > 0 ? "Pedido enviado a cocina." : "Productos agregados a la cuenta. No hay productos para cocina."));
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo enviar a cocina.");
     } finally {

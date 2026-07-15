@@ -6939,7 +6939,7 @@ export const receivePurchaseOrder = async (id: number, payload: { notes?: string
 export type DiningArea = { id: number; name: string; sortOrder: number; isActive: boolean; x:number; y:number; width:number; height:number; color?:string; operationalZoom:number; operationalOffsetX:number; operationalOffsetY:number };
 export type RestaurantTable = { id: number; area: number; areaName?: string; name: string; number: number; capacity: number; shape: "round"|"square"|"rectangle"|"booth"|"bar"; x: number; y: number; width: number; height: number; rotation: number; color?: string; isActive: boolean; sortOrder: number };
 export type TableGuest = { id: number; label: string; baseLabel: string; displayName: string; customName: string; seatNumber: number; isActive: boolean; isPaid: boolean };
-export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number; groupNumber?: number | null; sentCount?: number; detail?: string };
+export type TableSession = { id: number; status: string; guestsCount: number; orderMode: "table"|"per_person"; primaryOrder?: number | null; tableIds: number[]; guests: TableGuest[]; openedAt?: string | null; totalCached?: number; groupNumber?: number | null; sentCount?: number; savedCount?: number; detail?: string };
 export type TableLayout = { areas: DiningArea[]; tables: RestaurantTable[]; sessions: TableSession[] };
 export type TableKitchenItem = { id: number; productName: string; quantity: number; assignedName?: string; guestNumber?: number | null; guestLabel?: string; tableGuestId?: number | null; tableGuestLabel?: string; tableGuestSeatNumber?: number | null; kitchenStatus: "pending"|"sent"|"ready"|"delivered"; kitchenStatusLabel?: string; kitchenSentAt?: string | null; kitchenReadyAt?: string | null; kitchenDeliveredAt?: string | null; kitchenCompletedAt?: string | null; kitchenServedAt?: string | null; isPendingKitchen?: boolean; isInKitchen?: boolean; isCompleted?: boolean; isServed?: boolean; modifiers: string[]; lineTotal: number };
 export type TableKitchenPerson = { label: string; items: TableKitchenItem[]; total: number };
@@ -7126,8 +7126,8 @@ export const sendTableSessionToKitchen = async (sessionId: number, payload?: { s
       guest_number: payload?.guestNumber ?? null,
     }),
   });
-  const data = await handleJson<({ session?: RawTableSession; sent_count?: unknown; detail?: unknown; order?: unknown; summary?: unknown } & RawTableSession)>(response);
-  return { ...mapTableSession(data.session ?? data), sentCount: Number(data.sent_count ?? 0), detail: data.detail ? String(data.detail) : undefined };
+  const data = await handleJson<({ session?: RawTableSession; sent_count?: unknown; saved_count?: unknown; detail?: unknown; order?: unknown; summary?: unknown } & RawTableSession)>(response);
+  return { ...mapTableSession(data.session ?? data), sentCount: Number(data.sent_count ?? 0), savedCount: Number(data.saved_count ?? 0), detail: data.detail ? String(data.detail) : undefined };
 };
 export const renameTableSessionGuest = async (sessionId: number, guestNumber: number, name: string): Promise<{ detail?: string; guest: TableGuest; session: TableSession }> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/guests/${guestNumber}/rename/`, {
