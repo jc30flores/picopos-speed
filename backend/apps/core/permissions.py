@@ -89,7 +89,7 @@ def user_can_manage_feature_key(user, key: str) -> bool:
 
 
 def user_can_view_features(user) -> bool:
-    return bool(is_superadmin(user) or _role_is(user, {"admin"}))
+    return bool(is_superadmin(user) or _role_is(user, {"admin", "manager"}))
 
 
 def can_manage_dte_settings(user) -> bool:

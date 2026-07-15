@@ -2,8 +2,9 @@ from django.db import transaction
 from django.db.models.expressions import RawSQL
 from rest_framework import serializers
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from apps.core.models import ActivityCatalog, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig
+from apps.core.models import ActivityCatalog, BusinessHoursSettings, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig
 from apps.menu.models import Product
 
 
@@ -209,6 +210,35 @@ class SystemAppearanceSettingsSerializer(serializers.ModelSerializer):
             "#111827",
             "#0D9488",
         ]
+
+
+class BusinessHoursSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BusinessHoursSettings
+        fields = [
+            "business_hours_enabled",
+            "opening_time",
+            "closing_time",
+            "grace_hours_after_close",
+            "timezone",
+            "auto_close_cash_enabled",
+            "auto_close_count_zero",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_at"]
+
+    def validate_grace_hours_after_close(self, value: int) -> int:
+        if value < 0 or value > 24:
+            raise serializers.ValidationError("Las horas de gracia deben estar entre 0 y 24.")
+        return value
+
+    def validate_timezone(self, value: str) -> str:
+        cleaned = (value or "America/El_Salvador").strip()
+        try:
+            ZoneInfo(cleaned)
+        except ZoneInfoNotFoundError:
+            raise serializers.ValidationError("Zona horaria inválida.")
+        return cleaned
 
 
 class DTEGlobalSettingsSerializer(serializers.ModelSerializer):

@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { deleteTicketLogo, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateFeatureSettings, uploadTicketLogo, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
+import { deleteTicketLogo, getBusinessHoursSettings, getFeatureSettings, getFeatureSettingsOptions, getTicketSettings, updateBusinessHoursSettings, updateFeatureSettings, uploadTicketLogo, type BusinessHoursSettings, type FeatureSettings, type FeatureSettingsOptions } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
 import { loadAppearanceSettings } from "@/lib/theme";
 
@@ -36,6 +38,17 @@ const defaultState: FeatureSettings = {
   posQuickSalesButtonMode: "last_sale",
   posQuickSalesHistoryScope: "current_shift",
   posQuickSalesHistoryWindowMinutes: 60,
+};
+
+const defaultBusinessHours: BusinessHoursSettings = {
+  businessHoursEnabled: false,
+  openingTime: "08:00",
+  closingTime: "22:00",
+  graceHoursAfterClose: 4,
+  timezone: "America/El_Salvador",
+  autoCloseCashEnabled: false,
+  autoCloseCountZero: true,
+  updatedAt: null,
 };
 
 type ToggleSettingKey =
@@ -139,30 +152,39 @@ const operationModes = [
 export const FeatureFlagsTab = () => {
   const { user } = useAuth();
   const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
+  const isManagerOnly = user?.role === "manager" && !isSuperadmin;
   const [settings, setSettings] = useState<FeatureSettings>(defaultState);
+  const [businessHours, setBusinessHours] = useState<BusinessHoursSettings>(defaultBusinessHours);
   const [options, setOptions] = useState<FeatureSettingsOptions>({ roles: [], cashCloseExpectedTotalFields: [] });
   const [ticketLogoUrl, setTicketLogoUrl] = useState<string | null>(null);
   const [ticketLogoError, setTicketLogoError] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
+  const [businessHoursSaving, setBusinessHoursSaving] = useState(false);
   const [open, setOpen] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, o, ticket] = await Promise.all([getFeatureSettings(), getFeatureSettingsOptions(), getTicketSettings()]);
+      if (isManagerOnly) {
+        const hours = await getBusinessHoursSettings();
+        setBusinessHours(hours);
+        return;
+      }
+      const [s, o, ticket, hours] = await Promise.all([getFeatureSettings(), getFeatureSettingsOptions(), getTicketSettings(), getBusinessHoursSettings()]);
       setSettings(s);
       setOptions(o);
       setTicketLogoUrl(ticket.ticketLogoUrl);
+      setBusinessHours(hours);
       setTicketLogoError(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron cargar funciones");
     } finally {
       setLoading(false);
     }
-  };
-  useEffect(() => { void load(); }, []);
+  }, [isManagerOnly]);
+  useEffect(() => { void load(); }, [load]);
 
   const persist = async (patch: Partial<FeatureSettings>) => {
     const previous = settings;
@@ -175,6 +197,30 @@ export const FeatureFlagsTab = () => {
     } catch (error) {
       setSettings(previous);
       toast.error(error instanceof Error ? error.message : "No se pudo guardar");
+    }
+  };
+
+  const persistBusinessHours = async (patch: Partial<BusinessHoursSettings>) => {
+    const next = { ...businessHours, ...patch };
+    if (next.graceHoursAfterClose < 0 || next.graceHoursAfterClose > 24) {
+      toast.error("Las horas de gracia deben estar entre 0 y 24.");
+      return;
+    }
+    if (!next.openingTime || !next.closingTime) {
+      toast.error("Hora de apertura y cierre son requeridas.");
+      return;
+    }
+    setBusinessHours(next);
+    setBusinessHoursSaving(true);
+    try {
+      const saved = await updateBusinessHoursSettings(next);
+      setBusinessHours(saved);
+      toast.success("Horario de atención guardado");
+    } catch (error) {
+      setBusinessHours(businessHours);
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar horario de atención");
+    } finally {
+      setBusinessHoursSaving(false);
     }
   };
 
@@ -256,13 +302,97 @@ export const FeatureFlagsTab = () => {
       }]
       : []),
   ];
+  const intro = (
+    <div className="rounded-2xl border bg-gradient-to-br from-muted/40 via-background to-background p-4 shadow-sm">
+      <h3 className="text-lg font-semibold">Funciones experimentales y módulos</h3>
+      <p className="text-sm text-muted-foreground">Activa solo lo necesario. Los cambios se guardan de inmediato y mantienen las llaves existentes.</p>
+    </div>
+  );
+  const businessHoursSection = (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Caja</span>
+        <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Horario de atención</h4>
+      </div>
+      <Card className="gp-primary-border bg-card/90 shadow-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Horario de atención</CardTitle>
+          <CardDescription className="text-xs">
+            Define la hora normal de apertura y cierre. Si una caja queda abierta después del cierre y el tiempo de gracia, el sistema puede cerrarla automáticamente para evitar sesiones abiertas por varios días.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex items-center justify-between rounded-lg border bg-background/50 px-3 py-2">
+              <span className="text-sm font-medium">Activar horario de atención</span>
+              <Switch
+                checked={businessHours.businessHoursEnabled}
+                disabled={businessHoursSaving}
+                onCheckedChange={(checked) => void persistBusinessHours({ businessHoursEnabled: checked })}
+              />
+            </label>
+            <label className="flex items-center justify-between rounded-lg border bg-background/50 px-3 py-2">
+              <span className="text-sm font-medium">Cerrar caja automáticamente si queda olvidada</span>
+              <Switch
+                checked={businessHours.autoCloseCashEnabled}
+                disabled={businessHoursSaving}
+                onCheckedChange={(checked) => void persistBusinessHours({ autoCloseCashEnabled: checked })}
+              />
+            </label>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Hora de apertura</Label>
+              <Input
+                type="time"
+                value={businessHours.openingTime.slice(0, 5)}
+                disabled={businessHoursSaving}
+                onChange={(event) => void persistBusinessHours({ openingTime: event.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Hora de cierre</Label>
+              <Input
+                type="time"
+                value={businessHours.closingTime.slice(0, 5)}
+                disabled={businessHoursSaving}
+                onChange={(event) => void persistBusinessHours({ closingTime: event.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Horas de gracia después del cierre</Label>
+              <Input
+                type="number"
+                min={0}
+                max={24}
+                step={1}
+                value={businessHours.graceHoursAfterClose}
+                disabled={businessHoursSaving}
+                onChange={(event) => void persistBusinessHours({ graceHoursAfterClose: Number(event.target.value) })}
+              />
+            </div>
+          </div>
+          <p className="text-xs leading-snug text-muted-foreground">
+            El cierre automático solo se realizará si no hay cuentas abiertas. Si hay cuentas pendientes, el sistema bloqueará el cierre y lo reportará.
+          </p>
+        </CardContent>
+      </Card>
+    </section>
+  );
+
+  if (isManagerOnly) {
+    return (
+      <div className="space-y-5">
+        {intro}
+        {businessHoursSection}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl border bg-gradient-to-br from-muted/40 via-background to-background p-4 shadow-sm">
-        <h3 className="text-lg font-semibold">Funciones experimentales y módulos</h3>
-        <p className="text-sm text-muted-foreground">Activa solo lo necesario. Los cambios se guardan de inmediato y mantienen las llaves existentes.</p>
-      </div>
+      {intro}
+      {businessHoursSection}
 
       <section className="space-y-2">
         <div className="flex items-center gap-2">

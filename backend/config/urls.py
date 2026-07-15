@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from apps.core.views import (
     AppearanceSettingsView,
+    BusinessHoursSettingsView,
     DTECorrelativeDetailView,
     DTECorrelativesView,
     DTEGlobalSettingsView,
@@ -37,6 +38,7 @@ urlpatterns = [
     path("api/settings/features/", FeatureSettingsView.as_view(), name="settings-features"),
     path("api/settings/features/options/", FeatureSettingsOptionsView.as_view(), name="settings-features-options"),
     path("api/settings/appearance/", AppearanceSettingsView.as_view(), name="settings-appearance"),
+    path("api/settings/business-hours/", BusinessHoursSettingsView.as_view(), name="settings-business-hours"),
     path("api/public/appearance/", PublicAppearanceView.as_view(), name="public-appearance"),
     path("api/public/manifest.webmanifest", PublicPwaManifestView.as_view(), name="public-pwa-manifest"),
     path("api/public/pwa/metadata/", PublicPwaMetadataView.as_view(), name="public-pwa-metadata"),

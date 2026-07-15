@@ -6,15 +6,16 @@ from django.db.models import Case, IntegerField, Value, When
 from PIL import Image, UnidentifiedImageError
 import logging
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import ActivityCatalog, Branch, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig, TicketSettings
+from apps.core.models import ActivityCatalog, Branch, BusinessHoursSettings, Customer, DTEGlobalSettings, FeatureFlag, GeoDepartment, GeoMunicipality, ServiceType, SystemAppearanceSettings, TaxConfig, TicketSettings
 from apps.core.feature_flags import get_pos_quick_sales_settings, set_pos_quick_sales_settings
-from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, can_view_dte, is_admin, is_superadmin, user_can_manage_feature_key, user_can_view_features
-from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
+from apps.core.permissions import IsAdmin, IsAuthenticatedAndActive, IsSuperAdmin, can_manage_features, can_view_dte, is_admin, is_manager, is_superadmin, user_can_manage_feature_key, user_can_view_features
+from apps.core.serializers import ActivityCatalogSerializer, BranchSerializer, BusinessHoursSettingsSerializer, ClientSerializer, CustomerSerializer, DTEGlobalSettingsSerializer, FeatureFlagSerializer, GeoDepartmentSerializer, GeoMunicipalitySerializer, ServiceTypeSerializer, SystemAppearanceSettingsSerializer, TaxConfigSerializer, build_color_tokens
 from apps.dte.runtime import DISABLED_MESSAGE, get_dte_runtime_status
 
 
@@ -564,6 +565,31 @@ class PublicAppearanceView(APIView):
                 "css_variables": data["css_variables"],
             }
         )
+
+
+class BusinessHoursSettingsView(APIView):
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not (is_superadmin(request.user) or is_admin(request.user) or is_manager(request.user)):
+            raise PermissionDenied("No tienes permiso para configurar horario de atención.")
+
+    def get(self, request):
+        settings, _ = BusinessHoursSettings.objects.get_or_create(pk=1)
+        return Response(BusinessHoursSettingsSerializer(settings).data)
+
+    @transaction.atomic
+    def patch(self, request):
+        settings, _ = BusinessHoursSettings.objects.select_for_update().get_or_create(pk=1)
+        serializer = BusinessHoursSettingsSerializer(settings, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        from apps.core.audit import log_audit
+
+        data = BusinessHoursSettingsSerializer(settings).data
+        log_audit(request, "business_hours.update", "BusinessHoursSettings", settings.id, dict(data))
+        return Response(data)
 
 
 def get_dte_settings() -> DTEGlobalSettings:

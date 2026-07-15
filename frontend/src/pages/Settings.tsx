@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PageTabs } from "@/components/ui/page-tabs";
 import { EmployeesTab } from "@/components/settings/EmployeesTab";
@@ -16,16 +16,24 @@ const Settings = () => {
   const { user } = useAuth();
   const isSuperadmin = Boolean(user?.permissions?.isSuperadmin || user?.role === "superadmin");
   const isAdmin = Boolean(user?.role === "admin");
-  const canViewFeatures = isSuperadmin || isAdmin;
-  const tabs = [
-    { label: "Empleados", value: "employees" },
-    { label: "Horarios", value: "schedules" },
+  const isManager = Boolean(user?.role === "manager");
+  const canViewAdminSettings = isSuperadmin || isAdmin;
+  const canViewFeatures = canViewAdminSettings || isManager;
+  const tabs = useMemo(() => [
+    ...(canViewAdminSettings ? [{ label: "Empleados", value: "employees" }] : []),
+    ...(canViewAdminSettings ? [{ label: "Horarios", value: "schedules" }] : []),
     ...(canViewFeatures ? [{ label: "Funciones", value: "features" }] : []),
-    { label: "Apariencia", value: "appearance" },
+    ...(canViewAdminSettings ? [{ label: "Apariencia", value: "appearance" }] : []),
     ...(isSuperadmin ? [{ label: "Hacienda / DTE", value: "dte-settings" }] : []),
-    { label: "Tipos de Pedido", value: "order-types" },
-    { label: "Métodos de Pago", value: "payment-methods" },
-  ];
+    ...(canViewAdminSettings ? [{ label: "Tipos de Pedido", value: "order-types" }] : []),
+    ...(canViewAdminSettings ? [{ label: "Métodos de Pago", value: "payment-methods" }] : []),
+  ], [canViewAdminSettings, canViewFeatures, isSuperadmin]);
+
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.value === activeTab)) {
+      setActiveTab(tabs[0]?.value ?? "features");
+    }
+  }, [activeTab, tabs]);
 
   return (
     <PageLayout

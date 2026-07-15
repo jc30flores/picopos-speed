@@ -36,7 +36,7 @@ export const appModules: AppModuleConfig[] = [
   { key: "registers", label: "REPORTES", path: "/registros/ventas", requiredRoles: ["admin"] },
   { key: "dte", label: "DTE", path: "/dte", requiredRoles: ["superadmin"] },
   { key: "clients", label: "CLIENTES", path: "/clientes", requiredRoles: ["admin", "manager"] },
-  { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin"] },
+  { key: "settings", label: "CONFIGURACIÓN", path: "/settings", requiredRoles: ["admin", "manager"] },
 ];
 
 export const canAccessModule = (user: RoleAccessUser, module: AppModuleConfig) => {
@@ -51,7 +51,7 @@ export const filterModulesForUser = (user: RoleAccessUser, modules: AppModuleCon
 export const allowedRoutesByRole: Record<AppRole, string[]> = {
   superadmin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/dte", "/registros/empleados", "/dte", "/settings"],
   admin: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kiosk", "/kitchen", "/customer-display", "/clientes", "/menu", "/inventory", "/registros/ventas", "/registros/caja", "/registros/reportes", "/registros/empleados", "/settings"],
-  manager: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kitchen", "/menu", "/inventory", "/clientes"],
+  manager: ["/", "/pos", "/tables/editor", "/open-orders", "/pendientes", "/kitchen", "/menu", "/inventory", "/clientes", "/settings"],
   cashier: ["/", "/pos", "/open-orders", "/pendientes"],
   waiter: ["/pos", "/kitchen"],
   kitchen: ["/kitchen"],
@@ -89,6 +89,7 @@ export const allowedNavItemsByRole: Record<AppRole, Array<{ label: string; path:
     { label: "Menú & Descuentos", path: "/menu" },
     { label: "Inventario", path: "/inventory" },
     { label: "Clientes", path: "/clientes" },
+    { label: "Configuración", path: "/settings" },
   ],
   cashier: [
     { label: "POS", path: "/pos" },

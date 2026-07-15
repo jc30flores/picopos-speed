@@ -758,6 +758,17 @@ export type FeatureSettingsOptions = {
   cashCloseExpectedTotalFields: Array<{ code: string; label: string }>;
 };
 
+export type BusinessHoursSettings = {
+  businessHoursEnabled: boolean;
+  openingTime: string;
+  closingTime: string;
+  graceHoursAfterClose: number;
+  timezone: string;
+  autoCloseCashEnabled: boolean;
+  autoCloseCountZero: boolean;
+  updatedAt?: string | null;
+};
+
 export type TransactionTicketPayload = {
   paymentId: number;
   orderId: number;
@@ -920,6 +931,8 @@ export type CashSessionSnapshot = {
   hasOpenCashSession?: boolean;
   canOpenCash?: boolean;
   canCloseCash?: boolean;
+  pendingOpenOrdersCount?: number;
+  cashAutoClose?: { closed?: number; skipped?: number; details?: unknown[] };
   lastOpenedAt?: string | null;
   lastClosedAt?: string | null;
   totalSessionsToday?: number;
@@ -1674,6 +1687,41 @@ export const getFeatureSettingsOptions = async (): Promise<FeatureSettingsOption
     roles: data.roles ?? [],
     cashCloseExpectedTotalFields: data.cash_close_expected_total_fields ?? [],
   };
+};
+
+const normalizeTimeValue = (value: unknown, fallback: string) => String(value ?? fallback).slice(0, 5);
+
+const mapBusinessHoursSettings = (data: Record<string, unknown>): BusinessHoursSettings => ({
+  businessHoursEnabled: Boolean(data.business_hours_enabled),
+  openingTime: normalizeTimeValue(data.opening_time, "08:00"),
+  closingTime: normalizeTimeValue(data.closing_time, "22:00"),
+  graceHoursAfterClose: Number(data.grace_hours_after_close ?? 4),
+  timezone: String(data.timezone ?? "America/El_Salvador"),
+  autoCloseCashEnabled: Boolean(data.auto_close_cash_enabled),
+  autoCloseCountZero: Boolean(data.auto_close_count_zero ?? true),
+  updatedAt: data.updated_at ?? null,
+});
+
+export const getBusinessHoursSettings = async (): Promise<BusinessHoursSettings> => {
+  const response = await request("/settings/business-hours/");
+  return mapBusinessHoursSettings(await handleJson<Record<string, unknown>>(response));
+};
+
+export const updateBusinessHoursSettings = async (payload: Partial<BusinessHoursSettings>): Promise<BusinessHoursSettings> => {
+  const body = Object.fromEntries(Object.entries({
+    business_hours_enabled: payload.businessHoursEnabled,
+    opening_time: payload.openingTime,
+    closing_time: payload.closingTime,
+    grace_hours_after_close: payload.graceHoursAfterClose,
+    timezone: payload.timezone,
+    auto_close_cash_enabled: payload.autoCloseCashEnabled,
+    auto_close_count_zero: payload.autoCloseCountZero,
+  }).filter(([, value]) => value !== undefined));
+  const response = await request("/settings/business-hours/", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  return mapBusinessHoursSettings(await handleJson<Record<string, unknown>>(response));
 };
 
 const mapAppearanceSettings = (data: any): AppearanceSettings => ({
@@ -5922,6 +5970,8 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
       hasOpenCashSession: false,
       canOpenCash: Boolean(data.can_open_cash ?? true),
       canCloseCash: Boolean(data.can_close_cash ?? false),
+      pendingOpenOrdersCount: Number(data.pending_orders_count ?? 0),
+      cashAutoClose: data.cash_auto_close ?? undefined,
       lastOpenedAt: data.last_opened_at ?? null,
       lastClosedAt: data.last_closed_at ?? null,
       totalSessionsToday: Number(data.total_sessions_today ?? 0),
@@ -5932,6 +5982,8 @@ export const getCurrentCashSession = async (): Promise<CashSessionSnapshot> => {
     hasOpenCashSession: true,
     canOpenCash: Boolean(data.can_open_cash ?? false),
     canCloseCash: Boolean(data.can_close_cash ?? true),
+    pendingOpenOrdersCount: Number(data.pending_orders_count ?? 0),
+    cashAutoClose: data.cash_auto_close ?? undefined,
     lastOpenedAt: data.last_opened_at ?? session.opened_at ?? null,
     lastClosedAt: data.last_closed_at ?? session.closed_at ?? null,
     totalSessionsToday: Number(data.total_sessions_today ?? 0),
