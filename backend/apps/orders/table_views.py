@@ -23,6 +23,12 @@ def _table_map_enabled() -> bool:
 
 
 ACTIVE_TABLE_SESSION_STATUSES = ["open", "sent_to_kitchen", "partially_paid"]
+TABLE_RELEASE_SUPERVISOR_ROLES = {"superadmin", "admin", "manager", "cashier"}
+KITCHEN_ACTIVE_STATUSES = [
+    OrderItem.KITCHEN_STATUS_PENDING,
+    OrderItem.KITCHEN_STATUS_SENT,
+    OrderItem.KITCHEN_STATUS_READY,
+]
 
 
 def _parse_table_ids(data) -> list[int]:
@@ -124,12 +130,22 @@ def _is_admin_or_superadmin(user) -> bool:
     return bool(getattr(user, "is_superuser", False) or (profile and profile.role in {"superadmin", "admin"}))
 
 
-def _authorize_admin_or_superadmin_pin(pin: str):
+def _user_role(user) -> str:
+    profile = UserProfile.objects.filter(user=user, is_active=True).first()
+    return profile.role if profile else ""
+
+
+def _is_table_release_supervisor(user) -> bool:
+    role = _user_role(user)
+    return bool(getattr(user, "is_superuser", False) or role in TABLE_RELEASE_SUPERVISOR_ROLES)
+
+
+def _authorize_table_release_pin(pin: str):
     if not is_valid_pin_format(pin):
         return None
     profiles = UserProfile.objects.select_related("user").filter(
         is_active=True,
-        role__in=["superadmin", "admin"],
+        role__in=TABLE_RELEASE_SUPERVISOR_ROLES,
         user__is_active=True,
     )
     for profile in profiles:
@@ -758,7 +774,7 @@ class TableSessionReleaseView(TableMapFeatureGuardMixin, APIView):
 
 
 class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     @transaction.atomic
     def post(self, request, pk: int):
@@ -776,12 +792,19 @@ class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
             order_total_paid = Payment.objects.filter(order=order).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0.00")
             due = Decimal(order.amount_due_cents or to_cents(order.total)) / Decimal("100")
             order_remaining = max(due - order_total_paid, Decimal("0.00")).quantize(Decimal("0.01"))
-        authorized_by = request.user if _is_admin_or_superadmin(request.user) else None
-        if order_remaining > 0 and not authorized_by:
-            authorized_by = _authorize_admin_or_superadmin_pin(str(request.data.get("authorization_pin") or "").strip())
+        requester_role = _user_role(request.user)
+        auth_pin = str(request.data.get("authorization_pin") or "").strip()
+        authorized_by = request.user if _is_table_release_supervisor(request.user) else None
+        if requester_role == "waiter":
+            authorized_by = _authorize_table_release_pin(auth_pin)
             if not authorized_by:
-                return Response({"detail": "Autorización de admin/superadmin requerida."}, status=status.HTTP_403_FORBIDDEN)
-        if order:
+                return Response({"detail": "PIN no autorizado."}, status=status.HTTP_403_FORBIDDEN)
+        if order_remaining > 0 and not authorized_by:
+            authorized_by = _authorize_table_release_pin(auth_pin)
+            if not authorized_by:
+                return Response({"detail": "PIN no autorizado."}, status=status.HTTP_403_FORBIDDEN)
+        should_cancel_order = order_remaining > 0
+        if order and should_cancel_order:
             order.status = "canceled"
             order.financial_status = "voided"
             order.payment_status = "partial" if order_total_paid > 0 else "unpaid"
@@ -797,7 +820,21 @@ class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
                 "is_pending", "pending_state", "pending_completed_at", "pending_completion_type",
                 "pending_completion_note", "updated_at",
             ])
-        session.status = TableSession.STATUS_CANCELLED
+        elif order:
+            order.is_pending = False
+            order.pending_state = "none"
+            order.pending_completed_at = timezone.localtime(timezone.now())
+            order.pending_completion_type = "paid" if order.payment_status == "paid" else "removed"
+            order.pending_completion_note = reason[:160]
+            order.save(update_fields=[
+                "is_pending",
+                "pending_state",
+                "pending_completed_at",
+                "pending_completion_type",
+                "pending_completion_note",
+                "updated_at",
+            ])
+        session.status = TableSession.STATUS_CANCELLED if should_cancel_order else TableSession.STATUS_CLOSED
         session.closed_by = request.user
         session.closed_at = timezone.now()
         session.save(update_fields=["status", "closed_by", "closed_at", "updated_at"])
@@ -817,8 +854,9 @@ class TableSessionForceReleaseView(TableMapFeatureGuardMixin, APIView):
         )
         return Response({
             "ok": True,
+            "detail": "Mesa liberada y cuenta pendiente cancelada." if should_cancel_order else "Mesa liberada con autorización.",
             "session": TableSessionSerializer(session).data,
-            "voided_order_id": order.id if order else None,
+            "voided_order_id": order.id if order and should_cancel_order else None,
             "authorized_by": getattr(authorized_by, "id", None) if authorized_by else None,
         })
 

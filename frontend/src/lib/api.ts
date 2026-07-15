@@ -7065,8 +7065,8 @@ export const renameTableSessionGuest = async (sessionId: number, guestNumber: nu
 };
 export const forceReleaseTableSession = async (sessionId: number, payload: { reason: string; authorizationPin?: string }): Promise<TableSession> => {
   const response = await request(`/orders/tables/sessions/${sessionId}/force-release/`, { method: 'POST', body: JSON.stringify({ reason: payload.reason, authorization_pin: payload.authorizationPin ?? "" }) });
-  const data = await handleJson<{ session?: RawTableSession } & RawTableSession>(response);
-  return mapTableSession(data.session ?? data);
+  const data = await handleJson<{ session?: RawTableSession; detail?: unknown } & RawTableSession>(response);
+  return { ...mapTableSession(data.session ?? data), detail: data.detail ? String(data.detail) : undefined };
 };
 export const markTableKitchenItemReady = async (itemId: number): Promise<TableKitchenItem> => {
   const response = await request(`/kitchen/items/${itemId}/complete/`, { method: 'POST' });

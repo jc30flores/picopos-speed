@@ -1284,8 +1284,12 @@ type TableConfirmDialogState =
     } catch {
       hasBalance = Number(session.totalCached ?? 0) > 0;
     }
+    if (isWaiterRole) {
+      setForceReleaseDialog({ open: true, session, reason: "", pin: "", requiresPin: true, loading: false });
+      return;
+    }
     if (hasBalance) {
-      const requiresPin = !(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin");
+      const requiresPin = !(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
       setForceReleaseDialog({ open: true, session, reason: "", pin: "", requiresPin, loading: false });
       return;
     }
@@ -1311,13 +1315,13 @@ type TableConfirmDialogState =
       return;
     }
     if (forceReleaseDialog.requiresPin && !forceReleaseDialog.pin.trim()) {
-      toast.error("Ingresa PIN de admin o superadmin.");
+      toast.error("Ingresa PIN de cajero, gerente, admin o superadmin.");
       return;
     }
     setForceReleaseDialog((prev) => ({ ...prev, loading: true }));
     try {
-      await forceReleaseTableSession(session.id, { reason: forceReleaseDialog.reason.trim(), authorizationPin: forceReleaseDialog.pin.trim() || undefined });
-      toast.success("Mesa liberada y cuenta pendiente cancelada.");
+      const released = await forceReleaseTableSession(session.id, { reason: forceReleaseDialog.reason.trim(), authorizationPin: forceReleaseDialog.pin.trim() || undefined });
+      toast.success(released.detail || "Mesa liberada con autorización.");
       setForceReleaseDialog({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
       await refreshTableSessions();
       setSelectedOpsTableId(null);
@@ -5071,13 +5075,17 @@ type TableConfirmDialogState =
         <Dialog open={forceReleaseDialog.open} onOpenChange={(open) => !forceReleaseDialog.loading && setForceReleaseDialog((prev) => ({ ...prev, open }))}>
           <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg flex-col overflow-hidden p-0">
             <DialogHeader className="shrink-0 border-b px-5 py-4">
-              <DialogTitle>Liberar mesa con saldo pendiente</DialogTitle>
-              <DialogDescription>Esta acción cancelará la cuenta pendiente y dejará la mesa disponible. Los pagos existentes se conservan.</DialogDescription>
+              <DialogTitle>Autorización requerida</DialogTitle>
+              <DialogDescription>
+                {Number(forceReleaseDialog.session?.totalCached ?? 0) > 0
+                  ? "Esta mesa tiene saldo pendiente. Para liberarla se requiere autorización; la cuenta pendiente se cancelará y los pagos existentes se conservan."
+                  : "El Mesero necesita autorización de supervisor para liberar la mesa."}
+              </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               <div className="rounded-lg border bg-muted/20 p-3 text-sm">
                 <div className="flex justify-between"><span>Saldo a cancelar</span><span className="font-semibold">{formatMoney(forceReleaseDialog.session?.totalCached ?? 0)}</span></div>
-                <div className="mt-1 text-xs text-muted-foreground">{forceReleaseDialog.requiresPin ? "Requiere PIN de admin o superadmin." : "Tu rol permite autorizar esta liberación."}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{forceReleaseDialog.requiresPin ? "Requiere PIN de cajero, gerente, admin o superadmin." : "Tu rol permite autorizar esta liberación."}</div>
               </div>
               <div>
                 <Label>Motivo obligatorio</Label>
@@ -5085,7 +5093,7 @@ type TableConfirmDialogState =
               </div>
               {forceReleaseDialog.requiresPin ? (
                 <div>
-                  <Label>PIN admin/superadmin</Label>
+                  <Label>PIN supervisor</Label>
                   <Input value={forceReleaseDialog.pin} onChange={(event) => setForceReleaseDialog((prev) => ({ ...prev, pin: event.target.value.replace(/\D/g, "").slice(0, 6) }))} inputMode="numeric" type="password" autoComplete="off" />
                 </div>
               ) : null}
