@@ -339,6 +339,34 @@ const normalizeServiceTypeKey = (value: string, available: Array<{ key: string }
   return insensitive?.key ?? "";
 };
 
+const normalizeServiceLookupText = (value: unknown) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
+const TABLE_SERVICE_MATCHES = ["mesa", "mesas", "dine in", "dine-in", "dine_in", "salon", "restaurante", "restaurant", "en local", "local"];
+const NON_TABLE_SERVICE_MATCHES = ["delivery", "domicilio", "pickup", "recoger", "takeout", "llevar", "kiosk", "kiosko", "rapido"];
+
+const getTableServiceTypeKey = (available: Array<{ key: string; label?: string }>) => {
+  const matchesAny = (value: string, words: string[]) => words.some((word) => value.includes(word));
+  const preferred = available.find((item) => {
+    const key = normalizeServiceLookupText(item.key);
+    const label = normalizeServiceLookupText(item.label);
+    return matchesAny(key, TABLE_SERVICE_MATCHES) || matchesAny(label, TABLE_SERVICE_MATCHES);
+  });
+  if (preferred) return preferred.key;
+  const firstNonDelivery = available.find((item) => {
+    const key = normalizeServiceLookupText(item.key);
+    const label = normalizeServiceLookupText(item.label);
+    return !matchesAny(key, NON_TABLE_SERVICE_MATCHES) && !matchesAny(label, NON_TABLE_SERVICE_MATCHES);
+  });
+  return firstNonDelivery?.key ?? available[0]?.key ?? "";
+};
+
+const TABLE_POS_URL_MODES = new Set(["tables", "table", "table_map", "table-map", "table_service", "table-service", "mesa", "mesas"]);
+
 const DrawerIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
     <rect x="3" y="5" width="18" height="14" rx="2" />
@@ -491,6 +519,11 @@ type TableConfirmDialogState =
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  const urlMode = String(searchParams.get("mode") || "").trim().toLowerCase();
+  const hasTableSessionParam = Boolean(searchParams.get("session_id"));
+  const isQuickPosRequested = urlMode === "quick";
+  const isTablePosRequested = TABLE_POS_URL_MODES.has(urlMode) || hasTableSessionParam;
+  const isTableFlowMode = isTablePosRequested || ["table_order", "edit", "pay"].includes(urlMode);
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -612,14 +645,14 @@ type TableConfirmDialogState =
   const [stockWarning, setStockWarning] = useState<{ check: InventoryAvailabilityCheck; mode: "warn" | "block"; resolve?: (confirmed: boolean) => void } | null>(null);
   const [inventoryStockPolicy, setInventoryStockPolicy] = useState<InventoryStockPolicy>("allow");
   const [posProductImagesEnabled, setPosProductImagesEnabled] = useState(false);
-  const [tableMapEnabled, setTableMapEnabled] = useState(false);
-  const [operationMode, setOperationMode] = useState<"quick_pos" | "table_service" | "both">("quick_pos");
+  const [tableMapEnabled, setTableMapEnabled] = useState(isTablePosRequested);
+  const [operationMode, setOperationMode] = useState<"quick_pos" | "table_service" | "both">(isTablePosRequested ? "table_service" : "quick_pos");
   const [runtimeSettingsLoaded, setRuntimeSettingsLoaded] = useState(false);
   const [allowTableMerge, setAllowTableMerge] = useState(true);
   const [allowTableTransfer, setAllowTableTransfer] = useState(true);
   const [allowSplitByGuest, setAllowSplitByGuest] = useState(true);
   const [allowSplitByItem, setAllowSplitByItem] = useState(true);
-  const [posMode, setPosMode] = useState<"tables"|"pos">("pos");
+  const [posMode, setPosMode] = useState<"tables"|"pos">(isTablePosRequested ? "tables" : "pos");
   const [restaurantTables, setRestaurantTables] = useState<RestaurantTable[]>([]);
   const [tableSessions, setTableSessions] = useState<TableSession[]>([]);
   const [tableReadySummaries, setTableReadySummaries] = useState<TableReadySummary[]>([]);
@@ -747,9 +780,6 @@ type TableConfirmDialogState =
   );
 
   const activeTableGuestNumber = tableOrderContext?.guests.find((guest) => guest.id === tableOrderContext.activeGuestId)?.seatNumber ?? null;
-  const urlMode = String(searchParams.get("mode") || "").trim().toLowerCase();
-  const isQuickPosRequested = urlMode === "quick";
-  const isTableFlowMode = ["table_order", "table_service", "edit", "pay"].includes(urlMode) || Boolean(searchParams.get("session_id"));
   const canShowOpenOrdersChoice = Boolean(
     runtimeSettingsLoaded &&
     posMode === "pos" &&
@@ -1069,11 +1099,13 @@ type TableConfirmDialogState =
   const openTableOrderContext = useCallback((tableId: number, session: TableSession, mode: "edit" | "pay" = "edit") => {
     upsertTableSession(session);
     setContextFromTableSession(tableId, session);
+    const tableServiceType = getTableServiceTypeKey(serviceTypes);
+    if (tableServiceType) setServiceType(tableServiceType);
     if (session.primaryOrder) {
       setPosMode("pos");
       navigate(`/pos?pending_order_id=${session.primaryOrder}&mode=${mode}`, { state: { fromOpenOrders: true, tableSession: session, tableId } });
     }
-  }, [navigate, setContextFromTableSession, upsertTableSession]);
+  }, [navigate, serviceTypes, setContextFromTableSession, upsertTableSession]);
 
   const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: OpenTablePaymentOptions) => {
     if (!canCollectTablePayments) {
@@ -1578,13 +1610,15 @@ type TableConfirmDialogState =
       .then((order) => {
         const navState = location.state as { tableSession?: TableSession; tableId?: number } | null;
         const isTableEditHydration = Boolean(navState?.tableSession) && mode !== "pay";
+        const tableServiceType = isTableEditHydration ? getTableServiceTypeKey(serviceTypes) : "";
+        const hydratedServiceType = order.serviceType || tableServiceType || serviceType;
         const restoredCart = isTableEditHydration
           ? mapOrderPendingItemsToCart(order)
           : (order.items || []).map((item) => mapOrderItemToCartItem(item));
         const hydratedPricing = calculatePosPricing({
           items: restoredCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
           products,
-          serviceType: order.serviceType || serviceType,
+          serviceType: hydratedServiceType,
           serviceTypes,
           selectedDiscount: null,
           availableDiscounts: [],
@@ -1627,10 +1661,10 @@ type TableConfirmDialogState =
           tax: order.taxTotal ?? 0,
           total: hydratedPricing.total,
           taxRate,
-          serviceType: order.serviceType || serviceType,
+          serviceType: hydratedServiceType,
           createdAt: Date.now(),
         });
-        setServiceType(order.serviceType || serviceType);
+        setServiceType(hydratedServiceType);
         if (mode === "pay") {
           posDebug("open_order.pay.load", {
             order_id: order.id,
@@ -1649,15 +1683,21 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!serviceTypes.length) return;
+    const shouldUseTableService = (posMode === "tables" || Boolean(tableOrderContext) || isTablePosRequested) && !isQuickPosRequested;
+    const tableServiceType = shouldUseTableService ? getTableServiceTypeKey(serviceTypes) : "";
     const normalizedServiceType = normalizeServiceTypeKey(serviceType, serviceTypes);
     if (!normalizedServiceType) {
-      setServiceType(serviceTypes[0].key);
+      setServiceType(tableServiceType || serviceTypes[0].key);
+      return;
+    }
+    if (shouldUseTableService && tableServiceType && normalizedServiceType !== tableServiceType && cart.length === 0 && !activeOrder) {
+      setServiceType(tableServiceType);
       return;
     }
     if (normalizedServiceType !== serviceType) {
       setServiceType(normalizedServiceType);
     }
-  }, [serviceTypes, serviceType]);
+  }, [activeOrder, cart.length, isQuickPosRequested, isTablePosRequested, posMode, serviceTypes, serviceType, tableOrderContext]);
 
   useEffect(() => {
     if (!serviceTypes.length || draftRestoreDoneRef.current) return;
@@ -1727,6 +1767,7 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!serviceTypes.length || !serviceType) return;
+    if (posMode === "tables" && !tableOrderContext) return;
     const selectedServiceType = serviceTypes.find((item) => item.key === serviceType);
     if (!selectedServiceType) return;
     let cancelled = false;
@@ -1742,7 +1783,7 @@ type TableConfirmDialogState =
     return () => {
       cancelled = true;
     };
-  }, [serviceType, serviceTypes]);
+  }, [posMode, serviceType, serviceTypes, tableOrderContext]);
 
   useEffect(() => {
     if (isOpeningTablePayment || tablePaymentScope) return;
@@ -1764,7 +1805,7 @@ type TableConfirmDialogState =
     );
   }, [isOpeningTablePayment, products, serviceType, tablePaymentScope]);
 
-  const loadActiveDiscounts = async () => {
+  const loadActiveDiscounts = useCallback(async () => {
     try {
       setIsLoadingDiscounts(true);
       const discounts = await getActiveDiscounts({ serviceType, subtotal: itemsGross });
@@ -1775,13 +1816,14 @@ type TableConfirmDialogState =
     } finally {
       setIsLoadingDiscounts(false);
     }
-  };
+  }, [itemsGross, serviceType]);
 
   useEffect(() => {
     if (!serviceType) return;
     if (isOpeningTablePayment || tablePaymentScope) return;
+    if (posMode === "tables" && !tableOrderContext) return;
     void loadActiveDiscounts();
-  }, [isOpeningTablePayment, itemsGross, serviceType, tablePaymentScope]);
+  }, [isOpeningTablePayment, loadActiveDiscounts, posMode, serviceType, tableOrderContext, tablePaymentScope]);
 
   useEffect(() => {
     if (cart.length > 0 || activeOrder) return;
@@ -2655,8 +2697,10 @@ type TableConfirmDialogState =
       .catch(() => undefined);
     getRuntimeFeatureSettings().then((settings) => {
       const canUseTableMap = settings.tableMapEnabled && settings.operationMode !== "quick_pos";
-      const shouldUseQuickPos = isQuickPosRequested && settings.operationMode === "both";
+      const shouldUseQuickPos = isQuickPosRequested && settings.operationMode === "both" && canManageCashOperations;
+      const shouldUseTableRequest = isTablePosRequested && canUseTableMap;
       const shouldForceTablesForWaiter = isWaiterRole && canUseTableMap;
+      const shouldUseTables = shouldForceTablesForWaiter || shouldUseTableRequest || (canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map");
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setOperationMode(settings.operationMode);
@@ -2665,12 +2709,12 @@ type TableConfirmDialogState =
       setAllowSplitByGuest(settings.allowSplitByGuest);
       setAllowSplitByItem(settings.allowSplitByItem);
       setTableMapEnabled(canUseTableMap);
-      setPosMode(shouldForceTablesForWaiter || (canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map") ? "tables" : "pos");
+      setPosMode(shouldUseTables ? "tables" : "pos");
       if (isWaiterRole && isQuickPosRequested && !waiterQuickRedirectShownRef.current) {
         waiterQuickRedirectShownRef.current = true;
         toast.info("Tu usuario puede tomar órdenes en mesas, pero no cobrar en POS rápido.");
         if (canUseTableMap) {
-          navigate("/pos", { replace: true });
+          navigate("/pos?mode=tables", { replace: true });
         }
       }
       setQuickSalesMode(settings.posQuickSalesButtonMode);
@@ -2705,7 +2749,7 @@ type TableConfirmDialogState =
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested, isWaiterRole, navigate]);
+  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested, isTablePosRequested, isWaiterRole, navigate]);
 
   const refreshPaymentMethods = useCallback(() => {
     if (!canCollectTablePayments) {
@@ -4578,7 +4622,16 @@ type TableConfirmDialogState =
     if (tableMapDragRef.current?.pointerId === event.pointerId) tableMapDragRef.current = null;
   };
 
-  if (isCashGateLoading) {
+  const shouldShowPosModeLoading = !runtimeSettingsLoaded && !isQuickPosRequested && !isTablePosRequested && !tableOrderContext;
+  if (shouldShowPosModeLoading) {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background">
+        <div className="text-sm text-muted-foreground">Cargando POS...</div>
+      </div>
+    );
+  }
+
+  if (isCashGateLoading && canManageCashOperations && posMode === "pos" && !tableOrderContext) {
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background">
         <div className="text-sm text-muted-foreground">Verificando estado de caja...</div>
