@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.renderers import BaseRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -29,7 +30,7 @@ from apps.core.permissions import IsAdminOrManager, IsManagerOrAdmin, IsCashierO
 from apps.core.timezone_utils import parse_business_date_range
 from apps.printing.models import PrintJob
 from apps.cashier.services import CashDrawerService, get_open_cash_session_for_branch, resolve_branch_id, resolve_open_cash_session
-from apps.orders.models import Order
+from apps.cashier.services.auto_close import count_open_orders_for_cash_close, maybe_auto_close_expired_cash_sessions
 from apps.payments.models import Payment
 
 logger = logging.getLogger(__name__)
@@ -190,9 +191,31 @@ class RegisterListCreateView(generics.ListCreateAPIView):
 
 
 class CashSessionCurrentView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
 
     def get(self, request):
+        profile = _get_profile(request.user)
+        if profile and profile.role in {"waiter", "mesero"}:
+            return Response(
+                {
+                    "has_open_session": False,
+                    "has_open_cash_session": False,
+                    "session": None,
+                    "current_cash_session": None,
+                    "summary": None,
+                    "business_date": str(timezone.localdate()),
+                    "last_opened_at": None,
+                    "last_closed_at": None,
+                    "total_sessions_today": 0,
+                    "can_open_cash": False,
+                    "can_close_cash": False,
+                    "detail": "El rol Mesero no necesita caja abierta para tomar órdenes en mesas.",
+                },
+                status=status.HTTP_200_OK,
+            )
+        if not IsCashierOrManagerOrAdmin().has_permission(request, self):
+            raise PermissionDenied("No tienes permiso para consultar caja.")
+        auto_close_result = maybe_auto_close_expired_cash_sessions()
         raw_branch_id = (
             request.query_params.get("branch_id")
             or request.headers.get("X-Branch-Id")
@@ -204,6 +227,7 @@ class CashSessionCurrentView(APIView):
         scoped_sessions = CashSession.objects.filter(register__branch_id=branch_id) if branch_id else CashSession.objects.all()
         latest_session = scoped_sessions.order_by("-opened_at").first()
         total_sessions_today = scoped_sessions.filter(opened_at__date=today_sv).count()
+        pending_orders_count = count_open_orders_for_cash_close(branch_id)
         include_sensitive = _can_view_sensitive_cash_data(request)
         logger.info("cash_session.current branch_id=%s has_open_session=%s filter_scope=%s", branch_id, bool(session), "branch" if branch_id else "global")
         if not session:
@@ -220,6 +244,8 @@ class CashSessionCurrentView(APIView):
                     "total_sessions_today": total_sessions_today,
                     "can_open_cash": True,
                     "can_close_cash": False,
+                    "pending_orders_count": pending_orders_count,
+                    "cash_auto_close": auto_close_result,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -237,16 +263,27 @@ class CashSessionCurrentView(APIView):
                 "total_sessions_today": total_sessions_today,
                 "can_open_cash": False,
                 "can_close_cash": True,
+                "pending_orders_count": pending_orders_count,
+                "cash_auto_close": auto_close_result,
             },
             status=status.HTTP_200_OK,
         )
 
 
 class CashSessionOpenView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        profile = _get_profile(request.user)
+        if profile and profile.role in {"waiter", "mesero"}:
+            raise PermissionDenied("El rol Mesero no puede abrir caja.")
+        if not IsCashierOrManagerOrAdmin().has_permission(request, self):
+            raise PermissionDenied("No tienes permiso para abrir caja.")
 
     @transaction.atomic
     def post(self, request):
+        maybe_auto_close_expired_cash_sessions()
         try:
             opening_cash = _parse_decimal(
                 request.data.get("opening_cash_amount", request.data.get("opening_cash", "0")) or "0",
@@ -321,10 +358,19 @@ class CashSessionOpenView(APIView):
 
 
 class CashSessionCloseView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        profile = _get_profile(request.user)
+        if profile and profile.role in {"waiter", "mesero"}:
+            raise PermissionDenied("El rol Mesero no puede cerrar caja.")
+        if not IsCashierOrManagerOrAdmin().has_permission(request, self):
+            raise PermissionDenied("No tienes permiso para cerrar caja.")
 
     @transaction.atomic
     def post(self, request):
+        maybe_auto_close_expired_cash_sessions()
         raw_payload = _build_close_payload(request.data)
         branch_id = resolve_branch_id(
             raw_payload.get("branch_id")
@@ -364,16 +410,14 @@ class CashSessionCloseView(APIView):
                 request.query_params.get("branch_id"),
             )
             return Response({"detail": "No hay caja abierta."}, status=status.HTTP_400_BAD_REQUEST)
-        pending_count = Order.objects.filter(
-            branch_id=session.register.branch_id,
-            is_pending=True,
-        ).exclude(status__in=["canceled", "delivered"]).count()
+        pending_count = count_open_orders_for_cash_close(session.register.branch_id)
         allow_close_with_pending = is_feature_enabled("FF_CASH_CLOSE_ALLOW_PENDING_ORDERS")
         if pending_count > 0 and not allow_close_with_pending:
+            account_label = "cuenta abierta" if pending_count == 1 else "cuentas abiertas"
             return Response(
                 {
                     "code": "PENDING_ORDERS_BLOCK_CASH_CLOSE",
-                    "detail": "No puedes cerrar caja porque hay órdenes pendientes.",
+                    "detail": f"No puedes cerrar la caja porque hay {pending_count} {account_label}. Resuelve o cobra esas cuentas antes de cerrar.",
                     "pending_orders": pending_count,
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -407,6 +451,7 @@ class CashSessionCloseView(APIView):
         session.closing_total_coins = counted_coins
         session.closing_total_pos_cards = counted_pos_cards
         session.closing_total_pedidos_ya = counted_pedidos_ya
+        session.close_type = CashSession.CLOSE_TYPE_MANUAL
         session.notes = notes
         # snapshot after close-time set
         snapshot = calculate_shift_summary(session)
@@ -421,6 +466,7 @@ class CashSessionCloseView(APIView):
                 "closing_total_coins",
                 "closing_total_pos_cards",
                 "closing_total_pedidos_ya",
+                "close_type",
                 "notes",
                 "summary_snapshot",
             ]

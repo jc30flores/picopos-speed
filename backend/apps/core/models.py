@@ -1,3 +1,5 @@
+from datetime import time
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -129,6 +131,31 @@ class SystemAppearanceSettings(models.Model):
 
     def __str__(self) -> str:
         return f"Apariencia {self.primary_color}"
+
+
+class BusinessHoursSettings(models.Model):
+    business_hours_enabled = models.BooleanField(default=False)
+    opening_time = models.TimeField(default=time(8, 0))
+    closing_time = models.TimeField(default=time(22, 0))
+    grace_hours_after_close = models.PositiveSmallIntegerField(default=4)
+    timezone = models.CharField(max_length=64, default="America/El_Salvador")
+    auto_close_cash_enabled = models.BooleanField(default=False)
+    auto_close_count_zero = models.BooleanField(default=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="business_hours_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Business hours settings"
+        verbose_name_plural = "Business hours settings"
+
+    def __str__(self) -> str:
+        return "Horario de atención"
 
 
 class DTEGlobalSettings(models.Model):

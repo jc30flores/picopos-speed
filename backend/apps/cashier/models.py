@@ -19,9 +19,16 @@ class Register(models.Model):
 
 
 class CashSession(models.Model):
+    CLOSE_TYPE_MANUAL = "manual"
+    CLOSE_TYPE_AUTOMATIC_AFTER_HOURS = "automatic_after_hours"
+
     STATUS_CHOICES = [
         ("open", "Open"),
         ("closed", "Closed"),
+    ]
+    CLOSE_TYPE_CHOICES = [
+        (CLOSE_TYPE_MANUAL, "Manual"),
+        (CLOSE_TYPE_AUTOMATIC_AFTER_HOURS, "Automático por horario"),
     ]
 
     register = models.ForeignKey(Register, on_delete=models.PROTECT, related_name="sessions")
@@ -46,6 +53,7 @@ class CashSession(models.Model):
     closing_total_coins = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     closing_total_pos_cards = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     closing_total_pedidos_ya = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    close_type = models.CharField(max_length=32, choices=CLOSE_TYPE_CHOICES, default=CLOSE_TYPE_MANUAL)
     notes = models.TextField(blank=True)
     summary_snapshot = models.JSONField(default=dict, blank=True)
 

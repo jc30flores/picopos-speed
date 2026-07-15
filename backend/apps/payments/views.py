@@ -6,11 +6,12 @@ from django.db.models import Sum
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from apps.core.audit import log_audit
-from apps.core.permissions import IsCashierOrManagerOrAdmin, IsAdminOrManager, IsAdmin
+from apps.core.permissions import IsAuthenticatedAndActive, IsCashierOrManagerOrAdmin, IsAdminOrManager, IsAdmin, _get_profile
 from apps.cashier.models import Register, CashSession, CashTransaction
 from apps.payments.models import Payment, PaymentAllocation, Refund, PaymentMethod, PaymentMethodChangeLog
 from apps.printing.models import PrintJob
@@ -38,6 +39,7 @@ from apps.dte.services.availability import resolve_issued_at
 from apps.dte.models import DTERecord, DTEInvalidation, CreditNote
 from apps.dte.runtime import get_dte_runtime_status, is_dte_config_ready
 from apps.core.money import to_cents, from_cents
+from apps.cashier.services.auto_close import maybe_auto_close_expired_cash_sessions
 from apps.inventory.services import InventoryStockPolicyError, apply_inventory_for_order, reverse_inventory_for_order, validate_order_inventory_policy
 
 
@@ -314,7 +316,15 @@ class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class PaymentListCreateView(generics.ListCreateAPIView):
     serializer_class = PaymentSerializer
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [IsAuthenticatedAndActive]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        profile = _get_profile(request.user)
+        if profile and profile.role in {"waiter", "mesero"}:
+            raise PermissionDenied("El rol Mesero no puede cobrar.")
+        if not IsCashierOrManagerOrAdmin().has_permission(request, self):
+            raise PermissionDenied("No tienes permiso para cobrar.")
 
     def get_queryset(self):
         queryset = Payment.objects.select_related("order", "received_by", "payment_method", "reporting_payment_method")
@@ -326,6 +336,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
+        maybe_auto_close_expired_cash_sessions()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = serializer.validated_data["order"]
@@ -350,17 +361,17 @@ class PaymentListCreateView(generics.ListCreateAPIView):
         payment_method = serializer.validated_data.get("payment_method")
         is_cash_payment = method == "cash" or _is_cash_payment_method(payment_method)
         if remaining_cents <= 0:
-            return Response({"detail": "Order is already paid"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "La orden ya está pagada."}, status=status.HTTP_400_BAD_REQUEST)
         cash_received = serializer.validated_data.get("cash_received")
         if is_cash_payment and requested_applied_cents > remaining_cents and cash_received is None:
             cash_received = from_cents(requested_applied_cents)
             requested_applied_cents = remaining_cents
         if requested_applied_cents > remaining_cents + 1:
-            return Response({"detail": "Payment exceeds remaining balance"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "El pago excede el saldo pendiente."}, status=status.HTTP_400_BAD_REQUEST)
         applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents
         received_cents = to_cents(cash_received) if is_cash_payment and cash_received is not None else applied_cents + tip_cents
         if is_cash_payment and received_cents < applied_cents + tip_cents:
-            return Response({"detail": "Cash received must cover amount + tip"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "El efectivo recibido debe cubrir el monto y la propina."}, status=status.HTTP_400_BAD_REQUEST)
         change_cents = max(received_cents - (applied_cents + tip_cents), 0)
         will_complete_payment = applied_cents >= remaining_cents
         inventory_warning_confirmed = bool(serializer.validated_data.pop("inventory_warning_confirmed", False))
@@ -913,7 +924,7 @@ class PaymentPrintTicketView(APIView):
     def post(self, request, pk: int):
         payment = Payment.objects.select_related("order").filter(pk=pk).first()
         if not payment:
-            return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Pago no encontrado."}, status=status.HTTP_404_NOT_FOUND)
         context = {
             "order_id": payment.order_id,
             "payment_id": payment.id,
@@ -994,7 +1005,7 @@ class PaymentTicketPDFView(APIView):
     def get(self, request, pk: int):
         payment = Payment.objects.select_related("order").filter(pk=pk).first()
         if not payment:
-            return Response({"detail": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Pago no encontrado."}, status=status.HTTP_404_NOT_FOUND)
         try:
             payload = render_customer_ticket(payment.order)
             logger.info("[TICKET_TRACE] endpoint=payments.ticket-pdf payment_id=%s order_id=%s", payment.id, payment.order_id)

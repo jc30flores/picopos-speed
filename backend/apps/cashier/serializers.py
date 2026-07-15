@@ -44,10 +44,11 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "closing_total_coins",
             "closing_total_pos_cards",
             "closing_total_pedidos_ya",
+            "close_type",
             "notes",
             "summary_snapshot",
         ]
-        read_only_fields = ["status", "closed_by", "closed_at", "summary_snapshot"]
+        read_only_fields = ["status", "closed_by", "closed_at", "close_type", "summary_snapshot"]
 
 
 class CloseoutCountSerializer(serializers.ModelSerializer):
