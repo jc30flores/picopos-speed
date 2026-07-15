@@ -240,7 +240,8 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
-const isPendingKitchenItem = (item: Order["items"][number]) => item.requiresKitchen !== false && (item.kitchenStatus ?? "pending") === "pending";
+const isPendingKitchenItem = (item: Order["items"][number]) => (item.kitchenStatus ?? "pending") === "pending";
+const hasOrderItems = (order: Order | null | undefined) => Boolean(order?.items?.length);
 
 const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
   const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
@@ -267,6 +268,62 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
 };
 
 const mapOrderPendingItemsToCart = (order: Order): CartItem[] => (order.items || []).filter(isPendingKitchenItem).map((item) => mapOrderItemToCartItem(item));
+
+const normalizeLineMatchText = (value: unknown) => String(value ?? "").trim().toLowerCase();
+
+const cartLineMatchKey = (item: CartItem) => JSON.stringify({
+  productId: item.productId ?? null,
+  name: normalizeLineMatchText(item.name),
+  basePrice: Number(getItemBaseEffective(item)).toFixed(4),
+  quantity: Number(item.quantity || 0),
+  isCustom: Boolean(item.isCustom),
+  customCode: normalizeLineMatchText(item.customCode),
+  assignedName: normalizeLineMatchText(item.assignedName),
+  tableGuestId: item.tableGuestId ?? null,
+  unitPriceOverride: item.unitPriceOverride != null ? Number(item.unitPriceOverride).toFixed(4) : null,
+  requiresKitchen: item.requiresKitchen !== false,
+  modifiers: item.modifiers.map((modifier) => normalizeLineMatchText(modifier.name)).sort(),
+});
+
+const orderLineMatchKey = (item: Order["items"][number]) => JSON.stringify({
+  productId: item.productId ?? null,
+  name: normalizeLineMatchText(item.productName),
+  basePrice: Number(item.price ?? item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? 0).toFixed(4),
+  quantity: Number(item.quantity || 0),
+  isCustom: Boolean(item.isCustom),
+  customCode: normalizeLineMatchText(item.code),
+  assignedName: normalizeLineMatchText(item.assignedName),
+  tableGuestId: item.tableGuestId ?? null,
+  unitPriceOverride: item.unitPriceOverride != null ? Number(item.unitPriceOverride).toFixed(4) : null,
+  requiresKitchen: item.requiresKitchen !== false,
+  modifiers: (item.modifiers || []).map((modifier) => normalizeLineMatchText(modifier)).sort(),
+});
+
+const reconcileCartSourceOrderItemIds = (order: Order, items: CartItem[]): CartItem[] => {
+  const orderItemsByKey = new Map<string, Array<Order["items"][number]>>();
+  (order.items || []).forEach((item) => {
+    const key = orderLineMatchKey(item);
+    const queue = orderItemsByKey.get(key) ?? [];
+    queue.push(item);
+    orderItemsByKey.set(key, queue);
+  });
+
+  return items.map((cartItem) => {
+    const key = cartLineMatchKey(cartItem);
+    const queue = orderItemsByKey.get(key);
+    if (!queue?.length) return cartItem;
+    const existingIndex = cartItem.sourceOrderItemId
+      ? queue.findIndex((orderItem) => orderItem.id === cartItem.sourceOrderItemId)
+      : -1;
+    const [matched] = queue.splice(existingIndex >= 0 ? existingIndex : queue.length - 1, 1);
+    if (!matched) return cartItem;
+    return {
+      ...cartItem,
+      sourceOrderItemId: matched.id,
+      requiresKitchen: matched.requiresKitchen !== false,
+    };
+  });
+};
 
 const DENOMINATION_CENTS = [500, 1000, 2000, 5000, 10000, 25, 50, 100];
 
@@ -1956,7 +2013,7 @@ type TableConfirmDialogState =
           assignedName: assignedGuestName,
           tableGuestId: assignedGuestId,
           appliedSpecialPriceRuleName: pricing.appliedRule?.name ?? null,
-          requiresKitchen: Boolean(product.requiresKitchen),
+          requiresKitchen: product.requiresKitchen !== false,
           modifiers,
         },
       ];
@@ -1982,19 +2039,7 @@ type TableConfirmDialogState =
 
   const removeItem = (itemId: string) => {
     if (requiresCashOpen) return;
-    if (activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || "")))) {
-      toast.error("No se pueden eliminar productos: la orden ya fue enviada a cocina.");
-      return;
-    }
-    const isPrivileged = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
-    const requiresPinForPendingEdit = Boolean(activeOrder?.isPending && !isPrivileged);
-    if (requiresPinForPendingEdit && !pendingEditAuthorizationPin) {
-      privilegedGuard.requirePrivilege("removePendingItem", () => {
-        setCart((prev) => prev.filter((item) => item.id !== itemId));
-      });
-      return;
-    }
-    setCart(cart.filter((item) => item.id !== itemId));
+    setCart((prev) => prev.filter((item) => item.id !== itemId));
   };
 
   const openItemPriceEditor = (itemId: string) => {
@@ -2178,6 +2223,7 @@ type TableConfirmDialogState =
       order = await syncExistingOpenOrder(order);
       order = await getOrderById(order.id);
       setActiveOrder(order);
+      setCart((previous) => reconcileCartSourceOrderItemIds(order, previous));
     } else if (!hasSameDraft || !order) {
       order = await createOrder({
         serviceType: draft.serviceType,
@@ -3163,6 +3209,9 @@ type TableConfirmDialogState =
 
   const syncExistingOpenOrder = async (order: Order, itemsOverride?: CartItem[]) => {
     const itemsToPersist = itemsOverride ?? cart;
+    if (tableOrderContext && itemsToPersist.length === 0 && !hasOrderItems(order)) {
+      return order;
+    }
     const persistenceCart = getTablePersistenceCart(itemsToPersist, order);
     const pricing = calculatePosPricing({
       items: persistenceCart.map((item) => ({ productId: item.productId, quantity: item.quantity, unitTotal: getItemUnitTotal(item) })),
@@ -3200,6 +3249,7 @@ type TableConfirmDialogState =
 
   useEffect(() => {
     if (!tableOrderContext || !activeOrder || isSendingToPending) return;
+    if (cart.length === 0 && !hasOrderItems(activeOrder)) return;
     const signature = cartSignature(cart);
     if (signature === tableAutoSaveSignatureRef.current) return;
     if (tableAutoSaveTimeoutRef.current) window.clearTimeout(tableAutoSaveTimeoutRef.current);
@@ -3207,10 +3257,10 @@ type TableConfirmDialogState =
       void (async () => {
         try {
           const saved = await syncExistingOpenOrder(activeOrder, cart);
-          const nextCart = mapOrderPendingItemsToCart(saved);
-          tableAutoSaveSignatureRef.current = cartSignature(nextCart);
+          const reconciledCart = reconcileCartSourceOrderItemIds(saved, cart);
+          tableAutoSaveSignatureRef.current = cartSignature(reconciledCart);
           setActiveOrder(saved);
-          setCart(nextCart);
+          setCart(reconciledCart);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "No se pudo guardar el pedido de mesa.");
         }
@@ -3223,6 +3273,7 @@ type TableConfirmDialogState =
 
   const handleSendOrderToPending = async () => {
     if (isSendingToPending) return;
+    if (cart.length === 0 && !hasOrderItems(activeOrder)) return;
     if (!pendingReferenceDraft.trim()) {
       setIsPendingReferenceDialogOpen(true);
       return;
@@ -3302,15 +3353,29 @@ type TableConfirmDialogState =
   const saveTableOrder = async ({ returnToMap }: { returnToMap: boolean }) => {
     if (!tableOrderContext || isSendingToPending) return;
     if (!activeOrder) {
-      toast.error("No hay una orden de mesa activa.");
+      if (returnToMap) {
+        resetTableOrderDraft();
+        setTableOrderContext(null);
+        setPosMode("tables");
+      }
+      return;
+    }
+    if (cart.length === 0 && !hasOrderItems(activeOrder)) {
+      if (returnToMap) {
+        resetTableOrderDraft();
+        setTableOrderContext(null);
+        setPosMode("tables");
+      }
       return;
     }
     setIsSendingToPending(true);
     try {
       const saved = await syncExistingOpenOrder(activeOrder);
+      const reconciledCart = reconcileCartSourceOrderItemIds(saved, cart);
       setActiveOrder(saved);
-      tableAutoSaveSignatureRef.current = cartSignature(mapOrderPendingItemsToCart(saved));
-      toast.success("Pendientes guardados en mesa.");
+      setCart(reconciledCart);
+      tableAutoSaveSignatureRef.current = cartSignature(reconciledCart);
+      if (!returnToMap) toast.success("Pendientes guardados en mesa.");
       await refreshTableSessions();
       if (returnToMap) {
         resetTableOrderDraft();
@@ -3328,7 +3393,6 @@ type TableConfirmDialogState =
     if (!tableOrderContext || !activeOrder || isSendingToPending) return;
     const guestId = tableOrderContext.orderMode === "per_person" ? tableOrderContext.activeGuestId : null;
     if (scope === "guest" && visibleCart.length === 0) {
-      toast.info("No hay productos pendientes para enviar.");
       return;
     }
     setTableKitchenSendDialog({ open: false, pendingGuestCount: 0 });
@@ -3343,12 +3407,15 @@ type TableConfirmDialogState =
       });
       upsertTableSession(session);
       const refreshed = await getOrderById(savedBeforeSend.id);
-      const nextCart = mapOrderPendingItemsToCart(refreshed);
-      tableAutoSaveSignatureRef.current = cartSignature(nextCart);
       setActiveOrder(refreshed);
-      setCart(nextCart);
+      setCart((previous) => {
+        const reconciledCart = reconcileCartSourceOrderItemIds(refreshed, previous);
+        const nextCart = scope === "guest" ? reconciledCart.filter((item) => !tableGuestMatchesActive(item)) : [];
+        tableAutoSaveSignatureRef.current = cartSignature(nextCart);
+        return nextCart;
+      });
       await refreshTableSessions();
-      toast.success(session.detail || (session.sentCount === 0 ? "No hay productos pendientes para enviar." : `${session.sentCount ?? 0} productos enviados a cocina.`));
+      toast.success((session.sentCount ?? 0) > 0 ? "Pedido enviado a cocina." : "Productos agregados a la cuenta. No hay productos para cocina.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo enviar a cocina.");
     } finally {
@@ -3359,7 +3426,6 @@ type TableConfirmDialogState =
   const requestSendCurrentTableOrderToKitchen = () => {
     if (!tableOrderContext) return;
     if (visibleCart.length === 0) {
-      toast.info("No hay productos pendientes para enviar.");
       return;
     }
     if (tableOrderContext.orderMode === "per_person" && pendingGuestCount > 1) {
@@ -5592,7 +5658,7 @@ type TableConfirmDialogState =
                       </Button>
                     </div>
                   ) : null}
-                  <Button variant="outline" onClick={() => returnToTables()}>Volver a mesas</Button>
+                  <Button type="button" variant="outline" onClick={() => returnToTables()}>Volver a mesas</Button>
                 </div>
               </Card>
             ) : null}
@@ -5905,18 +5971,18 @@ type TableConfirmDialogState =
                         </div>
                         <div className="flex items-center gap-1">
                           <div className="flex items-center rounded-lg border bg-muted/20">
-                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-10 w-10 rounded-none">
+                            <Button type="button" variant="ghost" size="icon" onClick={() => updateQuantity(item.id, -1)} className="h-10 w-10 rounded-none">
                               <Minus className="h-4 w-4" />
                             </Button>
                             <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
-                            <Button variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none" disabled={!canAddProductByStock(item.productId)} title={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"} aria-label={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"}>
+                            <Button type="button" variant="ghost" size="icon" onClick={() => updateQuantity(item.id, 1)} className="h-10 w-10 rounded-none" disabled={!canAddProductByStock(item.productId)} title={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"} aria-label={!canAddProductByStock(item.productId) ? "No hay más stock disponible" : "Agregar unidad"}>
                               <Plus className="h-4 w-4" />
                             </Button>
                           </div>
                           <span className="w-20 text-right text-sm font-bold">{formatMoney(getItemUnitTotal(item) * item.quantity)}</span>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-10 w-10" title="Acciones de línea">
+                              <Button type="button" variant="ghost" size="icon" className="h-10 w-10" title="Acciones de línea">
                                 <Settings2 className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
@@ -5932,7 +5998,6 @@ type TableConfirmDialogState =
                               <DropdownMenuItem
                                 className="text-destructive"
                                 onClick={() => removeItem(item.id)}
-                                disabled={Boolean(activeOrder?.isPending && (activeOrder.sendToKitchen || ["preparing", "ready", "delivered"].includes(String(activeOrder.status || ""))))}
                               >
                                 Eliminar
                               </DropdownMenuItem>
@@ -5973,11 +6038,12 @@ type TableConfirmDialogState =
 
               <div className="flex items-center gap-2">
                 {!tableOrderContext ? (
-                  <Button variant="outline" className="h-14 w-14 p-0" onClick={() => void handleQuickPrintTicket()} title="Imprimir ticket" aria-label="Imprimir ticket">
+                  <Button type="button" variant="outline" className="h-14 w-14 p-0" onClick={() => void handleQuickPrintTicket()} title="Imprimir ticket" aria-label="Imprimir ticket">
                     <Printer className="h-5 w-5" />
                   </Button>
                 ) : null}
                 <Button
+                  type="button"
                   variant="secondary"
                   className="h-14 w-14 p-0"
                   onClick={() => {
@@ -5989,7 +6055,10 @@ type TableConfirmDialogState =
                           try {
                             if (cart.length > 0) {
                               const saved = await syncExistingOpenOrder(activeOrder);
+                              const reconciledCart = reconcileCartSourceOrderItemIds(saved, cart);
                               setActiveOrder(saved);
+                              setCart(reconciledCart);
+                              tableAutoSaveSignatureRef.current = cartSignature(reconciledCart);
                             }
                             await openTableBill(tableId, session);
                           } catch (error) {
@@ -6015,6 +6084,7 @@ type TableConfirmDialogState =
                   {tableOrderContext ? <ReceiptText className="h-5 w-5" /> : <Save className="h-5 w-5" />}
                 </Button>
                 <Button
+                  type="button"
                   variant="default"
                   className="h-14 flex-1 text-base font-bold"
                   size="lg"
@@ -6035,6 +6105,7 @@ type TableConfirmDialogState =
                   </span>
                 </Button>
                 <Button
+                  type="button"
                   variant="outline"
                   className="h-14 w-14 p-0"
                   onClick={() => {
@@ -6082,9 +6153,9 @@ type TableConfirmDialogState =
             <DialogDescription>Tienes productos sin guardar. ¿Deseas guardar antes de volver a mesas?</DialogDescription>
           </DialogHeader>
           <DialogFooter className="shrink-0 border-t px-5 py-4">
-            <Button variant="outline" onClick={() => setTableBackDialogOpen(false)}>Cancelar</Button>
-            <Button variant="outline" onClick={() => { setTableBackDialogOpen(false); returnToTables(true); }}>Volver sin guardar</Button>
-            <Button className="whitespace-normal text-center" onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ returnToMap: true }); }}>
+            <Button type="button" variant="outline" onClick={() => setTableBackDialogOpen(false)}>Cancelar</Button>
+            <Button type="button" variant="outline" onClick={() => { setTableBackDialogOpen(false); returnToTables(true); }}>Volver sin guardar</Button>
+            <Button type="button" className="whitespace-normal text-center" onClick={() => { setTableBackDialogOpen(false); void saveTableOrder({ returnToMap: true }); }}>
               Guardar pendientes y volver
             </Button>
           </DialogFooter>
@@ -6098,15 +6169,15 @@ type TableConfirmDialogState =
             <DialogDescription>Hay productos pendientes en varias personas.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 sm:grid-cols-2">
-            <Button className="h-14 text-base font-semibold" onClick={() => void sendCurrentTableOrderToKitchen("guest")}>
+            <Button type="button" className="h-14 text-base font-semibold" onClick={() => void sendCurrentTableOrderToKitchen("guest")}>
               Solo {tableOrderContext?.activeGuestLabel || "persona actual"}
             </Button>
-            <Button className="h-14 text-base font-semibold" variant="secondary" onClick={() => void sendCurrentTableOrderToKitchen("table")}>
+            <Button type="button" className="h-14 text-base font-semibold" variant="secondary" onClick={() => void sendCurrentTableOrderToKitchen("table")}>
               Toda la mesa
             </Button>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTableKitchenSendDialog({ open: false, pendingGuestCount: 0 })}>Cancelar</Button>
+            <Button type="button" variant="outline" onClick={() => setTableKitchenSendDialog({ open: false, pendingGuestCount: 0 })}>Cancelar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -7444,7 +7515,7 @@ type TableConfirmDialogState =
                 <p className="text-muted-foreground">Total extras: {formatMoney(pendingSelectionValidation.selectedMods.reduce((sum, mod) => sum + mod.price, 0))}</p>
                 {Object.values(pendingSelectionValidation.errors)[0] ? <p className="text-destructive">{Object.values(pendingSelectionValidation.errors)[0]}</p> : null}
               </div>
-              <Button className="h-14 min-w-48 text-base" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
+              <Button type="button" className="h-14 min-w-48 text-base" onClick={handleAddPendingProduct} disabled={!canAddPendingProduct} title={pendingProduct && !canAddProductByStock(pendingProduct.id) ? "No hay más stock disponible" : "Agregar"}>
                 {editingModifiersItemId
                   ? selectedExtrasCount > 0
                     ? `Actualizar (${selectedExtrasCount} extras)`
@@ -7483,7 +7554,7 @@ type TableConfirmDialogState =
               <Label>Nota</Label>
               <Input value={manualNote} onChange={(e) => setManualNote(e.target.value)} />
             </div>
-            <Button className="w-full" onClick={handleAddManualProduct}>Agregar al carrito</Button>
+            <Button type="button" className="w-full" onClick={handleAddManualProduct}>Agregar al carrito</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -7498,15 +7569,15 @@ type TableConfirmDialogState =
             <div className="text-center text-2xl tracking-[0.4em]">{Array.from({ length: 6 }).map((_, i) => (pinInput[i] ? "●" : "○")).join(" ")}</div>
             <div className="grid grid-cols-3 gap-2">
               {[1,2,3,4,5,6,7,8,9].map((n) => (
-                <Button key={n} variant="outline" className="h-12" onClick={() => appendPricePinDigit(String(n))}>{n}</Button>
+                <Button key={n} type="button" variant="outline" className="h-12" onClick={() => appendPricePinDigit(String(n))}>{n}</Button>
               ))}
-              <Button variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
-              <Button variant="outline" className="h-12" onClick={() => appendPricePinDigit("0")}>0</Button>
-              <Button variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
+              <Button type="button" variant="outline" className="h-12" onClick={() => setPinInput("")}>Limpiar</Button>
+              <Button type="button" variant="outline" className="h-12" onClick={() => appendPricePinDigit("0")}>0</Button>
+              <Button type="button" variant="outline" className="h-12" onClick={() => setPinInput((prev) => prev.slice(0, -1))}><Delete className="h-4 w-4" /></Button>
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsPinModalOpen(false)}>Cancelar</Button>
-              <Button onClick={() => void submitPricePin()} disabled={pinInput.length !== 6}>Confirmar</Button>
+              <Button type="button" variant="outline" onClick={() => setIsPinModalOpen(false)}>Cancelar</Button>
+              <Button type="button" onClick={() => void submitPricePin()} disabled={pinInput.length !== 6}>Confirmar</Button>
             </div>
           </div>
         </DialogContent>
