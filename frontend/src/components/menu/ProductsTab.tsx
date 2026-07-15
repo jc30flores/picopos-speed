@@ -6,13 +6,14 @@ import { ImageUploadField } from "@/components/ui/image-upload-field";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { getEntityImageSrc } from "@/lib/media";
 import { ModifierGroupsAdminModal } from "./ModifierGroupsAdminModal";
 import { ProductModifiersModal } from "./ProductModifiersModal";
 import { ProductFormDialog } from "./ProductFormDialog";
 import { ProductInventoryLinksDialog } from "./ProductInventoryLinksDialog";
-import { getCategories, getModifierGroups, getProducts, updateProductAvailability, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError, type ProductInventoryStockPolicy, type PosImagePolicy } from "@/lib/api";
+import { getCategories, getModifierGroups, getProducts, updateProductAvailability, updateProductKitchenRouting, deleteProduct, deleteCategory, createCategory, updateCategory, reorderCategories, reorderProducts, duplicateProduct, Category, ModifierGroup, Product, getCategoryInventoryLinks, saveCategoryInventoryLinks, type InventoryProductLink, type CategoryDeleteConflictError, type ProductInventoryStockPolicy, type PosImagePolicy } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -60,6 +61,37 @@ const InlineStatusToggle = ({ product, onUpdated }: InlineStatusToggleProps) => 
         {product.available ? "Activo" : "Inactivo"}
       </Badge>
     </button>
+  );
+};
+
+const InlineKitchenToggle = ({ product, onUpdated }: InlineStatusToggleProps) => {
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const handleToggle = async (checked: boolean) => {
+    if (isUpdating || checked === product.requiresKitchen) return;
+    setIsUpdating(true);
+    try {
+      const updated = await updateProductKitchenRouting(product.id, checked);
+      onUpdated(updated);
+      toast.success(checked ? "Producto se enviará a cocina." : "Producto no se mostrará en cocina.");
+    } catch (error) {
+      console.error("Failed to update product kitchen routing", error);
+      toast.error(error instanceof Error ? error.message : "No se pudo cambiar si el producto va a cocina.");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Switch
+        checked={Boolean(product.requiresKitchen)}
+        disabled={isUpdating}
+        onCheckedChange={(checked) => void handleToggle(Boolean(checked))}
+        aria-label={`Cambiar si ${product.name} va a cocina`}
+      />
+      <span className="text-xs text-muted-foreground">{product.requiresKitchen ? "Sí" : "No"}</span>
+    </div>
   );
 };
 
@@ -427,13 +459,14 @@ export const ProductsTab = () => {
                   <TableHead>Categoría</TableHead>
                   <TableHead>Precio</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead>Cocina</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isMenuLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Cargando productos...</TableCell>
+                    <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">Cargando productos...</TableCell>
                   </TableRow>
                 ) : displayProducts.map((product) => (
                   <TableRow
@@ -480,6 +513,9 @@ export const ProductsTab = () => {
                     </TableCell>
                     <TableCell>
                       <InlineStatusToggle product={product} onUpdated={handleStatusUpdated} />
+                    </TableCell>
+                    <TableCell>
+                      <InlineKitchenToggle product={product} onUpdated={handleStatusUpdated} />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

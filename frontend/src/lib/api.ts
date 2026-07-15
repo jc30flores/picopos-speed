@@ -3000,6 +3000,86 @@ export const updateProductAvailability = async (
   };
 };
 
+export const updateProductKitchenRouting = async (
+  productId: number,
+  requiresKitchen: boolean,
+): Promise<Product> => {
+  const formData = new FormData();
+  formData.append("requires_kitchen", requiresKitchen ? "true" : "false");
+  const response = await request(`/menu/products/${productId}/`, {
+    method: "PATCH",
+    body: formData,
+  });
+  const data = await handleJson<{
+    id: number;
+    name: string;
+    description: string;
+    price: string;
+    original_price?: string | null;
+    effective_price?: string | null;
+    is_special_price_active_now?: boolean;
+    applied_special_price_rule_id?: number | null;
+    applied_special_price_rule_name?: string | null;
+    sort_order?: number;
+    category: string;
+    category_name?: string;
+    category_id_display?: number;
+    image: string | null;
+    image_path?: string | null;
+    image_url: string | null;
+    available: boolean;
+    is_archived?: boolean;
+    requires_kitchen: boolean;
+    inventory_stock_policy?: ProductInventoryStockPolicy;
+    pos_image_policy?: PosImagePolicy;
+    inventory_components_enabled?: boolean;
+    track_inventory?: boolean;
+    tracked_inventory_item?: number | null;
+    tracked_inventory_item_name?: string | null;
+    tracked_inventory_item_unit?: string | null;
+    tracked_inventory_item_current_stock?: string | null;
+    tracked_inventory_quantity?: string;
+    auto_created_inventory_item?: boolean;
+    tracked_inventory_warning?: string;
+    modifier_groups: number[];
+    modifier_groups_pos?: number[];
+    modifier_group_links?: Array<{ group_id: number; show_in_pos: boolean }>;
+  }>(response);
+  const normalizedImageUrl = normalizeImageUrl(data);
+  return {
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: Number(data.price),
+    originalPrice: data.original_price != null ? Number(data.original_price) : Number(data.price),
+    effectivePrice: data.effective_price != null ? Number(data.effective_price) : Number(data.price),
+    isSpecialPriceActiveNow: Boolean(data.is_special_price_active_now ?? data.applied_special_price_rule_id != null),
+    appliedSpecialPriceRuleId: data.applied_special_price_rule_id ?? null,
+    appliedSpecialPriceRuleName: data.applied_special_price_rule_name ?? null,
+    sortOrder: Number(data.sort_order ?? 0),
+    category: data.category,
+    categoryName: data.category_name ?? data.category,
+    categoryId: data.category_id_display ?? 0,
+    image: data.image,
+    imagePath: data.image_path ?? null,
+    imageUrl: normalizedImageUrl,
+    image_url: normalizedImageUrl,
+    image_path: data.image_path ?? null,
+    available: data.available,
+    isArchived: Boolean(data.is_archived),
+    requiresKitchen: Boolean(data.requires_kitchen),
+    inventoryStockPolicy: normalizeProductInventoryStockPolicy(data.inventory_stock_policy),
+    posImagePolicy: normalizePosImagePolicy(data.pos_image_policy),
+    ...mapProductInventoryFields(data),
+    modifierGroups: data.modifier_groups,
+    modifierGroupsPos: data.modifier_groups_pos ?? [],
+    modifierGroupLinks: (data.modifier_group_links ?? []).map((link) => ({
+      groupId: link.group_id,
+      showInPos: Boolean(link.show_in_pos),
+    })),
+  };
+};
+
 export const getModifierGroups = async (): Promise<ModifierGroup[]> => {
   const response = await request("/menu/modifier-groups/");
   const data = await handleJson<Array<{
