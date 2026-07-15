@@ -5,6 +5,7 @@ from io import BytesIO
 
 from django.http import HttpResponse
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.core.pwa_metadata import get_public_pwa_metadata, safe_hex, ticket_logo_path
@@ -181,7 +182,7 @@ def _render_share_image() -> bytes:
 
 class PublicPwaIconView(APIView):
     authentication_classes = []
-    permission_classes = []
+    permission_classes = [AllowAny]
 
     ICON_SPECS = {
         "icon-192.png": (192, "image/png", False),

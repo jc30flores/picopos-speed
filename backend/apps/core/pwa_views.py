@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from django.http import HttpResponse, HttpResponseNotModified, JsonResponse
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.core.pwa_metadata import get_public_pwa_metadata
@@ -29,7 +30,7 @@ def set_cache_headers(response: HttpResponse, version: str, max_age: int = 3600,
 
 class PublicPwaMetadataView(APIView):
     authentication_classes = []
-    permission_classes = []
+    permission_classes = [AllowAny]
 
     def get(self, request):
         metadata = get_public_pwa_metadata()
@@ -39,7 +40,7 @@ class PublicPwaMetadataView(APIView):
 
 class PublicPwaManifestView(APIView):
     authentication_classes = []
-    permission_classes = []
+    permission_classes = [AllowAny]
 
     def get(self, request):
         metadata = get_public_pwa_metadata()

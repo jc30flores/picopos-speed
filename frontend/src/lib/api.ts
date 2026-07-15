@@ -1277,12 +1277,16 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
   cyclesToday: [],
 });
 
-const request = async (path: string, options: RequestInit = {}) => {
+type ApiRequestOptions = RequestInit & { public?: boolean };
+
+const request = async (path: string, options: ApiRequestOptions = {}) => {
+  const { public: explicitPublicRequest, ...fetchOptions } = options;
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers || {});
   const isFormData = options.body instanceof FormData;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const normalizedPathKey = normalizedPath.endsWith("/") ? normalizedPath.slice(0, -1) : normalizedPath;
+  const isPublicRequest = Boolean(explicitPublicRequest) || normalizedPath.startsWith("/public/");
 
   if (!isFormData && !headers.has("Content-Type") && method !== "GET") {
     headers.set("Content-Type", "application/json");
@@ -1303,8 +1307,8 @@ const request = async (path: string, options: RequestInit = {}) => {
 
   try {
     response = await fetch(buildApiUrl(path), {
-      credentials: "include",
-      ...options,
+      credentials: isPublicRequest ? "omit" : "include",
+      ...fetchOptions,
       headers,
     });
   } catch (error) {
@@ -1318,7 +1322,7 @@ const request = async (path: string, options: RequestInit = {}) => {
     "/auth/logout",
     "/auth/me",
   ]);
-  if (response.status === 401 && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+  if (response.status === 401 && !isPublicRequest && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     console.info("AUTH_SESSION_EXPIRED", {
       status: 401,
       endpoint: normalizedPath,
@@ -1326,7 +1330,7 @@ const request = async (path: string, options: RequestInit = {}) => {
     });
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
   }
-  if (response.status === 403 && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+  if (response.status === 403 && !isPublicRequest && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     console.info("AUTH_FORBIDDEN_NON_AUTH", {
       endpoint: normalizedPath,
       action: "keep_session",
@@ -1683,7 +1687,7 @@ export const getAppearanceSettings = async (): Promise<AppearanceSettings> => {
 };
 
 export const getPublicAppearanceSettings = async (): Promise<AppearanceSettings> => {
-  const response = await request("/public/appearance/");
+  const response = await request("/public/appearance/", { public: true });
   return mapAppearanceSettings(await handleJson<any>(response));
 };
 
@@ -1714,7 +1718,7 @@ const mapPublicPwaMetadata = (data: any): PublicPwaMetadata => ({
 });
 
 export const getPublicPwaMetadata = async (): Promise<PublicPwaMetadata> => {
-  const response = await request("/public/pwa/metadata/");
+  const response = await request("/public/pwa/metadata/", { public: true });
   return mapPublicPwaMetadata(await handleJson<any>(response));
 };
 

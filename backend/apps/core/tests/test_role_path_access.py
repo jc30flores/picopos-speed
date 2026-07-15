@@ -15,6 +15,8 @@ class RolePathAccessMiddlewareTests(TestCase):
         Employee.objects.create(full_name="Worker Uno", role="worker", status="active", user=self.worker)
         self.cashier = user_model.objects.create_user(username="cashier1", password="123456", is_active=True)
         UserProfile.objects.create(user=self.cashier, role="cashier", is_active=True)
+        self.waiter = user_model.objects.create_user(username="waiter1", password="123456", is_active=True)
+        UserProfile.objects.create(user=self.waiter, role="waiter", is_active=True)
         self.manager = user_model.objects.create_user(username="manager1", password="123456", is_active=True)
         UserProfile.objects.create(user=self.manager, role="manager", is_active=True)
 
@@ -44,6 +46,15 @@ class RolePathAccessMiddlewareTests(TestCase):
         self.assertEqual(me.status_code, 200)
         logout = self.client.post("/api/auth/logout")
         self.assertEqual(logout.status_code, 204)
+
+    def test_waiter_can_access_public_branding_endpoints(self):
+        self.client.post("/api/auth/login/", {"username": "waiter1", "password": "123456"}, format="json")
+        appearance = self.client.get("/api/public/appearance/")
+        self.assertEqual(appearance.status_code, 200)
+        metadata = self.client.get("/api/public/pwa/metadata/")
+        self.assertEqual(metadata.status_code, 200)
+        favicon = self.client.get("/api/public/pwa/favicon.ico")
+        self.assertEqual(favicon.status_code, 200)
 
     def test_cashier_is_blocked_from_reports_api(self):
         self.client.post("/api/auth/login/", {"username": "cashier1", "password": "123456"}, format="json")
