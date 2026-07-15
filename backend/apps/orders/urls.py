@@ -13,6 +13,7 @@ urlpatterns = [
     path("tables/ready-summary/", table_views.TableReadySummaryView.as_view(), name="tables-ready-summary"),
     path("tables/sessions/", table_views.TableSessionListCreateView.as_view(), name="tables-sessions"),
     path("tables/sessions/<int:pk>/", table_views.TableSessionDetailView.as_view(), name="tables-sessions-detail"),
+    path("tables/sessions/<int:pk>/guests/<int:guest_number>/rename/", table_views.TableSessionGuestRenameView.as_view(), name="tables-sessions-guests-rename"),
     path("tables/sessions/<int:pk>/send-to-kitchen/", table_views.TableSessionSendToKitchenView.as_view(), name="tables-sessions-send-kitchen"),
     path("tables/sessions/<int:pk>/serve-ready/", table_views.TableSessionServeReadyView.as_view(), name="tables-sessions-serve-ready"),
     path("tables/sessions/<int:pk>/merge/", table_views.TableSessionMergeView.as_view(), name="tables-sessions-merge"),

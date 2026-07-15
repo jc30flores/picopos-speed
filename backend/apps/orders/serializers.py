@@ -843,9 +843,16 @@ class RestaurantTableSerializer(serializers.ModelSerializer):
 
 
 class TableGuestSerializer(serializers.ModelSerializer):
+    label = serializers.SerializerMethodField()
+    base_label = serializers.CharField(source="label", read_only=True)
+    custom_name = serializers.CharField(source="display_name", read_only=True)
+
     class Meta:
         model = TableGuest
-        fields = ["id", "session", "label", "seat_number", "is_active", "is_paid", "created_at", "updated_at"]
+        fields = ["id", "session", "label", "base_label", "display_name", "custom_name", "seat_number", "is_active", "is_paid", "created_at", "updated_at"]
+
+    def get_label(self, obj):
+        return obj.display_label
 
 
 class TableSessionSerializer(serializers.ModelSerializer):

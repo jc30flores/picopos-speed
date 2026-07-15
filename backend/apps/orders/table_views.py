@@ -12,7 +12,7 @@ from apps.core.audit import log_audit
 from apps.core.money import to_cents
 from apps.core.permissions import CanAccessTablePos, CanManageKitchenItems, CanServeKitchenItems, CanViewKitchen, IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
-from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableSessionSerializer
+from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableGuestSerializer, TableSessionSerializer
 from apps.payments.models import Payment
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -384,6 +384,38 @@ class TableSessionDetailView(TableMapFeatureGuardMixin, generics.RetrieveUpdateA
     queryset = TableSession.objects.all()
     serializer_class = TableSessionSerializer
     permission_classes = [CanAccessTablePos]
+
+
+class TableSessionGuestRenameView(TableMapFeatureGuardMixin, APIView):
+    permission_classes = [CanAccessTablePos]
+
+    @transaction.atomic
+    def post(self, request, pk: int, guest_number: int):
+        session = (
+            TableSession.objects.select_for_update()
+            .prefetch_related("guests")
+            .filter(id=pk, status__in=ACTIVE_TABLE_SESSION_STATUSES)
+            .first()
+        )
+        if not session:
+            return Response({"detail": "Sesión de mesa no encontrada o cerrada."}, status=404)
+        if session.order_mode != TableSession.ORDER_MODE_PER_PERSON:
+            return Response({"detail": "Esta orden no está separada por persona."}, status=400)
+        guest = session.guests.select_for_update().filter(seat_number=guest_number).first()
+        if not guest:
+            return Response({"guest_number": "La persona indicada no pertenece a esta mesa."}, status=400)
+        raw_name = str(request.data.get("name") or "")
+        name = " ".join(raw_name.split())
+        if len(name) > 40:
+            return Response({"name": "El nombre debe tener máximo 40 caracteres."}, status=400)
+        guest.display_name = name
+        guest.save(update_fields=["display_name", "updated_at"])
+        session = TableSession.objects.select_related("primary_order").prefetch_related("session_tables__table", "guests").get(id=session.id)
+        return Response({
+            "detail": "Nombre eliminado." if not name else "Nombre asignado.",
+            "guest": TableGuestSerializer(guest).data,
+            "session": TableSessionSerializer(session).data,
+        })
 
 
 class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):

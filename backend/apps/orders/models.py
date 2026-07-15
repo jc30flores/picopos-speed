@@ -110,6 +110,7 @@ class TableSessionTable(models.Model):
 class TableGuest(models.Model):
     session = models.ForeignKey(TableSession, on_delete=models.CASCADE, related_name='guests')
     label = models.CharField(max_length=64)
+    display_name = models.CharField(max_length=40, blank=True, default="")
     seat_number = models.PositiveIntegerField(default=1)
     is_active = models.BooleanField(default=True)
     is_paid = models.BooleanField(default=False)
@@ -119,6 +120,10 @@ class TableGuest(models.Model):
     class Meta:
         unique_together = ("session", "seat_number")
         ordering = ["seat_number", "id"]
+
+    @property
+    def display_label(self) -> str:
+        return (self.display_name or "").strip() or self.label
 
 
 class Order(models.Model):
