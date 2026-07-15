@@ -1384,11 +1384,18 @@ const normalizeAuthPayload = (raw: AuthPayload): AuthUser => {
   const nestedUser = raw.user ?? {};
   const nestedProfile = raw.profile ?? {};
   const rawPermissions = raw.permissions ?? {};
+  const rawRole = String(raw.role ?? nestedProfile.role ?? "cashier").toLowerCase();
+  const normalizedRole = ({
+    cajero: "cashier",
+    cocina: "kitchen",
+    gerente: "manager",
+    mesero: "waiter",
+  } as Record<string, AuthUser["role"]>)[rawRole] ?? rawRole;
   return {
     id: Number(raw.id ?? nestedUser.id ?? 0),
     username: String(raw.username ?? nestedUser.username ?? ""),
     email: String(raw.email ?? nestedUser.email ?? ""),
-    role: (raw.role ?? nestedProfile.role ?? "cashier") as AuthUser["role"],
+    role: normalizedRole as AuthUser["role"],
     isSuperuser: Boolean(raw.isSuperuser ?? raw.is_superuser ?? nestedUser.isSuperuser ?? nestedUser.is_superuser),
     isStaff: Boolean(raw.isStaff ?? raw.is_staff ?? nestedUser.isStaff ?? nestedUser.is_staff),
     redirectTo: (raw.redirectTo ?? raw.redirect_to ?? nestedProfile.redirectTo ?? nestedProfile.redirect_to) as string | undefined,

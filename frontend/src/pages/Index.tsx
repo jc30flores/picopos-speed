@@ -600,6 +600,7 @@ type TableConfirmDialogState =
   const guestLongPressTimerRef = useRef<number | null>(null);
   const guestLongPressTriggeredRef = useRef(false);
   const tablePaymentOpenRequestRef = useRef(0);
+  const waiterQuickRedirectShownRef = useRef(false);
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
   const tableAutoSaveSignatureRef = useRef("");
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
@@ -662,7 +663,10 @@ type TableConfirmDialogState =
   const canUseLastSaleQuickAction = quickSalesMode === "last_sale" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewRecentSalesActions = quickSalesMode === "history" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const shouldShowQuickSalesButton = quickSalesMode !== "hidden" && (canUseLastSaleQuickAction || canViewRecentSalesActions);
-  const requiresCashOpen = !getCashSessionStatus(cashSnapshot).hasOpenCashSession;
+  const requiresCashOpen = canManageCashOperations && !getCashSessionStatus(cashSnapshot).hasOpenCashSession;
+  const openAccountsCount = cashSnapshot.pendingOpenOrdersCount ?? pendingOrdersCount;
+  const cashCloseBlockedByOpenAccounts = openAccountsCount > 0 && !allowCloseWithPendingOrders;
+  const cashCloseOpenAccountsMessage = `No puedes cerrar la caja porque hay ${openAccountsCount} ${openAccountsCount === 1 ? "cuenta abierta" : "cuentas abiertas"}. Resuelve o cobra esas cuentas antes de cerrar.`;
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
@@ -1015,6 +1019,10 @@ type TableConfirmDialogState =
   }, [navigate, setContextFromTableSession, upsertTableSession]);
 
   const openTablePayment = useCallback(async (tableId: number, session: TableSession, options?: OpenTablePaymentOptions) => {
+    if (!canCollectTablePayments) {
+      toast.error("Mesero no puede cobrar.");
+      return;
+    }
     const orderId = options?.order?.id ?? session.primaryOrder;
     if (!orderId) {
       toast.error("La mesa no tiene orden activa.");
@@ -1110,7 +1118,7 @@ type TableConfirmDialogState =
         setIsOpeningTablePayment(false);
       }
     }
-  }, [buildGuestPaymentScope, buildTablePaymentScope, serviceType, taxRate, upsertTableSession]);
+  }, [buildGuestPaymentScope, buildTablePaymentScope, canCollectTablePayments, serviceType, taxRate, upsertTableSession]);
 
   const openTableSession = async (tableId: number) => {
     const existing = sessionByTableId.get(tableId);
@@ -1222,7 +1230,8 @@ type TableConfirmDialogState =
     setTableBillStatusFilter("all");
     setTableBillDialog({ open: true, loading: true, tableId, session, order: null, payments: [] });
     try {
-      const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), getPaymentsByOrder(session.primaryOrder)]);
+      const paymentsPromise = canCollectTablePayments ? getPaymentsByOrder(session.primaryOrder) : Promise.resolve([] as Payment[]);
+      const [order, payments] = await Promise.all([getOrderById(session.primaryOrder), paymentsPromise]);
       setTableBillDialog({ open: true, loading: false, tableId, session, order, payments });
     } catch (error) {
       setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
@@ -1456,6 +1465,11 @@ type TableConfirmDialogState =
   }, [opsContextMenu.open, opsContextMenu.x, opsContextMenu.y, opsContextMenu.tableId, viewportReflowTick]);
 
   useEffect(() => {
+    if (isWaiterRole) {
+      setPendingOrdersCount(0);
+      setIsPendingChoiceOpen(false);
+      return;
+    }
     const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
     const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
     const cameFromPendingParams = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
@@ -1473,7 +1487,7 @@ type TableConfirmDialogState =
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, [canShowOpenOrdersChoice, location.state, searchParams, selectedBranchId]);
+  }, [canShowOpenOrdersChoice, isWaiterRole, location.state, searchParams, selectedBranchId]);
 
   useEffect(() => {
     const state = location.state as { tableSession?: TableSession; tableId?: number } | null;
@@ -2215,6 +2229,11 @@ type TableConfirmDialogState =
   };
 
   const requestOpenSession = (postAction?: () => Promise<void>, resolver?: (opened: boolean) => void) => {
+    if (!canManageCashOperations) {
+      toast.error("El rol Mesero no puede abrir caja.");
+      resolver?.(false);
+      return;
+    }
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       posDebug("[cash-debug] open-session-modal", {
@@ -2243,6 +2262,10 @@ type TableConfirmDialogState =
   };
 
   const ensureCashSessionOpen = async (postAction: () => Promise<void>) => {
+    if (!canManageCashOperations) {
+      toast.error("Mesero no puede cobrar.");
+      return false;
+    }
     try {
       const current = await getCurrentCashSession();
       setCashSnapshot(current);
@@ -2262,6 +2285,10 @@ type TableConfirmDialogState =
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (!canManageCashOperations) {
+      toast.error("Mesero no puede cobrar.");
+      return;
+    }
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       posDebug("[cash-debug] cobrar-click", {
@@ -2498,6 +2525,13 @@ type TableConfirmDialogState =
   };
 
   const loadCashData = async () => {
+    if (!canManageCashOperations) {
+      setCashSnapshot({ open: false, hasOpenCashSession: false, canOpenCash: false, canCloseCash: false });
+      setCashTransactions([]);
+      setIsOpenSessionModalOpen(false);
+      setIsCashGateLoading(false);
+      return;
+    }
     try {
       const snapshot = await getCurrentCashSession();
       let transactions = [] as Awaited<ReturnType<typeof getCashTransactions>>;
@@ -2522,6 +2556,13 @@ type TableConfirmDialogState =
         });
       }
       setCashSnapshot(snapshot);
+      setPendingOrdersCount(Number(snapshot.pendingOpenOrdersCount ?? 0));
+      if ((snapshot.cashAutoClose?.closed ?? 0) > 0) {
+        toast.success("Caja olvidada cerrada automáticamente por horario de atención con conteo en 0.");
+      }
+      if ((snapshot.cashAutoClose?.skipped ?? 0) > 0) {
+        toast.warning("Cierre automático omitido: existen cuentas abiertas.");
+      }
       setCashTransactions(transactions);
       const hasOpenCashSession = getCashSessionStatus(snapshot).hasOpenCashSession;
       posDebug("cash.open_session_modal", {
@@ -2565,6 +2606,7 @@ type TableConfirmDialogState =
     getRuntimeFeatureSettings().then((settings) => {
       const canUseTableMap = settings.tableMapEnabled && settings.operationMode !== "quick_pos";
       const shouldUseQuickPos = isQuickPosRequested && settings.operationMode === "both";
+      const shouldForceTablesForWaiter = isWaiterRole && canUseTableMap;
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setOperationMode(settings.operationMode);
@@ -2573,7 +2615,14 @@ type TableConfirmDialogState =
       setAllowSplitByGuest(settings.allowSplitByGuest);
       setAllowSplitByItem(settings.allowSplitByItem);
       setTableMapEnabled(canUseTableMap);
-      setPosMode(canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map" ? "tables" : "pos");
+      setPosMode(shouldForceTablesForWaiter || (canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map") ? "tables" : "pos");
+      if (isWaiterRole && isQuickPosRequested && !waiterQuickRedirectShownRef.current) {
+        waiterQuickRedirectShownRef.current = true;
+        toast.info("Tu usuario puede tomar órdenes en mesas, pero no cobrar en POS rápido.");
+        if (canUseTableMap) {
+          navigate("/pos", { replace: true });
+        }
+      }
       setQuickSalesMode(settings.posQuickSalesButtonMode);
       setQuickSalesHistoryScope(settings.posQuickSalesHistoryScope);
       setQuickSalesHistoryWindowMinutes(settings.posQuickSalesHistoryWindowMinutes);
@@ -2582,7 +2631,13 @@ type TableConfirmDialogState =
       setRuntimeSettingsLoaded(true);
     });
     if (canManageCashOperations) {
+      setIsCashGateLoading(true);
       loadCashData().catch(() => undefined);
+    } else {
+      setCashSnapshot({ open: false, hasOpenCashSession: false, canOpenCash: false, canCloseCash: false });
+      setCashTransactions([]);
+      setIsOpenSessionModalOpen(false);
+      setIsCashGateLoading(false);
     }
     const forceCashGate = () => {
       if (!canManageCashOperations) return;
@@ -2600,7 +2655,7 @@ type TableConfirmDialogState =
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested]);
+  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested, isWaiterRole, navigate]);
 
   const refreshPaymentMethods = useCallback(() => {
     if (!canCollectTablePayments) {
@@ -2802,6 +2857,11 @@ type TableConfirmDialogState =
 
   const handleOpenCashSession = async () => {
     if (isSavingCashAction) return;
+    if (!canManageCashOperations) {
+      toast.error("El rol Mesero no puede abrir caja.");
+      openSessionResolverRef.current?.(false);
+      return;
+    }
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       posDebug("[cash-debug] open-session-submit", { amount: Number(openSessionAmount || 0), currentCashSession: cashSnapshot.session?.id ?? null });
@@ -2865,7 +2925,7 @@ type TableConfirmDialogState =
               }
             }
             openSessionResolverRef.current?.(true);
-            toast.success("Caja ya estaba aperturada");
+            toast.success("La caja ya estaba abierta.");
             return;
           }
         } catch {
@@ -2890,8 +2950,8 @@ type TableConfirmDialogState =
       toast.error("No tienes permisos para cerrar caja.");
       return;
     }
-    if (pendingOrdersCount > 0 && !allowCloseWithPendingOrders) {
-      toast.error(`You cannot close the register because there are ${pendingOrdersCount} open orders.`);
+    if (cashCloseBlockedByOpenAccounts) {
+      toast.error(cashCloseOpenAccountsMessage);
       return;
     }
     const totalBills = Number(closeBillsInput || 0);
@@ -3206,9 +3266,9 @@ type TableConfirmDialogState =
         posDebug("open_order.save.start", { id: saved.id, is_update: false });
       }
       if (!saved.isPending) {
-        throw new Error("Order was not persisted as Open Order.");
+        throw new Error("La orden no quedó guardada como cuenta abierta.");
       }
-      toast.success("Orden guardada en Open Orders");
+      toast.success("Orden guardada en cuentas abiertas");
       const latestPending = await getPendingOrders({ branchId: selectedBranchId || undefined });
       setPendingOrdersCount(latestPending.count);
       setCart([]);
@@ -3222,7 +3282,7 @@ type TableConfirmDialogState =
       clearPersistedDraft();
       navigate("/open-orders");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden en Open Orders.");
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden en cuentas abiertas.");
     } finally {
       setIsSendingToPending(false);
     }
@@ -5943,11 +6003,19 @@ type TableConfirmDialogState =
                   variant="default"
                   className="h-14 flex-1 text-base font-bold"
                   size="lg"
-                  disabled={(tableOrderContext ? visibleCart.length === 0 : cart.length === 0) || isProcessingPayment || requiresCashOpen}
-                  onClick={() => tableOrderContext ? requestSendCurrentTableOrderToKitchen() : handleCheckout()}
+                  disabled={(tableOrderContext ? visibleCart.length === 0 : cart.length === 0) || isProcessingPayment || requiresCashOpen || (!tableOrderContext && !canManageCashOperations)}
+                  onClick={() => {
+                    if (!tableOrderContext && !canManageCashOperations) {
+                      toast.error("Mesero no puede cobrar.");
+                      return;
+                    }
+                    if (tableOrderContext) void requestSendCurrentTableOrderToKitchen();
+                    else void handleCheckout();
+                  }}
+                  title={!tableOrderContext && !canManageCashOperations ? "Mesero no puede cobrar." : undefined}
                 >
                   <span className="flex flex-col leading-tight">
-                    <span className="text-base font-semibold">{tableOrderContext ? tableOrderPrimaryLabel : "Cobrar"}</span>
+                    <span className="text-base font-semibold">{tableOrderContext ? tableOrderPrimaryLabel : isWaiterRole ? "Mesero no puede cobrar." : "Cobrar"}</span>
                     <span className="text-sm font-medium opacity-90">{formatMoney(total)}</span>
                   </span>
                 </Button>
@@ -5974,7 +6042,7 @@ type TableConfirmDialogState =
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Referencia requerida</DialogTitle>
-            <DialogDescription>Ingresa una referencia para enviar la orden a Open Orders.</DialogDescription>
+            <DialogDescription>Ingresa una referencia para enviar la orden a cuentas abiertas.</DialogDescription>
           </DialogHeader>
           <Input
             value={pendingReferenceDraft}
@@ -6264,9 +6332,15 @@ type TableConfirmDialogState =
                 {canCloseCash && closeCashStep === "idle" ? (
                   <div className="space-y-3">
                     <div className="text-sm text-muted-foreground">Caja abierta.</div>
+                    {cashCloseBlockedByOpenAccounts ? (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+                        {cashCloseOpenAccountsMessage}
+                      </div>
+                    ) : null}
                     <Button
                       className="h-14 w-full text-base font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:bg-red-300 disabled:text-red-50 dark:bg-red-700 dark:hover:bg-red-600 dark:active:bg-red-500 dark:disabled:bg-red-900 dark:disabled:text-red-200"
                       onClick={() => setCloseCashStep("bills")}
+                      disabled={cashCloseBlockedByOpenAccounts}
                     >
                       Iniciar cierre
                     </Button>
@@ -6358,19 +6432,19 @@ type TableConfirmDialogState =
                     </div>
                     <Label>Notas</Label>
                     <Textarea rows={2} className="max-h-24" value={cashNotes} onChange={(e) => setCashNotes(e.target.value)} placeholder="Opcional" />
-                    {pendingOrdersCount > 0 && !allowCloseWithPendingOrders ? (
+                    {cashCloseBlockedByOpenAccounts ? (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
-                        You cannot close the register because there are {pendingOrdersCount} open orders. Resolve them in Open Orders first.
+                        {cashCloseOpenAccountsMessage}
                       </div>
                     ) : null}
-                    {pendingOrdersCount > 0 && allowCloseWithPendingOrders ? (
+                    {openAccountsCount > 0 && allowCloseWithPendingOrders ? (
                       <div className="rounded-md border border-blue-500/30 bg-blue-500/10 p-2 text-sm text-blue-700 dark:text-blue-300">
-                        Hay {pendingOrdersCount} órdenes pendientes, pero el cierre con pendientes está habilitado por configuración.
+                        Hay {openAccountsCount} cuentas abiertas, pero el cierre con pendientes está habilitado por configuración.
                       </div>
                     ) : null}
                     <div className="sticky bottom-0 z-10 -mx-3 flex items-center gap-2 border-t bg-background/95 p-3 backdrop-blur">
                       <Button variant="outline" className="h-14 flex-1 text-base font-semibold" onClick={() => setCloseCashStep("pedidosYa")}>Atrás</Button>
-                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || (pendingOrdersCount > 0 && !allowCloseWithPendingOrders)}>{isSavingCashAction ? "Cerrando..." : "Confirmar cierre"}</Button>
+                      <Button variant="destructive" className="h-14 flex-1 text-base font-semibold" onClick={handleCloseCashSession} disabled={isSavingCashAction || cashCloseBlockedByOpenAccounts}>{isSavingCashAction ? "Cerrando..." : "Confirmar cierre"}</Button>
                     </div>
                   </>
                 ) : null}
