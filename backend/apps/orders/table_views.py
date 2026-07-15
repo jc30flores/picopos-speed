@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Max, Q, Sum
+from django.db.models import Max, Sum
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +11,7 @@ from apps.core.models import Branch, FeatureFlag
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
 from apps.core.permissions import CanAccessTablePos, CanManageKitchenItems, CanServeKitchenItems, CanViewKitchen, IsAdminOrManager, IsCashierOrManagerOrAdmin
+from apps.menu.models import Product
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableGuestSerializer, TableSessionSerializer
 from apps.payments.models import Payment
@@ -156,6 +157,28 @@ def _authorize_table_release_pin(pin: str):
 
 def _kitchen_items_queryset(order: Order):
     return order.items.filter(product__requires_kitchen=True)
+
+
+def _lock_pending_table_order_items(order: Order, guest: TableGuest | None = None) -> tuple[list[OrderItem], list[OrderItem]]:
+    pending_ids_qs = order.items.filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING).values_list("id", flat=True)
+    if guest:
+        pending_ids_qs = pending_ids_qs.filter(table_guest_id=guest.id)
+    pending_ids = list(pending_ids_qs)
+    if not pending_ids:
+        return [], []
+
+    locked_items = list(
+        OrderItem.objects.select_for_update()
+        .filter(order_id=order.id, id__in=pending_ids, kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+        .order_by("id")
+    )
+    product_ids = [item.product_id for item in locked_items if item.product_id]
+    kitchen_product_ids = set(
+        Product.objects.filter(id__in=product_ids, requires_kitchen=True).values_list("id", flat=True)
+    )
+    kitchen_items = [item for item in locked_items if item.product_id in kitchen_product_ids]
+    non_kitchen_items = [item for item in locked_items if item.product_id not in kitchen_product_ids]
+    return kitchen_items, non_kitchen_items
 
 
 def _guest_display_label(guest: TableGuest | None) -> str:
@@ -463,16 +486,10 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
             return Response({"detail": "Sesión no encontrada."}, status=404)
         order = session.primary_order
         if not order.items.exists():
-            return Response({"detail": "No se puede enviar una orden vacía."}, status=400)
+            return Response({"detail": "No hay productos pendientes para enviar."}, status=400)
         scope = str(request.data.get("scope") or "table").strip().lower()
         if scope not in {"guest", "table"}:
             return Response({"scope": "Usa guest o table."}, status=400)
-        pending_qs = _kitchen_items_queryset(order).select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
-        non_kitchen_pending_qs = (
-            order.items.select_for_update()
-            .filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
-            .filter(Q(product__requires_kitchen=False) | Q(product__isnull=True))
-        )
         guest = None
         if scope == "guest":
             if session.order_mode != TableSession.ORDER_MODE_PER_PERSON:
@@ -494,18 +511,16 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
                 guest = guests.filter(seat_number=guest_number).first()
             if guest is None:
                 return Response({"guest_number": "Selecciona una persona válida de la mesa."}, status=400)
-            pending_qs = pending_qs.filter(table_guest=guest)
-            non_kitchen_pending_qs = non_kitchen_pending_qs.filter(table_guest=guest)
-        pending_items = list(pending_qs)
-        non_kitchen_pending_items = list(non_kitchen_pending_qs)
+        pending_items, non_kitchen_pending_items = _lock_pending_table_order_items(order, guest)
         if not pending_items and not non_kitchen_pending_items:
-            detail = "Orden guardada. No hay productos para cocina."
+            detail = "No hay productos pendientes para enviar."
             if guest:
-                detail = f"Orden guardada. No hay productos para cocina de {guest.display_label}."
+                detail = f"No hay productos pendientes para enviar de {guest.display_label}."
             return Response(
                 {
                     "detail": detail,
                     "sent_count": 0,
+                    "saved_count": 0,
                     "session": TableSessionSerializer(session).data,
                     "order": OrderSerializer(order).data,
                     "summary": _serialize_kitchen_session(session),
@@ -531,6 +546,8 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
             detail = f"{len(pending_items)} productos enviados a cocina."
             if guest:
                 detail = f"Productos de {guest.display_label} enviados a cocina."
+            if non_kitchen_pending_items:
+                detail = "Pedido enviado. Algunos productos no van a cocina."
         else:
             detail = "Orden guardada. No hay productos para cocina."
             if guest:
