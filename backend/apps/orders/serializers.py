@@ -34,6 +34,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     guest_label = serializers.SerializerMethodField()
     table_guest_label = serializers.SerializerMethodField()
     table_guest_seat_number = serializers.SerializerMethodField()
+    requires_kitchen = serializers.SerializerMethodField()
     kitchen_status_label = serializers.SerializerMethodField()
     kitchen_completed_at = serializers.SerializerMethodField()
     kitchen_served_at = serializers.SerializerMethodField()
@@ -69,6 +70,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "guest_label",
             "table_guest_label",
             "table_guest_seat_number",
+            "requires_kitchen",
             "applied_special_price_rule_id",
             "kitchen_status",
             "kitchen_status_label",
@@ -105,7 +107,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
     def get_table_guest_seat_number(self, obj: OrderItem):
         return obj.table_guest.seat_number if obj.table_guest_id and obj.table_guest else None
 
+    def get_requires_kitchen(self, obj: OrderItem):
+        return bool(obj.product_id and obj.product and obj.product.requires_kitchen)
+
     def get_kitchen_status_label(self, obj: OrderItem):
+        if not self.get_requires_kitchen(obj):
+            return "Sin cocina"
         if obj.kitchen_status == OrderItem.KITCHEN_STATUS_SENT:
             return "En cocina"
         if obj.kitchen_status == OrderItem.KITCHEN_STATUS_READY:
@@ -121,16 +128,16 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return obj.kitchen_delivered_at
 
     def get_is_pending_kitchen(self, obj: OrderItem):
-        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_PENDING
+        return self.get_requires_kitchen(obj) and obj.kitchen_status == OrderItem.KITCHEN_STATUS_PENDING
 
     def get_is_in_kitchen(self, obj: OrderItem):
-        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_SENT
+        return self.get_requires_kitchen(obj) and obj.kitchen_status == OrderItem.KITCHEN_STATUS_SENT
 
     def get_is_completed(self, obj: OrderItem):
-        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_READY
+        return self.get_requires_kitchen(obj) and obj.kitchen_status == OrderItem.KITCHEN_STATUS_READY
 
     def get_is_served(self, obj: OrderItem):
-        return obj.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED
+        return self.get_requires_kitchen(obj) and obj.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED
 
     def _modifier_total(self, obj: OrderItem) -> Decimal:
         return sum((Decimal(mod.modifier_price_snapshot or 0) for mod in obj.applied_modifiers.all()), Decimal("0.00"))

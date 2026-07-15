@@ -803,6 +803,7 @@ export type OrderItem = {
   tableGuestId?: number | null;
   tableGuestLabel?: string;
   tableGuestSeatNumber?: number | null;
+  requiresKitchen?: boolean;
   kitchenStatus?: "pending" | "sent" | "ready" | "delivered";
   kitchenStatusLabel?: string;
   kitchenSentAt?: string | null;
@@ -2113,7 +2114,7 @@ export const getProducts = async (options?: {
       isArchived: Boolean(item.is_archived),
       disposableFee: Number(item.disposable_fee ?? 0),
       disposableApplyTo: Array.isArray(item.disposable_apply_to) ? item.disposable_apply_to : [],
-      requiresKitchen: Boolean(item.requires_kitchen),
+      requiresKitchen: item.requires_kitchen !== false,
       inventoryStockPolicy: normalizeProductInventoryStockPolicy(item.inventory_stock_policy),
       posImagePolicy: normalizePosImagePolicy(item.pos_image_policy),
     ...mapProductInventoryFields(item),
@@ -3571,6 +3572,7 @@ const mapOrder = (order: {
     line_total_discount?: string;
     line_total_final?: string;
     pricing_metadata?: Record<string, unknown> | null;
+    requires_kitchen?: boolean;
     kitchen_status?: "pending" | "sent" | "ready" | "delivered";
     kitchen_status_label?: string;
     kitchen_sent_at?: string | null;
@@ -3645,6 +3647,7 @@ const mapOrder = (order: {
       tableGuestId: item.table_guest_id ?? null,
       tableGuestLabel: item.table_guest_label || item.assigned_name || undefined,
       tableGuestSeatNumber: item.table_guest_seat_number ?? null,
+      requiresKitchen: item.requires_kitchen !== false,
       kitchenStatus: item.kitchen_status ?? "pending",
       kitchenStatusLabel: item.kitchen_status_label || undefined,
       kitchenSentAt: item.kitchen_sent_at ?? null,
@@ -3652,10 +3655,10 @@ const mapOrder = (order: {
       kitchenDeliveredAt: item.kitchen_delivered_at ?? null,
       kitchenCompletedAt: item.kitchen_completed_at ?? item.kitchen_ready_at ?? null,
       kitchenServedAt: item.kitchen_served_at ?? item.kitchen_delivered_at ?? null,
-      isPendingKitchen: Boolean(item.is_pending_kitchen ?? (item.kitchen_status ?? "pending") === "pending"),
-      isInKitchen: Boolean(item.is_in_kitchen ?? item.kitchen_status === "sent"),
-      isCompleted: Boolean(item.is_completed ?? item.kitchen_status === "ready"),
-      isServed: Boolean(item.is_served ?? item.kitchen_status === "delivered"),
+      isPendingKitchen: Boolean(item.requires_kitchen !== false && (item.is_pending_kitchen ?? (item.kitchen_status ?? "pending") === "pending")),
+      isInKitchen: Boolean(item.requires_kitchen !== false && (item.is_in_kitchen ?? item.kitchen_status === "sent")),
+      isCompleted: Boolean(item.requires_kitchen !== false && (item.is_completed ?? item.kitchen_status === "ready")),
+      isServed: Boolean(item.requires_kitchen !== false && (item.is_served ?? item.kitchen_status === "delivered")),
     })),
     total: Number(order.total),
     status: order.status,

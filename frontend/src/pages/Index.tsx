@@ -240,7 +240,7 @@ const getPaidExtrasLines = (item: CartItem) =>
     price: modifier.price,
   }));
 
-const isPendingKitchenItem = (item: Order["items"][number]) => (item.kitchenStatus ?? "pending") === "pending";
+const isPendingKitchenItem = (item: Order["items"][number]) => item.requiresKitchen !== false && (item.kitchenStatus ?? "pending") === "pending";
 
 const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
   const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
@@ -261,7 +261,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     assignedName: item.assignedName,
     tableGuestId: item.tableGuestId ?? null,
     unitPriceOverride: item.unitPriceOverride ?? null,
-    requiresKitchen: item.kitchenStatus === "pending",
+    requiresKitchen: item.requiresKitchen !== false,
     modifiers,
   };
 };
@@ -4293,10 +4293,16 @@ type TableConfirmDialogState =
       ), 0)
     ), 0);
   const isTableBillItemPaid = (item: Order["items"][number], payments: Payment[]) => getItemAllocatedCents(item, payments) >= Math.max(getOrderItemTotalCents(item) - 1, 0);
-  const getTableBillItemStatusLabel = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments) ? "Pagado" : getKitchenStatusLabel(item.kitchenStatus);
+  const getTableBillItemStatusLabel = (item: Order["items"][number], payments: Payment[]) => {
+    if (isTableBillItemPaid(item, payments)) return "Pagado";
+    if (item.requiresKitchen === false) return "Sin cocina";
+    return getKitchenStatusLabel(item.kitchenStatus);
+  };
   const getTableBillItemStatusTone = (item: Order["items"][number], payments: Payment[]) => isTableBillItemPaid(item, payments)
     ? "border-violet-300 bg-violet-500/10 text-violet-700 dark:text-violet-200"
-    : getKitchenStatusTone(item.kitchenStatus);
+    : item.requiresKitchen === false
+      ? "border-slate-300 bg-slate-500/10 text-slate-700 dark:text-slate-200"
+      : getKitchenStatusTone(item.kitchenStatus);
   const formatTicketQuantity = (quantity: number) => {
     const value = Number(quantity || 0);
     return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
@@ -4913,6 +4919,7 @@ type TableConfirmDialogState =
                   if (tableBillStatusFilter === "all") return true;
                   if (tableBillStatusFilter === "paid") return paid;
                   if (paid) return false;
+                  if (item.requiresKitchen === false) return false;
                   const status = item.kitchenStatus ?? "pending";
                   if (tableBillStatusFilter === "pending") return status === "pending";
                   if (tableBillStatusFilter === "in_kitchen") return status === "sent";

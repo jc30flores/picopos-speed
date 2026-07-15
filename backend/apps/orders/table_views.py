@@ -154,6 +154,10 @@ def _authorize_table_release_pin(pin: str):
     return None
 
 
+def _kitchen_items_queryset(order: Order):
+    return order.items.filter(product__requires_kitchen=True)
+
+
 def _guest_display_label(guest: TableGuest | None) -> str:
     if not guest:
         return ""
@@ -197,7 +201,12 @@ def _serialize_kitchen_item(item: OrderItem):
 def _serialize_kitchen_session(session: TableSession):
     order = session.primary_order
     table_names = list(session.session_tables.select_related("table").order_by("created_at", "id").values_list("table__name", flat=True))
-    items = list(order.items.select_related("table_guest").prefetch_related("applied_modifiers").order_by("id")) if order else []
+    items = list(
+        _kitchen_items_queryset(order)
+        .select_related("table_guest")
+        .prefetch_related("applied_modifiers")
+        .order_by("id")
+    ) if order else []
     by_person: dict[str, dict] = {}
     for item in items:
         label = (_guest_display_label(item.table_guest) if item.table_guest_id and item.table_guest else "") or item.assigned_name or "Cuenta general"
@@ -225,7 +234,11 @@ def _serialize_ready_session(session: TableSession):
     table_links = list(session.session_tables.select_related("table").order_by("created_at", "id"))
     table_names = [link.table.name for link in table_links]
     ready_items = list(
-        order.items.select_related("table_guest").prefetch_related("applied_modifiers").filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY).order_by("kitchen_ready_at", "id")
+        _kitchen_items_queryset(order)
+        .select_related("table_guest")
+        .prefetch_related("applied_modifiers")
+        .filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY)
+        .order_by("kitchen_ready_at", "id")
     ) if order else []
     group_label = f"Grupo {session.group_number}" if session.group_number else None
     return {
@@ -454,7 +467,7 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         scope = str(request.data.get("scope") or "table").strip().lower()
         if scope not in {"guest", "table"}:
             return Response({"scope": "Usa guest o table."}, status=400)
-        pending_qs = order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+        pending_qs = _kitchen_items_queryset(order).select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
         guest = None
         if scope == "guest":
             if session.order_mode != TableSession.ORDER_MODE_PER_PERSON:
@@ -479,9 +492,9 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
             pending_qs = pending_qs.filter(table_guest=guest)
         pending_items = list(pending_qs)
         if not pending_items:
-            detail = "No hay productos pendientes para enviar."
+            detail = "Orden guardada. No hay productos para cocina."
             if guest:
-                detail = f"No hay productos pendientes para {guest.display_label}."
+                detail = f"Orden guardada. No hay productos para cocina de {guest.display_label}."
             return Response(
                 {
                     "detail": detail,
@@ -521,7 +534,12 @@ class TableKitchenSummaryView(TableMapFeatureGuardMixin, APIView):
         sessions = (
             TableSession.objects.select_related("primary_order")
             .prefetch_related("session_tables__table", "primary_order__items__table_guest", "primary_order__items__applied_modifiers")
-            .filter(status__in=ACTIVE_TABLE_SESSION_STATUSES)
+            .filter(
+                status__in=ACTIVE_TABLE_SESSION_STATUSES,
+                primary_order__items__product__requires_kitchen=True,
+                primary_order__items__kitchen_status__in=KITCHEN_ACTIVE_STATUSES,
+            )
+            .distinct()
             .order_by("-updated_at", "-id")
         )
         return Response({"sessions": [_serialize_kitchen_session(session) for session in sessions]})
@@ -534,7 +552,11 @@ class TableReadySummaryView(TableMapFeatureGuardMixin, APIView):
         sessions = (
             TableSession.objects.select_related("primary_order")
             .prefetch_related("session_tables__table", "primary_order__items__table_guest", "primary_order__items__applied_modifiers")
-            .filter(status__in=ACTIVE_TABLE_SESSION_STATUSES, primary_order__items__kitchen_status=OrderItem.KITCHEN_STATUS_READY)
+            .filter(
+                status__in=ACTIVE_TABLE_SESSION_STATUSES,
+                primary_order__items__product__requires_kitchen=True,
+                primary_order__items__kitchen_status=OrderItem.KITCHEN_STATUS_READY,
+            )
             .distinct()
             .order_by("-updated_at", "-id")
         )
@@ -552,9 +574,11 @@ class TableOrderItemKitchenStatusView(APIView):
 
     @transaction.atomic
     def post(self, request, pk: int, target_status: str):
-        item = OrderItem.objects.select_for_update().select_related("order").filter(id=pk).first()
+        item = OrderItem.objects.select_for_update().select_related("order", "product").filter(id=pk).first()
         if not item:
             return Response({"detail": "Producto no encontrado."}, status=404)
+        if not (item.product_id and item.product and item.product.requires_kitchen):
+            return Response({"detail": "Este producto no va a cocina.", "code": "NOT_FOR_KITCHEN"}, status=400)
         now = timezone.now()
         if target_status == OrderItem.KITCHEN_STATUS_READY:
             if item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
@@ -581,13 +605,7 @@ class TableOrderItemKitchenStatusView(APIView):
                 .filter(primary_order=item.order, status=TableSession.STATUS_SENT_TO_KITCHEN)
                 .first()
             )
-            has_open_kitchen_items = item.order.items.filter(
-                kitchen_status__in=[
-                    OrderItem.KITCHEN_STATUS_PENDING,
-                    OrderItem.KITCHEN_STATUS_SENT,
-                    OrderItem.KITCHEN_STATUS_READY,
-                ]
-            ).exists()
+            has_open_kitchen_items = _kitchen_items_queryset(item.order).filter(kitchen_status__in=KITCHEN_ACTIVE_STATUSES).exists()
             if active_session and not has_open_kitchen_items:
                 active_session.status = TableSession.STATUS_OPEN
                 active_session.save(update_fields=["status", "updated_at"])
@@ -610,7 +628,7 @@ class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
                     item_ids.append(int(value))
                 except (TypeError, ValueError):
                     return Response({"item_ids": "Lista de productos inválida."}, status=400)
-        items_qs = session.primary_order.items.select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY)
+        items_qs = _kitchen_items_queryset(session.primary_order).select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY)
         if item_ids:
             items_qs = items_qs.filter(id__in=item_ids)
         items = list(items_qs)
@@ -621,13 +639,7 @@ class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
             item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
             item.kitchen_delivered_at = item.kitchen_delivered_at or now
             item.save(update_fields=["kitchen_status", "kitchen_delivered_at"])
-        has_open_kitchen_items = session.primary_order.items.filter(
-            kitchen_status__in=[
-                OrderItem.KITCHEN_STATUS_PENDING,
-                OrderItem.KITCHEN_STATUS_SENT,
-                OrderItem.KITCHEN_STATUS_READY,
-            ]
-        ).exists()
+        has_open_kitchen_items = _kitchen_items_queryset(session.primary_order).filter(kitchen_status__in=KITCHEN_ACTIVE_STATUSES).exists()
         if session.status == TableSession.STATUS_SENT_TO_KITCHEN and not has_open_kitchen_items:
             session.status = TableSession.STATUS_OPEN
             session.save(update_fields=["status", "updated_at"])

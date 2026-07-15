@@ -91,19 +91,21 @@ const quickItemsFromOrders = (orders: Order[]): KitchenCardItem[] =>
   orders
     .filter((order) => order.status !== "delivered" && order.status !== "canceled")
     .flatMap((order) =>
-      order.items.map((item) => ({
-        key: `quick-${order.id}-${item.id}`,
-        source: "quick" as const,
-        orderId: order.id,
-        productName: item.productName,
-        quantity: item.quantity,
-        tableLabel: order.tableLabel || `Orden #${order.orderNumber}`,
-        guestLabel: item.assignedName || order.customerName || "Pedido rápido",
-        modifiers: item.modifiers || [],
-        sentAt: item.kitchenSentAt || order.createdAt,
-        status: order.status === "ready" ? "ready" as const : "sent" as const,
-        serviceType: order.serviceType,
-      }))
+      order.items
+        .filter((item) => item.requiresKitchen !== false)
+        .map((item) => ({
+          key: `quick-${order.id}-${item.id}`,
+          source: "quick" as const,
+          orderId: order.id,
+          productName: item.productName,
+          quantity: item.quantity,
+          tableLabel: order.tableLabel || `Orden #${order.orderNumber}`,
+          guestLabel: item.assignedName || order.customerName || "Pedido rápido",
+          modifiers: item.modifiers || [],
+          sentAt: item.kitchenSentAt || order.createdAt,
+          status: order.status === "ready" ? "ready" as const : "sent" as const,
+          serviceType: order.serviceType,
+        }))
     );
 
 const Kitchen = () => {
