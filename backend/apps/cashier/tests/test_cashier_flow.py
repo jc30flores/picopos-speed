@@ -1,16 +1,18 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from datetime import time, timedelta
 import json
 from concurrent.futures import ThreadPoolExecutor
 from rest_framework.test import APIClient
 
-from apps.core.models import Branch, FeatureFlag
+from apps.core.models import Branch, BusinessHoursSettings, FeatureFlag
 from apps.users.models import UserProfile
 from apps.cashier.models import CashSession, Register
 from apps.orders.models import Order
 from apps.cashier.serializers import CashTransactionSerializer
 from apps.cashier.printing import build_end_of_day_ticket_pdf
+from apps.cashier.services.auto_close import maybe_auto_close_expired_cash_sessions
 from apps.dte.models import DTEBranchConfig
 from apps.core.models import ServiceType
 
@@ -22,9 +24,11 @@ class CashierFlowTests(TestCase):
         user = user_model.objects.create_user(username='cash', password='pw')
         self.admin = user_model.objects.create_user(username='admin_cash', password='pw')
         self.manager = user_model.objects.create_user(username='manager_cash', password='pw')
+        self.waiter = user_model.objects.create_user(username='waiter_cash', password='pw')
         UserProfile.objects.create(user=user, role='cashier', is_active=True)
         UserProfile.objects.create(user=self.admin, role='admin', is_active=True)
         UserProfile.objects.create(user=self.manager, role='manager', is_active=True)
+        UserProfile.objects.create(user=self.waiter, role='waiter', is_active=True)
         Branch.objects.create(name='Main', code='MAIN')
         self.service_type = ServiceType.objects.create(key="dine-in", label="En local")
         self.client.force_authenticate(user)
@@ -107,6 +111,27 @@ class CashierFlowTests(TestCase):
         self.assertEqual(current.data.get('has_open_session'), False)
         self.assertIsNone(current.data.get('session'))
 
+    def test_waiter_current_session_does_not_require_cash(self):
+        waiter_client = APIClient()
+        waiter_client.force_authenticate(self.waiter)
+
+        current = waiter_client.get('/api/cashier/session/current/')
+
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data.get('has_open_session'), False)
+        self.assertEqual(current.data.get('can_open_cash'), False)
+        self.assertEqual(current.data.get('can_close_cash'), False)
+        self.assertIn("Mesero", current.data.get("detail", ""))
+
+    def test_waiter_cannot_open_cash_with_spanish_message(self):
+        waiter_client = APIClient()
+        waiter_client.force_authenticate(self.waiter)
+
+        response = waiter_client.post('/api/cashier/session/open/', {'opening_cash_amount': '10.00'}, format='json')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data.get("detail"), "El rol Mesero no puede abrir caja.")
+
     def test_open_session_returns_409_if_register_already_open(self):
         first = self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
         self.assertEqual(first.status_code, 201)
@@ -140,6 +165,10 @@ class CashierFlowTests(TestCase):
         close = self.client.post('/api/cashier/session/close/', {'total_billetes': '95.00', 'total_monedas': '5.00', 'total_contado': '100.00'}, format='json')
         self.assertEqual(close.status_code, 409)
         self.assertEqual(close.data.get("code"), "PENDING_ORDERS_BLOCK_CASH_CLOSE")
+        self.assertEqual(
+            close.data.get("detail"),
+            "No puedes cerrar la caja porque hay 1 cuenta abierta. Resuelve o cobra esas cuentas antes de cerrar.",
+        )
 
     def test_create_expense_ok(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
@@ -216,6 +245,70 @@ class CashierFlowTests(TestCase):
         data = serializer.data
         self.assertEqual(data["payment_id"], 10)
         self.assertIsNone(data["refund_id"])
+
+    def test_auto_close_expired_cash_session_without_open_orders(self):
+        branch = Branch.objects.first()
+        register = Register.objects.create(name="Auto cierre", branch=branch)
+        session = CashSession.objects.create(register=register, opened_by=self.admin, opening_cash="25.00")
+        opened_at = timezone.now() - timedelta(days=2)
+        CashSession.objects.filter(pk=session.pk).update(opened_at=opened_at)
+        BusinessHoursSettings.objects.update_or_create(
+            pk=1,
+            defaults={
+                "business_hours_enabled": True,
+                "auto_close_cash_enabled": True,
+                "opening_time": time(8, 0),
+                "closing_time": time(22, 0),
+                "grace_hours_after_close": 4,
+                "timezone": "America/El_Salvador",
+            },
+        )
+
+        result = maybe_auto_close_expired_cash_sessions(now=timezone.now())
+
+        session.refresh_from_db()
+        self.assertEqual(result["closed"], 1)
+        self.assertEqual(session.status, "closed")
+        self.assertEqual(session.close_type, CashSession.CLOSE_TYPE_AUTOMATIC_AFTER_HOURS)
+        self.assertEqual(str(session.closing_counted_cash), "0.00")
+        self.assertIn("Cierre automático por horario de atención", session.notes)
+
+    def test_auto_close_skips_expired_cash_session_with_open_orders(self):
+        branch = Branch.objects.first()
+        register = Register.objects.create(name="Auto cierre bloqueado", branch=branch)
+        session = CashSession.objects.create(register=register, opened_by=self.admin, opening_cash="25.00")
+        CashSession.objects.filter(pk=session.pk).update(opened_at=timezone.now() - timedelta(days=2))
+        BusinessHoursSettings.objects.update_or_create(
+            pk=1,
+            defaults={
+                "business_hours_enabled": True,
+                "auto_close_cash_enabled": True,
+                "opening_time": time(8, 0),
+                "closing_time": time(22, 0),
+                "grace_hours_after_close": 4,
+                "timezone": "America/El_Salvador",
+            },
+        )
+        Order.objects.create(
+            order_number=1002,
+            branch=branch,
+            service_type=self.service_type,
+            status="waiting_payment",
+            payment_status="unpaid",
+            subtotal="10.00",
+            tax="0.00",
+            total="10.00",
+            is_pending=True,
+            pending_state="pending_payment",
+        )
+
+        result = maybe_auto_close_expired_cash_sessions(now=timezone.now())
+
+        session.refresh_from_db()
+        self.assertEqual(result["closed"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(session.status, "open")
+        self.assertEqual(result["details"][0]["message"], "Cierre automático omitido: existen cuentas abiertas.")
 
     def test_close_and_ticket_pdf(self):
         self.client.post('/api/cashier/session/open/', {'opening_cash_amount': '100.00'}, format='json')
