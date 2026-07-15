@@ -650,11 +650,21 @@ class PendingOrderToggleView(generics.GenericAPIView):
                     order.total,
                     len(items_data),
                 )
-            if not order.items.exists() or _to_money(order.total) <= Decimal("0.00") or int(order.amount_due_cents or 0) <= 0:
-                return Response(
-                    {"detail": "No se puede guardar una orden abierta sin productos o con total $0.00."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            if not order.items.exists():
+                order.is_pending = False
+                order.pending_state = "none"
+                order.pending_completed_at = timezone.localtime(timezone.now())
+                order.pending_completion_type = "removed"
+                order.pending_completion_note = "Orden vacía descartada."
+                order.save(update_fields=[
+                    "is_pending",
+                    "pending_state",
+                    "pending_completed_at",
+                    "pending_completion_type",
+                    "pending_completion_note",
+                    "updated_at",
+                ])
+                return Response(OrderSerializer(order).data)
             order.is_pending = True
             order.pending_state = pending_state
             if not order.pending_reference:
