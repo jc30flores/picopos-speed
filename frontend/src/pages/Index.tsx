@@ -5320,6 +5320,130 @@ type TableConfirmDialogState =
             </div>
           </DialogContent>
         </Dialog>
+
+        <Dialog
+          open={isCustomerDteOpen}
+          onOpenChange={(open) => {
+            setIsCustomerDteOpen(open);
+            if (!open) setIsCustomerPickerOpen(false);
+          }}
+        >
+          <DialogContent className="w-[95vw] max-w-xl">
+            <DialogHeader>
+              <DialogTitle>{dteEnabled ? "Cliente / DTE" : "Cliente"}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              {dteEnabled ? (
+                <div className="space-y-2">
+                  <Label>Tipo DTE</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CF" ? "default" : "outline"} onClick={() => setDteDocumentType("CF")}>CF</Button>
+                    <Button type="button" className="h-12 w-full min-w-0 text-sm sm:h-14 sm:text-base" variant={dteDocumentType === "CCF" ? "default" : "outline"} onClick={() => setDteDocumentType("CCF")}>CCF</Button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <Label>Cliente</Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-12 w-full min-w-0 justify-start overflow-hidden text-sm sm:h-14 sm:text-base"
+                    onClick={() => {
+                      setIsCustomerPickerOpen(true);
+                      setCustomerSearch("");
+                    }}
+                  >
+                    <span className="block w-full min-w-0 truncate text-left">
+                      {selectedCustomer ? `${selectedCustomer.fullName} (${selectedCustomer.clientType})` : "Selecciona cliente"}
+                    </span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-12 w-full min-w-[132px] shrink-0 text-sm sm:h-14 sm:w-auto sm:px-5 sm:text-base"
+                    disabled={!defaultConsumerCustomer}
+                    onClick={() => {
+                      if (defaultConsumerCustomer) setSelectedCustomerId(String(defaultConsumerCustomer.id));
+                    }}
+                  >
+                    Consumidor final
+                  </Button>
+                </div>
+              </div>
+              <WhatsAppPhoneInput
+                label="Número extra del cliente que se mostrará en WhatsApp"
+                helpText="Este número solo se usará para el mensaje 'Número del cliente'. No reemplaza el teléfono fiscal del DTE ni el número destino de WhatsApp."
+                country={whatsappClientCountry}
+                onCountryChange={(nextCountry) => {
+                  setWhatsappClientCountry(nextCountry);
+                  setWhatsappClientError("");
+                }}
+                value={whatsappClientInput}
+                onValueChange={(nextValue) => {
+                  setWhatsappClientError("");
+                  setWhatsappClientInput(nextValue);
+                }}
+                error={whatsappClientError}
+              />
+              {dteDocumentType === "CF" && selectedCustomer?.isIvaExempt ? (
+                <div className="rounded-md border gp-primary-border gp-primary-soft p-3 text-sm">
+                  <p className="font-medium">Cliente exento de IVA</p>
+                  <p className="text-xs text-muted-foreground">El DTE se generará como venta exenta, sin IVA.</p>
+                </div>
+              ) : null}
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" variant="outline" onClick={() => setIsCustomerDteOpen(false)}>Cancelar</Button>
+                <Button className="h-12 flex-1 text-sm sm:h-14 sm:text-base" onClick={() => void handleAcceptCustomerDte()}>Aceptar</Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isCustomerPickerOpen} onOpenChange={setIsCustomerPickerOpen}>
+          <DialogContent className="w-[92vw] max-w-lg rounded-2xl p-5">
+            <DialogHeader>
+              <DialogTitle>Seleccionar cliente</DialogTitle>
+              <DialogDescription>Busca por nombre, email, teléfono o documento.</DialogDescription>
+            </DialogHeader>
+            <Input
+              autoFocus
+              placeholder="Buscar cliente..."
+              value={customerSearch}
+              onChange={(event) => setCustomerSearch(event.target.value)}
+              className="h-12"
+            />
+            <div className="max-h-72 space-y-2 overflow-y-auto">
+              {visibleCustomers.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">Sin resultados</p>
+              ) : (
+                visibleCustomers.map((customer) => (
+                  <Button
+                    key={customer.id}
+                    type="button"
+                    variant={String(customer.id) === selectedCustomerId ? "default" : "outline"}
+                    className="h-12 w-full justify-start text-left"
+                    onClick={() => {
+                      setSelectedCustomerId(String(customer.id));
+                      setIsCustomerPickerOpen(false);
+                    }}
+                  >
+                    <span className="truncate">{customer.fullName}</span>
+                    <span className="ml-2 text-xs opacity-80">({customer.clientType})</span>
+                  </Button>
+                ))
+              )}
+            </div>
+            {filteredCustomers.length > visibleCustomers.length ? (
+              <p className="text-xs text-muted-foreground">
+                Refina tu búsqueda (mostrando 4 de {filteredCustomers.length})
+              </p>
+            ) : null}
+            {!normalizedCustomerSearch && customersByDte.length > visibleCustomers.length ? (
+              <p className="text-xs text-muted-foreground">Mostrando 4 de {customersByDte.length}</p>
+            ) : null}
+          </DialogContent>
+        </Dialog>
         <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
