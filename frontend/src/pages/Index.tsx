@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -105,6 +105,7 @@ import {
   releaseTableSession,
   forceReleaseTableSession,
   sendTableSessionToKitchen,
+  renameTableSessionGuest,
   getTableKitchenSummary,
   markTableKitchenItemReady,
   markTableKitchenItemDelivered,
@@ -582,6 +583,7 @@ type TableConfirmDialogState =
   const [thermalTicketWidth, setThermalTicketWidth] = useState<"58mm" | "80mm">("58mm");
   const [thermalTicket, setThermalTicket] = useState<ThermalTicketState>({ open: false, title: "", subtitle: "", text: "", logoUrl: null });
   const [tableOrderContext, setTableOrderContext] = useState<{ sessionId: number; tableLabel: string; orderMode: "table" | "per_person"; guests: TableSession["guests"]; activeGuestId: number | null; activeGuestLabel: string | null } | null>(null);
+  const [guestNameDialog, setGuestNameDialog] = useState<{ open: boolean; guest: TableSession["guests"][number] | null; name: string; loading: boolean }>({ open: false, guest: null, name: "", loading: false });
   const [tableKitchenSendDialog, setTableKitchenSendDialog] = useState<{ open: boolean; pendingGuestCount: number }>({ open: false, pendingGuestCount: 0 });
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
@@ -595,6 +597,8 @@ type TableConfirmDialogState =
   const [opsMenuPosition, setOpsMenuPosition] = useState<{ left: number; top: number; maxHeight: number; width: number; isSheet: boolean }>({ left: 16, top: 16, maxHeight: 560, width: 320, isSheet: false });
   const [viewportReflowTick, setViewportReflowTick] = useState(0);
   const longPressOpsRef = useRef<number | null>(null);
+  const guestLongPressTimerRef = useRef<number | null>(null);
+  const guestLongPressTriggeredRef = useRef(false);
   const tablePaymentOpenRequestRef = useRef(0);
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
   const tableAutoSaveSignatureRef = useRef("");
@@ -845,6 +849,100 @@ type TableConfirmDialogState =
       activeGuestLabel: firstGuest?.label ?? null,
     });
   }, [restaurantTables]);
+
+  const clearGuestLongPressTimer = useCallback(() => {
+    if (guestLongPressTimerRef.current) {
+      window.clearTimeout(guestLongPressTimerRef.current);
+      guestLongPressTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearGuestLongPressTimer, [clearGuestLongPressTimer]);
+
+  const openGuestNameDialog = useCallback((guest: TableSession["guests"][number]) => {
+    clearGuestLongPressTimer();
+    guestLongPressTriggeredRef.current = true;
+    setGuestNameDialog({ open: true, guest, name: "", loading: false });
+  }, [clearGuestLongPressTimer]);
+
+  const syncRenamedTableGuest = useCallback((session: TableSession, guest: TableSession["guests"][number]) => {
+    upsertTableSession(session);
+    setTableOrderContext((previous) => {
+      if (!previous || previous.sessionId !== session.id) return previous;
+      const guests = previous.guests.map((row) => row.id === guest.id ? guest : row);
+      return {
+        ...previous,
+        guests,
+        activeGuestLabel: previous.activeGuestId === guest.id ? guest.label : previous.activeGuestLabel,
+      };
+    });
+    setCart((previous) => previous.map((item) => (
+      item.tableGuestId === guest.id ? { ...item, assignedName: guest.label } : item
+    )));
+    setActiveOrder((previous) => previous ? {
+      ...previous,
+      items: previous.items.map((item) => (
+        item.tableGuestId === guest.id
+          ? { ...item, assignedName: guest.label, guestLabel: guest.label, tableGuestLabel: guest.label }
+          : item
+      )),
+    } : previous);
+    setTableBillDialog((previous) => {
+      if (!previous.session || previous.session.id !== session.id) return previous;
+      return {
+        ...previous,
+        session,
+        order: previous.order ? {
+          ...previous.order,
+          items: previous.order.items.map((item) => (
+            item.tableGuestId === guest.id
+              ? { ...item, assignedName: guest.label, guestLabel: guest.label, tableGuestLabel: guest.label }
+              : item
+          )),
+        } : previous.order,
+      };
+    });
+  }, [upsertTableSession]);
+
+  const startGuestLongPress = useCallback((guest: TableSession["guests"][number], event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    clearGuestLongPressTimer();
+    guestLongPressTriggeredRef.current = false;
+    guestLongPressTimerRef.current = window.setTimeout(() => openGuestNameDialog(guest), 600);
+  }, [clearGuestLongPressTimer, openGuestNameDialog]);
+
+  const handleGuestContextMenu = useCallback((guest: TableSession["guests"][number], event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    openGuestNameDialog(guest);
+  }, [openGuestNameDialog]);
+
+  const selectTableGuest = useCallback((guest: TableSession["guests"][number]) => {
+    if (guestLongPressTriggeredRef.current) {
+      guestLongPressTriggeredRef.current = false;
+      return;
+    }
+    setTableOrderContext((previous) => previous ? { ...previous, activeGuestId: guest.id, activeGuestLabel: guest.label } : previous);
+  }, []);
+
+  const saveGuestName = useCallback(async (name: string) => {
+    if (!tableOrderContext || !guestNameDialog.guest || guestNameDialog.loading) return;
+    const guest = guestNameDialog.guest;
+    const trimmed = name.trim();
+    if (trimmed.length > 40) {
+      toast.error("El nombre debe tener máximo 40 caracteres.");
+      return;
+    }
+    setGuestNameDialog((previous) => ({ ...previous, loading: true }));
+    try {
+      const result = await renameTableSessionGuest(tableOrderContext.sessionId, guest.seatNumber, trimmed);
+      syncRenamedTableGuest(result.session, result.guest);
+      setGuestNameDialog({ open: false, guest: null, name: "", loading: false });
+      toast.success(trimmed ? "Nombre asignado." : "Nombre eliminado.");
+    } catch (error) {
+      setGuestNameDialog((previous) => ({ ...previous, loading: false }));
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar el nombre.");
+    }
+  }, [guestNameDialog.guest, guestNameDialog.loading, syncRenamedTableGuest, tableOrderContext]);
 
   const getGuestItems = useCallback((order: Order, guest: TableSession["guests"][number]) => {
     return (order.items || []).filter((item) => {
@@ -5268,7 +5366,12 @@ type TableConfirmDialogState =
                           type="button"
                           size="sm"
                           variant={tableOrderContext.activeGuestId === guest.id ? "default" : "outline"}
-                          onClick={() => setTableOrderContext((previous) => previous ? { ...previous, activeGuestId: guest.id, activeGuestLabel: guest.label } : previous)}
+                          onPointerDown={(event) => startGuestLongPress(guest, event)}
+                          onPointerUp={clearGuestLongPressTimer}
+                          onPointerLeave={clearGuestLongPressTimer}
+                          onPointerCancel={clearGuestLongPressTimer}
+                          onContextMenu={(event) => handleGuestContextMenu(guest, event)}
+                          onClick={() => selectTableGuest(guest)}
                         >
                           {guest.label}
                         </Button>
@@ -5294,6 +5397,38 @@ type TableConfirmDialogState =
                 </div>
               </Card>
             ) : null}
+
+            <Dialog
+              open={guestNameDialog.open}
+              onOpenChange={(open) => {
+                if (guestNameDialog.loading) return;
+                setGuestNameDialog(open ? (previous) => ({ ...previous, open }) : { open: false, guest: null, name: "", loading: false });
+              }}
+            >
+              <DialogContent className="w-[min(92vw,24rem)] rounded-2xl p-5">
+                <DialogHeader>
+                  <DialogTitle>Nombre de persona</DialogTitle>
+                </DialogHeader>
+                <Input
+                  autoFocus
+                  value={guestNameDialog.name}
+                  placeholder="Ej: Carlos, Niño, Mesa jefe"
+                  maxLength={40}
+                  onChange={(event) => setGuestNameDialog((previous) => ({ ...previous, name: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void saveGuestName(guestNameDialog.name);
+                  }}
+                />
+                <DialogFooter className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+                  <Button type="button" variant="outline" disabled={guestNameDialog.loading} onClick={() => void saveGuestName("")}>
+                    Borrar
+                  </Button>
+                  <Button type="button" disabled={guestNameDialog.loading} onClick={() => void saveGuestName(guestNameDialog.name)}>
+                    {guestNameDialog.loading ? "Guardando..." : "Asignar"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Search & Filters */}
             <Card className="p-4">
