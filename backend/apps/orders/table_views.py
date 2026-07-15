@@ -468,6 +468,11 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
         if scope not in {"guest", "table"}:
             return Response({"scope": "Usa guest o table."}, status=400)
         pending_qs = _kitchen_items_queryset(order).select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+        non_kitchen_pending_qs = (
+            order.items.select_for_update()
+            .filter(kitchen_status=OrderItem.KITCHEN_STATUS_PENDING)
+            .filter(Q(product__requires_kitchen=False) | Q(product__isnull=True))
+        )
         guest = None
         if scope == "guest":
             if session.order_mode != TableSession.ORDER_MODE_PER_PERSON:
@@ -490,8 +495,10 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
             if guest is None:
                 return Response({"guest_number": "Selecciona una persona válida de la mesa."}, status=400)
             pending_qs = pending_qs.filter(table_guest=guest)
+            non_kitchen_pending_qs = non_kitchen_pending_qs.filter(table_guest=guest)
         pending_items = list(pending_qs)
-        if not pending_items:
+        non_kitchen_pending_items = list(non_kitchen_pending_qs)
+        if not pending_items and not non_kitchen_pending_items:
             detail = "Orden guardada. No hay productos para cocina."
             if guest:
                 detail = f"Orden guardada. No hay productos para cocina de {guest.display_label}."
@@ -506,21 +513,32 @@ class TableSessionSendToKitchenView(TableMapFeatureGuardMixin, APIView):
                 status=status.HTTP_200_OK,
             )
         now = timezone.now()
+        for item in non_kitchen_pending_items:
+            item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
+            item.kitchen_delivered_at = now
+            item.save(update_fields=["kitchen_status", "kitchen_delivered_at"])
         for item in pending_items:
             item.kitchen_status = OrderItem.KITCHEN_STATUS_SENT
             item.kitchen_sent_at = now
             item.save(update_fields=["kitchen_status", "kitchen_sent_at"])
-        order.send_to_kitchen = True
-        order.pending_state = "in_kitchen"
-        order.save(update_fields=["send_to_kitchen", "pending_state", "updated_at"])
-        session.status = "sent_to_kitchen"
-        session.save(update_fields=["status", "updated_at"])
-        detail = f"{len(pending_items)} productos enviados a cocina."
-        if guest:
-            detail = f"Productos de {guest.display_label} enviados a cocina."
+        if pending_items:
+            order.send_to_kitchen = True
+            order.pending_state = "in_kitchen"
+            order.save(update_fields=["send_to_kitchen", "pending_state", "updated_at"])
+            session.status = "sent_to_kitchen"
+            session.save(update_fields=["status", "updated_at"])
+        if pending_items:
+            detail = f"{len(pending_items)} productos enviados a cocina."
+            if guest:
+                detail = f"Productos de {guest.display_label} enviados a cocina."
+        else:
+            detail = "Orden guardada. No hay productos para cocina."
+            if guest:
+                detail = f"Orden guardada. No hay productos para cocina de {guest.display_label}."
         return Response({
             "detail": detail,
             "sent_count": len(pending_items),
+            "saved_count": len(non_kitchen_pending_items),
             "session": TableSessionSerializer(session).data,
             "order": OrderSerializer(order).data,
             "summary": _serialize_kitchen_session(session),

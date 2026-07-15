@@ -9,7 +9,7 @@ from rest_framework import generics, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import IsAdminOrManager, IsCashierOrManagerOrAdmin
+from apps.core.permissions import CanAccessTablePos, IsAdminOrManager, IsCashierOrManagerOrAdmin
 from apps.orders.models import Order
 from apps.inventory.models import (
     CatalogProductInventoryLink,
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class CartInventoryAvailabilityView(APIView):
-    permission_classes = [IsCashierOrManagerOrAdmin]
+    permission_classes = [CanAccessTablePos]
 
     def post(self, request):
         cart_items = request.data.get("cart_items") or []
