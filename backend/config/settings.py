@@ -107,6 +107,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.core.middleware.SessionSecurityMiddleware",
     "apps.core.middleware.RolePathAccessMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -234,6 +235,11 @@ CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE", default=not DEBUG)
 SESSION_COOKIE_SAMESITE = _env_str("SESSION_COOKIE_SAMESITE", "Lax")
 CSRF_COOKIE_SAMESITE = _env_str("CSRF_COOKIE_SAMESITE", "Lax")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
+GASTROPOSV_IDLE_TIMEOUT_SECONDS = _env_int("GASTROPOSV_IDLE_TIMEOUT_SECONDS", 600) or 600
+GASTROPOSV_SESSION_MAX_AGE_SECONDS = _env_int("GASTROPOSV_SESSION_MAX_AGE_SECONDS", 43200) or 43200
+GASTROPOSV_SESSION_EXPIRE_AT_BROWSER_CLOSE = _env_bool("GASTROPOSV_SESSION_EXPIRE_AT_BROWSER_CLOSE", default=False)
+SESSION_COOKIE_AGE = GASTROPOSV_SESSION_MAX_AGE_SECONDS
+SESSION_EXPIRE_AT_BROWSER_CLOSE = GASTROPOSV_SESSION_EXPIRE_AT_BROWSER_CLOSE
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 
 PRINT_WIDTH = 42

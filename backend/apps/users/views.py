@@ -12,6 +12,7 @@ from rest_framework.parsers import JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
+from apps.core.session_security import initialize_session_security
 from apps.users.models import UserProfile
 from apps.users.pin_utils import find_active_users_matching_pin, is_valid_pin_format, user_matches_pin
 
@@ -136,6 +137,7 @@ def login_view(request):
 
         cache.delete(throttle_key)
         login(request, user)
+        initialize_session_security(request)
         return _json_response(_build_auth_payload(user, profile.role))
     except Exception:  # noqa: BLE001
         logger.exception("auth.login.failed")
@@ -192,6 +194,7 @@ def pin_login_view(request):
 
         cache.delete(throttle_key)
         login(request, user)
+        initialize_session_security(request)
         session_key = getattr(request.session, "session_key", None)
         cookie_name = getattr(getattr(request, "session", None), "cookie_name", "sessionid")
         logger.info(
@@ -214,8 +217,7 @@ def pin_login_view(request):
 @renderer_classes([JSONRenderer])
 def logout_view(request):
     try:
-        if request.user.is_authenticated:
-            logout(request)
+        logout(request)
         return Response(status=status.HTTP_204_NO_CONTENT, content_type="application/json")
     except Exception:  # noqa: BLE001
         logger.exception("auth.logout.failed")

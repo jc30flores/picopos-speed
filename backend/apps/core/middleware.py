@@ -3,7 +3,25 @@ from __future__ import annotations
 from django.http import JsonResponse
 
 from apps.core.role_access import is_api_path_allowed_for_role
+from apps.core.session_security import (
+    is_session_security_exempt_path,
+    session_expired_response,
+    validate_session_security,
+)
 from apps.users.models import UserProfile
+
+
+class SessionSecurityMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and not is_session_security_exempt_path(request.path):
+            result = validate_session_security(request)
+            if result.expired:
+                return session_expired_response(request, result)
+        return self.get_response(request)
 
 
 class RolePathAccessMiddleware:
