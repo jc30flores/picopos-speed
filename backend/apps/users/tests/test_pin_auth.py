@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.core.session_security import SESSION_LAST_ACTIVITY_KEY, SESSION_LOGIN_AT_KEY
 from apps.users.models import UserProfile
 
 
@@ -119,6 +121,9 @@ class SessionAuthFlowTests(TestCase):
         response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 200)
         self.assertIn("sessionid", self.client.cookies)
+        session = self.client.session
+        self.assertIsNotNone(session.get(SESSION_LOGIN_AT_KEY))
+        self.assertIsNotNone(session.get(SESSION_LAST_ACTIVITY_KEY))
 
     def test_me_requires_auth_and_works_after_login(self):
         unauth = self.client.get("/api/auth/me/")
@@ -131,6 +136,66 @@ class SessionAuthFlowTests(TestCase):
         me_response = self.client.get("/api/auth/me/")
         self.assertEqual(me_response.status_code, 200)
         self.assertEqual(me_response.json().get("username"), "pin_session")
+
+    def test_authenticated_request_updates_last_activity_inside_limits(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+        session = self.client.session
+        previous_activity = int(timezone.now().timestamp()) - 30
+        session[SESSION_LAST_ACTIVITY_KEY] = previous_activity
+        session.save()
+
+        me_response = self.client.get("/api/auth/me/")
+        self.assertEqual(me_response.status_code, 200)
+        refreshed_session = self.client.session
+        self.assertGreaterEqual(refreshed_session[SESSION_LAST_ACTIVITY_KEY], previous_activity)
+
+    def test_idle_timeout_expires_backend_session(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+        session = self.client.session
+        session[SESSION_LAST_ACTIVITY_KEY] = int(timezone.now().timestamp()) - 601
+        session.save()
+
+        response = self.client.get("/api/auth/me/")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json().get("code"), "idle_timeout")
+        self.assertEqual(response.json().get("detail"), "Tu sesión se cerró por inactividad.")
+
+    def test_absolute_session_age_expires_even_with_recent_activity(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+        session = self.client.session
+        now = int(timezone.now().timestamp())
+        session[SESSION_LOGIN_AT_KEY] = now - 43201
+        session[SESSION_LAST_ACTIVITY_KEY] = now
+        session.save()
+
+        response = self.client.get("/api/auth/me/")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json().get("code"), "max_session_age")
+        self.assertEqual(response.json().get("detail"), "Tu sesión venció por seguridad. Ingresa nuevamente.")
+
+    def test_week_old_session_is_not_accepted(self):
+        token = self._ensure_csrf()
+        login_response = self.client.post("/api/auth/pin-login/", {"pin": "012345"}, format="json", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login_response.status_code, 200)
+        session = self.client.session
+        now = int(timezone.now().timestamp())
+        session[SESSION_LOGIN_AT_KEY] = now - 7 * 24 * 60 * 60
+        session[SESSION_LAST_ACTIVITY_KEY] = now
+        session.save()
+
+        response = self.client.get("/api/auth/me/")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json().get("code"), "max_session_age")
+
+    def test_public_endpoint_does_not_require_session_security(self):
+        response = self.client.get("/api/public/pwa/metadata/")
+        self.assertEqual(response.status_code, 200)
 
     def test_pin_login_and_me_return_stable_contract(self):
         token = self._ensure_csrf()
