@@ -520,10 +520,13 @@ type TableConfirmDialogState =
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const urlMode = String(searchParams.get("mode") || "").trim().toLowerCase();
+  const pendingOrderIdFromUrl = Number(searchParams.get("pending_order_id") || "0");
+  const hasPendingOrderParam = pendingOrderIdFromUrl > 0 && Number.isFinite(pendingOrderIdFromUrl);
   const hasTableSessionParam = Boolean(searchParams.get("session_id"));
   const isQuickPosRequested = urlMode === "quick";
   const isTablePosRequested = TABLE_POS_URL_MODES.has(urlMode) || hasTableSessionParam;
-  const isTableFlowMode = isTablePosRequested || ["table_order", "edit", "pay"].includes(urlMode);
+  const isTableOrderRoute = hasPendingOrderParam && ["edit", "pay"].includes(urlMode);
+  const isTableFlowMode = isTablePosRequested || isTableOrderRoute || urlMode === "table_order";
   const [selectedCategory, setSelectedCategory] = useState("Todos");
   const [searchQuery, setSearchQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -693,6 +696,7 @@ type TableConfirmDialogState =
   const waiterQuickRedirectShownRef = useRef(false);
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
   const tableAutoSaveSignatureRef = useRef("");
+  const userRequestedBackToTablesRef = useRef(false);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -1129,6 +1133,7 @@ type TableConfirmDialogState =
     const tableServiceType = getTableServiceTypeKey(serviceTypes);
     if (tableServiceType) setServiceType(tableServiceType);
     if (session.primaryOrder) {
+      userRequestedBackToTablesRef.current = false;
       setPosMode("pos");
       navigate(`/pos?pending_order_id=${session.primaryOrder}&mode=${mode}`, { state: { fromOpenOrders: true, tableSession: session, tableId } });
     }
@@ -1590,11 +1595,9 @@ type TableConfirmDialogState =
       setIsPendingChoiceOpen(false);
       return;
     }
-    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
-    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
-    const cameFromPendingParams = pendingOrderId > 0 && Number.isFinite(pendingOrderId);
+    const cameFromPendingParams = hasPendingOrderParam;
     const cameFromOpenOrdersNavigation = Boolean((location.state as { fromOpenOrders?: boolean } | null)?.fromOpenOrders);
-    const shouldSuppressPendingChoice = cameFromPendingParams || mode === "edit" || mode === "pay" || cameFromOpenOrdersNavigation;
+    const shouldSuppressPendingChoice = cameFromPendingParams || urlMode === "edit" || urlMode === "pay" || cameFromOpenOrdersNavigation;
     getPendingOrders({ branchId: selectedBranchId || undefined })
       .then((res) => {
         setPendingOrdersCount(res.count);
@@ -1607,7 +1610,7 @@ type TableConfirmDialogState =
       .catch(() => {
         setPendingOrdersCount(0);
       });
-  }, [canShowOpenOrdersChoice, isWaiterRole, location.state, searchParams, selectedBranchId]);
+  }, [canShowOpenOrdersChoice, hasPendingOrderParam, isWaiterRole, location.state, selectedBranchId, urlMode]);
 
   useEffect(() => {
     const state = location.state as { tableSession?: TableSession; tableId?: number } | null;
@@ -1623,11 +1626,13 @@ type TableConfirmDialogState =
   }, [location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
-    const pendingOrderId = Number(searchParams.get("pending_order_id") || "0");
-    const mode = String(searchParams.get("mode") || "").trim().toLowerCase();
+    const pendingOrderId = pendingOrderIdFromUrl;
+    const mode = urlMode;
     if (!pendingOrderId || !Number.isFinite(pendingOrderId)) return;
     if (hydratedPendingOrderIdRef.current === pendingOrderId) return;
     hydratedPendingOrderIdRef.current = pendingOrderId;
+    userRequestedBackToTablesRef.current = false;
+    setPosMode("pos");
     setCart([]);
     setCheckoutDraft(null);
     setSelectedDiscount(null);
@@ -1703,10 +1708,9 @@ type TableConfirmDialogState =
           setIsPaymentOpen(false);
           setIsPaymentMethodOpen(false);
         }
-        navigate("/pos", { replace: true, state: { fromOpenOrders: true } });
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo retomar la orden pendiente."));
-  }, [location.state, navigate, searchParams, serviceType, taxRate, products, serviceTypes]);
+  }, [location.state, pendingOrderIdFromUrl, serviceType, taxRate, products, serviceTypes, urlMode]);
 
   useEffect(() => {
     if (!serviceTypes.length) return;
@@ -2728,6 +2732,7 @@ type TableConfirmDialogState =
       const shouldUseTableRequest = isTablePosRequested && canUseTableMap;
       const shouldForceTablesForWaiter = isWaiterRole && canUseTableMap;
       const shouldUseTables = shouldForceTablesForWaiter || shouldUseTableRequest || (canUseTableMap && !shouldUseQuickPos && settings.defaultPosEntry === "table_map");
+      const shouldPreserveTableProductView = isTableOrderRoute && !userRequestedBackToTablesRef.current;
       setInventoryStockPolicy(settings.inventoryStockPolicy);
       setPosProductImagesEnabled(settings.posProductImagesEnabled);
       setOperationMode(settings.operationMode);
@@ -2736,7 +2741,7 @@ type TableConfirmDialogState =
       setAllowSplitByGuest(settings.allowSplitByGuest);
       setAllowSplitByItem(settings.allowSplitByItem);
       setTableMapEnabled(canUseTableMap);
-      setPosMode(shouldUseTables ? "tables" : "pos");
+      setPosMode(shouldPreserveTableProductView ? "pos" : shouldUseTables ? "tables" : "pos");
       if (isWaiterRole && isQuickPosRequested && !waiterQuickRedirectShownRef.current) {
         waiterQuickRedirectShownRef.current = true;
         toast.info("Tu usuario puede tomar órdenes en mesas, pero no cobrar en POS rápido.");
@@ -2776,7 +2781,7 @@ type TableConfirmDialogState =
     return () => {
       window.removeEventListener("cash:required", forceCashGate as EventListener);
     };
-  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested, isTablePosRequested, isWaiterRole, navigate]);
+  }, [canManageCashOperations, cashCloseFlowState, isQuickPosRequested, isTableOrderRoute, isTablePosRequested, isWaiterRole, navigate]);
 
   const refreshPaymentMethods = useCallback(() => {
     if (!canCollectTablePayments) {
@@ -3421,13 +3426,19 @@ type TableConfirmDialogState =
     clearPersistedDraft();
   };
 
+  const showTableMapAfterTableEdit = () => {
+    userRequestedBackToTablesRef.current = true;
+    setPosMode("tables");
+    navigate("/pos?mode=tables", { replace: true });
+  };
+
   const saveTableOrder = async ({ returnToMap }: { returnToMap: boolean }) => {
     if (!tableOrderContext || isSendingToPending) return;
     if (!activeOrder) {
       if (returnToMap) {
         resetTableOrderDraft();
         setTableOrderContext(null);
-        setPosMode("tables");
+        showTableMapAfterTableEdit();
       }
       return;
     }
@@ -3435,7 +3446,7 @@ type TableConfirmDialogState =
       if (returnToMap) {
         resetTableOrderDraft();
         setTableOrderContext(null);
-        setPosMode("tables");
+        showTableMapAfterTableEdit();
       }
       return;
     }
@@ -3451,7 +3462,7 @@ type TableConfirmDialogState =
       if (returnToMap) {
         resetTableOrderDraft();
         setTableOrderContext(null);
-        setPosMode("tables");
+        showTableMapAfterTableEdit();
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo guardar la orden de mesa.");
@@ -3517,7 +3528,7 @@ type TableConfirmDialogState =
     }
     resetTableOrderDraft();
     setTableOrderContext(null);
-    setPosMode("tables");
+    showTableMapAfterTableEdit();
     void refreshTableSessions();
   };
 
@@ -4653,7 +4664,7 @@ type TableConfirmDialogState =
     if (tableMapDragRef.current?.pointerId === event.pointerId) tableMapDragRef.current = null;
   };
 
-  const shouldShowPosModeLoading = !runtimeSettingsLoaded && !isQuickPosRequested && !isTablePosRequested && !tableOrderContext;
+  const shouldShowPosModeLoading = !runtimeSettingsLoaded && !isQuickPosRequested && !isTableFlowMode && !tableOrderContext;
   if (shouldShowPosModeLoading) {
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background">
