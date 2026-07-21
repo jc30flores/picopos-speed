@@ -94,6 +94,7 @@ const Login = () => {
   }, [clearPinState, loginWithPin, navigate]);
 
   const setAndMaybeSubmitPin = useCallback((nextValue: string) => {
+    if (loginInFlightRef.current) return;
     const nextPin = sanitizePin(nextValue);
     pinRef.current = nextPin;
     setPin(nextPin);
