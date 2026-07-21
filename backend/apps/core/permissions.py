@@ -174,6 +174,10 @@ class CanManageKitchenItems(BasePermission):
     message = "No tienes permiso para operar cocina."
 
     def has_permission(self, request, view):
+        if user_is_waiter(request.user):
+            self.message = "El rol Mesero solo puede visualizar cocina."
+            return False
+        self.message = "No tienes permiso para operar cocina."
         return user_can_manage_kitchen_items(request.user)
 
 

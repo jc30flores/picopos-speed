@@ -181,6 +181,12 @@ def _lock_pending_table_order_items(order: Order, guest: TableGuest | None = Non
     return kitchen_items, non_kitchen_items
 
 
+def _product_requires_kitchen(product_id: int | None) -> bool:
+    if not product_id:
+        return False
+    return Product.objects.filter(id=product_id, requires_kitchen=True).exists()
+
+
 def _guest_display_label(guest: TableGuest | None) -> str:
     if not guest:
         return ""
@@ -609,23 +615,34 @@ class TableOrderItemKitchenStatusView(APIView):
 
     @transaction.atomic
     def post(self, request, pk: int, target_status: str):
-        item = OrderItem.objects.select_for_update().select_related("order", "product").filter(id=pk).first()
+        # Evitar select_for_update con outer join nullable en PostgreSQL.
+        item = OrderItem.objects.select_for_update().filter(id=pk).first()
         if not item:
             return Response({"detail": "Producto no encontrado."}, status=404)
-        if not (item.product_id and item.product and item.product.requires_kitchen):
+        if not _product_requires_kitchen(item.product_id):
             return Response({"detail": "Este producto no va a cocina.", "code": "NOT_FOR_KITCHEN"}, status=400)
+        order_state = Order.objects.filter(id=item.order_id).values("status", "payment_status", "financial_status").first()
+        if order_state and order_state["status"] == "canceled":
+            return Response({"detail": "No se puede terminar un producto cancelado.", "code": "ORDER_CANCELLED"}, status=400)
         now = timezone.now()
         if target_status == OrderItem.KITCHEN_STATUS_READY:
+            if item.kitchen_status == OrderItem.KITCHEN_STATUS_READY:
+                refreshed = OrderItem.objects.select_related("table_guest").prefetch_related("applied_modifiers").get(id=item.id)
+                return Response({"detail": "El producto ya estaba terminado.", "code": "ALREADY_READY", "item": _serialize_kitchen_item(refreshed)}, status=200)
             if item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
                 return Response({"detail": "El producto ya fue servido.", "code": "ALREADY_SERVED"}, status=400)
-            if item.kitchen_status not in {OrderItem.KITCHEN_STATUS_SENT, OrderItem.KITCHEN_STATUS_READY}:
+            if item.kitchen_status != OrderItem.KITCHEN_STATUS_SENT:
                 return Response({"detail": "El producto aún no fue enviado a cocina.", "code": "NOT_IN_KITCHEN"}, status=400)
             item.kitchen_status = OrderItem.KITCHEN_STATUS_READY
             item.kitchen_ready_at = item.kitchen_ready_at or now
             fields = ["kitchen_status", "kitchen_ready_at"]
+            if hasattr(item, "kitchen_completed_by_id") and not item.kitchen_completed_by_id:
+                item.kitchen_completed_by = request.user
+                fields.append("kitchen_completed_by")
         elif target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
             if item.kitchen_status == OrderItem.KITCHEN_STATUS_DELIVERED:
-                return Response({"detail": "El producto ya estaba servido.", "code": "ALREADY_SERVED", "item": _serialize_kitchen_item(item)}, status=200)
+                refreshed = OrderItem.objects.select_related("table_guest").prefetch_related("applied_modifiers").get(id=item.id)
+                return Response({"detail": "El producto ya estaba servido.", "code": "ALREADY_SERVED", "item": _serialize_kitchen_item(refreshed)}, status=200)
             if item.kitchen_status != OrderItem.KITCHEN_STATUS_READY:
                 return Response({"detail": "Solo puedes servir productos terminados.", "code": "NOT_READY_TO_SERVE"}, status=400)
             item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
@@ -634,6 +651,7 @@ class TableOrderItemKitchenStatusView(APIView):
         else:
             return Response({"detail": "Estado inválido."}, status=400)
         item.save(update_fields=fields)
+        item = OrderItem.objects.select_related("table_guest").prefetch_related("applied_modifiers").get(id=item.id)
         if target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
             active_session = (
                 TableSession.objects.select_for_update()
