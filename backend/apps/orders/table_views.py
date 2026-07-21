@@ -187,6 +187,29 @@ def _product_requires_kitchen(product_id: int | None) -> bool:
     return Product.objects.filter(id=product_id, requires_kitchen=True).exists()
 
 
+def _lock_ready_table_order_items(order_id: int, item_ids: list[int] | None = None) -> list[OrderItem]:
+    qs = OrderItem.objects.select_for_update().filter(
+        order_id=order_id,
+        kitchen_status=OrderItem.KITCHEN_STATUS_READY,
+    )
+    if item_ids:
+        qs = qs.filter(id__in=item_ids)
+    locked_items = list(qs.order_by("id"))
+    product_ids = [item.product_id for item in locked_items if item.product_id]
+    kitchen_product_ids = set(
+        Product.objects.filter(id__in=product_ids, requires_kitchen=True).values_list("id", flat=True)
+    )
+    return [item for item in locked_items if item.product_id in kitchen_product_ids]
+
+
+def _order_has_active_kitchen_items(order_id: int) -> bool:
+    return OrderItem.objects.filter(
+        order_id=order_id,
+        product__requires_kitchen=True,
+        kitchen_status__in=KITCHEN_ACTIVE_STATUSES,
+    ).exists()
+
+
 def _guest_display_label(guest: TableGuest | None) -> str:
     if not guest:
         return ""
@@ -655,10 +678,10 @@ class TableOrderItemKitchenStatusView(APIView):
         if target_status == OrderItem.KITCHEN_STATUS_DELIVERED:
             active_session = (
                 TableSession.objects.select_for_update()
-                .filter(primary_order=item.order, status=TableSession.STATUS_SENT_TO_KITCHEN)
+                .filter(primary_order_id=item.order_id, status=TableSession.STATUS_SENT_TO_KITCHEN)
                 .first()
             )
-            has_open_kitchen_items = _kitchen_items_queryset(item.order).filter(kitchen_status__in=KITCHEN_ACTIVE_STATUSES).exists()
+            has_open_kitchen_items = _order_has_active_kitchen_items(item.order_id)
             if active_session and not has_open_kitchen_items:
                 active_session.status = TableSession.STATUS_OPEN
                 active_session.save(update_fields=["status", "updated_at"])
@@ -681,10 +704,7 @@ class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
                     item_ids.append(int(value))
                 except (TypeError, ValueError):
                     return Response({"item_ids": "Lista de productos inválida."}, status=400)
-        items_qs = _kitchen_items_queryset(session.primary_order).select_for_update().filter(kitchen_status=OrderItem.KITCHEN_STATUS_READY)
-        if item_ids:
-            items_qs = items_qs.filter(id__in=item_ids)
-        items = list(items_qs)
+        items = _lock_ready_table_order_items(session.primary_order_id, item_ids or None)
         if not items:
             return Response({"detail": "No hay productos listos para servir.", "served_count": 0, "summary": _serialize_ready_session(session)}, status=200)
         now = timezone.now()
@@ -692,7 +712,7 @@ class TableSessionServeReadyView(TableMapFeatureGuardMixin, APIView):
             item.kitchen_status = OrderItem.KITCHEN_STATUS_DELIVERED
             item.kitchen_delivered_at = item.kitchen_delivered_at or now
             item.save(update_fields=["kitchen_status", "kitchen_delivered_at"])
-        has_open_kitchen_items = _kitchen_items_queryset(session.primary_order).filter(kitchen_status__in=KITCHEN_ACTIVE_STATUSES).exists()
+        has_open_kitchen_items = _order_has_active_kitchen_items(session.primary_order_id)
         if session.status == TableSession.STATUS_SENT_TO_KITCHEN and not has_open_kitchen_items:
             session.status = TableSession.STATUS_OPEN
             session.save(update_fields=["status", "updated_at"])
