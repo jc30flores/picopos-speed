@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import {
   markTableKitchenItemReady,
   updateOrderStatus,
   type Order,
+  type TableKitchenItem,
   type TableKitchenSessionSummary,
 } from "@/lib/api";
 import { PageLayout } from "@/components/layout/PageLayout";
@@ -114,29 +115,57 @@ const Kitchen = () => {
   const [quickOrders, setQuickOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<KitchenFilter>("in_kitchen");
   const [isLoading, setIsLoading] = useState(true);
+  const [completingItemKeys, setCompletingItemKeys] = useState<Set<string>>(() => new Set());
+  const completingItemKeysRef = useRef<Set<string>>(new Set());
+  const loadInFlightRef = useRef(false);
+  const isMountedRef = useRef(false);
   const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
 
+  const updateTableItemLocal = useCallback((itemId: number, updater: (item: TableKitchenItem) => TableKitchenItem) => {
+    setTableSessions((previous) =>
+      previous.map((session) => ({
+        ...session,
+        items: session.items.map((item) => item.id === itemId ? updater(item) : item),
+        people: session.people.map((person) => ({
+          ...person,
+          items: person.items.map((item) => item.id === itemId ? updater(item) : item),
+        })),
+      }))
+    );
+  }, []);
+
   const loadKitchen = useCallback(async () => {
-    const branchId = localStorage.getItem("selected_branch_id") || undefined;
-    const [tableData, activeOrders] = await Promise.all([
-      getTableKitchenSummary(),
-      getActiveOrders({ branchId, serviceType: "all" }),
-    ]);
-    setTableSessions(tableData);
-    setQuickOrders(activeOrders);
-    setIsLoading(false);
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    try {
+      const branchId = localStorage.getItem("selected_branch_id") || undefined;
+      const [tableData, activeOrders] = await Promise.all([
+        getTableKitchenSummary(),
+        getActiveOrders({ branchId, serviceType: "all" }),
+      ]);
+      if (!isMountedRef.current) return;
+      setTableSessions(tableData);
+      setQuickOrders(activeOrders);
+    } finally {
+      loadInFlightRef.current = false;
+      if (isMountedRef.current) setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadKitchen().catch((error) => {
       console.error("Failed to load kitchen", error);
-      setIsLoading(false);
+      if (isMountedRef.current) setIsLoading(false);
     });
     const interval = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       loadKitchen().catch((error) => console.error("Failed to refresh kitchen", error));
     }, 5000);
-    return () => window.clearInterval(interval);
+    return () => {
+      isMountedRef.current = false;
+      window.clearInterval(interval);
+    };
   }, [loadKitchen]);
 
   const items = useMemo(() => [...tableItemsFromSummary(tableSessions), ...quickItemsFromOrders(quickOrders)], [quickOrders, tableSessions]);
@@ -153,22 +182,27 @@ const Kitchen = () => {
   }, [filter, items]);
 
   const completeItem = async (item: KitchenCardItem) => {
+    if (completingItemKeysRef.current.has(item.key)) return;
+    completingItemKeysRef.current.add(item.key);
+    setCompletingItemKeys(new Set(completingItemKeysRef.current));
     try {
       if (item.source === "table" && item.itemId) {
-        await markTableKitchenItemReady(item.itemId);
+        const updated = await markTableKitchenItemReady(item.itemId);
+        updateTableItemLocal(item.itemId, () => updated);
       } else if (item.orderId) {
         await updateOrderStatus(item.orderId, "ready");
       }
-      await loadKitchen();
+      void loadKitchen();
       toast.success("Producto marcado como terminado.");
     } catch (error) {
       const status = error instanceof Error && "status" in error ? (error as { status?: number }).status : undefined;
       const message = status === 403
-        ? "Tu usuario no tiene permiso para marcar pedidos como terminados."
-        : error instanceof Error
-          ? error.message
-          : "No se pudo actualizar cocina.";
+        ? "El rol Mesero solo puede visualizar cocina."
+        : "No se pudo marcar el producto como terminado.";
       toast.error(message);
+    } finally {
+      completingItemKeysRef.current.delete(item.key);
+      setCompletingItemKeys(new Set(completingItemKeysRef.current));
     }
   };
 
@@ -246,11 +280,11 @@ const Kitchen = () => {
                   <Button
                     className="mt-5 min-h-16 rounded-lg text-xl font-black"
                     size="lg"
-                    disabled={item.status === "ready"}
+                    disabled={item.status === "ready" || completingItemKeys.has(item.key)}
                     onClick={() => void completeItem(item)}
                   >
                     <CheckCircle2 className="mr-2 h-6 w-6" />
-                    {item.status === "ready" ? "Terminado" : "Terminado"}
+                    {completingItemKeys.has(item.key) ? "Marcando..." : "Terminado"}
                   </Button>
                 ) : (
                   <div className="mt-5 rounded-lg border bg-background/70 p-4 text-center text-sm font-semibold text-muted-foreground">

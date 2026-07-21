@@ -681,6 +681,8 @@ type TableConfirmDialogState =
   const [tableBackDialogOpen, setTableBackDialogOpen] = useState(false);
   const [forceReleaseDialog, setForceReleaseDialog] = useState<{ open: boolean; session: TableSession | null; reason: string; pin: string; requiresPin: boolean; loading: boolean }>({ open: false, session: null, reason: "", pin: "", requiresPin: false, loading: false });
   const [kitchenSummaryDialog, setKitchenSummaryDialog] = useState<{ open: boolean; loading: boolean; sessions: TableKitchenSessionSummary[] }>({ open: false, loading: false, sessions: [] });
+  const [kitchenUpdatingItemIds, setKitchenUpdatingItemIds] = useState<Set<number>>(() => new Set());
+  const kitchenUpdatingItemIdsRef = useRef<Set<number>>(new Set());
   const [readyServeDialog, setReadyServeDialog] = useState<{ open: boolean; tableId: number | null; summary: TableReadySummary | null; loading: boolean }>({ open: false, tableId: null, summary: null, loading: false });
   const tableMapViewportRef = useRef<HTMLDivElement | null>(null);
   const tableMapUserAdjustedRef = useRef(false);
@@ -697,6 +699,8 @@ type TableConfirmDialogState =
   const tableAutoSaveTimeoutRef = useRef<number | null>(null);
   const tableAutoSaveSignatureRef = useRef("");
   const userRequestedBackToTablesRef = useRef(false);
+  const tableSessionsRef = useRef<TableSession[]>([]);
+  const tableReadySummariesRef = useRef<TableReadySummary[]>([]);
   const [hiddenProductImages, setHiddenProductImages] = useState<Record<number, boolean>>({});
   const [cartAvailability, setCartAvailability] = useState<Record<number, CartAvailabilityItem>>({});
   const [isSendingToPending, setIsSendingToPending] = useState(false);
@@ -753,7 +757,7 @@ type TableConfirmDialogState =
   const isWaiterRole = user?.role === "waiter";
   const canCollectTablePayments = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canManageTableStructure = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier" || user?.role === "waiter");
-  const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
+  const canCompleteKitchenItems = Boolean(user?.isSuperuser || user?.role === "superadmin" || user?.role === "admin" || user?.role === "manager" || user?.role === "kitchen");
   const canUseLastSaleQuickAction = quickSalesMode === "last_sale" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager" || user?.role === "cashier");
   const canViewRecentSalesActions = quickSalesMode === "history" && Boolean(user?.isSuperuser || user?.role === "admin" || user?.role === "manager");
   const shouldShowQuickSalesButton = quickSalesMode !== "hidden" && (canUseLastSaleQuickAction || canViewRecentSalesActions);
@@ -904,6 +908,14 @@ type TableConfirmDialogState =
     return map;
   }, [tableSessions]);
 
+  useEffect(() => {
+    tableSessionsRef.current = tableSessions;
+  }, [tableSessions]);
+
+  useEffect(() => {
+    tableReadySummariesRef.current = tableReadySummaries;
+  }, [tableReadySummaries]);
+
   const refreshTableSessions = useCallback(async () => {
     try {
       const sessions = await getTableSessions();
@@ -911,9 +923,9 @@ type TableConfirmDialogState =
       return sessions;
     } catch (error) {
       posDebug("table.sessions.refresh.failed", error);
-      return tableSessions;
+      return tableSessionsRef.current;
     }
-  }, [tableSessions]);
+  }, []);
 
   const refreshTableReadySummaries = useCallback(async () => {
     try {
@@ -922,9 +934,9 @@ type TableConfirmDialogState =
       return summary.tables;
     } catch (error) {
       posDebug("table.ready.refresh.failed", error);
-      return tableReadySummaries;
+      return tableReadySummariesRef.current;
     }
-  }, [tableReadySummaries]);
+  }, []);
 
   const readySummaryByTableId = useMemo(() => {
     const map = new Map<number, TableReadySummary>();
@@ -3549,6 +3561,9 @@ type TableConfirmDialogState =
   };
 
   const updateKitchenItemStatus = async (itemId: number, target: "ready" | "delivered") => {
+    if (kitchenUpdatingItemIdsRef.current.has(itemId)) return;
+    kitchenUpdatingItemIdsRef.current.add(itemId);
+    setKitchenUpdatingItemIds(new Set(kitchenUpdatingItemIdsRef.current));
     try {
       if (target === "ready") await markTableKitchenItemReady(itemId);
       else await markTableKitchenItemDelivered(itemId);
@@ -3556,8 +3571,11 @@ type TableConfirmDialogState =
       await refreshTableReadySummaries();
       await refreshTableSessions();
       toast.success(target === "ready" ? "Producto marcado terminado." : "Producto marcado servido.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo actualizar cocina.");
+    } catch {
+      toast.error(target === "ready" ? "No se pudo marcar el producto como terminado." : "No se pudo marcar el producto como servido.");
+    } finally {
+      kitchenUpdatingItemIdsRef.current.delete(itemId);
+      setKitchenUpdatingItemIds(new Set(kitchenUpdatingItemIdsRef.current));
     }
   };
 
@@ -5307,8 +5325,8 @@ type TableConfirmDialogState =
                                     <p className="text-xs text-muted-foreground">x{item.quantity} · {item.kitchenStatus === "pending" ? "Pendiente de enviar" : item.kitchenStatus === "sent" ? "En cocina" : item.kitchenStatus === "ready" ? "Terminado" : "Servido"}</p>
                                   </div>
                                   <div className="flex gap-2">
-                                    {canCompleteKitchenItems ? <Button size="sm" variant="outline" disabled={item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>Terminado</Button> : null}
-                                    <Button size="sm" variant="outline" disabled={item.kitchenStatus !== "ready"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>Servido</Button>
+                                    {canCompleteKitchenItems ? <Button size="sm" variant="outline" disabled={kitchenUpdatingItemIds.has(item.id) || item.kitchenStatus === "ready" || item.kitchenStatus === "delivered"} onClick={() => void updateKitchenItemStatus(item.id, "ready")}>{kitchenUpdatingItemIds.has(item.id) ? "Marcando..." : "Terminado"}</Button> : null}
+                                    <Button size="sm" variant="outline" disabled={kitchenUpdatingItemIds.has(item.id) || item.kitchenStatus !== "ready"} onClick={() => void updateKitchenItemStatus(item.id, "delivered")}>{kitchenUpdatingItemIds.has(item.id) ? "Marcando..." : "Servido"}</Button>
                                   </div>
                                 </div>
                               ))}
