@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/useAuth";
+import { toast } from "sonner";
 
-const INACTIVITY_MS = 10 * 60 * 1000;
 const COUNTDOWN_SECONDS = 60;
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const INACTIVITY_MS = IDLE_TIMEOUT_MS - COUNTDOWN_SECONDS * 1000;
 
 export const InactivityGuard = () => {
   const { user, logout } = useAuth();
@@ -23,7 +25,7 @@ export const InactivityGuard = () => {
     countdownTimerRef.current = null;
   }, []);
 
-  const forceLogout = useCallback(async () => {
+  const forceLogout = useCallback(async (message = "Tu sesión se cerró por inactividad.") => {
     if (forceLogoutInFlightRef.current) return;
     forceLogoutInFlightRef.current = true;
     clearTimers();
@@ -34,6 +36,10 @@ export const InactivityGuard = () => {
       // ignore and continue
     }
     localStorage.removeItem("selected_branch_id");
+    Object.keys(sessionStorage)
+      .filter((key) => key.startsWith("auth:"))
+      .forEach((key) => sessionStorage.removeItem(key));
+    toast.error(message, { id: "auth-session-expired" });
     if (location.pathname !== "/login") {
       navigate("/login", { replace: true });
     }
@@ -49,12 +55,12 @@ export const InactivityGuard = () => {
     }
     if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
     inactivityTimerRef.current = window.setTimeout(() => {
-      setCountdown(COUNTDOWN_SECONDS - 1);
+      setCountdown(COUNTDOWN_SECONDS);
       countdownTimerRef.current = window.setInterval(() => {
         setCountdown((prev) => {
-          if (prev == null) return COUNTDOWN_SECONDS - 1;
+          if (prev == null) return COUNTDOWN_SECONDS;
           if (prev <= 1) {
-            window.setTimeout(() => void forceLogout(), 0);
+            window.setTimeout(() => void forceLogout("Tu sesión se cerró por inactividad."), 0);
             return 0;
           }
           return prev - 1;
@@ -82,14 +88,20 @@ export const InactivityGuard = () => {
   }, [clearTimers, location.pathname, resetInactivityTimer, user]);
 
   useEffect(() => {
-    const handleUnauthorized = () => {
-      if (location.pathname === "/login" || !user) return;
+    const handleUnauthorized = (event: Event) => {
+      if (location.pathname === "/login") return;
       if (handlingUnauthorizedRef.current) return;
       handlingUnauthorizedRef.current = true;
-      void forceLogout();
+      const detail = event instanceof CustomEvent ? event.detail : null;
+      const message = typeof detail?.message === "string" ? detail.message : "Tu sesión expiró. Ingresa nuevamente.";
+      void forceLogout(message);
     };
     window.addEventListener("auth:unauthorized", handleUnauthorized);
-    return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
+    window.addEventListener("auth:session-expired", handleUnauthorized);
+    return () => {
+      window.removeEventListener("auth:unauthorized", handleUnauthorized);
+      window.removeEventListener("auth:session-expired", handleUnauthorized);
+    };
   }, [forceLogout, location.pathname, user]);
 
   useEffect(() => {

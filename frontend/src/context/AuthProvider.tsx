@@ -4,6 +4,15 @@ import { AuthContext } from "./authContext";
 
 const AUTH_DEBUG = String(import.meta.env.VITE_AUTH_DEBUG ?? "").toLowerCase() === "true";
 
+const clearClientAuthState = () => {
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith("pos_draft_") || key === "selected_branch_id")
+    .forEach((key) => localStorage.removeItem(key));
+  Object.keys(sessionStorage)
+    .filter((key) => key.startsWith("auth:"))
+    .forEach((key) => sessionStorage.removeItem(key));
+};
+
 const authDebugLog = (...args: unknown[]) => {
   if (!AUTH_DEBUG) return;
   // eslint-disable-next-line no-console
@@ -35,6 +44,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     void loadUser("bootstrap");
   }, [loadUser]);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      clearClientAuthState();
+      setUser(null);
+      setLoading(false);
+    };
+    window.addEventListener("auth:session-expired", handleSessionExpired);
+    return () => window.removeEventListener("auth:session-expired", handleSessionExpired);
+  }, []);
 
   const login = useCallback(async ({ identifier, password }: { identifier: string; password: string }) => {
     if (loginInFlightRef.current) {
@@ -84,9 +103,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     } catch {
       // Logout must be idempotent on client side to avoid retry loops.
     }
-    Object.keys(localStorage)
-      .filter((key) => key.startsWith("pos_draft_"))
-      .forEach((key) => localStorage.removeItem(key));
+    clearClientAuthState();
     setUser(null);
   }, []);
 

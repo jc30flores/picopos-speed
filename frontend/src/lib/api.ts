@@ -1293,6 +1293,20 @@ const buildEmptyAttendanceState = (): AttendanceState => ({
 
 type ApiRequestOptions = RequestInit & { public?: boolean };
 
+const SESSION_EXPIRY_CODES = new Set(["session_expired", "idle_timeout", "max_session_age"]);
+
+const getSessionExpiryMessage = (code?: string, fallback?: string) => {
+  if (code === "idle_timeout") return "Tu sesión se cerró por inactividad.";
+  if (code === "max_session_age") return "Tu sesión venció por seguridad. Ingresa nuevamente.";
+  return fallback || "Tu sesión expiró. Ingresa nuevamente.";
+};
+
+const dispatchSessionExpired = (code?: string, detail?: string) => {
+  const message = getSessionExpiryMessage(code, detail);
+  window.dispatchEvent(new CustomEvent("auth:session-expired", { detail: { code: code || "session_expired", message } }));
+  window.dispatchEvent(new CustomEvent("auth:unauthorized", { detail: { code: code || "session_expired", message } }));
+};
+
 const request = async (path: string, options: ApiRequestOptions = {}) => {
   const { public: explicitPublicRequest, ...fetchOptions } = options;
   const method = options.method ?? "GET";
@@ -1336,19 +1350,31 @@ const request = async (path: string, options: ApiRequestOptions = {}) => {
     "/auth/logout",
     "/auth/me",
   ]);
-  if (response.status === 401 && !isPublicRequest && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+  if (response.status === 401 && !isPublicRequest) {
+    const payload = await response.clone().json().catch(() => null);
+    const code = payload && typeof payload.code === "string" ? String(payload.code) : undefined;
+    const detail = payload && typeof payload.detail === "string" ? String(payload.detail) : undefined;
+    const isExplicitSessionExpiry = Boolean(code && SESSION_EXPIRY_CODES.has(code));
+    if (isExplicitSessionExpiry || normalizedPathKey === "/auth/me" || !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
+      dispatchSessionExpired(code, detail);
+    }
     console.info("AUTH_SESSION_EXPIRED", {
       status: 401,
       endpoint: normalizedPath,
       action: "logout",
+      code: code || "unauthorized",
     });
-    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
   }
   if (response.status === 403 && !isPublicRequest && !authBypassUnauthorizedEvent.has(normalizedPathKey)) {
     console.info("AUTH_FORBIDDEN_NON_AUTH", {
       endpoint: normalizedPath,
       action: "keep_session",
     });
+  }
+  if (response.status === 403 && !isPublicRequest && normalizedPathKey === "/auth/me") {
+    const payload = await response.clone().json().catch(() => null);
+    const detail = payload && typeof payload.detail === "string" ? String(payload.detail) : undefined;
+    dispatchSessionExpired("session_expired", detail);
   }
   return response;
 };
