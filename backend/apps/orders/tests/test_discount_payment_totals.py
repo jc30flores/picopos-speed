@@ -38,6 +38,20 @@ class DiscountedPaymentTotalsTests(TestCase):
             category=self.category,
             available=True,
         )
+        self.person_one_plate = Product.objects.create(
+            name="Consumo Persona 1",
+            description="",
+            price=Decimal("35.97"),
+            category=self.category,
+            available=True,
+        )
+        self.person_two_plate = Product.objects.create(
+            name="Consumo Persona 2",
+            description="",
+            price=Decimal("11.99"),
+            category=self.category,
+            available=True,
+        )
         self.discount = Discount.objects.create(
             name="DESCUENTO ESTUDIANTE",
             type="fixed",
@@ -256,19 +270,77 @@ class DiscountedPaymentTotalsTests(TestCase):
         self.assertEqual(person_1["total"] + person_2["total"], calculate_order_totals(order).total)
         self.assertEqual(split_cents_evenly(898, 3), [299, 299, 300])
 
+    def test_large_table_capture_case_uses_net_total_for_person_and_equal_splits(self):
+        area = DiningArea.objects.create(name="Salón")
+        table = RestaurantTable.objects.create(area=area, name="Mesa 1", number=1, capacity=3)
+        session = TableSession.objects.create(
+            guests_count=3,
+            order_mode=TableSession.ORDER_MODE_PER_PERSON,
+            opened_by=self.user,
+        )
+        TableSessionTable.objects.create(session=session, table=table)
+        guest_1 = TableGuest.objects.create(session=session, label="Persona 1", seat_number=1)
+        guest_2 = TableGuest.objects.create(session=session, label="Persona 2", seat_number=2)
+        guest_3 = TableGuest.objects.create(session=session, label="Persona 3", seat_number=3)
+
+        order = self._order(
+            [
+                {
+                    "product_id": self.person_one_plate.id,
+                    "product_name_snapshot": self.person_one_plate.name,
+                    "price_snapshot": "35.97",
+                    "quantity": 1,
+                    "table_guest_id": guest_1.id,
+                    "modifiers": [],
+                },
+                {
+                    "product_id": self.person_two_plate.id,
+                    "product_name_snapshot": self.person_two_plate.name,
+                    "price_snapshot": "11.99",
+                    "quantity": 1,
+                    "table_guest_id": guest_2.id,
+                    "modifiers": [],
+                },
+                self._shrimp_item(table_guest_id=guest_3.id),
+            ]
+        )
+        session.primary_order = order
+        session.save(update_fields=["primary_order"])
+
+        totals = calculate_order_totals(order)
+        payload = OrderSerializer(order).data
+        person_1 = calculate_person_totals(order, guest_1)
+        person_2 = calculate_person_totals(order, guest_2)
+        person_3 = calculate_person_totals(order, guest_3)
+
+        self.assertEqual(totals.subtotal, Decimal("53.95"))
+        self.assertEqual(totals.discount_total, Decimal("1.50"))
+        self.assertEqual(totals.total, Decimal("52.45"))
+        self.assertEqual(totals.amount_due, Decimal("52.45"))
+        self.assertEqual(Decimal(str(payload["gross_subtotal"])), Decimal("53.95"))
+        self.assertEqual(Decimal(str(payload["discount_total"])), Decimal("1.50"))
+        self.assertEqual(Decimal(str(payload["net_total"])), Decimal("52.45"))
+        self.assertEqual(Decimal(str(payload["amount_due"])), Decimal("52.45"))
+        self.assertEqual(person_1["amount_due"], Decimal("35.97"))
+        self.assertEqual(person_2["amount_due"], Decimal("11.99"))
+        self.assertEqual(person_3["amount_due"], Decimal("4.49"))
+        self.assertEqual(person_1["amount_due"] + person_2["amount_due"] + person_3["amount_due"], totals.amount_due)
+        self.assertEqual(split_cents_evenly(totals.amount_due_cents, 2), [2622, 2623])
+        self.assertEqual(split_cents_evenly(totals.amount_due_cents, 3), [1748, 1748, 1749])
+
     def test_same_equal_part_cannot_be_paid_twice(self):
         order = self._order([self._shrimp_item(), self._shrimp_item()])
 
         first = self.client.post(
             "/api/payments/",
-            self._payment_payload(order, "2.99", "card", self.card_method, split_part=1),
+            self._payment_payload(order, "2.99", "card", self.card_method, split_part=1, payment_scope="split_part"),
             format="json",
         )
         self.assertEqual(first.status_code, 201, first.data)
 
         duplicate = self.client.post(
             "/api/payments/",
-            self._payment_payload(order, "2.99", "card", self.card_method, split_part=1),
+            self._payment_payload(order, "2.99", "card", self.card_method, split_part=1, payment_scope="split_part"),
             format="json",
         )
         self.assertEqual(duplicate.status_code, 400)
