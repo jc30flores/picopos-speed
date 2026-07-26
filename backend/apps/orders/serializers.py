@@ -193,10 +193,14 @@ class OrderSerializer(serializers.ModelSerializer):
     subtotal = serializers.SerializerMethodField()
     tax = serializers.SerializerMethodField()
     total = serializers.SerializerMethodField()
+    gross_subtotal = serializers.SerializerMethodField()
     discount_total = serializers.SerializerMethodField()
+    net_total = serializers.SerializerMethodField()
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
+    paid_total = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
+    amount_due = serializers.SerializerMethodField()
     amount_due_cents = serializers.SerializerMethodField()
     remaining_cents = serializers.SerializerMethodField()
     financial_status = serializers.CharField(read_only=True)
@@ -227,7 +231,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "subtotal",
             "tax",
             "total",
+            "gross_subtotal",
             "discount_total",
+            "net_total",
             "discount_snapshot",
             "disposable_total",
             "send_to_kitchen",
@@ -241,7 +247,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "pending_completion_type",
             "pending_completion_note",
             "total_paid",
+            "paid_total",
             "remaining",
+            "amount_due",
             "amount_due_cents",
             "remaining_cents",
             "refund_total",
@@ -285,8 +293,14 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_total(self, obj: Order):
         return self._totals(obj).total
 
+    def get_gross_subtotal(self, obj: Order):
+        return self._totals(obj).subtotal
+
     def get_discount_total(self, obj: Order):
         return self._totals(obj).discount_total
+
+    def get_net_total(self, obj: Order):
+        return self._totals(obj).total
 
     def get_fees(self, obj: Order):
         return [
@@ -315,7 +329,13 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_total_paid(self, obj: Order):
         return self._totals(obj).paid_total
 
+    def get_paid_total(self, obj: Order):
+        return self._totals(obj).paid_total
+
     def get_remaining(self, obj: Order):
+        return self._totals(obj).amount_due
+
+    def get_amount_due(self, obj: Order):
         return self._totals(obj).amount_due
 
     def get_amount_due_cents(self, obj: Order):

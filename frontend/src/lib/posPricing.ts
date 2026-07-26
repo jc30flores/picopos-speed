@@ -29,6 +29,9 @@ const getEligibleLineTotalForDiscount = (item: CartPricingItem, discount: Discou
   return 0;
 };
 
+const getEligibleQuantityForDiscount = (item: CartPricingItem, discount: Discount, products: Product[]): number =>
+  getEligibleLineTotalForDiscount(item, discount, products) > 0 ? item.quantity : 0;
+
 const getOrderDisposableTotal = (
   items: CartPricingItem[],
   products: Product[],
@@ -51,7 +54,10 @@ const getDiscountAmount = (items: CartPricingItem[], discount: Discount, product
   const eligible = items.reduce((sum, item) => sum + getEligibleLineTotalForDiscount(item, discount, products), 0);
   if (eligible <= 0) return 0;
   if (discount.type === "percent") return Math.min(eligible, (eligible * discount.value) / 100);
-  if (discount.type === "fixed") return Math.min(eligible, discount.value);
+  if (discount.type === "fixed") {
+    const units = discount.appliesTo === "order" ? 1 : items.reduce((sum, item) => sum + getEligibleQuantityForDiscount(item, discount, products), 0);
+    return Math.min(eligible, discount.value * Math.max(units, 1));
+  }
   return 0;
 };
 

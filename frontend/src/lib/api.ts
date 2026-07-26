@@ -837,6 +837,10 @@ export type Order = {
   financialStatus: "open" | "paid" | "refunded_partial" | "refunded_full" | "voided";
   totalPaid: number;
   remaining: number;
+  grossSubtotal?: number;
+  netTotal?: number;
+  paidTotal?: number;
+  amountDue?: number;
   amountDueCents?: number;
   remainingCents?: number;
   refundTotal: number;
@@ -3617,7 +3621,9 @@ const mapOrder = (order: {
   payment_status: Order["paymentStatus"];
   financial_status: Order["financialStatus"];
   total_paid: string;
+  paid_total?: string;
   remaining: string;
+  amount_due?: string;
   amount_due_cents?: number;
   remaining_cents?: number;
   refund_total: string;
@@ -3625,7 +3631,9 @@ const mapOrder = (order: {
   discount_snapshot?: Record<string, unknown> | null;
   requires_kitchen?: boolean;
   send_to_kitchen?: boolean;
+  gross_subtotal?: string;
   discount_total?: string;
+  net_total?: string;
   disposable_total?: string;
   subtotal_before_discounts?: string;
   subtotal_after_discounts?: string;
@@ -3645,6 +3653,10 @@ const mapOrder = (order: {
   const createdAt = new Date(order.created_at);
   const prepTime = Math.floor((Date.now() - createdAt.getTime()) / 60000);
   const items = Array.isArray(order.items) ? order.items : [];
+  const grossSubtotal = Number(order.gross_subtotal ?? order.subtotal_before_discounts ?? order.total);
+  const netTotal = Number(order.net_total ?? order.total_payable ?? order.total);
+  const paidTotal = Number(order.paid_total ?? order.total_paid ?? 0);
+  const amountDue = Number(order.amount_due ?? order.remaining ?? 0);
   return {
     id: order.id,
     orderNumber: order.order_number,
@@ -3704,16 +3716,20 @@ const mapOrder = (order: {
     ivaExemptDiscount: Number(order.iva_exempt_discount ?? 0),
     paymentStatus: order.payment_status,
     financialStatus: order.financial_status,
-    totalPaid: Number(order.total_paid ?? 0),
-    remaining: Number(order.remaining ?? 0),
+    totalPaid: paidTotal,
+    remaining: amountDue,
+    grossSubtotal,
+    netTotal,
+    paidTotal,
+    amountDue,
     amountDueCents:
       order.amount_due_cents !== undefined && order.amount_due_cents !== null
         ? Number(order.amount_due_cents)
-        : toCents(Number(order.total_payable ?? order.total ?? 0)),
+        : toCents(netTotal),
     remainingCents:
       order.remaining_cents !== undefined && order.remaining_cents !== null
         ? Number(order.remaining_cents)
-        : toCents(Number(order.remaining ?? 0)),
+        : toCents(amountDue),
     refundTotal: Number(order.refund_total ?? 0),
     netPaid: Number(order.net_paid ?? 0),
     discountSnapshot: order.discount_snapshot ?? null,
@@ -3721,10 +3737,10 @@ const mapOrder = (order: {
     sendToKitchen: Boolean(order.send_to_kitchen),
     discountTotal: order.discount_total != null ? Number(order.discount_total) : undefined,
     disposableTotal: order.disposable_total != null ? Number(order.disposable_total) : undefined,
-    subtotalBeforeDiscounts: Number(order.subtotal_before_discounts ?? order.total),
+    subtotalBeforeDiscounts: grossSubtotal,
     subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
     taxTotal: Number(order.tax_total ?? 0),
-    totalPayable: Number(order.total_payable ?? order.total),
+    totalPayable: netTotal,
     isPending: Boolean(order.is_pending),
     pendingState: (order.pending_state ?? "none") as Order["pendingState"],
     pendingReference: order.pending_reference ?? "",
@@ -5469,7 +5485,7 @@ export const createPayment = async (payload: {
   tipAmount?: number;
   reference?: string;
   splitPart?: number;
-  paymentScope?: "order" | "guest" | "custom" | "items";
+  paymentScope?: "order" | "guest" | "custom" | "items" | "split_part";
   tableSessionId?: number | null;
   tableGuestId?: number | null;
   guestNumber?: number | null;
