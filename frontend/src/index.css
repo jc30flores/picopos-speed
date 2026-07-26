@@ -263,6 +263,42 @@ All colors MUST be HSL.
     @apply transition-transform duration-200 hover:scale-[1.02] hover:shadow-lg;
   }
 
+  .tap-target {
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+    min-height: 44px;
+  }
+
+  .touch-button {
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+    min-height: 44px;
+    transition-property: background-color, border-color, color, transform;
+    transition-duration: 75ms;
+  }
+
+  .pin-key {
+    @apply touch-button shadow-none active:translate-y-px active:scale-[0.99];
+  }
+
+  .pin-key:focus:not(:focus-visible) {
+    outline: none;
+    box-shadow: none;
+  }
+
+  @media (hover: none) {
+    .pin-key:hover:not(:active):not([data-pressed="true"]) {
+      background-color: hsl(var(--background) / 0.8);
+      color: hsl(var(--foreground));
+    }
+  }
+
   .animate-fade-in {
     animation: fade-in 0.3s ease-out;
   }
