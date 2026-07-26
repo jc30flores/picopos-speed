@@ -371,7 +371,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             detail = "La orden ya está pagada."
             if allocation_payload.get("scope") == "guest":
                 detail = "Esta persona no tiene saldo pendiente."
-            elif allocation_payload.get("scope") in {"items", "custom"}:
+            elif allocation_payload.get("scope") in {"items", "custom", "split_part"}:
                 detail = "Esta parte ya fue pagada."
             return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
         cash_received = serializer.validated_data.get("cash_received")
@@ -382,7 +382,7 @@ class PaymentListCreateView(generics.ListCreateAPIView):
             detail = "El pago excede el saldo pendiente."
             if allocation_payload.get("scope") == "guest":
                 detail = "El pago excede el saldo pendiente de esta persona."
-            elif allocation_payload.get("scope") in {"items", "custom"}:
+            elif allocation_payload.get("scope") in {"items", "custom", "split_part"}:
                 detail = "El pago excede el saldo pendiente de esta parte."
             return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
         applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents

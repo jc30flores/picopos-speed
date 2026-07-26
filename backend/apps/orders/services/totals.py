@@ -311,6 +311,8 @@ def calculate_payment_scope_remaining_cents(order: Order, allocation_payload: di
         return to_cents(calculate_person_totals(order, guest)["amount_due"])
     if scope in {"items", "custom"}:
         return calculate_items_remaining_cents(order, allocation_payload.get("order_item_ids") or [])
+    if scope == "split_part":
+        return calculate_order_totals(order).amount_due_cents
     return calculate_order_totals(order).amount_due_cents
 
 

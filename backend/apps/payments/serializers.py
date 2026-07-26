@@ -284,7 +284,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Las órdenes anuladas no pueden recibir pagos")
 
         payment_scope = str(attrs.get("payment_scope") or "").strip().lower()
-        if payment_scope and payment_scope not in {"order", "guest", "custom", "items"}:
+        if payment_scope and payment_scope not in {"order", "guest", "custom", "items", "split_part"}:
             raise serializers.ValidationError({"payment_scope": "Alcance de pago inválido."})
         if payment_scope == "guest" and not (attrs.get("table_guest") or attrs.get("guest_number")):
             raise serializers.ValidationError({"guest_number": "Selecciona una persona para este pago."})
