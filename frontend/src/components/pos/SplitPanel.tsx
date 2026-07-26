@@ -12,6 +12,8 @@ import { toast } from "sonner";
 type SplitPanelProps = {
   enabled: boolean;
   onEnabledChange: (value: boolean) => void;
+  mode?: "none" | "person" | "equal";
+  onModeChange?: (mode: "none" | "person" | "equal") => void;
   totalCents: number;
   parts: SplitPart[];
   onPartsChange: (parts: SplitPart[]) => void;
@@ -30,6 +32,8 @@ const nextPartId = (): string => `part-${Date.now()}-${Math.floor(Math.random() 
 export function SplitPanel({
   enabled,
   onEnabledChange,
+  mode,
+  onModeChange,
   totalCents,
   parts,
   onPartsChange,
@@ -48,7 +52,7 @@ export function SplitPanel({
   );
   const validation = useMemo(() => validateParts(totalCents, safeParts), [safeParts, totalCents]);
   const hasLocks = safeParts.some((part) => part.locked);
-  const selectedMode = enabled ? "equal" : "none";
+  const selectedMode = mode ?? (enabled ? "equal" : "none");
 
   const chooseFallbackActive = (list: SplitPart[]): string | null => {
     if (!list.length) return null;
@@ -174,6 +178,7 @@ export function SplitPanel({
   };
 
   const selectNoSplit = () => {
+    onModeChange?.("none");
     onEnabledChange(false);
     const reset = splitEvenly(totalCents, 1);
     onPartsChange(reset);
@@ -183,6 +188,7 @@ export function SplitPanel({
   const selectEqualParts = () => {
     const base = parts.length >= 2 ? parts : splitEvenly(totalCents, 2);
     const normalized = recalcParts(totalCents, base);
+    onModeChange?.("equal");
     onEnabledChange(true);
     onPartsChange(normalized);
     onActivePartIdChange(chooseFallbackActive(normalized));
@@ -193,7 +199,8 @@ export function SplitPanel({
       toast.info(personModeDisabledReason);
       return;
     }
-    onPersonModeSelect?.();
+    onModeChange?.("person");
+    if (!onModeChange) onPersonModeSelect?.();
   };
 
   const modeCard = ({
