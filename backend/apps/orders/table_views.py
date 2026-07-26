@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.db import transaction
 from django.db.models import Max, Sum
 from django.utils import timezone
@@ -14,6 +14,7 @@ from apps.core.permissions import CanAccessTablePos, CanManageKitchenItems, CanS
 from apps.menu.models import Product
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableGuestSerializer, TableSessionSerializer
+from apps.orders.services.totals import calculate_order_totals
 from apps.payments.models import Payment
 from apps.users.models import UserProfile
 from apps.users.pin_utils import is_valid_pin_format, user_matches_pin
@@ -266,6 +267,7 @@ def _serialize_kitchen_session(session: TableSession):
         line_total = (item.effective_unit_price * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
         bucket["items"].append(_serialize_kitchen_item(item))
         bucket["total"] += line_total
+    order_totals = calculate_order_totals(order) if order else None
     return {
         "session_id": session.id,
         "order_id": session.primary_order_id,
@@ -274,8 +276,8 @@ def _serialize_kitchen_session(session: TableSession):
         "table_label": " + ".join(table_names),
         "guests_count": session.guests_count,
         "order_mode": session.order_mode,
-        "total": str(order.total if order else session.total_cached),
-        "remaining": str(max((Decimal(order.amount_due_cents or to_cents(order.total)) / Decimal("100")) - (Payment.objects.filter(order=order).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0")), Decimal("0.00")) if order else Decimal("0.00")),
+        "total": str(order_totals.total if order_totals else session.total_cached),
+        "remaining": str(order_totals.amount_due if order_totals else Decimal("0.00")),
         "items": [_serialize_kitchen_item(item) for item in items],
         "people": [{**value, "total": str(value["total"].quantize(Decimal("0.01")))} for value in by_person.values()],
     }
@@ -980,11 +982,16 @@ class TableSessionMoveItemsView(TableMapFeatureGuardMixin, APIView):
             item.table_guest = to_guest
             item.save(update_fields=["table_guest"])
         else:
+            moved_discount = Decimal("0.00")
+            if item.discount_amount:
+                moved_discount = (Decimal(item.discount_amount) * Decimal(qty) / Decimal(item.quantity)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             item.quantity -= qty
-            item.save(update_fields=["quantity"])
+            item.discount_amount = max(Decimal(item.discount_amount or 0) - moved_discount, Decimal("0.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            item.save(update_fields=["quantity", "discount_amount"])
             OrderItem.objects.create(
                 order=item.order, product=item.product, product_name_snapshot=item.product_name_snapshot, price_snapshot=item.price_snapshot,
                 unit_price_override=item.unit_price_override, snapshot_sku_or_code=item.snapshot_sku_or_code, is_custom=item.is_custom,
-                quantity=qty, discount_amount=0, assigned_name=item.assigned_name, table_guest=to_guest,
+                quantity=qty, discount_amount=moved_discount, assigned_name=to_guest.display_label, table_guest=to_guest,
+                applied_special_price_rule=item.applied_special_price_rule,
             )
         return Response({"detail": "Producto movido correctamente."})

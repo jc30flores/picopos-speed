@@ -180,6 +180,8 @@ type TablePaymentScope = {
   tableGuestId?: number | null;
   guestNumber?: number | null;
   guestLabel?: string;
+  subtotalCents?: number;
+  discountCents?: number;
   totalCents: number;
   paidCents: number;
   remainingCents: number;
@@ -191,6 +193,30 @@ type TablePaymentReturnTarget = {
   session: TableSession;
   reopenBill: boolean;
 } | null;
+
+type InventoryAvailabilityPayload = {
+  ok?: boolean;
+  policy?: "block" | "warn" | "allow";
+  has_insufficient_stock?: boolean;
+  message?: string;
+  items?: Array<{
+    inventory_item_id?: number | string;
+    name?: string;
+    sku?: string;
+    unit?: string;
+    available?: string | number;
+    required?: string | number;
+    missing?: string | number;
+    affected_products?: Array<{
+      product_id?: number | string;
+      product_name?: string;
+      quantity?: string | number;
+      policy_source?: string;
+      policy_source_label?: string;
+      policy_label?: string;
+    }>;
+  }>;
+};
 
 type OpenTablePaymentOptions = {
   guest?: TableSession["guests"][number];
@@ -230,7 +256,10 @@ const formatPhone = (raw: string) => {
 const getItemModifierTotal = (item: CartItem) => (item.modifiers || []).reduce((sum, mod) => sum + Number(mod.price || 0), 0);
 const getItemBaseEffective = (item: CartItem) => (item.unitPriceOverride != null ? Number(item.unitPriceOverride) : Number(item.basePrice));
 const getItemUnitTotal = (item: CartItem) => getItemBaseEffective(item) + getItemModifierTotal(item);
-const getOrderItemTotal = (item: Order["items"][number]) => Number(item.lineTotalFinal ?? (item.unitPriceFinal ?? item.price) * item.quantity);
+const getOrderItemSubtotal = (item: Order["items"][number]) =>
+  Number(item.lineTotalBeforeDiscount ?? (item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? item.price) * item.quantity);
+const getOrderItemDiscount = (item: Order["items"][number]) => Number(item.lineTotalDiscount ?? item.discountAmount ?? 0);
+const getOrderItemTotal = (item: Order["items"][number]) => Number(item.lineTotalFinal ?? Math.max(getOrderItemSubtotal(item) - getOrderItemDiscount(item), 0));
 const getOrderItemTotalCents = (item: Order["items"][number]) => toCents(getOrderItemTotal(item));
 const getOrderItemModifiers = (item: Order["items"][number]) => Array.isArray(item.modifiers) ? item.modifiers.filter(Boolean) : [];
 
@@ -244,7 +273,7 @@ const isPendingKitchenItem = (item: Order["items"][number]) => (item.kitchenStat
 const hasOrderItems = (order: Order | null | undefined) => Boolean(order?.items?.length);
 
 const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
-  const basePrice = Number(item.unitPriceFinal ?? item.price ?? 0);
+  const basePrice = Number(item.unitPriceBeforeDiscount ?? item.price ?? item.unitPriceFinal ?? 0);
   const modifiers = Array.isArray(item.modifiers)
     ? item.modifiers.map((name) => ({ name, price: 0 }))
     : [];
@@ -254,7 +283,7 @@ const mapOrderItemToCartItem = (item: Order["items"][number]): CartItem => {
     productId: item.productId ?? null,
     name: item.productName,
     basePrice,
-    originalBasePrice: item.unitPriceBeforeDiscount ?? basePrice,
+    originalBasePrice: item.unitPriceList ?? item.unitPriceBeforeDiscount ?? basePrice,
     price: basePrice,
     quantity: item.quantity,
     isCustom: Boolean(item.isCustom),
@@ -288,7 +317,7 @@ const cartLineMatchKey = (item: CartItem) => JSON.stringify({
 const orderLineMatchKey = (item: Order["items"][number]) => JSON.stringify({
   productId: item.productId ?? null,
   name: normalizeLineMatchText(item.productName),
-  basePrice: Number(item.price ?? item.unitPriceBeforeDiscount ?? item.unitPriceFinal ?? 0).toFixed(4),
+  basePrice: Number(item.unitPriceBeforeDiscount ?? item.price ?? item.unitPriceFinal ?? 0).toFixed(4),
   quantity: Number(item.quantity || 0),
   isCustom: Boolean(item.isCustom),
   customCode: normalizeLineMatchText(item.code),
@@ -1103,6 +1132,8 @@ type TableConfirmDialogState =
     guest: TableSession["guests"][number],
   ): TablePaymentScope => {
     const guestItems = getGuestItems(order, guest);
+    const subtotalCents = guestItems.reduce((sum, item) => sum + toCents(getOrderItemSubtotal(item)), 0);
+    const discountCents = guestItems.reduce((sum, item) => sum + toCents(getOrderItemDiscount(item)), 0);
     const totalCents = guestItems.reduce((sum, item) => sum + getOrderItemTotalCents(item), 0);
     const paidCents = getGuestPaidCents(payments, guest);
     return {
@@ -1112,6 +1143,8 @@ type TableConfirmDialogState =
       tableGuestId: guest.id,
       guestNumber: guest.seatNumber,
       guestLabel: guest.label,
+      subtotalCents,
+      discountCents,
       totalCents,
       paidCents,
       remainingCents: Math.max(totalCents - paidCents, 0),
@@ -1132,6 +1165,8 @@ type TableConfirmDialogState =
       tableGuestId: null,
       guestNumber: null,
       guestLabel: "Cuenta completa",
+      subtotalCents: toCents(order.subtotalBeforeDiscounts ?? order.total),
+      discountCents: toCents(order.discountTotal ?? 0),
       totalCents: toCents(order.totalPayable ?? order.total),
       paidCents: toCents(order.totalPaid),
       remainingCents,
@@ -1209,7 +1244,7 @@ type TableConfirmDialogState =
       setServiceType(serviceKey);
       setCheckoutDraft({
         items: restoredCart,
-        subtotal: order.subtotalBeforeDiscounts ?? order.total,
+        subtotal: (scope.subtotalCents ?? toCents(order.subtotalBeforeDiscounts ?? order.total)) / 100,
         tax: order.taxTotal ?? 0,
         total: scope.remainingCents / 100,
         taxRate,
@@ -2233,7 +2268,7 @@ type TableConfirmDialogState =
   const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDraftPricing = useMemo(
     () =>
-      checkoutDraft
+      checkoutDraft && !activeOrder
         ? calculatePosPricing({
             items: checkoutDraft.items.map((item) => ({
               productId: item.productId,
@@ -2247,13 +2282,62 @@ type TableConfirmDialogState =
             availableDiscounts,
           })
         : null,
-    [availableDiscounts, checkoutDraft, products, selectedDiscount, serviceTypes]
+    [activeOrder, availableDiscounts, checkoutDraft, products, selectedDiscount, serviceTypes]
   );
-  const checkoutDisposableTotal = checkoutDraftPricing?.disposableTotal ?? 0;
-  const checkoutSummarySubtotalBefore = checkoutDraftPricing?.subtotal ?? activeOrder?.subtotalBeforeDiscounts ?? checkoutDraft?.subtotal ?? subtotal;
-  const checkoutSummaryDiscount = checkoutDraftPricing?.discountTotal ?? (activeOrder ? Math.max((activeOrder.subtotalBeforeDiscounts ?? activeOrder.total) - (activeOrder.totalPayable ?? activeOrder.total), 0) : discountAmount);
-  const checkoutSummaryTotal = tablePaymentScope ? paymentTotal : checkoutDraftPricing?.total ?? activeOrder?.totalPayable ?? paymentTotal;
-  const checkoutDiscountLines = checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
+  const orderDiscountLine = useMemo(() => {
+    if (!activeOrder) return null;
+    const snapshot = activeOrder.discountSnapshot ?? {};
+    const snapshotName = typeof snapshot.name === "string" && snapshot.name.trim() ? snapshot.name.trim() : "";
+    const snapshotAmount = typeof snapshot.amount === "string" || typeof snapshot.amount === "number" ? Number(snapshot.amount) : 0;
+    const amount = activeOrder.discountTotal ?? snapshotAmount;
+    if (amount <= 0) return null;
+    return {
+      id: Number(snapshot.discount_id ?? activeOrder.id),
+      name: snapshotName || "descuento aplicado",
+      amount,
+      source: "auto" as const,
+    };
+  }, [activeOrder]);
+  const checkoutDisposableTotal = tablePaymentScope ? 0 : activeOrder?.disposableTotal ?? checkoutDraftPricing?.disposableTotal ?? 0;
+  const checkoutSummarySubtotalBefore = tablePaymentScope
+    ? (tablePaymentScope.subtotalCents ?? 0) / 100
+    : activeOrder?.subtotalBeforeDiscounts ?? checkoutDraftPricing?.subtotal ?? checkoutDraft?.subtotal ?? subtotal;
+  const checkoutSummaryDiscount = tablePaymentScope
+    ? (tablePaymentScope.discountCents ?? 0) / 100
+    : activeOrder?.discountTotal ?? checkoutDraftPricing?.discountTotal ?? discountAmount;
+  const checkoutSummaryTotal = tablePaymentScope
+    ? tablePaymentScope.totalCents / 100
+    : activeOrder?.totalPayable ?? checkoutDraftPricing?.total ?? paymentTotal;
+  const checkoutSummaryPaid = tablePaymentScope ? tablePaymentScope.paidCents / 100 : activeOrder?.totalPaid ?? 0;
+  const checkoutDiscountLines = tablePaymentScope && checkoutSummaryDiscount > 0
+    ? [{ id: tablePaymentScope.tableGuestId ?? tablePaymentScope.tableSessionId, name: tablePaymentScope.kind === "guest" ? tablePaymentScope.guestLabel || "persona" : "cuenta", amount: checkoutSummaryDiscount, source: "auto" as const }]
+    : orderDiscountLine
+      ? [orderDiscountLine]
+      : checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
+  const splitPersonSession = tablePaymentReturn?.session ?? tableSessions.find((session) => session.id === tablePaymentScope?.tableSessionId) ?? null;
+  const canUseSplitByPerson = Boolean(tablePaymentScope?.kind === "table" && tablePaymentScope.tableId && splitPersonSession?.guests?.length);
+  const splitModeLabel = tablePaymentScope?.kind === "guest"
+    ? "División: Por persona"
+    : splitEnabled
+      ? `División: ${parts.length} partes iguales`
+      : "Cuenta sin dividir";
+  const handleSelectSplitByPerson = () => {
+    if (!tablePaymentScope?.tableId || !splitPersonSession) {
+      toast.info("Abre una cuenta de mesa para dividir por persona.");
+      return;
+    }
+    const reset = splitEvenly(checkoutTotalCents, 1);
+    setSplitEnabled(false);
+    setParts(reset);
+    setActivePartId(reset[0]?.id ?? null);
+    setIsSplitConfigOpen(false);
+    setIsPaymentOpen(false);
+    setIsPaymentMethodOpen(false);
+    setCheckoutDraft(null);
+    setTablePaymentScope(null);
+    toast.success("La cuenta fue dividida por persona.");
+    void openTableBill(tablePaymentScope.tableId, splitPersonSession);
+  };
   const paymentDialogItems = useMemo(() => {
     if (!activeOrder?.items?.length) return null;
     if (!tablePaymentScope) return activeOrder.items;
@@ -3274,6 +3358,8 @@ type TableConfirmDialogState =
       pendingState,
       pendingReference: buildQuickPrintPendingReference(),
       authorizationPin: pendingEditAuthorizationPin || undefined,
+      discountId: selectedDiscount?.id ?? null,
+      discountMode: selectedDiscount ? "manual" : undefined,
       items: payloadItems,
     });
     setActiveOrder(saved);
@@ -3306,7 +3392,7 @@ type TableConfirmDialogState =
       products,
       serviceType,
       serviceTypes,
-      selectedDiscount: null,
+      selectedDiscount,
       availableDiscounts,
     });
     posDebug("open_order.update.request", { order_id: order.id, is_update: true });
@@ -3323,6 +3409,8 @@ type TableConfirmDialogState =
       pendingState: order.paymentStatus === "paid" ? "paid_pending_delivery" : "pending_payment",
       pendingReference: pendingReferenceDraft.trim() || order.pendingReference || "",
       authorizationPin: pendingEditAuthorizationPin,
+      discountId: selectedDiscount?.id ?? null,
+      discountMode: selectedDiscount ? "manual" : undefined,
       items: buildPendingPayloadItems(persistenceCart),
     });
     posDebug("open_order.save.done", {
@@ -3380,6 +3468,8 @@ type TableConfirmDialogState =
           ivaExempt,
           source: "pos",
           channel: "pos",
+          discountId: selectedDiscount?.id,
+          discountMode: selectedDiscount ? "manual" : undefined,
           items: cart.map((item) => ({
             productId: item.productId,
             productName: item.name,
@@ -3403,6 +3493,8 @@ type TableConfirmDialogState =
             pendingState,
             pendingReference: pendingReferenceDraft.trim(),
             authorizationPin: pendingEditAuthorizationPin,
+            discountId: selectedDiscount?.id ?? null,
+            discountMode: selectedDiscount ? "manual" : undefined,
             items: buildPendingPayloadItems(cart),
           });
       if (!activeOrder?.isPending) {
@@ -3973,6 +4065,10 @@ type TableConfirmDialogState =
       toast.error(splitValidation.error || "Los montos de partes no cuadran");
       return;
     }
+    if (splitEnabled && activeSplitPart?.isPaid) {
+      toast.error("Esta parte ya fue pagada.");
+      return;
+    }
     if (selectedPaymentIsCash && amountReceived < totalDue) {
       toast.error("El monto recibido debe cubrir total + propina");
       return;
@@ -4125,8 +4221,8 @@ type TableConfirmDialogState =
     } catch (error) {
       console.error("Failed to create payment", error);
       if (error instanceof ApiRequestError && error.code === "INVENTORY_STOCK_INSUFFICIENT") {
-        const availability = (error.payload as any)?.availability;
-        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item: any) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product: any) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0"), policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global", policySourceLabel: String(product.policy_source_label || "Configuración global"), policyLabel: String(product.policy_label || "Permitir venta") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
+        const availability = (error.payload as { availability?: InventoryAvailabilityPayload } | undefined)?.availability;
+        if (availability) setStockWarning({ check: { ok: Boolean(availability.ok), policy: availability.policy, hasInsufficientStock: Boolean(availability.has_insufficient_stock), items: (availability.items || []).map((item) => ({ inventoryItemId: Number(item.inventory_item_id), name: String(item.name || ""), sku: item.sku || "", unit: String(item.unit || ""), available: String(item.available || "0"), required: String(item.required || "0"), missing: String(item.missing || "0"), affectedProducts: (item.affected_products || []).map((product) => ({ productId: Number(product.product_id), productName: String(product.product_name || ""), quantity: String(product.quantity || "0"), policySource: product.policy_source === "product" || product.policy_source === "category" ? product.policy_source : "global", policySourceLabel: String(product.policy_source_label || "Configuración global"), policyLabel: String(product.policy_label || "Permitir venta") })) })), message: availability.message }, mode: availability.policy === "block" ? "block" : "warn" });
         else toast.error(error.message);
       } else {
         toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago");
@@ -4545,26 +4641,32 @@ type TableConfirmDialogState =
       row("Fecha", formatDateTimeSV(new Date().toISOString())),
       rule,
     ];
-    const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number; paidCents: number }>();
+    const groups = new Map<string, { label: string; seat: number; items: Order["items"]; subtotal: number; discount: number; total: number; paidCents: number }>();
     (order.items || []).forEach((item) => {
       const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
       const seat = item.tableGuestSeatNumber ?? item.guestNumber ?? 999;
       const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
-      const group = groups.get(key) ?? { label, seat, items: [], total: 0, paidCents: 0 };
+      const group = groups.get(key) ?? { label, seat, items: [], subtotal: 0, discount: 0, total: 0, paidCents: 0 };
       group.items.push(item);
+      group.subtotal += getOrderItemSubtotal(item);
+      group.discount += getOrderItemDiscount(item);
       group.total += getOrderItemTotal(item);
       group.paidCents += getItemAllocatedCents(item, payments);
       groups.set(key, group);
     });
     Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).forEach((group) => {
-      lines.push(group.label.toUpperCase(), row("Subtotal", formatMoney(group.total)));
+      lines.push(group.label.toUpperCase(), row("Subtotal bruto", formatMoney(group.subtotal)));
+      if (group.discount > 0) lines.push(row("Descuento", `-${formatMoney(group.discount)}`));
+      lines.push(row("Total neto", formatMoney(group.total)));
       group.items.forEach((item) => {
         appendTicketItemLines(lines, item, chars, row, payments);
       });
       lines.push(rule);
     });
+    lines.push(row("Subtotal bruto", formatMoney(order.subtotalBeforeDiscounts ?? order.total)));
+    if ((order.discountTotal ?? 0) > 0) lines.push(row("Descuento", `-${formatMoney(order.discountTotal ?? 0)}`));
     lines.push(
-      row("Total", formatMoney(order.totalPayable ?? order.total)),
+      row("Total neto", formatMoney(order.totalPayable ?? order.total)),
       row("Pagado", formatMoney(order.totalPaid)),
       row("Pendiente", formatMoney(order.remaining)),
       rule,
@@ -4587,6 +4689,9 @@ type TableConfirmDialogState =
       return `${safeLeft}${" ".repeat(Math.max(1, chars - safeLeft.length - safeRight.length))}${safeRight}`;
     };
     const paidItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
+    const paidSubtotal = paidItems.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0);
+    const paidDiscount = paidItems.reduce((sum, item) => sum + getOrderItemDiscount(item), 0);
+    const paidNet = paidItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0);
     const received = payment.cashReceived ?? payment.amount;
     const change = Math.max(received - payment.amount - (payment.tipAmount || 0), 0);
     const lines: string[] = [
@@ -4604,6 +4709,9 @@ type TableConfirmDialogState =
     });
     lines.push(
       rule,
+      row("Subtotal bruto", formatMoney(paidSubtotal)),
+      paidDiscount > 0 ? row("Descuento", `-${formatMoney(paidDiscount)}`) : "",
+      row("Total neto", formatMoney(paidNet)),
       row("Metodo", payment.method),
       row("Pagado", formatMoney(payment.amount)),
       payment.cashReceived != null ? row("Recibido", formatMoney(received)) : "",
@@ -5111,12 +5219,20 @@ type TableConfirmDialogState =
                   return matchesStatusFilter(item);
                 };
                 const visibleItems = order.items.filter(filterItem);
+                const accountSubtotal = order.subtotalBeforeDiscounts ?? order.items.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0);
+                const accountDiscount = order.discountTotal ?? order.items.reduce((sum, item) => sum + getOrderItemDiscount(item), 0);
+                const accountTotal = order.totalPayable ?? order.total;
+                const selectedSubtotal = visibleItems.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0);
+                const selectedDiscount = visibleItems.reduce((sum, item) => sum + getOrderItemDiscount(item), 0);
                 const selectedTotal = visibleItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0);
+                const selectedGuestSubtotal = selectedGuest ? selectedGuestItems.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0) : 0;
+                const selectedGuestDiscount = selectedGuest ? selectedGuestItems.reduce((sum, item) => sum + getOrderItemDiscount(item), 0) : 0;
                 const selectedGuestTotal = selectedGuest ? selectedGuestItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0) : 0;
                 const selectedPaidCents = selectedGuest ? getGuestPaidCents(tableBillDialog.payments, selectedGuest) : 0;
                 const selectedPendingCents = selectedGuest ? Math.max(toCents(selectedGuestTotal) - selectedPaidCents, 0) : 0;
                 const renderItem = (item: Order["items"][number]) => {
                   const modifiers = getOrderItemModifiers(item);
+                  const itemDiscount = getOrderItemDiscount(item);
                   return (
                     <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b px-3 py-2.5 last:border-b-0">
                       <div className="min-w-0 space-y-1">
@@ -5125,8 +5241,9 @@ type TableConfirmDialogState =
                           <Badge variant="outline" className={cn(getTableBillItemStatusTone(item, tableBillDialog.payments))}>{getTableBillItemStatusLabel(item, tableBillDialog.payments)}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceFinal ?? item.price)} c/u
+                          {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceBeforeDiscount ?? item.price)} c/u
                         </p>
+                        {itemDiscount > 0 ? <p className="text-xs gp-primary-text">Descuento: -{formatMoney(itemDiscount)}</p> : null}
                         {modifiers.length ? <p className="text-xs text-muted-foreground">Modificadores: {modifiers.join(", ")}</p> : null}
                       </div>
                       <p className="whitespace-nowrap text-right font-semibold">{formatMoney(getOrderItemTotal(item))}</p>
@@ -5141,10 +5258,12 @@ type TableConfirmDialogState =
                           <p className="font-semibold text-foreground">{restaurantTables.find((table) => table.id === tableBillDialog.tableId)?.name ?? "Mesa"}</p>
                           <p className="text-xs text-muted-foreground">{session?.guestsCount ?? 1} personas · {getSessionStateLabel(session ?? undefined)}</p>
                         </div>
-                        <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs font-semibold text-foreground sm:text-sm">
-                          <span>Total: {formatMoney(order.totalPayable ?? order.total)}</span>
-                          <span>Pagado: {formatMoney(order.totalPaid)}</span>
-                          <span>Pendiente: {formatMoney(order.remaining)}</span>
+                        <div className="grid min-w-[12rem] gap-1 text-xs text-muted-foreground sm:text-sm">
+                          <div className="flex justify-between gap-3"><span>Subtotal bruto</span><span className="font-medium text-foreground">{formatMoney(accountSubtotal)}</span></div>
+                          {accountDiscount > 0 ? <div className="flex justify-between gap-3 gp-primary-text"><span>Descuento</span><span>-{formatMoney(accountDiscount)}</span></div> : null}
+                          <div className="flex justify-between gap-3"><span>Total neto</span><span className="font-semibold text-foreground">{formatMoney(accountTotal)}</span></div>
+                          <div className="flex justify-between gap-3"><span>Pagado</span><span className="font-medium text-foreground">{formatMoney(order.totalPaid)}</span></div>
+                          <div className="flex justify-between gap-3"><span>Pendiente</span><span className="font-semibold text-foreground">{formatMoney(order.remaining)}</span></div>
                         </div>
                       </div>
                     </div>
@@ -5160,6 +5279,8 @@ type TableConfirmDialogState =
                       <div className="grid gap-2 rounded-lg border bg-card px-3 py-2 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-center">
                         <p className="text-xs text-muted-foreground">
                           Total filtro: <span className="font-semibold text-foreground">{formatMoney(selectedTotal)}</span>
+                          {selectedDiscount > 0 ? <span className="ml-2 gp-primary-text">Desc. -{formatMoney(selectedDiscount)}</span> : null}
+                          <span className="ml-2">Subtotal {formatMoney(selectedSubtotal)}</span>
                         </p>
                         <Select value={tableBillStatusFilter} onValueChange={(value) => setTableBillStatusFilter(value as TableBillStatusFilter)}>
                           <SelectTrigger className="h-9">
@@ -5177,20 +5298,28 @@ type TableConfirmDialogState =
                       <div className="rounded-lg border border-[color:var(--app-border-strong)] bg-[var(--app-surface)] px-3 py-2 text-sm">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="font-semibold">{selectedGuest.label}</span>
-                          <span className="font-medium">Total: {formatMoney(selectedGuestTotal)} · Pagado: {formatMoney(selectedPaidCents / 100)} · Pendiente: {formatMoney(selectedPendingCents / 100)}</span>
+                          <span className="font-medium">
+                            Subtotal: {formatMoney(selectedGuestSubtotal)}
+                            {selectedGuestDiscount > 0 ? ` · Descuento: -${formatMoney(selectedGuestDiscount)}` : ""}
+                            {" · "}Total neto: {formatMoney(selectedGuestTotal)}
+                            {" · "}Pagado: {formatMoney(selectedPaidCents / 100)}
+                            {" · "}Pendiente: {formatMoney(selectedPendingCents / 100)}
+                          </span>
                         </div>
                       </div>
                     ) : null}
                     <div className="overflow-hidden rounded-lg border">
                       {visibleItems.length ? (
                         tableBillGuestFilter === "all" ? (() => {
-                          const groups = new Map<string, { label: string; seat: number; items: Order["items"]; total: number; paidCents: number }>();
+                          const groups = new Map<string, { label: string; seat: number; items: Order["items"]; subtotal: number; discount: number; total: number; paidCents: number }>();
                           visibleItems.forEach((item) => {
                             const label = item.tableGuestLabel || item.assignedName || "Mesa completa";
                             const seat = item.tableGuestSeatNumber ?? item.guestNumber ?? 999;
                             const key = item.tableGuestId ? `guest-${item.tableGuestId}` : label;
-                            const group = groups.get(key) ?? { label, seat, items: [], total: 0, paidCents: 0 };
+                            const group = groups.get(key) ?? { label, seat, items: [], subtotal: 0, discount: 0, total: 0, paidCents: 0 };
                             group.items.push(item);
+                            group.subtotal += getOrderItemSubtotal(item);
+                            group.discount += getOrderItemDiscount(item);
                             group.total += getOrderItemTotal(item);
                             group.paidCents += getItemAllocatedCents(item, tableBillDialog.payments);
                             groups.set(key, group);
@@ -5199,7 +5328,11 @@ type TableConfirmDialogState =
                             <div key={group.label} className="border-b last:border-b-0">
                               <div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-muted/80 px-3 py-2 text-sm font-semibold backdrop-blur">
                                 <span>{group.label}</span>
-                                <span className="whitespace-nowrap">{formatMoney(group.total)} · pagado {formatMoney(group.paidCents / 100)}</span>
+                                <span className="whitespace-nowrap">
+                                  {formatMoney(group.total)}
+                                  {group.discount > 0 ? ` · desc. -${formatMoney(group.discount)}` : ""}
+                                  {" · "}pagado {formatMoney(group.paidCents / 100)}
+                                </span>
                               </div>
                               {group.items.map(renderItem)}
                             </div>
@@ -5478,7 +5611,7 @@ type TableConfirmDialogState =
                         </span>
                       </Button>
                       <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
-                        Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
+                        {splitModeLabel}
                       </Button>
                     </div>
                     <div className="flex gap-2">
@@ -5699,23 +5832,28 @@ type TableConfirmDialogState =
           </DialogContent>
         </Dialog>
         <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden">
             <DialogHeader>
               <DialogTitle>Dividir cuenta</DialogTitle>
               <DialogDescription>Define partes de la cuenta antes de cobrar con uno o varios métodos de pago.</DialogDescription>
             </DialogHeader>
-            <SplitPanel
-              enabled={splitEnabled}
-              onEnabledChange={setSplitEnabled}
-              totalCents={checkoutTotalCents}
-              parts={parts}
-              onPartsChange={setParts}
-              activePartId={activePartId}
-              onActivePartIdChange={setActivePartId}
-            />
+            <div className="min-h-0 overflow-y-auto">
+              <SplitPanel
+                enabled={splitEnabled}
+                onEnabledChange={setSplitEnabled}
+                totalCents={checkoutTotalCents}
+                parts={parts}
+                onPartsChange={setParts}
+                activePartId={activePartId}
+                onActivePartIdChange={setActivePartId}
+                canUsePersonMode={canUseSplitByPerson}
+                personModeDisabledReason="Abre una cuenta de mesa con personas para dividir por persona."
+                onPersonModeSelect={handleSelectSplitByPerson}
+              />
+            </div>
             <div className="flex gap-2">
-              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cerrar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aceptar</Button>
+              <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cancelar</Button>
+              <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aplicar división</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -5842,7 +5980,7 @@ type TableConfirmDialogState =
                       key={cat}
                       variant={selectedCategory === cat ? "default" : "outline"}
                       className={cn(
-                        "inline-flex min-h-14 cursor-pointer items-center whitespace-nowrap rounded-full px-5 py-2 text-base transition-all",
+                        "tap-target inline-flex min-h-14 cursor-pointer items-center whitespace-nowrap rounded-full px-5 py-2 text-base transition-all",
                         selectedCategory === cat && "bg-primary text-primary-foreground"
                       )}
                       onClick={() => setSelectedCategory(cat)}
@@ -5872,7 +6010,7 @@ type TableConfirmDialogState =
                     return (
                     <Card
                       key={product.id}
-                      className={cn("relative overflow-hidden hover-lift", showProductImage ? "p-2" : "p-4", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
+                      className={cn("tap-target relative overflow-hidden hover-lift", showProductImage ? "p-2" : "p-4", blocked ? "cursor-not-allowed border-red-500/50 opacity-60" : "cursor-pointer")}
                       onClick={() => blocked ? warnIfStockLimited(product.id) : handleProductClick(product)}
                       title={stockTitle}
                       aria-disabled={blocked}
@@ -6888,7 +7026,13 @@ type TableConfirmDialogState =
                           ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
                           : null}
                       {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
+                      <div className="flex justify-between font-semibold text-foreground"><span>Total neto</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
+                      {checkoutSummaryPaid > 0 ? (
+                        <div className="flex justify-between"><span>Pagado</span><span>{formatMoney(checkoutSummaryPaid)}</span></div>
+                      ) : null}
+                      {(checkoutSummaryPaid > 0 || tablePaymentScope) ? (
+                        <div className="flex justify-between font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(paymentTotal)}</span></div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -6947,7 +7091,7 @@ type TableConfirmDialogState =
                       </span>
                     </Button>
                     <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
-                      Dividir cuenta: {splitEnabled ? "Activado" : "Desactivado"}
+                      {splitModeLabel}
                     </Button>
                   </div>
                   <div className="flex gap-2">
@@ -7120,23 +7264,28 @@ type TableConfirmDialogState =
       </Dialog>
 
       <Dialog open={isSplitConfigOpen} onOpenChange={setIsSplitConfigOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Dividir cuenta</DialogTitle>
             <DialogDescription>Define partes de la cuenta antes de cobrar con uno o varios métodos de pago.</DialogDescription>
           </DialogHeader>
-          <SplitPanel
-            enabled={splitEnabled}
-            onEnabledChange={setSplitEnabled}
-            totalCents={checkoutTotalCents}
-            parts={parts}
-            onPartsChange={setParts}
-            activePartId={activePartId}
-            onActivePartIdChange={setActivePartId}
-          />
+          <div className="min-h-0 overflow-y-auto">
+            <SplitPanel
+              enabled={splitEnabled}
+              onEnabledChange={setSplitEnabled}
+              totalCents={checkoutTotalCents}
+              parts={parts}
+              onPartsChange={setParts}
+              activePartId={activePartId}
+              onActivePartIdChange={setActivePartId}
+              canUsePersonMode={canUseSplitByPerson}
+              personModeDisabledReason="Abre una cuenta de mesa con personas para dividir por persona."
+              onPersonModeSelect={handleSelectSplitByPerson}
+            />
+          </div>
           <div className="flex gap-2">
-            <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cerrar</Button>
-            <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aceptar</Button>
+            <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cancelar</Button>
+            <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aplicar división</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -206,9 +206,12 @@ class USBPrinterService:
             totals = ctx.get("totals", {})
             printer.text("-" * 42 + "\n")
             subtotal_txt = f"${Decimal(totals.get('subtotal', 0)):.2f}"
+            discount_total = Decimal(totals.get("discount_total", 0))
             iva_txt = f"${Decimal(totals.get('iva', 0)):.2f}"
             total_txt = f"${Decimal(totals.get('total', 0)):.2f}"
             printer.text(f"Subtotal:{subtotal_txt.rjust(32)}\n")
+            if discount_total > 0:
+                printer.text(f"Descuento:{f'-${discount_total:.2f}'.rjust(31)}\n")
             printer.text(f"IVA:{iva_txt.rjust(37)}\n")
             iva_rete1 = Decimal(totals.get("iva_rete1", 0))
             if iva_rete1 > 0:

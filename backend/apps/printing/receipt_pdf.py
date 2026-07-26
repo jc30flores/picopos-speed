@@ -507,9 +507,10 @@ def build_sale_receipt_pdf(
     totals = receipt_context.get("totals") or {}
     total = _money(totals.get("total") or 0)
     subtotal = _money(totals.get("subtotal") or (total / Decimal("1.13")))
+    discount_total = _money(totals.get("discount_total") or 0)
     iva = _money(totals.get("iva") or (total - subtotal))
-    if subtotal + iva != total:
-        iva = _money(total - subtotal)
+    if subtotal - discount_total + iva != total:
+        iva = _money(total - (subtotal - discount_total))
 
     dte = receipt_context.get("dte") or {}
     status_label = _dte_status_label(receipt_context)
@@ -654,7 +655,11 @@ def build_sale_receipt_pdf(
         pdf.drawString(margin_x, y, line)
 
     hr()
-    for label, amount in [("Subtotal:", subtotal), ("IVA:", iva), ("TOTAL:", total)]:
+    total_rows = [("Subtotal:", subtotal)]
+    if discount_total > 0:
+        total_rows.append(("Descuento:", -discount_total))
+    total_rows.extend([("IVA:", iva), ("TOTAL:", total)])
+    for label, amount in total_rows:
         size = total_size if label == "TOTAL:" else body_size
         move(leading)
         _draw_right_value(pdf, label, f"${amount:.2f}", y=y, page_width_pt=page_width_pt, margin_x=margin_x, font_name=font_name, font_size=size)

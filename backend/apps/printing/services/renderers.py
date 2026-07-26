@@ -10,6 +10,7 @@ from apps.dte.models import DTERecord
 from apps.dte.services.hacienda import build_hacienda_consulta_publica_url
 from apps.dte.services.payment_methods import get_cat017_code_and_label
 from apps.orders.models import Order
+from apps.orders.services.totals import calculate_order_totals
 from apps.payments.models import Refund
 
 
@@ -197,11 +198,11 @@ def build_receipt_context(order: Order) -> dict:
         or (timezone.localtime(dte_record.recibido_at).isoformat() if dte_record and dte_record.recibido_at else "")
     )
 
-    payment_total = sum((Decimal(str(p.amount or "0")) for p in payments), Decimal("0"))
-    total_source = payment_total if payment_total > 0 else Decimal(str(resumen.get("totalPagar") or order.total or "0.00"))
-    total = Decimal(str(total_source)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    subtotal_display, iva_display = _derive_totals_from_total(total)
-    iva = iva_display
+    order_totals = calculate_order_totals(order)
+    total = order_totals.total
+    subtotal_display = order_totals.subtotal
+    discount_total = order_totals.discount_total
+    iva = order_totals.tax_total
     iva_rete1 = Decimal(str(resumen.get("ivaRete1") or "0.00")).quantize(Decimal("0.01"))
 
     items: list[dict] = []
@@ -241,6 +242,7 @@ def build_receipt_context(order: Order) -> dict:
         "items": items,
         "totals": {
             "subtotal": subtotal_display,
+            "discount_total": discount_total,
             "iva": iva,
             "iva_rete1": iva_rete1,
             "total": total,
@@ -356,6 +358,8 @@ def render_customer_ticket(order: Order) -> dict:
 
     lines.append(_divider())
     lines.append(_format_right_label_value("Subtotal", _format_money(ctx["totals"]["subtotal"])))
+    if ctx["totals"].get("discount_total", Decimal("0.00")) > 0:
+        lines.append(_format_right_label_value("Descuento", f"-{_format_money(ctx['totals']['discount_total'])}"))
     lines.append(_format_right_label_value("IVA", _format_money(ctx["totals"]["iva"])))
     if ctx["totals"]["iva_rete1"] > 0:
         lines.append(_format_right_label_value("IVA Retenido 1%", _format_money(ctx["totals"]["iva_rete1"])))

@@ -844,6 +844,8 @@ export type Order = {
   discountSnapshot?: Record<string, unknown> | null;
   requiresKitchen?: boolean;
   sendToKitchen?: boolean;
+  discountTotal?: number;
+  disposableTotal?: number;
   subtotalBeforeDiscounts?: number;
   subtotalAfterDiscounts?: number;
   taxTotal?: number;
@@ -3623,6 +3625,8 @@ const mapOrder = (order: {
   discount_snapshot?: Record<string, unknown> | null;
   requires_kitchen?: boolean;
   send_to_kitchen?: boolean;
+  discount_total?: string;
+  disposable_total?: string;
   subtotal_before_discounts?: string;
   subtotal_after_discounts?: string;
   tax_total?: string;
@@ -3715,6 +3719,8 @@ const mapOrder = (order: {
     discountSnapshot: order.discount_snapshot ?? null,
     requiresKitchen: Boolean(order.requires_kitchen),
     sendToKitchen: Boolean(order.send_to_kitchen),
+    discountTotal: order.discount_total != null ? Number(order.discount_total) : undefined,
+    disposableTotal: order.disposable_total != null ? Number(order.disposable_total) : undefined,
     subtotalBeforeDiscounts: Number(order.subtotal_before_discounts ?? order.total),
     subtotalAfterDiscounts: Number(order.subtotal_after_discounts ?? order.total),
     taxTotal: Number(order.tax_total ?? 0),
@@ -3754,6 +3760,9 @@ export const setOrderPending = async (
     pendingReference?: string;
     removalReason?: string;
     completionType?: "paid" | "removed" | "canceled";
+    discountId?: number | null;
+    discountMode?: "manual" | "auto";
+    manualDiscountSnapshot?: Record<string, unknown> | null;
     items?: Array<{
       sourceOrderItemId?: number;
       productId?: number | null;
@@ -3779,6 +3788,10 @@ export const setOrderPending = async (
       pending_reference: payload.pendingReference ?? "",
       removal_reason: payload.removalReason ?? "",
       completion_type: payload.completionType ?? "",
+      manual_discount_id: payload.discountId ?? undefined,
+      discount_id: payload.discountId ?? undefined,
+      discount_mode: payload.discountMode ?? undefined,
+      manual_discount_snapshot: payload.manualDiscountSnapshot ?? undefined,
       items: (payload.items ?? []).map((item) => ({
         source_order_item_id: item.sourceOrderItemId ?? null,
         product_id: item.productId ?? null,

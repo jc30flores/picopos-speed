@@ -8,10 +8,11 @@ from rest_framework.views import APIView
 from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework import status
-from apps.orders.models import AppliedDiscount, Order, OrderFee, OrderItem, OrderItemModifier
-from apps.menu.models import Modifier, Product
+from apps.orders.models import Order, OrderFee, OrderItem, OrderItemModifier
+from apps.menu.models import Discount, Modifier, Product
 from apps.orders.serializers import OrderSerializer, OrderCreateSerializer, OrderCustomerUpdateSerializer
 from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
+from apps.orders.services.totals import apply_order_discounts_and_totals
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
@@ -108,7 +109,16 @@ def _item_requires_protected_removal(item: OrderItem) -> bool:
     }
 
 
-def _sync_pending_order_lines(order: Order, items_data: list[dict], request, authorization_pin: str) -> None:
+def _sync_pending_order_lines(
+    order: Order,
+    items_data: list[dict],
+    request,
+    authorization_pin: str,
+    *,
+    manual_discount_id: int | None = None,
+    discount_mode: str = "",
+    manual_discount_snapshot: dict | None = None,
+) -> None:
     previous_total = _to_money(order.total or 0)
     logger.info(
         "open_order.update.before_totals order_id=%s subtotal=%s discounts=%s fees=%s total=%s items=%s",
@@ -162,11 +172,10 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
         if protected_removed and not _is_privileged_user(request.user) and not _require_manager_pin_for_cashier(request, authorization_pin):
             raise PermissionDenied("Autorización de gerente/admin requerida para eliminar productos.")
 
-    AppliedDiscount.objects.filter(order=order).delete()
     OrderFee.objects.filter(order=order).delete()
     order.items.all().delete()
 
-    subtotal = Decimal("0.00")
+    order_lines: list[dict] = []
     requires_kitchen = False
     for idx, raw in enumerate(items_data, start=1):
         product_id = raw.get("product_id")
@@ -233,19 +242,44 @@ def _sync_pending_order_lines(order: Order, items_data: list[dict], request, aut
             OrderItemModifier.objects.create(order_item=item, modifier_name_snapshot=mod_name[:120], modifier_price_snapshot=mod_price)
             line_modifier_total += mod_price
         line_total = (base_price + line_modifier_total) * Decimal(quantity)
-        subtotal += _to_money(line_total)
+        order_lines.append(
+            {
+                "line_key": f"line-{idx - 1}",
+                "order_item_id": item.id,
+                "product_id": product.id if product else None,
+                "category_id": product.category_id if product else None,
+                "quantity": quantity,
+                "price_snapshot": base_price,
+                "modifier_total": line_modifier_total,
+                "line_total": _to_money(line_total),
+            }
+        )
         requires_kitchen = requires_kitchen or bool(getattr(product, "requires_kitchen", False))
 
-    total = _to_money(subtotal)
-    tax = _to_money(total - (total / Decimal("1.13"))) if total > Decimal("0.00") else Decimal("0.00")
-    order.subtotal = total
-    order.tax = tax
-    order.total = total
-    order.discount_total = Decimal("0.00")
-    order.discount_snapshot = {}
-    order.disposable_total = Decimal("0.00")
-    order.iva_exempt_discount = Decimal("0.00")
-    order.amount_due_cents = int((total * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    discounts = list(Discount.objects.filter(is_active=True).prefetch_related("targets").order_by("priority", "id"))
+    selected_discount = None
+    force_apply_discount = False
+    normalized_discount_mode = (discount_mode or "").strip().lower()
+    if manual_discount_id:
+        selected_discount = next((discount for discount in discounts if discount.id == int(manual_discount_id)), None)
+        if selected_discount is None:
+            raise serializers.ValidationError({"manual_discount_id": "Descuento no encontrado o inactivo."})
+        force_apply_discount = True
+        normalized_discount_mode = "manual"
+    elif normalized_discount_mode == "manual":
+        raise serializers.ValidationError({"manual_discount_id": "manual_discount_id es requerido para modo manual."})
+
+    apply_order_discounts_and_totals(
+        order=order,
+        order_lines=order_lines,
+        discounts=discounts,
+        service_type_key=order.service_type.key if order.service_type else "",
+        disposable_total=Decimal("0.00"),
+        selected_discount=selected_discount,
+        force_apply_discount=force_apply_discount,
+        discount_mode=normalized_discount_mode,
+        manual_discount_snapshot=manual_discount_snapshot if isinstance(manual_discount_snapshot, dict) else None,
+    )
     order.requires_kitchen = requires_kitchen
     logger.info(
         "open_order.update.after_totals order_id=%s subtotal=%s discounts=%s fees=%s total=%s items=%s previous_total=%s",
@@ -637,6 +671,13 @@ class PendingOrderToggleView(generics.GenericAPIView):
         items_data = request.data.get("items") if isinstance(request.data, dict) else None
         removal_reason = str(request.data.get("removal_reason") or "").strip()
         completion_type = str(request.data.get("completion_type") or "").strip().lower()
+        raw_manual_discount_id = request.data.get("manual_discount_id") or request.data.get("discount_id")
+        try:
+            manual_discount_id = int(raw_manual_discount_id) if raw_manual_discount_id not in (None, "") else None
+        except (TypeError, ValueError):
+            return Response({"manual_discount_id": "Descuento inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        discount_mode = str(request.data.get("discount_mode") or "").strip().lower()
+        manual_discount_snapshot = request.data.get("manual_discount_snapshot") if isinstance(request.data, dict) else None
 
         if order.status in {"canceled", "delivered"}:
             return Response({"detail": "La orden no está activa para Pendientes."}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
@@ -660,7 +701,15 @@ class PendingOrderToggleView(generics.GenericAPIView):
                     request.data.get("total") if isinstance(request.data, dict) else None,
                     len(items_data),
                 )
-                _sync_pending_order_lines(order, items_data, request, auth_pin)
+                _sync_pending_order_lines(
+                    order,
+                    items_data,
+                    request,
+                    auth_pin,
+                    manual_discount_id=manual_discount_id,
+                    discount_mode=discount_mode,
+                    manual_discount_snapshot=manual_discount_snapshot if isinstance(manual_discount_snapshot, dict) else None,
+                )
                 logger.info(
                     "open_order.persisted_totals order_id=%s subtotal=%s discounts=%s fees=%s total=%s items=%s",
                     order.id,
