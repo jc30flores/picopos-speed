@@ -5,6 +5,7 @@ from typing import Any
 
 from apps.dte.models import DTERecord
 from apps.orders.models import Order, OrderInvoice
+from apps.orders.services.totals import calculate_order_totals
 
 
 def _money(value: Decimal) -> str:
@@ -15,6 +16,7 @@ def build_sale_snapshot(order: Order) -> dict[str, Any]:
     customer = order.customer
     latest_payment = order.payments.select_related("payment_method").order_by("-id").first()
     latest_dte = DTERecord.objects.filter(order=order).order_by("-id").first()
+    order_totals = calculate_order_totals(order)
 
     items = []
     for item in order.items.prefetch_related("applied_modifiers").all():
@@ -65,12 +67,15 @@ def build_sale_snapshot(order: Order) -> dict[str, Any]:
         },
         "items": items,
         "totals": {
-            "subtotal": _money(order.subtotal),
-            "iva": _money(order.tax),
-            "total": _money(order.total),
-            "discount_total": _money(order.discount_total),
+            "subtotal": _money(order_totals.subtotal),
+            "subtotal_after_discounts": _money(order_totals.subtotal_after_discounts),
+            "iva": _money(order_totals.tax_total),
+            "total": _money(order_totals.total),
+            "discount_total": _money(order_totals.discount_total),
             "discount_snapshot": order.discount_snapshot or {},
-            "disposable_total": _money(order.disposable_total),
+            "disposable_total": _money(order_totals.disposable_total),
+            "paid_total": _money(order_totals.paid_total),
+            "amount_due": _money(order_totals.amount_due),
         },
         "payment": {
             "method": latest_payment.method if latest_payment else None,

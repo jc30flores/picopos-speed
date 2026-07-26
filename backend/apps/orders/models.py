@@ -223,6 +223,7 @@ class Order(models.Model):
         from decimal import Decimal
         from django.db.models import DecimalField, ExpressionWrapper, F, Sum
         from apps.payments.models import Payment, Refund
+        from apps.orders.services.totals import calculate_order_totals
 
         totals = Payment.objects.filter(order=self).aggregate(total_paid=Sum("amount_applied"))
         refunded = Refund.objects.filter(order=self).aggregate(
@@ -238,12 +239,13 @@ class Order(models.Model):
         net_paid = max(total_paid - total_refunded, Decimal("0")).quantize(Decimal("0.01"))
 
         if self.financial_status != "voided":
+            calculated_totals = calculate_order_totals(self)
+            if self.amount_due_cents <= 0:
+                self.amount_due_cents = calculated_totals.total_cents
+            amount_due = Decimal(self.amount_due_cents) / Decimal("100")
             if total_paid <= 0:
                 self.payment_status = "unpaid"
                 self.financial_status = "open"
-            amount_due = Decimal(self.amount_due_cents or to_cents(self.total)) / Decimal("100")
-            if self.amount_due_cents <= 0:
-                self.amount_due_cents = to_cents(self.total)
             elif total_paid < amount_due:
                 self.payment_status = "partial"
                 self.financial_status = "open"

@@ -13,6 +13,7 @@ from apps.payments.models import Payment
 from apps.orders.discount_engine import apply_discounts, discount_conditions_met, discount_has_conditions
 from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
 from apps.orders.whatsapp_phone import normalize_whatsapp_num_cliente
+from apps.orders.services.totals import apply_order_discounts_and_totals, calculate_order_totals
 from apps.menu.utils.pricing import resolve_effective_price
 from apps.core.audit import log_audit
 from apps.core.money import to_cents
@@ -189,10 +190,14 @@ class OrderItemSerializer(serializers.ModelSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     service_type = serializers.SerializerMethodField()
+    subtotal = serializers.SerializerMethodField()
+    tax = serializers.SerializerMethodField()
+    total = serializers.SerializerMethodField()
+    discount_total = serializers.SerializerMethodField()
     discounts_applied = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     remaining = serializers.SerializerMethodField()
-    amount_due_cents = serializers.IntegerField(read_only=True)
+    amount_due_cents = serializers.SerializerMethodField()
     remaining_cents = serializers.SerializerMethodField()
     financial_status = serializers.CharField(read_only=True)
     refund_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
@@ -262,6 +267,27 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_service_type(self, obj: Order):
         return obj.service_type.key if obj.service_type else None
 
+    def _totals(self, obj: Order):
+        cache = getattr(self, "_order_totals_cache", None)
+        if cache is None:
+            cache = {}
+            self._order_totals_cache = cache
+        if obj.id not in cache:
+            cache[obj.id] = calculate_order_totals(obj)
+        return cache[obj.id]
+
+    def get_subtotal(self, obj: Order):
+        return self._totals(obj).subtotal
+
+    def get_tax(self, obj: Order):
+        return self._totals(obj).tax_total
+
+    def get_total(self, obj: Order):
+        return self._totals(obj).total
+
+    def get_discount_total(self, obj: Order):
+        return self._totals(obj).discount_total
+
     def get_fees(self, obj: Order):
         return [
             {
@@ -287,34 +313,32 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
 
     def get_total_paid(self, obj: Order):
-        total = Payment.objects.filter(order=obj).aggregate(total=Sum("amount_applied"))["total"] or Decimal("0")
-        return total
+        return self._totals(obj).paid_total
 
     def get_remaining(self, obj: Order):
-        total_paid = self.get_total_paid(obj)
-        due = Decimal(obj.amount_due_cents or to_cents(obj.total)) / Decimal("100")
-        remaining = (due - total_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return remaining
+        return self._totals(obj).amount_due
+
+    def get_amount_due_cents(self, obj: Order):
+        totals = self._totals(obj)
+        payable_cents = totals.total_cents
+        if obj.financial_locked_at and obj.amount_due_cents > 0:
+            payable_cents = obj.amount_due_cents
+        return max(payable_cents, 0)
 
     def get_remaining_cents(self, obj: Order):
-        return max(to_cents(self.get_remaining(obj)), 0)
+        return self._totals(obj).amount_due_cents
 
     def get_subtotal_before_discounts(self, obj: Order):
-        total = Decimal("0.00")
-        for item in obj.items.all():
-            modifiers_total = sum((Decimal(mod.modifier_price_snapshot or 0) for mod in item.applied_modifiers.all()), Decimal("0.00"))
-            unit_before = Decimal(item.price_snapshot or 0) + modifiers_total
-            total += unit_before * Decimal(item.quantity or 0)
-        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return self._totals(obj).subtotal
 
     def get_subtotal_after_discounts(self, obj: Order):
-        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return self._totals(obj).subtotal_after_discounts
 
     def get_tax_total(self, obj: Order):
-        return Decimal(obj.tax or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return self._totals(obj).tax_total
 
     def get_total_payable(self, obj: Order):
-        return Decimal(obj.total or 0).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return self._totals(obj).total
 
 
     def get_table_session_id(self, obj: Order):
@@ -680,40 +704,17 @@ class OrderCreateSerializer(serializers.Serializer):
         elif discount_mode == "manual":
             raise serializers.ValidationError({"manual_discount_id": "manual_discount_id es requerido para modo manual."})
 
-        discount_result = apply_discounts(
-            order_lines,
-            discounts,
+        apply_order_discounts_and_totals(
+            order=order,
+            order_lines=order_lines,
+            discounts=discounts,
             service_type_key=service_type_key,
             disposable_total=disposable_total,
             selected_discount=selected_discount,
-            force_apply=force_apply_discount,
+            force_apply_discount=force_apply_discount,
+            discount_mode=discount_mode,
+            manual_discount_snapshot=manual_discount_snapshot if isinstance(manual_discount_snapshot, dict) else None,
         )
-
-        discount_totals = discount_result["discount_totals"]
-        discount_total = sum(discount_totals.values(), Decimal("0"))
-        subtotal_after_discounts = discount_result["subtotal_after_discounts"]
-        total = discount_result["final_subtotal"].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-        tax_config = TaxConfig.objects.filter(is_active=True).order_by("-id").first()
-        tax_rate = tax_config.rate if tax_config else Decimal("0.13")
-        divisor = Decimal("1.00") + tax_rate
-        tax_included = (total - (total / divisor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-        order.subtotal = total
-        order.tax = tax_included
-        order.total = total
-        order.discount_total = discount_total
-        order.discount_snapshot = {}
-        order.disposable_total = disposable_total
-        if order.iva_exempt:
-            exempt_discount = (total - (total / Decimal("1.13"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            order.iva_exempt_discount = exempt_discount
-            order.discount_total = (discount_total + exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            order.tax = Decimal("0.00")
-            order.total = (total - exempt_discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        else:
-            order.iva_exempt_discount = Decimal("0.00")
-        order.amount_due_cents = to_cents(order.total)
         order.requires_kitchen = order.items.filter(product__requires_kitchen=True).exists()
         order.send_to_kitchen = order.requires_kitchen and (is_kiosk_service or requested_send_to_kitchen)
         if order.send_to_kitchen and order.status == "preparing":
@@ -724,59 +725,15 @@ class OrderCreateSerializer(serializers.Serializer):
             )
         order.save(update_fields=["subtotal", "tax", "total", "amount_due_cents", "discount_total", "discount_snapshot", "disposable_total", "iva_exempt_discount", "requires_kitchen", "send_to_kitchen", "updated_at"])
 
-        breakdown_by_discount = {}
-        for entry in discount_result["applied_breakdown"]:
-            did = entry.get("discount_id")
-            breakdown_by_discount.setdefault(did, []).append(entry)
-
-        order_discount_snapshot = {}
-        line_discount_map = discount_result["line_discounts"]
-        for line in order_lines:
-            OrderItem.objects.filter(id=line["order_item_id"]).update(
-                discount_amount=(line_discount_map.get(line["line_key"]) or Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        request = self.context.get("request")
+        if request is not None and order.discount_snapshot and force_apply_discount:
+            log_audit(
+                request,
+                "orders.discount.manual_apply",
+                "Order",
+                order.id,
+                {"discount_id": order.discount_snapshot.get("discount_id"), "name": order.discount_snapshot.get("name")},
             )
-
-        for discount in discounts:
-            amount = discount_totals.get(discount.id)
-            if amount and amount > 0:
-                applied = AppliedDiscount.objects.create(
-                    order=order,
-                    discount_name_snapshot=discount.name,
-                    discount_type_snapshot=discount.type,
-                    discount_value_snapshot=discount.value,
-                    amount_discounted=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                    breakdown={"entries": breakdown_by_discount.get(discount.id, [])},
-                )
-                order_discount_snapshot = {
-                    "discount_id": discount.id,
-                    "name": discount.name,
-                    "type": discount.type,
-                    "value": str(discount.value),
-                    "amount": str(applied.amount_discounted),
-                    "mode": discount_mode or ("manual" if force_apply_discount else "auto"),
-                    "conditions_met": discount_conditions_met(
-                        discount,
-                        service_type_key=service_type_key,
-                        subtotal_before_discounts=subtotal,
-                    ),
-                    "has_conditions": discount_has_conditions(discount),
-                    "applies_to": discount.applies_to,
-                    "line_breakdown": breakdown_by_discount.get(discount.id, []),
-                }
-                if isinstance(manual_discount_snapshot, dict) and discount_mode == "manual":
-                    order_discount_snapshot["manual_input"] = manual_discount_snapshot
-
-        if order_discount_snapshot:
-            order.discount_snapshot = order_discount_snapshot
-            order.save(update_fields=["discount_snapshot", "updated_at"])
-            if force_apply_discount:
-                log_audit(
-                    self.context.get("request"),
-                    "orders.discount.manual_apply",
-                    "Order",
-                    order.id,
-                    {"discount_id": order_discount_snapshot.get("discount_id"), "name": order_discount_snapshot.get("name")},
-                )
 
         return order
 
@@ -884,5 +841,5 @@ class TableSessionSerializer(serializers.ModelSerializer):
 
     def get_total_cached(self, obj):
         if obj.primary_order_id and obj.primary_order:
-            return obj.primary_order.total
+            return calculate_order_totals(obj.primary_order).total
         return obj.total_cached

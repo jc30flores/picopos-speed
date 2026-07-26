@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from typing import Any
 
 from django.utils import timezone
@@ -148,7 +148,8 @@ def apply_discounts(
                 if discount.type == "percent":
                     amount = q2(base_amount * (discount.value / Decimal("100")))
                 else:
-                    amount = min(base_amount, Decimal(discount.value))
+                    fixed_value = Decimal(discount.value) * Decimal(line.get("quantity") or 1)
+                    amount = q2(min(base_amount, fixed_value))
                 line_discounts[line["line_key"]] += amount
                 register(discount, amount, {"scope": "line", "line_key": line["line_key"]})
 
@@ -160,20 +161,28 @@ def apply_discounts(
                 else:
                     amount = min(running_subtotal, Decimal(discount.value))
                 if amount > 0 and lines:
-                    # apply proportionally for deterministic line totals
-                    total_base = sum((line["line_total"] - line_discounts[line["line_key"]] for line in lines), Decimal("0"))
-                    remaining = amount
-                    for idx, line in enumerate(lines):
+                    # Reparte centavos con largest remainder para que la suma
+                    # por línea coincida exactamente con el descuento del ticket.
+                    eligible_lines = []
+                    for line in lines:
                         base = max(line["line_total"] - line_discounts[line["line_key"]], Decimal("0"))
-                        if base <= 0:
-                            continue
-                        if idx == len(lines) - 1 or total_base <= 0:
-                            part = remaining
-                        else:
-                            part = q2(amount * (base / total_base))
-                            part = min(part, remaining)
-                        line_discounts[line["line_key"]] += part
-                        remaining -= part
+                        if base > 0:
+                            eligible_lines.append((line, base))
+                    total_base = sum((base for _, base in eligible_lines), Decimal("0"))
+                    if total_base > 0:
+                        amount_cents = int((q2(amount) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+                        allocations = []
+                        allocated_cents = 0
+                        for index, (line, base) in enumerate(eligible_lines):
+                            raw = (Decimal(amount_cents) * base) / total_base
+                            cents = int(raw.to_integral_value(rounding=ROUND_FLOOR))
+                            allocated_cents += cents
+                            allocations.append({"index": index, "line": line, "cents": cents, "remainder": raw - Decimal(cents)})
+                        for allocation in sorted(allocations, key=lambda row: (-row["remainder"], row["index"]))[: amount_cents - allocated_cents]:
+                            allocation["cents"] += 1
+                        for allocation in sorted(allocations, key=lambda row: row["index"]):
+                            part = Decimal(allocation["cents"]) / Decimal("100")
+                            line_discounts[allocation["line"]["line_key"]] += part
                     register(discount, amount, {"scope": "order"})
 
         elif discount.type == "bxgy":
