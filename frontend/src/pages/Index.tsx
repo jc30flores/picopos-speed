@@ -701,6 +701,7 @@ type TableConfirmDialogState =
   const [tableBillStatusFilter, setTableBillStatusFilter] = useState<TableBillStatusFilter>("all");
   const [tablePaymentScope, setTablePaymentScope] = useState<TablePaymentScope | null>(null);
   const [tablePaymentReturn, setTablePaymentReturn] = useState<TablePaymentReturnTarget>(null);
+  const [tablePaymentPayments, setTablePaymentPayments] = useState<Payment[]>([]);
   const [isOpeningTablePayment, setIsOpeningTablePayment] = useState(false);
   const [thermalTicketWidth, setThermalTicketWidth] = useState<"58mm" | "80mm">("58mm");
   const [thermalTicket, setThermalTicket] = useState<ThermalTicketState>({ open: false, title: "", subtitle: "", text: "", logoUrl: null });
@@ -759,9 +760,14 @@ type TableConfirmDialogState =
   const [cashCloseFlowState, setCashCloseFlowState] = useState<CashCloseFlowState>("idle");
   const [lastPaymentId, setLastPaymentId] = useState<number | null>(null);
   const [lastPaymentAutoPrint, setLastPaymentAutoPrint] = useState(false);
+  const [splitMode, setSplitMode] = useState<"none" | "person" | "equal">("none");
+  const [personSplitEnabled, setPersonSplitEnabled] = useState(false);
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [parts, setParts] = useState<SplitPart[]>([]);
   const [activePartId, setActivePartId] = useState<string | null>(null);
+  const [splitDraftMode, setSplitDraftMode] = useState<"none" | "person" | "equal">("none");
+  const [splitDraftParts, setSplitDraftParts] = useState<SplitPart[]>([]);
+  const [splitDraftActivePartId, setSplitDraftActivePartId] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [createdOrderNumber, setCreatedOrderNumber] = useState<number | null>(null);
   const hardReloadTriggeredRef = useRef(false);
@@ -1174,6 +1180,39 @@ type TableConfirmDialogState =
     };
   }, []);
 
+  const applyTablePaymentScopeState = useCallback((order: Order, scope: TablePaymentScope, options?: { resetMethod?: boolean }) => {
+    const sourceItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
+    const restoredCart = sourceItems.map((item) => mapOrderItemToCartItem(item));
+    const serviceKey = order.serviceType || serviceType;
+    setActiveOrder(order);
+    setCreatedOrderId(order.id);
+    setCreatedOrderNumber(order.orderNumber);
+    setCart(restoredCart);
+    setSelectedDiscount(null);
+    setServiceType(serviceKey);
+    setCheckoutDraft({
+      items: restoredCart,
+      subtotal: (scope.subtotalCents ?? toCents(order.subtotalBeforeDiscounts ?? order.total)) / 100,
+      tax: order.taxTotal ?? 0,
+      total: scope.remainingCents / 100,
+      taxRate,
+      serviceType: serviceKey,
+      createdAt: Date.now(),
+    });
+    setPaymentAmount(centsToInput(scope.remainingCents));
+    setTipAmount("0");
+    setPaymentReference("");
+    setShowCashPanel(false);
+    setActiveTenderField(null);
+    if (options?.resetMethod) {
+      setSelectedPaymentMethodCode("");
+      setPaymentMethodAutoSelectedFromOrderType(false);
+      setPaymentMethod("cash");
+      setCardType(null);
+    }
+    setTablePaymentScope(scope);
+  }, [serviceType, taxRate]);
+
   const openTableOrderContext = useCallback((tableId: number, session: TableSession, mode: "edit" | "pay" = "edit") => {
     upsertTableSession(session);
     setContextFromTableSession(tableId, session);
@@ -1203,6 +1242,7 @@ type TableConfirmDialogState =
     setTableOrderContext(null);
     setTableBillDialog({ open: false, loading: false, tableId: null, session: null, order: null, payments: [] });
     setTablePaymentScope(null);
+    setTablePaymentPayments([]);
     setTablePaymentReturn(returnTarget);
     setActiveOrder(null);
     setCart([]);
@@ -1211,6 +1251,14 @@ type TableConfirmDialogState =
     setCreatedOrderNumber(null);
     setSelectedDiscount(null);
     setIsPaymentMethodOpen(false);
+    setPersonSplitEnabled(false);
+    setSplitMode("none");
+    setSplitEnabled(false);
+    setParts([]);
+    setActivePartId(null);
+    setSplitDraftMode("none");
+    setSplitDraftParts([]);
+    setSplitDraftActivePartId(null);
     setIsOpeningTablePayment(true);
     setPosMode("tables");
     setIsPaymentOpen(true);
@@ -1225,6 +1273,7 @@ type TableConfirmDialogState =
         toast.info(`${scope.guestLabel || "La persona"} ya no tiene saldo pendiente.`);
         setIsPaymentOpen(false);
         setTablePaymentScope(null);
+        setTablePaymentPayments([]);
         setTablePaymentReturn(null);
         setCheckoutDraft(null);
         setActiveOrder(null);
@@ -1233,39 +1282,14 @@ type TableConfirmDialogState =
         }
         return;
       }
-      const sourceItems = (order.items || []).filter((item) => scope.orderItemIds.includes(item.id));
-      const restoredCart = sourceItems.map((item) => mapOrderItemToCartItem(item));
-      const serviceKey = order.serviceType || serviceType;
-      setActiveOrder(order);
-      setCreatedOrderId(order.id);
-      setCreatedOrderNumber(order.orderNumber);
-      setCart(restoredCart);
-      setSelectedDiscount(null);
-      setServiceType(serviceKey);
-      setCheckoutDraft({
-        items: restoredCart,
-        subtotal: (scope.subtotalCents ?? toCents(order.subtotalBeforeDiscounts ?? order.total)) / 100,
-        tax: order.taxTotal ?? 0,
-        total: scope.remainingCents / 100,
-        taxRate,
-        serviceType: serviceKey,
-        createdAt: Date.now(),
-      });
-      const dueCents = scope.remainingCents;
-      setPaymentAmount(centsToInput(dueCents));
-      setTipAmount("0");
-      setPaymentReference("");
-      setSelectedPaymentMethodCode("");
-      setPaymentMethodAutoSelectedFromOrderType(false);
-      setPaymentMethod("cash");
-      setCardType(null);
-      setShowCashPanel(false);
-      setActiveTenderField(null);
-      setSplitEnabled(false);
+      setTablePaymentPayments(payments);
+      applyTablePaymentScopeState(order, scope, { resetMethod: true });
       const initialParts = splitEvenly(scope.remainingCents, 1);
       setParts(initialParts);
       setActivePartId(initialParts[0]?.id ?? null);
-      setTablePaymentScope(scope);
+      setSplitDraftMode("none");
+      setSplitDraftParts(initialParts);
+      setSplitDraftActivePartId(initialParts[0]?.id ?? null);
       setPosMode("tables");
       setIsPaymentMethodOpen(false);
       setIsPaymentOpen(true);
@@ -1273,6 +1297,7 @@ type TableConfirmDialogState =
       if (tablePaymentOpenRequestRef.current === requestId) {
         setIsPaymentOpen(false);
         setTablePaymentScope(null);
+        setTablePaymentPayments([]);
         setTablePaymentReturn(null);
         setCheckoutDraft(null);
         setActiveOrder(null);
@@ -1286,7 +1311,7 @@ type TableConfirmDialogState =
         setIsOpeningTablePayment(false);
       }
     }
-  }, [buildGuestPaymentScope, buildTablePaymentScope, canCollectTablePayments, serviceType, taxRate, upsertTableSession]);
+  }, [applyTablePaymentScopeState, buildGuestPaymentScope, buildTablePaymentScope, canCollectTablePayments, upsertTableSession]);
 
   const openTableSession = async (tableId: number) => {
     const existing = sessionByTableId.get(tableId);
@@ -1423,10 +1448,16 @@ type TableConfirmDialogState =
       setCheckoutDraft(null);
       setCreatedOrderId(null);
       setCreatedOrderNumber(null);
+      setPersonSplitEnabled(false);
+      setSplitMode("none");
       setSplitEnabled(false);
       setParts([]);
       setActivePartId(null);
+      setSplitDraftMode("none");
+      setSplitDraftParts([]);
+      setSplitDraftActivePartId(null);
       setTablePaymentScope(null);
+      setTablePaymentPayments([]);
       setPosMode("tables");
       if (returnTarget?.reopenBill) {
         window.setTimeout(() => {
@@ -2256,16 +2287,16 @@ type TableConfirmDialogState =
   const tipAmountValue = toNumber(tipAmount);
   const checkoutTotal = paymentTotal;
   const checkoutTotalCents = canonicalDueCents;
-  const splitValidation = validateParts(checkoutTotalCents, parts);
+  const tableRemainingCents = activeOrder
+    ? typeof activeOrder.remainingCents === "number"
+      ? Math.max(activeOrder.remainingCents, 0)
+      : Math.max(toCents(activeOrder.remaining), 0)
+    : checkoutTotalCents;
+  const splitPartsTotalCents = parts.reduce((sum, part) => sum + Number(part.amountCents || 0), 0);
+  const splitConfigTotalCents = splitEnabled && parts.length >= 2 ? splitPartsTotalCents : tablePaymentScope ? tableRemainingCents : checkoutTotalCents;
+  const splitValidation = validateParts(splitConfigTotalCents, parts);
   const activeSplitPart = parts.find((part) => part.id === activePartId) ?? parts.find((part) => !part.isPaid) ?? parts[0];
   const expectedPaymentCents = splitEnabled ? (activeSplitPart?.amountCents ?? checkoutTotalCents) : checkoutTotalCents;
-  const paymentAmountCents = parseMoneyToCents(paymentAmount);
-  const tipAmountCents = parseMoneyToCents(tipAmount);
-  const totalDueCents = expectedPaymentCents + tipAmountCents;
-  const changeCents = paymentAmountCents - totalDueCents;
-  const remainingTotal = Math.max(totalDueCents - paymentAmountCents, 0) / 100;
-  const changeTotal = Math.max(changeCents, 0) / 100;
-  const isExactPayment = Math.abs(changeCents) <= 1;
   const checkoutDraftPricing = useMemo(
     () =>
       checkoutDraft && !activeOrder
@@ -2315,28 +2346,169 @@ type TableConfirmDialogState =
       ? [orderDiscountLine]
       : checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
   const splitPersonSession = tablePaymentReturn?.session ?? tableSessions.find((session) => session.id === tablePaymentScope?.tableSessionId) ?? null;
-  const canUseSplitByPerson = Boolean(tablePaymentScope?.kind === "table" && tablePaymentScope.tableId && splitPersonSession?.guests?.length);
-  const splitModeLabel = tablePaymentScope?.kind === "guest"
-    ? "División: Por persona"
-    : splitEnabled
-      ? `División: ${parts.length} partes iguales`
+  const tablePaymentTableId = tablePaymentScope?.tableId ?? tablePaymentReturn?.tableId ?? null;
+  const personSplitCards = useMemo(() => {
+    if (!activeOrder || !splitPersonSession || !tablePaymentTableId) return [];
+    return (splitPersonSession.guests ?? []).map((guest) => {
+      const scope = buildGuestPaymentScope(tablePaymentTableId, splitPersonSession, activeOrder, tablePaymentPayments, guest);
+      const itemCount = (activeOrder.items || [])
+        .filter((item) => scope.orderItemIds.includes(item.id))
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      return {
+        guest,
+        scope,
+        itemCount,
+        isActive:
+          tablePaymentScope?.kind === "guest" &&
+          ((scope.tableGuestId != null && scope.tableGuestId === tablePaymentScope.tableGuestId) ||
+            (scope.guestNumber != null && scope.guestNumber === tablePaymentScope.guestNumber)),
+        isPaid: scope.totalCents <= 0 || scope.remainingCents <= 0,
+      };
+    });
+  }, [activeOrder, buildGuestPaymentScope, splitPersonSession, tablePaymentPayments, tablePaymentScope, tablePaymentTableId]);
+  const currentPersonSplitCard = personSplitCards.find((card) => card.isActive) ?? personSplitCards.find((card) => !card.isPaid) ?? null;
+  const currentSplitPartIndex = activeSplitPart ? parts.findIndex((part) => part.id === activeSplitPart.id) : -1;
+  const equalSplitPendingAfterCurrentCents = splitEnabled && activeSplitPart
+    ? parts.reduce((sum, part) => sum + (!part.isPaid && part.id !== activeSplitPart.id ? part.amountCents : 0), 0)
+    : 0;
+  const tableFullTotal = activeOrder?.totalPayable ?? activeOrder?.total ?? checkoutSummaryTotal;
+  const splitModeLabel = personSplitEnabled || splitMode === "person" || tablePaymentScope?.kind === "guest"
+    ? "División por persona"
+    : splitEnabled || splitMode === "equal"
+      ? `División: ${Math.max(parts.length, 2)} partes iguales`
       : "Cuenta sin dividir";
+  const paymentHeadline = personSplitEnabled && tablePaymentScope?.kind === "guest"
+    ? {
+        eyebrow: "AHORA COBRARÁS",
+        title: (tablePaymentScope.guestLabel || "Persona").toUpperCase(),
+        subtitle: `${currentPersonSplitCard?.itemCount ?? tablePaymentScope.orderItemIds.length} producto${(currentPersonSplitCard?.itemCount ?? tablePaymentScope.orderItemIds.length) === 1 ? "" : "s"}`,
+        amountCents: expectedPaymentCents,
+        helper: `Saldo total de mesa: ${formatMoney(tableFullTotal)}`,
+      }
+    : splitEnabled && activeSplitPart
+      ? {
+          eyebrow: "AHORA COBRARÁS",
+          title: `PARTE ${Math.max(currentSplitPartIndex + 1, 1)} DE ${parts.length}`,
+          subtitle: `Saldo total de mesa: ${formatMoney(tableFullTotal)}`,
+          amountCents: activeSplitPart.amountCents,
+          helper: `Pendiente después de esta parte: ${formatMoney(equalSplitPendingAfterCurrentCents / 100)}`,
+        }
+      : {
+          eyebrow: "TOTAL A PAGAR",
+          title: "",
+          subtitle: "",
+          amountCents: expectedPaymentCents,
+          helper: "",
+        };
+  const canUseSplitByPerson = Boolean(tablePaymentTableId && splitPersonSession?.guests?.length && activeOrder);
+
+  const activatePersonSplitScope = (scope: TablePaymentScope) => {
+    if (!activeOrder) return;
+    if (scope.remainingCents <= 0) {
+      toast.info("Esta persona no tiene saldo pendiente.");
+      return;
+    }
+    applyTablePaymentScopeState(activeOrder, scope);
+    setPersonSplitEnabled(true);
+    setSplitMode("person");
+    setSplitEnabled(false);
+    const reset = splitEvenly(scope.remainingCents, 1);
+    setParts(reset);
+    setActivePartId(reset[0]?.id ?? null);
+    setSplitDraftMode("person");
+    setSplitDraftParts(reset);
+    setSplitDraftActivePartId(reset[0]?.id ?? null);
+  };
+
+  const handleSplitModeChange = (nextMode: "none" | "person" | "equal") => {
+    setSplitDraftMode(nextMode);
+    if (nextMode === "none") {
+      const reset = splitEvenly(splitConfigTotalCents, 1);
+      setSplitDraftParts(reset);
+      setSplitDraftActivePartId(reset[0]?.id ?? null);
+      return;
+    }
+    if (nextMode === "person") {
+      const reset = splitEvenly(splitConfigTotalCents, 1);
+      setSplitDraftParts(reset);
+      setSplitDraftActivePartId(reset[0]?.id ?? null);
+      return;
+    }
+    const base = splitDraftParts.length >= 2 ? splitDraftParts : splitEvenly(splitConfigTotalCents, 2);
+    setSplitDraftParts(base);
+    setSplitDraftActivePartId(base.find((part) => !part.isPaid)?.id ?? base[0]?.id ?? null);
+  };
+
+  const handleApplySplitConfig = () => {
+    if (splitDraftMode === "person") {
+      if (!tablePaymentTableId || !splitPersonSession || !activeOrder) {
+        toast.info("Abre una cuenta de mesa para dividir por persona.");
+        return;
+      }
+      const nextPerson = personSplitCards.find((card) => !card.isPaid && card.scope.remainingCents > 0);
+      if (!nextPerson) {
+        toast.info("No hay personas con saldo pendiente.");
+        return;
+      }
+      activatePersonSplitScope(nextPerson.scope);
+      setIsSplitConfigOpen(false);
+      toast.success("La cuenta fue dividida por persona.");
+      return;
+    }
+    if (splitDraftMode === "equal") {
+      const normalized = splitDraftParts.length >= 2 ? splitDraftParts : splitEvenly(splitConfigTotalCents, 2);
+      const draftValidation = validateParts(splitConfigTotalCents, normalized);
+      if (!draftValidation.isValid) {
+        toast.error(draftValidation.error || "Los montos de partes no cuadran");
+        return;
+      }
+      setSplitMode("equal");
+      setParts(normalized);
+      const nextActivePartId = splitDraftActivePartId ?? normalized.find((part) => !part.isPaid)?.id ?? normalized[0]?.id ?? null;
+      const nextActivePart = normalized.find((part) => part.id === nextActivePartId) ?? normalized[0];
+      setActivePartId(nextActivePartId);
+      if (nextActivePart) setPaymentAmount(centsToInput(nextActivePart.amountCents));
+      setTipAmount("0");
+      setPaymentReference("");
+      setShowCashPanel(false);
+      setActiveTenderField(null);
+      setPersonSplitEnabled(false);
+      setSplitEnabled(true);
+      if (activeOrder && tablePaymentTableId && splitPersonSession && tablePaymentScope?.kind === "guest") {
+        applyTablePaymentScopeState(activeOrder, buildTablePaymentScope(tablePaymentTableId, splitPersonSession, activeOrder));
+      }
+      setIsSplitConfigOpen(false);
+      toast.success(`La cuenta fue dividida en ${normalized.length} partes.`);
+      return;
+    }
+    setSplitMode("none");
+    setPersonSplitEnabled(false);
+    setSplitEnabled(false);
+    const reset = splitEvenly(splitConfigTotalCents, 1);
+    setParts(reset);
+    setActivePartId(reset[0]?.id ?? null);
+    if (activeOrder && tablePaymentTableId && splitPersonSession && tablePaymentScope?.kind === "guest") {
+      applyTablePaymentScopeState(activeOrder, buildTablePaymentScope(tablePaymentTableId, splitPersonSession, activeOrder));
+    }
+    setIsSplitConfigOpen(false);
+    toast.success("La cuenta quedó sin dividir.");
+  };
+
   const handleSelectSplitByPerson = () => {
-    if (!tablePaymentScope?.tableId || !splitPersonSession) {
+    if (!tablePaymentTableId || !splitPersonSession) {
       toast.info("Abre una cuenta de mesa para dividir por persona.");
       return;
     }
-    const reset = splitEvenly(checkoutTotalCents, 1);
-    setSplitEnabled(false);
-    setParts(reset);
-    setActivePartId(reset[0]?.id ?? null);
-    setIsSplitConfigOpen(false);
-    setIsPaymentOpen(false);
-    setIsPaymentMethodOpen(false);
-    setCheckoutDraft(null);
-    setTablePaymentScope(null);
-    toast.success("La cuenta fue dividida por persona.");
-    void openTableBill(tablePaymentScope.tableId, splitPersonSession);
+    setSplitDraftMode("person");
+  };
+
+  const openSplitConfig = () => {
+    const currentMode = personSplitEnabled || tablePaymentScope?.kind === "guest" ? "person" : splitEnabled ? "equal" : "none";
+    const currentParts = parts.length ? parts : splitEvenly(splitConfigTotalCents, currentMode === "equal" ? 2 : 1);
+    setSplitDraftMode(currentMode);
+    setSplitDraftParts(currentParts);
+    setSplitDraftActivePartId(activePartId ?? currentParts.find((part) => !part.isPaid)?.id ?? currentParts[0]?.id ?? null);
+    setIsSplitConfigOpen(true);
   };
   const paymentDialogItems = useMemo(() => {
     if (!activeOrder?.items?.length) return null;
@@ -2439,10 +2611,15 @@ type TableConfirmDialogState =
     setCardType(null);
     setShowCashPanel(false);
     setActiveTenderField(null);
+    setPersonSplitEnabled(false);
+    setSplitMode("none");
     setSplitEnabled(false);
     const initialParts = splitEvenly(dueCents, 1);
     setParts(initialParts);
     setActivePartId(initialParts[0]?.id ?? null);
+    setSplitDraftMode("none");
+    setSplitDraftParts(initialParts);
+    setSplitDraftActivePartId(initialParts[0]?.id ?? null);
     setTablePaymentScope(null);
     setIsPaymentOpen(true);
   };
@@ -2970,6 +3147,14 @@ type TableConfirmDialogState =
     [paymentMethods, selectedPaymentMethodCode],
   );
   const selectedPaymentIsCash = Boolean(selectedPaymentMethodOption) && (isCashPaymentMethod(selectedPaymentMethodOption) || shouldOpenCashDrawer(paymentMethod, selectedPaymentMethodCode));
+  const paymentAmountCents = parseMoneyToCents(paymentAmount);
+  const tipAmountCents = parseMoneyToCents(tipAmount);
+  const allowsScopedCashPartial = Boolean(tablePaymentScope && !splitEnabled && selectedPaymentIsCash && showCashPanel);
+  const cashPaymentTargetCents = allowsScopedCashPartial && paymentAmountCents > 0 ? Math.min(paymentAmountCents, expectedPaymentCents) : expectedPaymentCents;
+  const currentPaymentTargetCents = selectedPaymentIsCash && showCashPanel ? cashPaymentTargetCents : expectedPaymentCents;
+  const totalDueCents = currentPaymentTargetCents + tipAmountCents;
+  const changeCents = paymentAmountCents - totalDueCents;
+  const isExactPayment = Math.abs(changeCents) <= 1;
   const selectedPaymentAutoPrint = Boolean(selectedPaymentMethodOption?.autoPrintTicket);
   const selectedServiceType = useMemo(
     () => serviceTypes.find((type) => type.key === serviceType) ?? serviceTypes[0] ?? null,
@@ -3864,7 +4049,7 @@ type TableConfirmDialogState =
   };
 
   const setExactTenderAmount = () => {
-    setPaymentAmount(centsToInput(totalDueCents));
+    setPaymentAmount(centsToInput(expectedPaymentCents + tipAmountCents));
     setActiveTenderField("payment");
     setShouldResetTenderOnFirstTap(false);
   };
@@ -3896,10 +4081,16 @@ type TableConfirmDialogState =
     setCreatedOrderId(null);
     setCreatedOrderNumber(null);
     setLastPaymentId(null);
+    setPersonSplitEnabled(false);
+    setSplitMode("none");
     setSplitEnabled(false);
     setParts([]);
     setActivePartId(null);
+    setSplitDraftMode("none");
+    setSplitDraftParts([]);
+    setSplitDraftActivePartId(null);
     setTablePaymentScope(null);
+    setTablePaymentPayments([]);
     setKitchenPromptOrderId(null);
     setIsKitchenPromptOpen(false);
     setPostSaleKitchenChoice(true);
@@ -4051,7 +4242,8 @@ type TableConfirmDialogState =
     const totalDue = selectedPaymentIsCash && !showCashPanel ? exactCashAmount : totalDueCents / 100;
     const remainingOrderAmount = tablePaymentScope ? tablePaymentScope.remainingCents / 100 : Math.max(0, toNumber(activeOrder?.remaining) || checkoutTotal);
     const splitPartAmount = splitEnabled ? (activeSplitPart?.amountCents ?? expectedPaymentCents) / 100 : null;
-    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : tablePaymentScope ? expectedPaymentCents / 100 : remainingOrderAmount;
+    const scopedPaymentAmount = selectedPaymentIsCash && showCashPanel ? currentPaymentTargetCents / 100 : expectedPaymentCents / 100;
+    const paymentAmountForApi = splitEnabled ? (splitPartAmount ?? expectedPaymentCents / 100) : tablePaymentScope ? scopedPaymentAmount : remainingOrderAmount;
 
     if (selectedPaymentIsCash && (!amountReceived || amountReceived <= 0)) {
       toast.error("Ingresa un monto válido");
@@ -4118,7 +4310,7 @@ type TableConfirmDialogState =
         reference: paymentReference || undefined,
         paymentMethodCode: selectedPaymentMethodCode,
         splitPart: splitEnabled && activeSplitPart ? (parts.findIndex((part) => part.id === activeSplitPart.id) + 1) : undefined,
-        paymentScope: tablePaymentScope?.kind === "guest" ? "guest" : tablePaymentScope ? "custom" : "order",
+        paymentScope: splitEnabled ? "split_part" : tablePaymentScope?.kind === "guest" ? "guest" : tablePaymentScope ? "custom" : "order",
         tableSessionId: tablePaymentScope?.tableSessionId ?? null,
         tableGuestId: tablePaymentScope?.tableGuestId ?? null,
         guestNumber: tablePaymentScope?.guestNumber ?? null,
@@ -4133,6 +4325,11 @@ type TableConfirmDialogState =
       }
       const refreshed = await getOrderById(orderId);
       setActiveOrder(refreshed);
+      const refreshedPayments = tablePaymentScope ? await getPaymentsByOrder(Number(orderId)) : null;
+      if (refreshedPayments) setTablePaymentPayments(refreshedPayments);
+      if (tablePaymentScope?.kind === "table" && tablePaymentTableId && splitPersonSession) {
+        setTablePaymentScope(buildTablePaymentScope(tablePaymentTableId, splitPersonSession, refreshed));
+      }
       let nextUnpaidPart: SplitPart | undefined;
       if (splitEnabled) {
         const paidPartId = activeSplitPart?.id;
@@ -4141,7 +4338,7 @@ type TableConfirmDialogState =
         nextUnpaidPart = nextParts.find((part) => !part.isPaid);
         setActivePartId(nextUnpaidPart?.id ?? nextParts[0]?.id ?? null);
       }
-      setPaymentAmount(toNumber(refreshed.remaining).toFixed(2));
+      setPaymentAmount(centsToInput(nextUnpaidPart?.amountCents ?? (tablePaymentScope?.kind === "guest" ? tablePaymentScope.remainingCents : toCents(refreshed.remaining))));
       setTipAmount("0");
       setPaymentReference("");
       if (refreshed.paymentStatus === "paid") {
@@ -4199,6 +4396,36 @@ type TableConfirmDialogState =
           setIsKitchenPromptOpen(true);
         }
       } else {
+        if (personSplitEnabled && tablePaymentScope?.kind === "guest" && splitPersonSession && tablePaymentTableId && refreshedPayments) {
+          const currentGuestId = tablePaymentScope.tableGuestId;
+          const currentGuestNumber = tablePaymentScope.guestNumber;
+          const refreshedCards = (splitPersonSession.guests ?? []).map((guest) => {
+            const scope = buildGuestPaymentScope(tablePaymentTableId, splitPersonSession, refreshed, refreshedPayments, guest);
+            return { guest, scope };
+          });
+          const currentGuest = refreshedCards.find(({ scope }) =>
+            (currentGuestId != null && scope.tableGuestId === currentGuestId) ||
+            (currentGuestNumber != null && scope.guestNumber === currentGuestNumber)
+          );
+          if (currentGuest && currentGuest.scope.remainingCents > 0) {
+            applyTablePaymentScopeState(refreshed, currentGuest.scope);
+            toast.success("Pago parcial registrado. Esta persona aún tiene saldo pendiente.");
+            return;
+          }
+          const nextPerson = refreshedCards.find(({ scope }) => scope.remainingCents > 0);
+          if (nextPerson) {
+            applyTablePaymentScopeState(refreshed, nextPerson.scope);
+            toast.success(`Pago de ${tablePaymentScope.guestLabel || "persona"} registrado. Continúa con ${nextPerson.scope.guestLabel || "la siguiente persona"}.`);
+            return;
+          }
+        }
+        if (splitEnabled && nextUnpaidPart) {
+          setPaymentAmount(centsToInput(nextUnpaidPart.amountCents));
+          setShowCashPanel(false);
+          setActiveTenderField(null);
+          toast.success(`Parte ${activeSplitPart ? parts.findIndex((part) => part.id === activeSplitPart.id) + 1 : ""} pagada. Continúa con la siguiente parte.`);
+          return;
+        }
         if (tablePaymentScope && (!splitEnabled || !nextUnpaidPart)) {
           const scope = tablePaymentScope;
           toast.success(`Pago de ${scope.guestLabel || "persona"} registrado. La mesa sigue abierta.`);
@@ -4788,6 +5015,64 @@ type TableConfirmDialogState =
   };
   const handleTableMapPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (tableMapDragRef.current?.pointerId === event.pointerId) tableMapDragRef.current = null;
+  };
+
+  const renderPaymentHeadline = () => (
+    <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">{paymentHeadline.eyebrow}</div>
+      {paymentHeadline.title ? <div className="mt-1 text-sm font-bold uppercase text-foreground">{paymentHeadline.title}</div> : null}
+      {paymentHeadline.subtitle ? <div className="mt-0.5 text-xs text-muted-foreground">{paymentHeadline.subtitle}</div> : null}
+      <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentHeadline.amountCents / 100)}</div>
+      {paymentHeadline.helper ? <div className="mt-2 text-xs text-muted-foreground">{paymentHeadline.helper}</div> : null}
+    </div>
+  );
+
+  const renderPersonSplitSection = () => {
+    if (!personSplitEnabled || !personSplitCards.length) return null;
+    return (
+      <div className="space-y-3 rounded-md border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">División por persona</div>
+            <p className="text-xs text-muted-foreground">Selecciona la persona que vas a cobrar ahora.</p>
+          </div>
+          <Badge variant="outline">{formatMoney((activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? 0)) / 100)} pendiente</Badge>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {personSplitCards.map((card) => {
+            const disabled = card.isPaid || card.scope.remainingCents <= 0;
+            return (
+              <button
+                key={card.guest.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => activatePersonSplitScope(card.scope)}
+                className={cn(
+                  "tap-target min-h-28 rounded-md border p-3 text-left transition-[background-color,border-color,box-shadow] duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  card.isActive ? "border-primary bg-primary/10 shadow-sm" : "bg-background hover:bg-muted/40",
+                  disabled && "cursor-not-allowed opacity-60"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-foreground">{card.guest.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {card.itemCount} producto{card.itemCount === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                  <Badge variant={disabled ? "secondary" : "outline"}>{disabled ? "Pagada" : "Pendiente"}</Badge>
+                </div>
+                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  <div className="flex justify-between gap-2"><span>Subtotal</span><span>{formatMoney(card.scope.subtotalCents ? card.scope.subtotalCents / 100 : 0)}</span></div>
+                  <div className="flex justify-between gap-2"><span>Descuento</span><span>{card.scope.discountCents ? `-${formatMoney(card.scope.discountCents / 100)}` : formatMoney(0)}</span></div>
+                  <div className="flex justify-between gap-2 font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(card.scope.remainingCents / 100)}</span></div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   const shouldShowPosModeLoading = !runtimeSettingsLoaded && !isQuickPosRequested && !isTableFlowMode && !tableOrderContext;
@@ -5490,10 +5775,9 @@ type TableConfirmDialogState =
               {checkoutDraft ? (
                 <>
                   <div ref={checkoutModalScrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                    <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
-                      <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
-                    </div>
+                    {renderPaymentHeadline()}
+
+                    {renderPersonSplitSection()}
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm font-semibold">
@@ -5552,19 +5836,19 @@ type TableConfirmDialogState =
                             ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
                             : null}
                         {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                        <div className="flex justify-between font-semibold text-foreground"><span>Total</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
+                        <div className="flex justify-between font-semibold text-foreground"><span>Total neto</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
+                        {checkoutSummaryPaid > 0 ? (
+                          <div className="flex justify-between"><span>Pagado</span><span>{formatMoney(checkoutSummaryPaid)}</span></div>
+                        ) : null}
+                        {(checkoutSummaryPaid > 0 || tablePaymentScope) ? (
+                          <div className="flex justify-between font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(paymentTotal)}</span></div>
+                        ) : null}
                       </div>
                     </div>
 
-                    {splitEnabled && activeSplitPart ? (
-                      <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
-                        Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
-                      </div>
-                    ) : null}
-
                     {selectedPaymentIsCash && showCashPanel ? (
                       <CashPaymentPanel
-                        totalCents={expectedPaymentCents}
+                        totalCents={currentPaymentTargetCents}
                         paymentAmount={paymentAmount}
                         tipAmount={tipAmount}
                         activeTenderField={activeTenderField}
@@ -5610,7 +5894,7 @@ type TableConfirmDialogState =
                           Cliente: {selectedCustomer ? `${selectedCustomer.fullName}${dteEnabled ? ` (${dteDocumentType})` : ""}` : dteEnabled ? `Consumidor final (${dteDocumentType})` : "Consumidor final"}
                         </span>
                       </Button>
-                      <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                      <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={openSplitConfig}>
                         {splitModeLabel}
                       </Button>
                     </div>
@@ -5640,7 +5924,7 @@ type TableConfirmDialogState =
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Pago</DialogTitle>
-              <DialogDescription>{splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
+              <DialogDescription>{personSplitEnabled && tablePaymentScope?.kind === "guest" ? `Cobrando ${tablePaymentScope.guestLabel || "persona"}` : splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
               <div className="rounded-xl border bg-muted/30 p-4 text-center">
@@ -5839,13 +6123,15 @@ type TableConfirmDialogState =
             </DialogHeader>
             <div className="min-h-0 overflow-y-auto">
               <SplitPanel
-                enabled={splitEnabled}
-                onEnabledChange={setSplitEnabled}
-                totalCents={checkoutTotalCents}
-                parts={parts}
-                onPartsChange={setParts}
-                activePartId={activePartId}
-                onActivePartIdChange={setActivePartId}
+                enabled={splitDraftMode === "equal"}
+                onEnabledChange={(value) => handleSplitModeChange(value ? "equal" : "none")}
+                mode={splitDraftMode}
+                onModeChange={handleSplitModeChange}
+                totalCents={splitConfigTotalCents}
+                parts={splitDraftParts}
+                onPartsChange={setSplitDraftParts}
+                activePartId={splitDraftActivePartId}
+                onActivePartIdChange={setSplitDraftActivePartId}
                 canUsePersonMode={canUseSplitByPerson}
                 personModeDisabledReason="Abre una cuenta de mesa con personas para dividir por persona."
                 onPersonModeSelect={handleSelectSplitByPerson}
@@ -5853,7 +6139,7 @@ type TableConfirmDialogState =
             </div>
             <div className="flex gap-2">
               <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cancelar</Button>
-              <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aplicar división</Button>
+              <Button className="h-14 flex-1 text-base" onClick={handleApplySplitConfig}>Aplicar división</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -6964,10 +7250,9 @@ type TableConfirmDialogState =
             {checkoutDraft ? (
               <>
                 <div ref={checkoutModalScrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6 min-h-0">
-                  <div className="rounded-xl border bg-muted/20 px-4 py-3 text-center shadow-sm">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">TOTAL A PAGAR</div>
-                    <div className="mt-2 text-4xl font-extrabold leading-none text-secondary sm:text-5xl">{formatMoney(paymentTotal)}</div>
-                  </div>
+                  {renderPaymentHeadline()}
+
+                  {renderPersonSplitSection()}
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm font-semibold">
@@ -7036,15 +7321,9 @@ type TableConfirmDialogState =
                     </div>
                   </div>
 
-                  {splitEnabled && activeSplitPart ? (
-                    <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
-                      Cobrando Parte {parts.findIndex((part) => part.id === activeSplitPart.id) + 1}: {formatMoney(activeSplitPart.amountCents / 100)}
-                    </div>
-                  ) : null}
-
                   {selectedPaymentIsCash && showCashPanel ? (
                     <CashPaymentPanel
-                      totalCents={expectedPaymentCents}
+                      totalCents={currentPaymentTargetCents}
                       paymentAmount={paymentAmount}
                       tipAmount={tipAmount}
                       activeTenderField={activeTenderField}
@@ -7090,7 +7369,7 @@ type TableConfirmDialogState =
                         Cliente: {selectedCustomer ? `${selectedCustomer.fullName}${dteEnabled ? ` (${dteDocumentType})` : ""}` : dteEnabled ? `Consumidor final (${dteDocumentType})` : "Consumidor final"}
                       </span>
                     </Button>
-                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={() => setIsSplitConfigOpen(true)}>
+                    <Button className="h-12 min-w-0 text-sm" type="button" variant="outline" onClick={openSplitConfig}>
                       {splitModeLabel}
                     </Button>
                   </div>
@@ -7121,7 +7400,7 @@ type TableConfirmDialogState =
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Pago</DialogTitle>
-            <DialogDescription>{splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
+            <DialogDescription>{personSplitEnabled && tablePaymentScope?.kind === "guest" ? `Cobrando ${tablePaymentScope.guestLabel || "persona"}` : splitEnabled && activeSplitPart ? `Cobrando Parte ${parts.findIndex((part) => part.id === activeSplitPart.id) + 1}/${parts.length}` : "Pago completo"}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="rounded-xl border bg-muted/30 p-4 text-center">
@@ -7271,13 +7550,15 @@ type TableConfirmDialogState =
           </DialogHeader>
           <div className="min-h-0 overflow-y-auto">
             <SplitPanel
-              enabled={splitEnabled}
-              onEnabledChange={setSplitEnabled}
-              totalCents={checkoutTotalCents}
-              parts={parts}
-              onPartsChange={setParts}
-              activePartId={activePartId}
-              onActivePartIdChange={setActivePartId}
+              enabled={splitDraftMode === "equal"}
+              onEnabledChange={(value) => handleSplitModeChange(value ? "equal" : "none")}
+              mode={splitDraftMode}
+              onModeChange={handleSplitModeChange}
+              totalCents={splitConfigTotalCents}
+              parts={splitDraftParts}
+              onPartsChange={setSplitDraftParts}
+              activePartId={splitDraftActivePartId}
+              onActivePartIdChange={setSplitDraftActivePartId}
               canUsePersonMode={canUseSplitByPerson}
               personModeDisabledReason="Abre una cuenta de mesa con personas para dividir por persona."
               onPersonModeSelect={handleSelectSplitByPerson}
@@ -7285,7 +7566,7 @@ type TableConfirmDialogState =
           </div>
           <div className="flex gap-2">
             <Button className="h-14 flex-1 text-base" variant="outline" onClick={() => setIsSplitConfigOpen(false)}>Cancelar</Button>
-            <Button className="h-14 flex-1 text-base" onClick={() => setIsSplitConfigOpen(false)}>Aplicar división</Button>
+            <Button className="h-14 flex-1 text-base" onClick={handleApplySplitConfig}>Aplicar división</Button>
           </div>
         </DialogContent>
       </Dialog>
