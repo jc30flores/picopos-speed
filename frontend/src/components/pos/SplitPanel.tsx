@@ -1,10 +1,9 @@
-import { useMemo, useState } from "react";
-import { Minus, Plus, RotateCcw, X } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Check, Minus, Plus, RotateCcw, SplitSquareHorizontal, Users, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/money";
 import { recalcParts, SplitPart, splitEvenly, validateParts } from "@/lib/splitPayments";
@@ -18,6 +17,9 @@ type SplitPanelProps = {
   onPartsChange: (parts: SplitPart[]) => void;
   activePartId: string | null;
   onActivePartIdChange: (partId: string | null) => void;
+  canUsePersonMode?: boolean;
+  personModeDisabledReason?: string;
+  onPersonModeSelect?: () => void;
 };
 
 const MAX_PARTS = 20;
@@ -33,13 +35,20 @@ export function SplitPanel({
   onPartsChange,
   activePartId,
   onActivePartIdChange,
+  canUsePersonMode = true,
+  personModeDisabledReason = "Disponible solo para cuentas de mesa con personas.",
+  onPersonModeSelect,
 }: SplitPanelProps) {
   const [editingPartId, setEditingPartId] = useState<string | null>(null);
   const [editingRawValue, setEditingRawValue] = useState("");
 
-  const safeParts = useMemo(() => (parts.length ? parts : splitEvenly(totalCents, 1)), [parts, totalCents]);
+  const safeParts = useMemo(
+    () => (enabled ? (parts.length >= 2 ? parts : splitEvenly(totalCents, 2)) : splitEvenly(totalCents, 1)),
+    [enabled, parts, totalCents]
+  );
   const validation = useMemo(() => validateParts(totalCents, safeParts), [safeParts, totalCents]);
   const hasLocks = safeParts.some((part) => part.locked);
+  const selectedMode = enabled ? "equal" : "none";
 
   const chooseFallbackActive = (list: SplitPart[]): string | null => {
     if (!list.length) return null;
@@ -48,7 +57,7 @@ export function SplitPanel({
   };
 
   const setPartCount = (count: number, resetLocks = false) => {
-    const target = Math.max(1, Math.min(MAX_PARTS, Math.floor(count || 1)));
+    const target = Math.max(2, Math.min(MAX_PARTS, Math.floor(count || 2)));
     const base = resetLocks
       ? splitEvenly(totalCents, target).map((part, index) => ({ ...part, id: `part-${index + 1}` }))
       : safeParts.map((part) => ({ ...part }));
@@ -66,14 +75,14 @@ export function SplitPanel({
           .find(({ part }) => !part.isPaid && !part.locked)?.index;
 
         if (removeIndex === undefined) {
-          toast.error("Desbloquea una parte o usa Reset para reducir.");
+          toast.error("Desbloquea una parte o usa Reiniciar para reducir.");
           break;
         }
         resized.splice(removeIndex, 1);
       }
     }
 
-    const normalized = resized.length ? recalcParts(totalCents, resized) : splitEvenly(totalCents, 1);
+    const normalized = resized.length >= 2 ? recalcParts(totalCents, resized) : splitEvenly(totalCents, 2);
     onPartsChange(normalized);
     onActivePartIdChange(chooseFallbackActive(normalized));
   };
@@ -81,19 +90,19 @@ export function SplitPanel({
   const incrementParts = () => setPartCount(safeParts.length + 1);
 
   const decrementParts = () => {
-    if (safeParts.length <= 1) return;
+    if (safeParts.length <= 2) return;
     const candidate = [...safeParts]
       .map((part, index) => ({ part, index }))
       .reverse()
       .find(({ part }) => !part.isPaid && !part.locked)?.index;
 
     if (candidate === undefined) {
-      toast.error("Todas las partes restantes están bloqueadas. Desbloquea o haz Reset.");
+      toast.error("Todas las partes restantes están bloqueadas. Desbloquea o usa Reiniciar.");
       return;
     }
 
     const next = safeParts.filter((_, index) => index !== candidate);
-    const normalized = recalcParts(totalCents, next.length ? next : splitEvenly(totalCents, 1));
+    const normalized = recalcParts(totalCents, next.length >= 2 ? next : splitEvenly(totalCents, 2));
     onPartsChange(normalized);
     if (safeParts[candidate].id === activePartId) {
       onActivePartIdChange(chooseFallbackActive(normalized));
@@ -109,7 +118,7 @@ export function SplitPanel({
     }
 
     const next = safeParts.filter((part) => part.id !== partId);
-    const normalized = recalcParts(totalCents, next.length ? next : splitEvenly(totalCents, 1));
+    const normalized = recalcParts(totalCents, next.length >= 2 ? next : splitEvenly(totalCents, 2));
     onPartsChange(normalized);
     if (activePartId === partId) {
       onActivePartIdChange(chooseFallbackActive(normalized));
@@ -164,14 +173,109 @@ export function SplitPanel({
     setPartCount(count);
   };
 
+  const selectNoSplit = () => {
+    onEnabledChange(false);
+    const reset = splitEvenly(totalCents, 1);
+    onPartsChange(reset);
+    onActivePartIdChange(reset[0]?.id ?? null);
+  };
+
+  const selectEqualParts = () => {
+    const base = parts.length >= 2 ? parts : splitEvenly(totalCents, 2);
+    const normalized = recalcParts(totalCents, base);
+    onEnabledChange(true);
+    onPartsChange(normalized);
+    onActivePartIdChange(chooseFallbackActive(normalized));
+  };
+
+  const selectPersonMode = () => {
+    if (!canUsePersonMode) {
+      toast.info(personModeDisabledReason);
+      return;
+    }
+    onPersonModeSelect?.();
+  };
+
+  const modeCard = ({
+    mode,
+    title,
+    description,
+    icon,
+    disabled = false,
+    onClick,
+  }: {
+    mode: "none" | "person" | "equal";
+    title: string;
+    description: string;
+    icon: ReactNode;
+    disabled?: boolean;
+    onClick: () => void;
+  }) => {
+    const selected = selectedMode === mode;
+    return (
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          "tap-target flex w-full items-start gap-3 rounded-md border p-3 text-left transition-[background-color,border-color,box-shadow] duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          selected ? "border-primary bg-primary/10 shadow-sm" : "bg-background hover:bg-muted/40",
+          disabled && "cursor-not-allowed opacity-55"
+        )}
+      >
+        <span className={cn("mt-0.5 rounded-md border p-2", selected ? "border-primary bg-primary text-primary-foreground" : "bg-muted/40")}>
+          {icon}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-foreground">{title}</span>
+          <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{description}</span>
+        </span>
+        <span
+          className={cn(
+            "mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
+            selected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
+          )}
+          aria-hidden="true"
+        >
+          {selected ? <Check className="h-3.5 w-3.5" /> : null}
+        </span>
+      </button>
+    );
+  };
+
   return (
     <div className="flex min-h-0 flex-col overflow-hidden rounded-md border">
-      <div className="flex items-center justify-between gap-2 border-b bg-background px-3 py-2">
+      <div className="border-b bg-background px-3 py-2">
         <div>
           <div className="text-sm font-semibold">Dividir cuenta</div>
-          <p className="text-xs text-muted-foreground">Controla y cobra cada parte con precisión</p>
+          <p className="text-xs text-muted-foreground">Elige cómo cobrar el saldo restante.</p>
         </div>
-        <Checkbox checked={enabled} onCheckedChange={(checked) => onEnabledChange(checked === true)} />
+        <div className="mt-3 grid gap-2" role="radiogroup" aria-label="Modo de división">
+          {modeCard({
+            mode: "none",
+            title: "Cuenta sin dividir",
+            description: "Cobra el saldo completo en un solo pago.",
+            icon: <X className="h-4 w-4" />,
+            onClick: selectNoSplit,
+          })}
+          {modeCard({
+            mode: "person",
+            title: "Dividir por persona",
+            description: "Cobra por separado lo consumido por cada persona.",
+            icon: <Users className="h-4 w-4" />,
+            disabled: !canUsePersonMode,
+            onClick: selectPersonMode,
+          })}
+          {modeCard({
+            mode: "equal",
+            title: "Dividir en partes iguales",
+            description: "Divide el saldo restante en 2 o más partes del mismo valor.",
+            icon: <SplitSquareHorizontal className="h-4 w-4" />,
+            onClick: selectEqualParts,
+          })}
+        </div>
       </div>
 
       {enabled && (
@@ -179,32 +283,32 @@ export function SplitPanel({
           <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
             <Label className="text-xs text-muted-foreground">Partes</Label>
             <div className="flex items-center rounded-md border">
-              <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-none" onClick={decrementParts}>
+              <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-none" onClick={decrementParts}>
                 <Minus className="h-4 w-4" />
               </Button>
               <Input
                 value={String(safeParts.length)}
-                onChange={(event) => setPartCount(Number(event.target.value || 1))}
-                className="h-8 w-14 rounded-none border-x text-center"
+                onChange={(event) => setPartCount(Number(event.target.value || 2))}
+                className="h-11 w-16 rounded-none border-x text-center"
                 inputMode="numeric"
-                min={1}
+                min={2}
                 max={MAX_PARTS}
               />
-              <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-none" onClick={incrementParts}>
+              <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-none" onClick={incrementParts}>
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
 
             <div className="ml-auto flex gap-1">
               {QUICK_SPLITS.map((quick) => (
-                <Button key={quick} type="button" variant="outline" size="sm" onClick={() => quickSplit(quick)}>
+                <Button key={quick} type="button" variant="outline" size="sm" className="h-11 min-w-11" onClick={() => quickSplit(quick)}>
                   {quick}
                 </Button>
               ))}
             </div>
 
-            <Button type="button" variant="ghost" size="sm" onClick={resetAll} className="gap-1">
-              <RotateCcw className="h-3.5 w-3.5" /> Reset
+            <Button type="button" variant="ghost" size="sm" onClick={resetAll} className="h-11 gap-1">
+              <RotateCcw className="h-3.5 w-3.5" /> Reiniciar
             </Button>
           </div>
 
@@ -230,11 +334,11 @@ export function SplitPanel({
                         onClick={() => onActivePartIdChange(part.id)}
                       >
                         <div className="text-sm font-semibold">Parte {index + 1}</div>
-                        <div className="text-[11px] text-muted-foreground">{part.locked ? "Manual" : "Auto"}</div>
+                        <div className="text-[11px] text-muted-foreground">{part.locked ? "Manual" : "Automático"}</div>
                       </button>
                       <div className="flex items-center gap-1">
                         {part.locked && !part.isPaid && (
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAuto(part.id)} title="Volver a auto">
+                          <Button type="button" variant="ghost" size="icon" className="h-11 w-11" onClick={() => setAuto(part.id)} title="Volver a automático">
                             <RotateCcw className="h-3.5 w-3.5" />
                           </Button>
                         )}
@@ -242,7 +346,7 @@ export function SplitPanel({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="h-11 w-11"
                           onClick={() => removePart(part.id)}
                           disabled={Boolean(part.isPaid)}
                           title={part.isPaid ? "No puedes eliminar una parte ya pagada" : "Eliminar parte"}
