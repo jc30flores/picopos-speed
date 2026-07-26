@@ -23,7 +23,7 @@ export const splitEvenly = (totalCents: number, n: number): SplitPart[] => {
 
   return Array.from({ length: safeCount }, (_, index) => ({
     id: `part-${index + 1}`,
-    amountCents: base + (index < rem ? 1 : 0),
+    amountCents: base + (index >= safeCount - rem ? 1 : 0),
     locked: false,
     isPaid: false,
   }));
@@ -57,7 +57,7 @@ export const recalcParts = (totalCents: number, parts: SplitPart[]): SplitPart[]
     if (lockedIndices.includes(index)) {
       return { ...part, amountCents: clampCents(part.amountCents) };
     }
-    const amountCents = base + (unlockedCursor < rem ? 1 : 0);
+    const amountCents = base + (unlockedCursor >= unlockedIndices.length - rem ? 1 : 0);
     unlockedCursor += 1;
     return {
       ...part,

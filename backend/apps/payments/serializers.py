@@ -243,7 +243,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         if code and not payment_method:
             payment_method = resolve_payment_method(code, active_only=True)
             if not payment_method:
-                raise serializers.ValidationError("Payment method not found")
+                raise serializers.ValidationError("Método de pago no encontrado")
             attrs["payment_method"] = payment_method
 
         method_value = (attrs.get("method") or "").strip().lower()
@@ -274,14 +274,14 @@ class PaymentSerializer(serializers.ModelSerializer):
             attrs["card_type"] = ""
 
         if amount <= 0:
-            raise serializers.ValidationError("Amount must be greater than 0")
+            raise serializers.ValidationError("El monto debe ser mayor que 0")
         if tip_amount < 0:
-            raise serializers.ValidationError("Tip amount cannot be negative")
+            raise serializers.ValidationError("La propina no puede ser negativa")
 
         if order is None:
-            raise serializers.ValidationError("Order is required")
+            raise serializers.ValidationError("La orden es requerida")
         if order.financial_status == "voided":
-            raise serializers.ValidationError("Voided orders cannot accept payments")
+            raise serializers.ValidationError("Las órdenes anuladas no pueden recibir pagos")
 
         payment_scope = str(attrs.get("payment_scope") or "").strip().lower()
         if payment_scope and payment_scope not in {"order", "guest", "custom", "items"}:

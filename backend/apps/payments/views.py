@@ -29,6 +29,12 @@ from apps.payments.serializers import (
 from apps.orders.models import OrderItem, TableGuest, TableSession
 from apps.orders.serializers import OrderSerializer
 from apps.orders.services.snapshots import persist_sale_snapshot
+from apps.orders.services.totals import (
+    allocate_cents,
+    calculate_order_item_totals,
+    calculate_payment_scope_remaining_cents,
+    sync_order_totals,
+)
 from apps.dte.services.dte_service import (
     DTEPreflightError,
     invalidate_dte_for_order,
@@ -148,9 +154,8 @@ def _extract_payment_allocation_payload(validated_data: dict) -> dict:
 
 
 def _order_item_total_cents(item: OrderItem) -> int:
-    unit = item.unit_price_override if item.unit_price_override is not None else item.price_snapshot
-    total = (unit * item.quantity) - (item.discount_amount or Decimal("0"))
-    return max(to_cents(total), 0)
+    totals = calculate_order_item_totals([item])
+    return totals[0].net_cents if totals else 0
 
 
 def _refresh_guest_paid_state(table_guest: TableGuest, order_id: int) -> None:
@@ -228,15 +233,10 @@ def _create_payment_allocations(payment: Payment, payload: dict, applied_cents: 
             _refresh_guest_paid_state(table_guest, payment.order_id)
         return
 
-    total_item_cents = sum(cents for _, cents in item_totals) or applied_cents
-    remaining = applied_cents
-    for index, (item, item_cents) in enumerate(item_totals):
-        if remaining <= 0:
-            break
-        amount_cents = remaining if index == len(item_totals) - 1 else min(remaining, round(applied_cents * (item_cents / total_item_cents)))
+    allocations = allocate_cents(applied_cents, [item_cents for _, item_cents in item_totals])
+    for (item, _item_cents), amount_cents in zip(item_totals, allocations):
         if amount_cents <= 0:
             continue
-        remaining -= amount_cents
         PaymentAllocation.objects.create(
             payment=payment,
             table_session=table_session,
@@ -348,26 +348,43 @@ class PaymentListCreateView(generics.ListCreateAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
         order = order.__class__.objects.select_for_update().get(pk=order.pk)
+        if order.financial_locked_at is None:
+            sync_order_totals(order)
+        split_part = serializer.validated_data.get("split_part")
+        if split_part and Payment.objects.filter(order=order, split_part=split_part, amount_applied_cents__gt=0).exists():
+            return Response({"detail": "Esta parte ya fue pagada."}, status=status.HTTP_400_BAD_REQUEST)
         existing_applied_cents = sum(
             to_cents(p.amount_applied if p.amount_applied is not None else p.amount)
             for p in Payment.objects.select_for_update().filter(order=order)
         )
-        due_cents = to_cents(order.total)
-        order.amount_due_cents = due_cents
+        due_cents = order.amount_due_cents if order.amount_due_cents > 0 else to_cents(order.total)
         remaining_cents = max(due_cents - existing_applied_cents, 0)
+        scope_remaining_cents = calculate_payment_scope_remaining_cents(order, allocation_payload)
+        if allocation_payload.get("scope") in {"guest", "items", "custom"}:
+            remaining_cents = min(remaining_cents, scope_remaining_cents)
         requested_applied_cents = to_cents(serializer.validated_data.get("amount"))
         tip_cents = to_cents(serializer.validated_data.get("tip_amount"))
         method = str(serializer.validated_data.get("method") or "").strip().lower()
         payment_method = serializer.validated_data.get("payment_method")
         is_cash_payment = method == "cash" or _is_cash_payment_method(payment_method)
         if remaining_cents <= 0:
-            return Response({"detail": "La orden ya está pagada."}, status=status.HTTP_400_BAD_REQUEST)
+            detail = "La orden ya está pagada."
+            if allocation_payload.get("scope") == "guest":
+                detail = "Esta persona no tiene saldo pendiente."
+            elif allocation_payload.get("scope") in {"items", "custom"}:
+                detail = "Esta parte ya fue pagada."
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
         cash_received = serializer.validated_data.get("cash_received")
         if is_cash_payment and requested_applied_cents > remaining_cents and cash_received is None:
             cash_received = from_cents(requested_applied_cents)
             requested_applied_cents = remaining_cents
         if requested_applied_cents > remaining_cents + 1:
-            return Response({"detail": "El pago excede el saldo pendiente."}, status=status.HTTP_400_BAD_REQUEST)
+            detail = "El pago excede el saldo pendiente."
+            if allocation_payload.get("scope") == "guest":
+                detail = "El pago excede el saldo pendiente de esta persona."
+            elif allocation_payload.get("scope") in {"items", "custom"}:
+                detail = "El pago excede el saldo pendiente de esta parte."
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
         applied_cents = remaining_cents if requested_applied_cents > remaining_cents else requested_applied_cents
         received_cents = to_cents(cash_received) if is_cash_payment and cash_received is not None else applied_cents + tip_cents
         if is_cash_payment and received_cents < applied_cents + tip_cents:
