@@ -2315,20 +2315,6 @@ type TableConfirmDialogState =
         : null,
     [activeOrder, availableDiscounts, checkoutDraft, products, selectedDiscount, serviceTypes]
   );
-  const orderDiscountLine = useMemo(() => {
-    if (!activeOrder) return null;
-    const snapshot = activeOrder.discountSnapshot ?? {};
-    const snapshotName = typeof snapshot.name === "string" && snapshot.name.trim() ? snapshot.name.trim() : "";
-    const snapshotAmount = typeof snapshot.amount === "string" || typeof snapshot.amount === "number" ? Number(snapshot.amount) : 0;
-    const amount = activeOrder.discountTotal ?? snapshotAmount;
-    if (amount <= 0) return null;
-    return {
-      id: Number(snapshot.discount_id ?? activeOrder.id),
-      name: snapshotName || "descuento aplicado",
-      amount,
-      source: "auto" as const,
-    };
-  }, [activeOrder]);
   const checkoutDisposableTotal = tablePaymentScope ? 0 : activeOrder?.disposableTotal ?? checkoutDraftPricing?.disposableTotal ?? 0;
   const checkoutSummarySubtotalBefore = tablePaymentScope
     ? (tablePaymentScope.subtotalCents ?? 0) / 100
@@ -2340,11 +2326,6 @@ type TableConfirmDialogState =
     ? tablePaymentScope.totalCents / 100
     : activeOrder?.totalPayable ?? checkoutDraftPricing?.total ?? paymentTotal;
   const checkoutSummaryPaid = tablePaymentScope ? tablePaymentScope.paidCents / 100 : activeOrder?.totalPaid ?? 0;
-  const checkoutDiscountLines = tablePaymentScope && checkoutSummaryDiscount > 0
-    ? [{ id: tablePaymentScope.tableGuestId ?? tablePaymentScope.tableSessionId, name: tablePaymentScope.kind === "guest" ? tablePaymentScope.guestLabel || "persona" : "cuenta", amount: checkoutSummaryDiscount, source: "auto" as const }]
-    : orderDiscountLine
-      ? [orderDiscountLine]
-      : checkoutDraftPricing?.discountLines ?? cartPricing.discountLines;
   const splitPersonSession = tablePaymentReturn?.session ?? tableSessions.find((session) => session.id === tablePaymentScope?.tableSessionId) ?? null;
   const tablePaymentTableId = tablePaymentScope?.tableId ?? tablePaymentReturn?.tableId ?? null;
   const personSplitCards = useMemo(() => {
@@ -2371,7 +2352,6 @@ type TableConfirmDialogState =
   const equalSplitPendingAfterCurrentCents = splitEnabled && activeSplitPart
     ? parts.reduce((sum, part) => sum + (!part.isPaid && part.id !== activeSplitPart.id ? part.amountCents : 0), 0)
     : 0;
-  const tableFullTotal = activeOrder?.totalPayable ?? activeOrder?.total ?? checkoutSummaryTotal;
   const splitModeLabel = personSplitEnabled || splitMode === "person" || tablePaymentScope?.kind === "guest"
     ? "División por persona"
     : splitEnabled || splitMode === "equal"
@@ -2383,24 +2363,25 @@ type TableConfirmDialogState =
         title: (tablePaymentScope.guestLabel || "Persona").toUpperCase(),
         subtitle: `${currentPersonSplitCard?.itemCount ?? tablePaymentScope.orderItemIds.length} producto${(currentPersonSplitCard?.itemCount ?? tablePaymentScope.orderItemIds.length) === 1 ? "" : "s"}`,
         amountCents: expectedPaymentCents,
-        helper: `Saldo total de mesa: ${formatMoney(tableFullTotal)}`,
+        helper: "",
       }
     : splitEnabled && activeSplitPart
       ? {
           eyebrow: "AHORA COBRARÁS",
           title: `PARTE ${Math.max(currentSplitPartIndex + 1, 1)} DE ${parts.length}`,
-          subtitle: `Saldo total de mesa: ${formatMoney(tableFullTotal)}`,
+          subtitle: "",
           amountCents: activeSplitPart.amountCents,
           helper: `Pendiente después de esta parte: ${formatMoney(equalSplitPendingAfterCurrentCents / 100)}`,
         }
       : {
-          eyebrow: "TOTAL A PAGAR",
+          eyebrow: "TOTAL A COBRAR",
           title: "",
           subtitle: "",
           amountCents: expectedPaymentCents,
           helper: "",
         };
   const canUseSplitByPerson = Boolean(tablePaymentTableId && splitPersonSession?.guests?.length && activeOrder);
+  const paymentActionsDisabled = expectedPaymentCents <= 0 || checkoutTotal <= 0 || (splitEnabled && Boolean(activeSplitPart?.isPaid));
 
   const activatePersonSplitScope = (scope: TablePaymentScope) => {
     if (!activeOrder) return;
@@ -4882,20 +4863,20 @@ type TableConfirmDialogState =
       groups.set(key, group);
     });
     Array.from(groups.values()).sort((a, b) => a.seat - b.seat || a.label.localeCompare(b.label)).forEach((group) => {
-      lines.push(group.label.toUpperCase(), row("Subtotal bruto", formatMoney(group.subtotal)));
+      lines.push(group.label.toUpperCase(), row("Subtotal", formatMoney(group.subtotal)));
       if (group.discount > 0) lines.push(row("Descuento", `-${formatMoney(group.discount)}`));
-      lines.push(row("Total neto", formatMoney(group.total)));
+      lines.push(row("Total", formatMoney(group.total)));
       group.items.forEach((item) => {
         appendTicketItemLines(lines, item, chars, row, payments);
       });
       lines.push(rule);
     });
-    lines.push(row("Subtotal bruto", formatMoney(order.subtotalBeforeDiscounts ?? order.total)));
+    lines.push(row("Subtotal", formatMoney(order.subtotalBeforeDiscounts ?? order.total)));
     if ((order.discountTotal ?? 0) > 0) lines.push(row("Descuento", `-${formatMoney(order.discountTotal ?? 0)}`));
     lines.push(
-      row("Total neto", formatMoney(order.totalPayable ?? order.total)),
+      row("Total", formatMoney(order.totalPayable ?? order.total)),
       row("Pagado", formatMoney(order.totalPaid)),
-      row("Pendiente", formatMoney(order.remaining)),
+      row("Restante", formatMoney(order.remaining)),
       rule,
       center("Pendiente de pago"),
     );
@@ -4936,9 +4917,9 @@ type TableConfirmDialogState =
     });
     lines.push(
       rule,
-      row("Subtotal bruto", formatMoney(paidSubtotal)),
+      row("Subtotal", formatMoney(paidSubtotal)),
       paidDiscount > 0 ? row("Descuento", `-${formatMoney(paidDiscount)}`) : "",
-      row("Total neto", formatMoney(paidNet)),
+      row("Total", formatMoney(paidNet)),
       row("Metodo", payment.method),
       row("Pagado", formatMoney(payment.amount)),
       payment.cashReceived != null ? row("Recibido", formatMoney(received)) : "",
@@ -5027,6 +5008,92 @@ type TableConfirmDialogState =
     </div>
   );
 
+  const renderMoneyRow = (
+    label: string,
+    value: string,
+    options?: { className?: string; valueClassName?: string }
+  ) => (
+    <div key={`${label}-${value}`} className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3", options?.className)}>
+      <span className="min-w-0 truncate">{label}</span>
+      <span className={cn("whitespace-nowrap text-right tabular-nums", options?.valueClassName)}>{value}</span>
+    </div>
+  );
+
+  const renderScopeMoneyRows = (scope: TablePaymentScope) => {
+    const subtotalCents = Math.max(scope.subtotalCents ?? 0, 0);
+    const discountCents = Math.max(scope.discountCents ?? 0, 0);
+    const totalCents = Math.max(scope.totalCents, 0);
+    const paidCents = Math.max(scope.paidCents, 0);
+    const remainingCents = Math.max(scope.remainingCents, 0);
+    const isScopePaid = totalCents <= 0 || remainingCents <= 0;
+    const isScopePartial = !isScopePaid && paidCents > 0;
+
+    if (isScopePaid) {
+      return renderMoneyRow("Total", formatMoney(0), { className: "font-semibold text-foreground" });
+    }
+
+    if (isScopePartial) {
+      return (
+        <>
+          {discountCents > 0 ? renderMoneyRow("Descuento aplicado", `-${formatMoney(discountCents / 100)}`, { className: "gp-primary-text" }) : null}
+          {renderMoneyRow("Pagado", formatMoney(paidCents / 100))}
+          {renderMoneyRow("Restante", formatMoney(remainingCents / 100), { className: "font-semibold text-foreground" })}
+        </>
+      );
+    }
+
+    if (discountCents > 0) {
+      return (
+        <>
+          {renderMoneyRow("Subtotal", formatMoney(subtotalCents / 100))}
+          {renderMoneyRow("Descuento", `-${formatMoney(discountCents / 100)}`, { className: "gp-primary-text" })}
+          {renderMoneyRow("Total", formatMoney(totalCents / 100), { className: "font-semibold text-foreground" })}
+        </>
+      );
+    }
+
+    return renderMoneyRow("Total", formatMoney(remainingCents / 100), { className: "font-semibold text-foreground" });
+  };
+
+  const renderCheckoutSummary = () => {
+    const hasDiscount = checkoutSummaryDiscount > 0.009;
+    const hasPaid = checkoutSummaryPaid > 0.009;
+    const hasDisposable = checkoutDisposableTotal > 0.009;
+    const isSettled = paymentTotal <= 0.009 || isPaid;
+
+    if (!hasDiscount && !hasPaid && !hasDisposable && !isSettled) return null;
+
+    let rows = renderMoneyRow("Total", formatMoney(0), { className: "font-semibold text-foreground" });
+    if (hasPaid && !isSettled) {
+      rows = (
+        <>
+          {hasDiscount ? renderMoneyRow("Descuento aplicado", `-${formatMoney(checkoutSummaryDiscount)}`, { className: "gp-primary-text" }) : null}
+          {renderMoneyRow("Pagado", formatMoney(checkoutSummaryPaid))}
+          {renderMoneyRow("Restante", formatMoney(paymentTotal), { className: "font-semibold text-foreground" })}
+        </>
+      );
+    } else if (!isSettled) {
+      rows = (
+        <>
+          {renderMoneyRow("Subtotal", formatMoney(checkoutSummarySubtotalBefore))}
+          {hasDiscount ? renderMoneyRow("Descuento", `-${formatMoney(checkoutSummaryDiscount)}`, { className: "gp-primary-text" }) : null}
+          {hasDisposable ? renderMoneyRow("Desechables", formatMoney(checkoutDisposableTotal)) : null}
+          {renderMoneyRow("Total", formatMoney(checkoutSummaryTotal), { className: "font-semibold text-foreground" })}
+        </>
+      );
+    }
+
+    return (
+      <div className="rounded-md border p-3 text-sm">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="font-semibold">Resumen</div>
+          {isSettled ? <Badge variant="secondary">Pagada</Badge> : null}
+        </div>
+        <div className="space-y-1 text-muted-foreground">{rows}</div>
+      </div>
+    );
+  };
+
   const renderPersonSplitSection = () => {
     if (!personSplitEnabled || !personSplitCards.length) return null;
     return (
@@ -5034,13 +5101,14 @@ type TableConfirmDialogState =
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">División por persona</div>
-            <p className="text-xs text-muted-foreground">Selecciona la persona que vas a cobrar ahora.</p>
           </div>
-          <Badge variant="outline">{formatMoney((activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? 0)) / 100)} pendiente</Badge>
+          <Badge variant="outline">Pendiente de la mesa: {formatMoney((activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? 0)) / 100)}</Badge>
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {personSplitCards.map((card) => {
             const disabled = card.isPaid || card.scope.remainingCents <= 0;
+            const isPartial = !disabled && card.scope.paidCents > 0;
+            const statusLabel = disabled ? "Pagada" : isPartial ? "Parcial" : "Pendiente";
             return (
               <button
                 key={card.guest.id}
@@ -5060,12 +5128,53 @@ type TableConfirmDialogState =
                       {card.itemCount} producto{card.itemCount === 1 ? "" : "s"}
                     </div>
                   </div>
-                  <Badge variant={disabled ? "secondary" : "outline"}>{disabled ? "Pagada" : "Pendiente"}</Badge>
+                  <Badge variant={disabled ? "secondary" : "outline"} className={cn(isPartial && "border-amber-400 text-amber-600 dark:text-amber-300")}>{statusLabel}</Badge>
                 </div>
                 <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                  <div className="flex justify-between gap-2"><span>Subtotal</span><span>{formatMoney(card.scope.subtotalCents ? card.scope.subtotalCents / 100 : 0)}</span></div>
-                  <div className="flex justify-between gap-2"><span>Descuento</span><span>{card.scope.discountCents ? `-${formatMoney(card.scope.discountCents / 100)}` : formatMoney(0)}</span></div>
-                  <div className="flex justify-between gap-2 font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(card.scope.remainingCents / 100)}</span></div>
+                  {renderScopeMoneyRows(card.scope)}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderEqualSplitSection = () => {
+    if (!splitEnabled || parts.length < 2) return null;
+    return (
+      <div className="space-y-3 rounded-md border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Partes iguales</div>
+          </div>
+          <Badge variant="outline">Pendiente de la mesa: {formatMoney((activeOrder?.remainingCents ?? toCents(activeOrder?.remaining ?? 0)) / 100)}</Badge>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {parts.map((part, index) => {
+            const isActive = part.id === activePartId;
+            const isPartPaid = Boolean(part.isPaid);
+            return (
+              <button
+                key={part.id}
+                type="button"
+                disabled={isPartPaid}
+                onClick={() => setActivePartId(part.id)}
+                className={cn(
+                  "tap-target min-h-24 rounded-md border p-3 text-left transition-[background-color,border-color,box-shadow] duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  isActive ? "border-primary bg-primary/10 shadow-sm" : "bg-background hover:bg-muted/40",
+                  isPartPaid && "cursor-not-allowed opacity-60"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-foreground">Parte {index + 1} de {parts.length}</div>
+                  </div>
+                  <Badge variant={isPartPaid ? "secondary" : "outline"}>{isPartPaid ? "Pagada" : "Pendiente"}</Badge>
+                </div>
+                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  {renderMoneyRow("Total", formatMoney(isPartPaid ? 0 : part.amountCents / 100), { className: "font-semibold text-foreground" })}
                 </div>
               </button>
             );
@@ -5507,6 +5616,8 @@ type TableConfirmDialogState =
                 const accountSubtotal = order.subtotalBeforeDiscounts ?? order.items.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0);
                 const accountDiscount = order.discountTotal ?? order.items.reduce((sum, item) => sum + getOrderItemDiscount(item), 0);
                 const accountTotal = order.totalPayable ?? order.total;
+                const accountPaid = Math.max(toNumber(order.totalPaid), 0);
+                const accountRemaining = Math.max(toNumber(order.remaining), 0);
                 const selectedSubtotal = visibleItems.reduce((sum, item) => sum + getOrderItemSubtotal(item), 0);
                 const selectedDiscount = visibleItems.reduce((sum, item) => sum + getOrderItemDiscount(item), 0);
                 const selectedTotal = visibleItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0);
@@ -5515,6 +5626,24 @@ type TableConfirmDialogState =
                 const selectedGuestTotal = selectedGuest ? selectedGuestItems.reduce((sum, item) => sum + getOrderItemTotal(item), 0) : 0;
                 const selectedPaidCents = selectedGuest ? getGuestPaidCents(tableBillDialog.payments, selectedGuest) : 0;
                 const selectedPendingCents = selectedGuest ? Math.max(toCents(selectedGuestTotal) - selectedPaidCents, 0) : 0;
+                const selectedGuestSummaryParts = selectedGuest ? (() => {
+                  if (selectedPendingCents <= 0) return [`Total: ${formatMoney(0)}`, "Pagada"];
+                  if (selectedPaidCents > 0) {
+                    return [
+                      ...(selectedGuestDiscount > 0 ? [`Descuento aplicado: -${formatMoney(selectedGuestDiscount)}`] : []),
+                      `Pagado: ${formatMoney(selectedPaidCents / 100)}`,
+                      `Restante: ${formatMoney(selectedPendingCents / 100)}`,
+                    ];
+                  }
+                  if (selectedGuestDiscount > 0) {
+                    return [
+                      `Subtotal: ${formatMoney(selectedGuestSubtotal)}`,
+                      `Descuento: -${formatMoney(selectedGuestDiscount)}`,
+                      `Total: ${formatMoney(selectedGuestTotal)}`,
+                    ];
+                  }
+                  return [`Total: ${formatMoney(selectedGuestTotal)}`];
+                })() : [];
                 const renderItem = (item: Order["items"][number]) => {
                   const modifiers = getOrderItemModifiers(item);
                   const itemDiscount = getOrderItemDiscount(item);
@@ -5544,11 +5673,23 @@ type TableConfirmDialogState =
                           <p className="text-xs text-muted-foreground">{session?.guestsCount ?? 1} personas · {getSessionStateLabel(session ?? undefined)}</p>
                         </div>
                         <div className="grid min-w-[12rem] gap-1 text-xs text-muted-foreground sm:text-sm">
-                          <div className="flex justify-between gap-3"><span>Subtotal bruto</span><span className="font-medium text-foreground">{formatMoney(accountSubtotal)}</span></div>
-                          {accountDiscount > 0 ? <div className="flex justify-between gap-3 gp-primary-text"><span>Descuento</span><span>-{formatMoney(accountDiscount)}</span></div> : null}
-                          <div className="flex justify-between gap-3"><span>Total neto</span><span className="font-semibold text-foreground">{formatMoney(accountTotal)}</span></div>
-                          <div className="flex justify-between gap-3"><span>Pagado</span><span className="font-medium text-foreground">{formatMoney(order.totalPaid)}</span></div>
-                          <div className="flex justify-between gap-3"><span>Pendiente</span><span className="font-semibold text-foreground">{formatMoney(order.remaining)}</span></div>
+                          {accountRemaining <= 0 ? (
+                            renderMoneyRow("Total", formatMoney(0), { className: "font-semibold text-foreground" })
+                          ) : accountPaid > 0 ? (
+                            <>
+                              {accountDiscount > 0 ? renderMoneyRow("Descuento aplicado", `-${formatMoney(accountDiscount)}`, { className: "gp-primary-text" }) : null}
+                              {renderMoneyRow("Pagado", formatMoney(accountPaid))}
+                              {renderMoneyRow("Restante", formatMoney(accountRemaining), { className: "font-semibold text-foreground" })}
+                            </>
+                          ) : accountDiscount > 0 ? (
+                            <>
+                              {renderMoneyRow("Subtotal", formatMoney(accountSubtotal))}
+                              {renderMoneyRow("Descuento", `-${formatMoney(accountDiscount)}`, { className: "gp-primary-text" })}
+                              {renderMoneyRow("Total", formatMoney(accountTotal), { className: "font-semibold text-foreground" })}
+                            </>
+                          ) : (
+                            renderMoneyRow("Total", formatMoney(accountTotal), { className: "font-semibold text-foreground" })
+                          )}
                         </div>
                       </div>
                     </div>
@@ -5584,11 +5725,9 @@ type TableConfirmDialogState =
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="font-semibold">{selectedGuest.label}</span>
                           <span className="font-medium">
-                            Subtotal: {formatMoney(selectedGuestSubtotal)}
-                            {selectedGuestDiscount > 0 ? ` · Descuento: -${formatMoney(selectedGuestDiscount)}` : ""}
-                            {" · "}Total neto: {formatMoney(selectedGuestTotal)}
-                            {" · "}Pagado: {formatMoney(selectedPaidCents / 100)}
-                            {" · "}Pendiente: {formatMoney(selectedPendingCents / 100)}
+                            {selectedGuestSummaryParts.map((part, index) => (
+                              <span key={`${part}-${index}`}>{index > 0 ? " · " : ""}{part}</span>
+                            ))}
                           </span>
                         </div>
                       </div>
@@ -5778,6 +5917,7 @@ type TableConfirmDialogState =
                     {renderPaymentHeadline()}
 
                     {renderPersonSplitSection()}
+                    {renderEqualSplitSection()}
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm font-semibold">
@@ -5821,30 +5961,7 @@ type TableConfirmDialogState =
                       </div>
                     </div>
 
-                    <div className="rounded-md border p-3 text-sm">
-                      <div className="mb-2 font-semibold">Resumen</div>
-                      <div className="space-y-1 text-muted-foreground">
-                        <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
-                        {checkoutDiscountLines.length > 0
-                          ? checkoutDiscountLines.map((line) => (
-                              <div key={`checkout-table-${line.source}-${line.id}`} className="flex justify-between gp-primary-text">
-                                <span>Descuento ({line.name})</span>
-                                <span>-{formatMoney(line.amount)}</span>
-                              </div>
-                            ))
-                          : checkoutSummaryDiscount > 0
-                            ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
-                            : null}
-                        {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                        <div className="flex justify-between font-semibold text-foreground"><span>Total neto</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
-                        {checkoutSummaryPaid > 0 ? (
-                          <div className="flex justify-between"><span>Pagado</span><span>{formatMoney(checkoutSummaryPaid)}</span></div>
-                        ) : null}
-                        {(checkoutSummaryPaid > 0 || tablePaymentScope) ? (
-                          <div className="flex justify-between font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(paymentTotal)}</span></div>
-                        ) : null}
-                      </div>
-                    </div>
+                    {renderCheckoutSummary()}
 
                     {selectedPaymentIsCash && showCashPanel ? (
                       <CashPaymentPanel
@@ -5880,6 +5997,7 @@ type TableConfirmDialogState =
                               className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
                               style={getPaymentButtonStyle(option, selected)}
                               onClick={() => selectPaymentMethodOption(option, false)}
+                              disabled={paymentActionsDisabled}
                             >
                               {option.label}
                             </Button>
@@ -5900,7 +6018,7 @@ type TableConfirmDialogState =
                     </div>
                     <div className="flex gap-2">
                       <Button type="button" variant="outline" className="h-12 flex-1 text-sm" onClick={() => handlePaymentDialogOpenChange(false)}>Cerrar</Button>
-                      <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                      <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={paymentActionsDisabled || isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                         {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                       </Button>
                     </div>
@@ -5941,6 +6059,7 @@ type TableConfirmDialogState =
                     className="h-14 text-base"
                     style={getPaymentButtonStyle(option, selectedPaymentMethodCode === option.code)}
                     onClick={() => selectPaymentMethodOption(option, false)}
+                    disabled={paymentActionsDisabled}
                   >
                     {option.label}
                   </Button>
@@ -5984,7 +6103,7 @@ type TableConfirmDialogState =
               ) : null}
               <div className="flex gap-2">
                 <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
-                <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={paymentActionsDisabled || isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                   {isProcessingPayment ? "Procesando..." : "Registrar pago"}
                 </Button>
               </div>
@@ -7253,6 +7372,7 @@ type TableConfirmDialogState =
                   {renderPaymentHeadline()}
 
                   {renderPersonSplitSection()}
+                  {renderEqualSplitSection()}
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm font-semibold">
@@ -7296,30 +7416,7 @@ type TableConfirmDialogState =
                     </div>
                   </div>
 
-                  <div className="rounded-md border p-3 text-sm">
-                    <div className="mb-2 font-semibold">Resumen</div>
-                    <div className="space-y-1 text-muted-foreground">
-                      <div className="flex justify-between"><span>Subtotal (antes descuentos)</span><span>{formatMoney(checkoutSummarySubtotalBefore)}</span></div>
-                      {checkoutDiscountLines.length > 0
-                        ? checkoutDiscountLines.map((line) => (
-                            <div key={`checkout-${line.source}-${line.id}`} className="flex justify-between gp-primary-text">
-                              <span>Descuento ({line.name})</span>
-                              <span>-{formatMoney(line.amount)}</span>
-                            </div>
-                          ))
-                        : checkoutSummaryDiscount > 0
-                          ? <div className="flex justify-between gp-primary-text"><span>Descuento</span><span>-{formatMoney(checkoutSummaryDiscount)}</span></div>
-                          : null}
-                      {checkoutDisposableTotal > 0 && <div className="flex justify-between"><span>Desechables</span><span>{formatMoney(checkoutDisposableTotal)}</span></div>}
-                      <div className="flex justify-between font-semibold text-foreground"><span>Total neto</span><span>{formatMoney(checkoutSummaryTotal)}</span></div>
-                      {checkoutSummaryPaid > 0 ? (
-                        <div className="flex justify-between"><span>Pagado</span><span>{formatMoney(checkoutSummaryPaid)}</span></div>
-                      ) : null}
-                      {(checkoutSummaryPaid > 0 || tablePaymentScope) ? (
-                        <div className="flex justify-between font-semibold text-foreground"><span>Pendiente</span><span>{formatMoney(paymentTotal)}</span></div>
-                      ) : null}
-                    </div>
-                  </div>
+                  {renderCheckoutSummary()}
 
                   {selectedPaymentIsCash && showCashPanel ? (
                     <CashPaymentPanel
@@ -7355,6 +7452,7 @@ type TableConfirmDialogState =
                             className={cn("h-11 px-2 text-sm font-semibold", selected && "ring-2 ring-primary/40")}
                             style={getPaymentButtonStyle(option, selected)}
                             onClick={() => selectPaymentMethodOption(option, false)}
+                            disabled={paymentActionsDisabled}
                           >
                             {option.label}
                           </Button>
@@ -7375,7 +7473,7 @@ type TableConfirmDialogState =
                   </div>
                   <div className="flex gap-2">
                     <Button type="button" variant="outline" className="h-12 flex-1 text-sm" onClick={() => handlePaymentDialogOpenChange(false)}>Cerrar</Button>
-                    <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+                    <Button className="h-12 flex-1 text-sm" onClick={handleSubmitPayment} disabled={paymentActionsDisabled || isProcessingPayment || checkoutTotal <= 0 || !selectedPaymentMethodCode || (selectedPaymentIsCash && showCashPanel && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                       {isProcessingPayment ? "Procesando..." : "Continuar con el pago"}
                     </Button>
                   </div>
@@ -7417,6 +7515,7 @@ type TableConfirmDialogState =
                   className="h-14 text-base"
                   style={getPaymentButtonStyle(option, selectedPaymentMethodCode === option.code)}
                   onClick={() => selectPaymentMethodOption(option, false)}
+                  disabled={paymentActionsDisabled}
                 >
                   {option.label}
                 </Button>
@@ -7460,7 +7559,7 @@ type TableConfirmDialogState =
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
-              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
+              <Button className="h-14 flex-1 text-base" onClick={handleSubmitPayment} disabled={paymentActionsDisabled || isProcessingPayment || checkoutTotal <= 0 || (selectedPaymentIsCash && paymentAmountValue <= 0) || (splitEnabled && !splitValidation.isValid)}>
                 {isProcessingPayment ? "Procesando..." : "Registrar pago"}
               </Button>
             </div>
