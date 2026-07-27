@@ -188,6 +188,16 @@ type TablePaymentScope = {
   orderItemIds: number[];
 };
 
+type CurrentChargeSummary = {
+  subtotalCents: number;
+  discountCents: number;
+  disposableCents: number;
+  totalCents: number;
+  paidCents: number;
+  remainingCents: number;
+  isSettled: boolean;
+};
+
 type TablePaymentReturnTarget = {
   tableId: number;
   session: TableSession;
@@ -501,42 +511,65 @@ const CashPaymentPanel = ({
   onExact,
   panelRef,
   paymentInputRef,
-}: CashPaymentPanelProps) => (
-  <div ref={panelRef} className="space-y-2 rounded-xl border gp-primary-border gp-primary-soft p-3">
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <h3 className="font-semibold">Pago en efectivo</h3>
-        <p className="text-xs text-muted-foreground">Monto recibido, propina y cambio.</p>
+}: CashPaymentPanelProps) => {
+  const tenderInputClass = "h-12 border-border bg-background text-foreground shadow-sm focus-visible:border-primary focus-visible:ring-primary";
+  const tenderButtonClass = "h-11 min-w-0 border-border bg-background px-2 text-sm font-semibold text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground active:bg-accent focus-visible:ring-primary sm:h-12";
+  const activeInputClass = "border-primary ring-2 ring-primary/30";
+
+  return (
+    <div ref={panelRef} className="space-y-3 rounded-xl border border-border bg-muted p-3 text-foreground shadow-sm">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-foreground">Pago en efectivo</h3>
+          <p className="text-xs font-medium text-muted-foreground">Monto recibido, propina y cambio.</p>
+        </div>
+        <Badge variant="outline" className="w-fit shrink-0 border-primary bg-background px-3 py-1 text-sm font-bold text-foreground shadow-sm">
+          Total {formatMoney(totalCents / 100)}
+        </Badge>
       </div>
-      <Badge variant="outline">Total {formatMoney(totalCents / 100)}</Badge>
-    </div>
-    <div className="grid grid-cols-2 gap-3">
-      <div className="space-y-2">
-        <Label>Monto recibido</Label>
-        <Input ref={paymentInputRef} value={paymentAmount} onFocus={() => onFocusTenderField("payment")} onClick={() => onFocusTenderField("payment")} onChange={(e) => onPaymentAmountChange(e.target.value)} inputMode="decimal" />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="font-medium text-foreground">Monto recibido</Label>
+          <Input
+            ref={paymentInputRef}
+            value={paymentAmount}
+            onFocus={() => onFocusTenderField("payment")}
+            onClick={() => onFocusTenderField("payment")}
+            onChange={(e) => onPaymentAmountChange(e.target.value)}
+            inputMode="decimal"
+            className={cn(tenderInputClass, activeTenderField === "payment" && activeInputClass)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label className="font-medium text-foreground">Propina</Label>
+          <Input
+            value={tipAmount}
+            onFocus={() => onFocusTenderField("tip")}
+            onClick={() => onFocusTenderField("tip")}
+            onChange={(e) => onTipAmountChange(e.target.value)}
+            inputMode="decimal"
+            className={cn(tenderInputClass, activeTenderField === "tip" && activeInputClass)}
+          />
+        </div>
       </div>
-      <div className="space-y-2">
-        <Label>Propina</Label>
-        <Input value={tipAmount} onFocus={() => onFocusTenderField("tip")} onClick={() => onFocusTenderField("tip")} onChange={(e) => onTipAmountChange(e.target.value)} inputMode="decimal" />
+      <div className={cn("rounded-lg border border-border bg-background p-3 text-center font-semibold text-foreground shadow-sm", isExactPayment ? "text-lg" : "text-2xl sm:text-3xl")}>
+        {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
+        {isExactPayment && <span className="text-primary">Pago exacto</span>}
+        {changeCents > 1 && <span className="text-primary">Cambio: {formatMoney(changeCents / 100)}</span>}
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {DENOMINATION_CENTS.map((value) => (
+          <Button key={value} type="button" className={tenderButtonClass} variant="outline" onClick={() => onApplyDenomination(value)}>
+            {formatMoney(value / 100)}
+          </Button>
+        ))}
+        <Button type="button" className={tenderButtonClass} variant="outline" onClick={onClear}>Borrar</Button>
+        <Button type="button" className={tenderButtonClass} variant="outline" onClick={onBackspace} aria-label="Retroceso">←</Button>
+        <Button type="button" className={cn(tenderButtonClass, "col-span-2 border-primary text-foreground")} variant="outline" onClick={onExact}>Exacto</Button>
       </div>
     </div>
-    <div className={cn("rounded-lg border bg-background/80 p-3 text-center font-semibold", isExactPayment ? "text-lg" : "text-2xl sm:text-3xl")}> 
-      {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-      {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-      {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-    </div>
-    <div className="grid grid-cols-4 gap-2">
-      {DENOMINATION_CENTS.map((value) => (
-        <Button key={value} type="button" className="h-11 text-sm" variant="outline" onClick={() => onApplyDenomination(value)}>
-          {formatMoney(value / 100)}
-        </Button>
-      ))}
-      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onClear}>Borrar</Button>
-      <Button type="button" className="h-11 text-sm" variant="outline" onClick={onBackspace}>←</Button>
-      <Button type="button" className="col-span-2 h-12 text-sm" variant="outline" onClick={onExact}>Exacto</Button>
-    </div>
-  </div>
-);
+  );
+};
 
 const POS = () => {
 type CashCloseFlowState = "idle" | "closingInProgress" | "pendingUserAck";
@@ -663,11 +696,9 @@ type TableConfirmDialogState =
   const [tipAmount, setTipAmount] = useState("");
   const [activeTenderField, setActiveTenderField] = useState<"payment" | "tip" | null>(null);
   const [shouldResetTenderOnFirstTap, setShouldResetTenderOnFirstTap] = useState(true);
-  const cashInputsContainerRef = useRef<HTMLDivElement | null>(null);
   const checkoutModalScrollRef = useRef<HTMLDivElement | null>(null);
   const cashPanelRef = useRef<HTMLDivElement | null>(null);
   const cashAmountInputRef = useRef<HTMLInputElement | null>(null);
-  const keypadRef = useRef<HTMLDivElement | null>(null);
   const cartItemsScrollRef = useRef<HTMLDivElement | null>(null);
   const cartEndRef = useRef<HTMLDivElement | null>(null);
   const previousCartLengthRef = useRef(0);
@@ -1955,8 +1986,7 @@ type TableConfirmDialogState =
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
-      if (cashInputsContainerRef.current?.contains(target)) return;
-      if (keypadRef.current?.contains(target)) return;
+      if (cashPanelRef.current?.contains(target)) return;
       setActiveTenderField(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
@@ -2326,6 +2356,35 @@ type TableConfirmDialogState =
     ? tablePaymentScope.totalCents / 100
     : activeOrder?.totalPayable ?? checkoutDraftPricing?.total ?? paymentTotal;
   const checkoutSummaryPaid = tablePaymentScope ? tablePaymentScope.paidCents / 100 : activeOrder?.totalPaid ?? 0;
+  const currentChargeSummary: CurrentChargeSummary = splitEnabled && activeSplitPart
+    ? {
+        subtotalCents: Math.max(activeSplitPart.amountCents, 0),
+        discountCents: 0,
+        disposableCents: 0,
+        totalCents: Math.max(activeSplitPart.amountCents, 0),
+        paidCents: activeSplitPart.isPaid ? Math.max(activeSplitPart.amountCents, 0) : 0,
+        remainingCents: activeSplitPart.isPaid ? 0 : Math.max(activeSplitPart.amountCents, 0),
+        isSettled: Boolean(activeSplitPart.isPaid) || Math.max(activeSplitPart.amountCents, 0) <= 0,
+      }
+    : tablePaymentScope
+      ? {
+          subtotalCents: Math.max(tablePaymentScope.subtotalCents ?? tablePaymentScope.totalCents, 0),
+          discountCents: Math.max(tablePaymentScope.discountCents ?? 0, 0),
+          disposableCents: 0,
+          totalCents: Math.max(tablePaymentScope.totalCents, 0),
+          paidCents: Math.max(tablePaymentScope.paidCents, 0),
+          remainingCents: Math.max(tablePaymentScope.remainingCents, 0),
+          isSettled: tablePaymentScope.remainingCents <= 0 || tablePaymentScope.totalCents <= 0,
+        }
+      : {
+          subtotalCents: Math.max(toCents(checkoutSummarySubtotalBefore), 0),
+          discountCents: Math.max(toCents(checkoutSummaryDiscount), 0),
+          disposableCents: Math.max(toCents(checkoutDisposableTotal), 0),
+          totalCents: Math.max(toCents(checkoutSummaryTotal), 0),
+          paidCents: Math.max(toCents(checkoutSummaryPaid), 0),
+          remainingCents: Math.max(checkoutTotalCents, 0),
+          isSettled: paymentTotal <= 0.009 || isPaid,
+        };
   const splitPersonSession = tablePaymentReturn?.session ?? tableSessions.find((session) => session.id === tablePaymentScope?.tableSessionId) ?? null;
   const tablePaymentTableId = tablePaymentScope?.tableId ?? tablePaymentReturn?.tableId ?? null;
   const personSplitCards = useMemo(() => {
@@ -3220,8 +3279,12 @@ type TableConfirmDialogState =
     frame = window.requestAnimationFrame(() => {
       nestedFrame = window.requestAnimationFrame(() => {
         const container = checkoutModalScrollRef.current;
-        if (container) {
-          container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        const panel = cashPanelRef.current;
+        if (container && panel) {
+          const containerRect = container.getBoundingClientRect();
+          const panelRect = panel.getBoundingClientRect();
+          const targetTop = Math.max(container.scrollTop + panelRect.top - containerRect.top - 12, 0);
+          container.scrollTo({ top: targetTop, behavior: "smooth" });
         } else {
           cashPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
         }
@@ -4030,7 +4093,7 @@ type TableConfirmDialogState =
   };
 
   const setExactTenderAmount = () => {
-    setPaymentAmount(centsToInput(expectedPaymentCents + tipAmountCents));
+    setPaymentAmount(centsToInput(currentPaymentTargetCents + tipAmountCents));
     setActiveTenderField("payment");
     setShouldResetTenderOnFirstTap(false);
   };
@@ -5056,37 +5119,40 @@ type TableConfirmDialogState =
   };
 
   const renderCheckoutSummary = () => {
-    const hasDiscount = checkoutSummaryDiscount > 0.009;
-    const hasPaid = checkoutSummaryPaid > 0.009;
-    const hasDisposable = checkoutDisposableTotal > 0.009;
-    const isSettled = paymentTotal <= 0.009 || isPaid;
-
-    if (!hasDiscount && !hasPaid && !hasDisposable && !isSettled) return null;
+    const summary = currentChargeSummary;
+    const hasDiscount = summary.discountCents > 0;
+    const hasPaid = summary.paidCents > 0;
+    const hasDisposable = summary.disposableCents > 0;
+    const isSettled = summary.isSettled || summary.remainingCents <= 0;
+    const shouldShowBreakdown = hasDiscount || hasDisposable;
+    const totalCents = isSettled ? 0 : Math.max(summary.remainingCents || summary.totalCents, 0);
 
     let rows = renderMoneyRow("Total", formatMoney(0), { className: "font-semibold text-foreground" });
     if (hasPaid && !isSettled) {
       rows = (
         <>
-          {hasDiscount ? renderMoneyRow("Descuento aplicado", `-${formatMoney(checkoutSummaryDiscount)}`, { className: "gp-primary-text" }) : null}
-          {renderMoneyRow("Pagado", formatMoney(checkoutSummaryPaid))}
-          {renderMoneyRow("Restante", formatMoney(paymentTotal), { className: "font-semibold text-foreground" })}
+          {shouldShowBreakdown ? renderMoneyRow("Subtotal", formatMoney(summary.subtotalCents / 100)) : null}
+          {hasDiscount ? renderMoneyRow("Descuento", `-${formatMoney(summary.discountCents / 100)}`, { className: "text-primary font-medium" }) : null}
+          {hasDisposable ? renderMoneyRow("Desechables", formatMoney(summary.disposableCents / 100)) : null}
+          {renderMoneyRow("Pagado", formatMoney(summary.paidCents / 100))}
+          {renderMoneyRow("Restante", formatMoney(summary.remainingCents / 100), { className: "font-semibold text-foreground" })}
         </>
       );
     } else if (!isSettled) {
       rows = (
         <>
-          {renderMoneyRow("Subtotal", formatMoney(checkoutSummarySubtotalBefore))}
-          {hasDiscount ? renderMoneyRow("Descuento", `-${formatMoney(checkoutSummaryDiscount)}`, { className: "gp-primary-text" }) : null}
-          {hasDisposable ? renderMoneyRow("Desechables", formatMoney(checkoutDisposableTotal)) : null}
-          {renderMoneyRow("Total", formatMoney(checkoutSummaryTotal), { className: "font-semibold text-foreground" })}
+          {shouldShowBreakdown ? renderMoneyRow("Subtotal", formatMoney(summary.subtotalCents / 100)) : null}
+          {hasDiscount ? renderMoneyRow("Descuento", `-${formatMoney(summary.discountCents / 100)}`, { className: "text-primary font-medium" }) : null}
+          {hasDisposable ? renderMoneyRow("Desechables", formatMoney(summary.disposableCents / 100)) : null}
+          {renderMoneyRow("Total", formatMoney(totalCents / 100), { className: "font-semibold text-foreground" })}
         </>
       );
     }
 
     return (
-      <div className="rounded-md border p-3 text-sm">
+      <div className="rounded-md border border-border bg-card p-3 text-sm text-card-foreground shadow-sm">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="font-semibold">Resumen</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Resumen del cobro actual</div>
           {isSettled ? <Badge variant="secondary">Pagada</Badge> : null}
         </div>
         <div className="space-y-1 text-muted-foreground">{rows}</div>
@@ -6066,40 +6132,23 @@ type TableConfirmDialogState =
                 ))}
               </div>
               {selectedPaymentIsCash ? (
-                <>
-                  <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label>Monto recibido</Label>
-                      <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Propina</Label>
-                      <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
-                    </div>
-                  </div>
-                  <div
-                    className={cn(
-                      "rounded-lg border p-3 text-center font-semibold",
-                      isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
-                    )}
-                  >
-                    {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-                    {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-                    {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-                  </div>
-                  {activeTenderField ? (
-                    <div ref={keypadRef} className="grid grid-cols-4 gap-2">
-                      {DENOMINATION_CENTS.map((value) => (
-                        <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                          {formatMoney(value / 100)}
-                        </Button>
-                      ))}
-                      <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                      <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
-                      <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
-                    </div>
-                  ) : null}
-                </>
+                <CashPaymentPanel
+                  totalCents={currentPaymentTargetCents}
+                  paymentAmount={paymentAmount}
+                  tipAmount={tipAmount}
+                  activeTenderField={activeTenderField}
+                  changeCents={changeCents}
+                  isExactPayment={isExactPayment}
+                  onPaymentAmountChange={setPaymentAmount}
+                  onTipAmountChange={setTipAmount}
+                  onFocusTenderField={focusTenderField}
+                  onApplyDenomination={applyTenderDenomination}
+                  onClear={clearTenderField}
+                  onBackspace={backspaceTenderField}
+                  onExact={setExactTenderAmount}
+                  panelRef={cashPanelRef}
+                  paymentInputRef={cashAmountInputRef}
+                />
               ) : null}
               <div className="flex gap-2">
                 <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
@@ -7522,40 +7571,23 @@ type TableConfirmDialogState =
               ))}
             </div>
             {selectedPaymentIsCash ? (
-              <>
-                <div ref={cashInputsContainerRef} className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>Monto recibido</Label>
-                    <Input value={paymentAmount} onFocus={() => focusTenderField("payment")} onClick={() => focusTenderField("payment")} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Propina</Label>
-                    <Input value={tipAmount} onFocus={() => focusTenderField("tip")} onClick={() => focusTenderField("tip")} onChange={(e) => setTipAmount(e.target.value)} inputMode="decimal" />
-                  </div>
-                </div>
-                <div
-                  className={cn(
-                    "rounded-lg border p-3 text-center font-semibold",
-                    isExactPayment ? "text-lg" : "text-2xl sm:text-3xl",
-                  )}
-                >
-                  {changeCents < -1 && <span className="text-destructive">Faltan {formatMoney(Math.abs(changeCents) / 100)}</span>}
-                  {isExactPayment && <span className="text-secondary">Pago exacto</span>}
-                  {changeCents > 1 && <span className="text-amber-500">Cambio: {formatMoney(changeCents / 100)}</span>}
-                </div>
-                {activeTenderField ? (
-                  <div ref={keypadRef} className="grid grid-cols-4 gap-2">
-                    {DENOMINATION_CENTS.map((value) => (
-                      <Button key={value} type="button" className="h-14 text-base" variant="outline" onClick={() => applyTenderDenomination(value)}>
-                        {formatMoney(value / 100)}
-                      </Button>
-                    ))}
-                    <Button type="button" className="h-14 text-base" variant="outline" onClick={clearTenderField}>Borrar</Button>
-                    <Button type="button" className="h-14 text-base" variant="outline" onClick={backspaceTenderField}>←</Button>
-                    <Button type="button" className="col-span-2 h-14 text-base" variant="outline" onClick={setExactTenderAmount}>Exacto</Button>
-                  </div>
-                ) : null}
-              </>
+              <CashPaymentPanel
+                totalCents={currentPaymentTargetCents}
+                paymentAmount={paymentAmount}
+                tipAmount={tipAmount}
+                activeTenderField={activeTenderField}
+                changeCents={changeCents}
+                isExactPayment={isExactPayment}
+                onPaymentAmountChange={setPaymentAmount}
+                onTipAmountChange={setTipAmount}
+                onFocusTenderField={focusTenderField}
+                onApplyDenomination={applyTenderDenomination}
+                onClear={clearTenderField}
+                onBackspace={backspaceTenderField}
+                onExact={setExactTenderAmount}
+                panelRef={cashPanelRef}
+                paymentInputRef={cashAmountInputRef}
+              />
             ) : null}
             <div className="flex gap-2">
               <Button variant="outline" className="h-14 flex-1 text-base" onClick={() => { setIsPaymentMethodOpen(false); setIsPaymentOpen(true); }}>Volver</Button>
