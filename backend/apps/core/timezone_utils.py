@@ -6,6 +6,14 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 
 
+def get_business_local_datetime(value: datetime | None = None) -> datetime:
+    current = value or timezone.now()
+    tz = timezone.get_current_timezone()
+    if timezone.is_naive(current):
+        current = timezone.make_aware(current, tz)
+    return timezone.localtime(current, tz)
+
+
 def parse_business_date_range(date_from_raw: str | None, date_to_raw: str | None) -> tuple[datetime | None, datetime | None]:
     date_from = parse_date(date_from_raw or "")
     date_to = parse_date(date_to_raw or "")

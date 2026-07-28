@@ -12,6 +12,7 @@ from apps.orders.models import Order, OrderFee, OrderItem, OrderItemModifier
 from apps.menu.models import Discount, Modifier, Product
 from apps.orders.serializers import OrderSerializer, OrderCreateSerializer, OrderCustomerUpdateSerializer
 from apps.orders.schema import ensure_whatsapp_order_columns, has_whatsapp_order_columns
+from apps.orders.services.service_types import resolve_table_service_type
 from apps.orders.services.totals import apply_order_discounts_and_totals
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
@@ -132,6 +133,8 @@ def _sync_pending_order_lines(
     existing_items = {item.id: item for item in order.items.select_related("product").all()}
     existing_ids = set(existing_items.keys())
     table_session = order.table_sessions.prefetch_related("guests").order_by("-id").first()
+    if order.service_type_id is None and table_session is not None:
+        order.service_type = resolve_table_service_type()
     guests_by_id = {guest.id: guest for guest in table_session.guests.all()} if table_session else {}
     guests_by_label = {}
     for guest in guests_by_id.values():
@@ -782,6 +785,7 @@ class PendingOrderToggleView(generics.GenericAPIView):
                     "iva_exempt_discount",
                     "amount_due_cents",
                     "requires_kitchen",
+                    "service_type",
                 ]
             )
         order.save(update_fields=update_fields)

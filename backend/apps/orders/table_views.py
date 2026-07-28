@@ -14,6 +14,7 @@ from apps.core.permissions import CanAccessTablePos, CanManageKitchenItems, CanS
 from apps.menu.models import Product
 from apps.orders.models import DiningArea, RestaurantTable, TableSession, TableSessionTable, TableGuest, Order, OrderItem
 from apps.orders.serializers import DiningAreaSerializer, OrderSerializer, RestaurantTableSerializer, TableGuestSerializer, TableSessionSerializer
+from apps.orders.services.service_types import resolve_table_service_type
 from apps.orders.services.totals import calculate_order_totals
 from apps.payments.models import Payment
 from apps.users.models import UserProfile
@@ -447,6 +448,7 @@ class TableSessionListCreateView(TableMapFeatureGuardMixin, APIView):
         order = Order.objects.create(
             order_number=_next_order_number(branch),
             branch=branch,
+            service_type=resolve_table_service_type(),
             status="new",
             customer_name="",
             is_pending=True,

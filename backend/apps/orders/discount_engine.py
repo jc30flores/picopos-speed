@@ -6,10 +6,14 @@ from typing import Any
 
 from django.utils import timezone
 
+from apps.core.timezone_utils import get_business_local_datetime
 from apps.menu.models import Discount
 
 
 MONEY = Decimal("0.01")
+TABLE_SERVICE_KEYS = {"MESA", "DINE_IN", "DINE-IN", "DINEIN", "DINE IN", "EN_LOCAL", "RESTAURANTE"}
+TAKEOUT_SERVICE_KEYS = {"PARA_LLEVAR", "PARA LLEVAR", "TAKEOUT", "TAKE_OUT"}
+PEDIDOS_YA_SERVICE_KEYS = {"PEDIDOS_YA", "PEDIDOS YA", "PEDIDOSYA"}
 
 
 def q2(value: Decimal) -> Decimal:
@@ -17,11 +21,31 @@ def q2(value: Decimal) -> Decimal:
 
 
 def _time_in_range(now_t, start_t, end_t) -> bool:
-    if not start_t or not end_t:
+    if not start_t and not end_t:
         return True
+    if start_t and not end_t:
+        return now_t >= start_t
+    if end_t and not start_t:
+        return now_t <= end_t
     if start_t <= end_t:
         return start_t <= now_t <= end_t
     return now_t >= start_t or now_t <= end_t
+
+
+def discount_business_weekday(local_dt) -> int:
+    return (local_dt.weekday() + 1) % 7
+
+
+def normalize_discount_service_type(value: str | None) -> str:
+    key = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    compact = key.replace("_", "")
+    if key in TABLE_SERVICE_KEYS or compact in {"MESA", "DINEIN", "ENLOCAL", "RESTAURANTE"}:
+        return "MESA"
+    if key in TAKEOUT_SERVICE_KEYS or compact in {"PARALLEVAR", "TAKEOUT"}:
+        return "PARA_LLEVAR"
+    if key in PEDIDOS_YA_SERVICE_KEYS or compact == "PEDIDOSYA":
+        return "PEDIDOS_YA"
+    return key
 
 
 @dataclass
@@ -45,21 +69,23 @@ def discount_has_conditions(discount: Discount) -> bool:
         or (discount.days_of_week or [])
         or discount.start_time
         or discount.end_time
-        or discount.min_amount
+        or discount.min_amount is not None
     )
 
 
 def discount_conditions_met(discount: Discount, *, service_type_key: str, now=None, subtotal_before_discounts: Decimal = Decimal("0")) -> bool:
-    now = now or timezone.localtime(timezone.now())
-    day = now.weekday()
+    now = get_business_local_datetime(now or timezone.now())
+    day = discount_business_weekday(now)
     t = now.time()
-    if discount.service_types and service_type_key not in discount.service_types:
+    normalized_service_type = normalize_discount_service_type(service_type_key)
+    normalized_discount_services = {normalize_discount_service_type(value) for value in (discount.service_types or []) if value}
+    if normalized_discount_services and normalized_service_type not in normalized_discount_services:
         return False
     if discount.days_of_week and day not in discount.days_of_week:
         return False
     if not _time_in_range(t, discount.start_time, discount.end_time):
         return False
-    if discount.min_amount and subtotal_before_discounts < Decimal(discount.min_amount):
+    if discount.min_amount is not None and subtotal_before_discounts < Decimal(discount.min_amount):
         return False
     return True
 
@@ -108,7 +134,6 @@ def apply_discounts(
         eligible = [
             d for d in discounts
             if d.auto_apply
-            and discount_has_conditions(d)
             and discount_is_eligible(d, service_type_key=service_type_key, subtotal_before_discounts=subtotal_before_discounts)
         ]
     eligible.sort(key=lambda d: (d.priority, d.id))

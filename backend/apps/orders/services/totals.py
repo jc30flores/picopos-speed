@@ -337,7 +337,24 @@ def _resolve_snapshot_discount(order: Order, discounts: list[Discount]) -> tuple
     if not discount:
         return None, False, ""
     mode = str(snapshot.get("mode") or "").strip().lower()
-    return discount, mode == "manual", mode
+    return discount, mode == "manual" or (mode == "auto" and _order_discount_snapshot_is_locked(order)), mode
+
+
+def _order_discount_snapshot_is_locked(order: Order) -> bool:
+    if order.financial_locked_at or order.send_to_kitchen:
+        return True
+    if order.status in {"preparing", "ready", "delivered"}:
+        return True
+    if order.table_sessions.filter(
+        status__in=[
+            TableSession.STATUS_SENT_TO_KITCHEN,
+            TableSession.STATUS_PARTIALLY_PAID,
+            TableSession.STATUS_PAID,
+            TableSession.STATUS_CLOSED,
+        ]
+    ).exists():
+        return True
+    return False
 
 
 def apply_order_discounts_and_totals(
