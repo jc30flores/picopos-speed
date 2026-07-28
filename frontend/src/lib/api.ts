@@ -791,6 +791,7 @@ export type OrderItem = {
   unitPriceBeforeDiscount?: number;
   discountAmount?: number;
   discountPercent?: number;
+  discountName?: string;
   unitPriceFinal?: number;
   lineTotalBeforeDiscount?: number;
   lineTotalDiscount?: number;
@@ -3373,6 +3374,8 @@ export const getActiveDiscounts = async (params?: {
     target_product_ids: number[];
     auto_apply: boolean;
     is_active: boolean;
+    priority?: number;
+    stackable?: boolean;
     has_conditions: boolean;
     available_now: boolean;
   }>>(response);
@@ -3387,6 +3390,8 @@ export const getActiveDiscounts = async (params?: {
     targetProductIds: item.target_product_ids ?? [],
     autoApply: Boolean(item.auto_apply),
     isActive: Boolean(item.is_active),
+    priority: item.priority ?? 100,
+    stackable: Boolean(item.stackable),
     hasConditions: Boolean(item.has_conditions),
     availableNow: Boolean(item.available_now),
   }));
@@ -3599,6 +3604,7 @@ const mapOrder = (order: {
     unit_price_before_discount?: string;
     discount_amount?: string;
     discount_percent?: string;
+    discount_name?: string;
     unit_price_final?: string;
     line_total_before_discount?: string;
     line_total_discount?: string;
@@ -3677,6 +3683,7 @@ const mapOrder = (order: {
       unitPriceBeforeDiscount: Number(item.unit_price_before_discount ?? item.price_snapshot),
       discountAmount: Number(item.discount_amount ?? 0),
       discountPercent: Number(item.discount_percent ?? 0),
+      discountName: item.discount_name ?? "",
       unitPriceFinal: Number(item.unit_price_final ?? item.price_snapshot),
       lineTotalBeforeDiscount: Number(item.line_total_before_discount ?? Number(item.price_snapshot) * item.quantity),
       lineTotalDiscount: Number(item.line_total_discount ?? 0),

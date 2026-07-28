@@ -47,6 +47,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     unit_price_special = serializers.SerializerMethodField()
     unit_price_before_discount = serializers.SerializerMethodField()
     discount_percent = serializers.SerializerMethodField()
+    discount_name = serializers.SerializerMethodField()
     unit_price_final = serializers.SerializerMethodField()
     line_total_before_discount = serializers.SerializerMethodField()
     line_total_discount = serializers.SerializerMethodField()
@@ -89,6 +90,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "unit_price_special",
             "unit_price_before_discount",
             "discount_percent",
+            "discount_name",
             "unit_price_final",
             "line_total_before_discount",
             "line_total_discount",
@@ -165,6 +167,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
             return Decimal("0.00")
         unit_discount = (Decimal(obj.discount_amount or 0) / Decimal(obj.quantity or 1)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return ((unit_discount / unit_before) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def get_discount_name(self, obj: OrderItem):
+        if Decimal(obj.discount_amount or 0) <= 0:
+            return ""
+        discount = obj.order.applied_discounts.order_by("id").first()
+        return discount.discount_name_snapshot if discount else ""
 
     def get_unit_price_final(self, obj: OrderItem):
         unit_before = self._unit_before_discount(obj)

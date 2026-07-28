@@ -699,6 +699,8 @@ class ActiveDiscountListView(APIView):
                     "target_product_ids": target_product_ids,
                     "auto_apply": discount.auto_apply,
                     "is_active": discount.is_active,
+                    "priority": discount.priority,
+                    "stackable": discount.stackable,
                     "conditions": {
                         "days_of_week": discount.days_of_week or [],
                         "start_time": discount.start_time,

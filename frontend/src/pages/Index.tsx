@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Search, Plus, Minus, ShoppingCart, Wallet, ChevronDown, ChevronUp, Delete, BadgePercent, LayoutGrid, RefreshCw, Settings2, Printer, Save, XCircle, ReceiptText, Send, PrinterCheck, History, ArrowLeft, CreditCard, DoorOpen, Eye, Link2, Loader2, MoveRight, SplitSquareHorizontal, Utensils, X, Home, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMoney, moneyToFixedString, toCents, toNumber } from "@/lib/money";
+import { formatMoney, fromCents, moneyToFixedString, toCents, toNumber } from "@/lib/money";
 import { getReadableTextColor, isValidHexColor } from "@/lib/color";
 import { resolveEffectiveUnitPrice } from "@/lib/pricing";
 import { formatDateTimeSV } from "@/lib/datetime";
@@ -278,6 +278,34 @@ const getPaidExtrasLines = (item: CartItem) =>
     name: modifier.name,
     price: modifier.price,
   }));
+
+const discountAppliesToProduct = (discount: Discount, product: Product) => {
+  if (discount.appliesTo === "order") return true;
+  if (discount.appliesTo === "products") return (discount.targetProductIds ?? []).includes(product.id);
+  if (discount.appliesTo === "categories") return (discount.targetCategoryIds ?? []).includes(product.categoryId);
+  return false;
+};
+
+const getAutomaticProductDiscountPreview = (product: Product, unitPrice: number, discounts: Discount[]) => {
+  const unitCents = toCents(unitPrice);
+  if (unitCents <= 0) return null;
+  const discount = (discounts ?? [])
+    .filter((row) => row.autoApply && row.availableNow === true && row.type !== "bxgy" && discountAppliesToProduct(row, product))
+    .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100) || a.id - b.id)[0];
+  if (!discount) return null;
+  let amountCents = 0;
+  if (discount.type === "percent") {
+    amountCents = Math.round((unitCents * discount.value) / 100);
+  } else if (discount.type === "fixed" && discount.appliesTo !== "order") {
+    amountCents = Math.min(unitCents, toCents(discount.value));
+  }
+  if (amountCents <= 0) return null;
+  return {
+    discount,
+    amountCents,
+    finalPrice: fromCents(Math.max(unitCents - amountCents, 0)),
+  };
+};
 
 const isPendingKitchenItem = (item: Order["items"][number]) => (item.kitchenStatus ?? "pending") === "pending";
 const hasOrderItems = (order: Order | null | undefined) => Boolean(order?.items?.length);
@@ -834,6 +862,7 @@ type TableConfirmDialogState =
   const [availableDiscounts, setAvailableDiscounts] = useState<Discount[]>([]);
   const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
   const [isLoadingDiscounts, setIsLoadingDiscounts] = useState(false);
+  const activeDiscountRequestSeqRef = useRef(0);
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("1");
   const [manualPrice, setManualPrice] = useState("");
@@ -894,6 +923,10 @@ type TableConfirmDialogState =
     [availableDiscounts, pricingCart, products, selectedDiscount, serviceType, serviceTypes]
   );
   const { itemsGross, subtotal, discountTotal: discountAmount, disposableTotal: cartDisposableTotal, total } = cartPricing;
+  const cartLineDiscountByIndex = useMemo(
+    () => new Map(cartPricing.lineDiscounts.map((line) => [line.index, line])),
+    [cartPricing.lineDiscounts]
+  );
 
   const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
 
@@ -1946,15 +1979,21 @@ type TableConfirmDialogState =
   }, [isOpeningTablePayment, products, serviceType, tablePaymentScope]);
 
   const loadActiveDiscounts = useCallback(async () => {
+    const requestSeq = activeDiscountRequestSeqRef.current + 1;
+    activeDiscountRequestSeqRef.current = requestSeq;
     try {
       setIsLoadingDiscounts(true);
       const discounts = await getActiveDiscounts({ serviceType, subtotal: itemsGross });
+      if (requestSeq !== activeDiscountRequestSeqRef.current) return;
       setAvailableDiscounts(discounts);
     } catch (error) {
+      if (requestSeq !== activeDiscountRequestSeqRef.current) return;
       console.error("Failed to load active discounts", error);
       toast.error("No se pudieron cargar los descuentos");
     } finally {
-      setIsLoadingDiscounts(false);
+      if (requestSeq === activeDiscountRequestSeqRef.current) {
+        setIsLoadingDiscounts(false);
+      }
     }
   }, [itemsGross, serviceType]);
 
@@ -5723,7 +5762,7 @@ type TableConfirmDialogState =
                         <p className="text-xs text-muted-foreground">
                           {(item.tableGuestLabel || item.assignedName || "Mesa completa")} · Cantidad {item.quantity} · {formatMoney(item.unitPriceBeforeDiscount ?? item.price)} c/u
                         </p>
-                        {itemDiscount > 0 ? <p className="text-xs gp-primary-text">Descuento: -{formatMoney(itemDiscount)}</p> : null}
+                        {itemDiscount > 0 ? <p className="text-xs gp-primary-text">{item.discountName || "Descuento"}: -{formatMoney(itemDiscount)}</p> : null}
                         {modifiers.length ? <p className="text-xs text-muted-foreground">Modificadores: {modifiers.join(", ")}</p> : null}
                       </div>
                       <p className="whitespace-nowrap text-right font-semibold">{formatMoney(getOrderItemTotal(item))}</p>
@@ -6015,7 +6054,7 @@ type TableConfirmDialogState =
                                 </div>
                                 {(item.discountAmount ?? 0) > 0 && (
                                   <div className="text-[11px] gp-primary-text">
-                                    Descuento {formatMoney(item.discountAmount ?? 0)}
+                                    {item.discountName || "Descuento"} -{formatMoney(item.discountAmount ?? 0)}
                                   </div>
                                 )}
                               </div>
@@ -6456,6 +6495,7 @@ type TableConfirmDialogState =
                       new Date(),
                       Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
                     );
+                    const productDiscountPreview = getAutomaticProductDiscountPreview(product, productPricing.effectivePrice, availableDiscounts);
                     const availability = productAvailability(product.id);
                     const blocked = availability?.resolvedPolicy === "block" && !availability.canAddOne;
                     const badgeText = blocked ? (Number(availability?.currentCartQuantity ?? 0) > 0 ? "Máximo" : "Sin stock") : availability?.status === "warning" ? "Stock bajo" : availability?.status === "allowed_without_stock" ? "Venta sin stock" : "";
@@ -6486,16 +6526,25 @@ type TableConfirmDialogState =
                         <h3 className="font-semibold text-sm line-clamp-2">{product.name}</h3>
                         {!showProductImage && badgeText ? <Badge variant={blocked ? "destructive" : "outline"} className="shrink-0 text-[10px]">{badgeText}</Badge> : null}
                       </div>
-                      {productPricing.display.showOfferBadge && (
-                        <Badge className="mb-1 max-w-full truncate gp-primary-bg">
-                          {productPricing.appliedRule?.name?.trim() || "OFERTA"}
-                        </Badge>
-                      )}
-                      <div className="space-y-0.5">
+                      <div className="mb-1 flex flex-wrap gap-1">
                         {productPricing.display.showOfferBadge && (
-                          <p className="text-xs text-muted-foreground line-through">${product.price.toFixed(2)}</p>
+                          <Badge className="max-w-full truncate gp-primary-bg">
+                            {productPricing.appliedRule?.name?.trim() || "OFERTA"}
+                          </Badge>
                         )}
-                        <p className="text-base font-bold text-secondary">${productPricing.effectivePrice.toFixed(2)}</p>
+                        {productDiscountPreview ? (
+                          <Badge variant="outline" className="max-w-full truncate border-primary/60 text-[10px] text-primary" title={productDiscountPreview.discount.name}>
+                            {productDiscountPreview.discount.name} · {productDiscountPreview.discount.type === "percent" ? `-${productDiscountPreview.discount.value}%` : `-${formatMoney(productDiscountPreview.amountCents / 100)}`}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="space-y-0.5">
+                        {(productPricing.display.showOfferBadge || productDiscountPreview) && (
+                          <p className="text-xs text-muted-foreground line-through">
+                            {formatMoney(productDiscountPreview ? productPricing.effectivePrice : product.price)}
+                          </p>
+                        )}
+                        <p className="text-base font-bold text-secondary">{formatMoney(productDiscountPreview?.finalPrice ?? productPricing.effectivePrice)}</p>
                       </div>
                     </Card>
                   );
@@ -6645,7 +6694,11 @@ type TableConfirmDialogState =
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {visibleCart.map((item) => (
+                  {visibleCart.map((item, itemIndex) => {
+                    const lineDiscount = cartLineDiscountByIndex.get(itemIndex);
+                    const lineGross = getItemUnitTotal(item) * item.quantity;
+                    const lineTotal = lineDiscount ? lineDiscount.lineTotalAfter : lineGross;
+                    return (
                     <Card key={item.id} className="p-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -6653,6 +6706,9 @@ type TableConfirmDialogState =
                             <h4 className="whitespace-normal break-words text-sm font-semibold leading-snug">{item.name}</h4>
                             {item.isCustom && <Badge variant="secondary" className="text-[10px] uppercase leading-none">Manual</Badge>}
                           </div>
+                          <p className="text-xs text-muted-foreground">
+                            {item.quantity} × {formatMoney(getItemUnitTotal(item))}
+                          </p>
                           {item.originalBasePrice != null && item.originalBasePrice !== item.basePrice && (
                             <p className="text-xs text-muted-foreground">
                               <span className="line-through mr-1">{formatMoney(item.originalBasePrice)}</span>
@@ -6668,6 +6724,11 @@ type TableConfirmDialogState =
                           {item.unitPriceOverride != null && (
                             <Badge variant="outline" className="mt-1 border-amber-500/60 text-amber-400">Precio ajustado</Badge>
                           )}
+                          {lineDiscount ? (
+                            <p className="text-[11px] font-medium text-primary">
+                              {lineDiscount.discountName} {lineDiscount.discountType === "percent" ? `-${lineDiscount.discountValue}%` : `-${formatMoney(lineDiscount.amount)}`}
+                            </p>
+                          ) : null}
                           {item.modifiers.length > 0 && (
                             <div className="mt-1 whitespace-normal break-words text-[11px] leading-snug text-secondary">
                               {item.modifiers.map((mod) => mod.name).join(", ")}
@@ -6684,7 +6745,16 @@ type TableConfirmDialogState =
                               <Plus className="h-4 w-4" />
                             </Button>
                           </div>
-                          <span className="w-20 text-right text-sm font-bold">{formatMoney(getItemUnitTotal(item) * item.quantity)}</span>
+                          <span className="w-20 text-right text-sm font-bold">
+                            {lineDiscount ? (
+                              <span className="flex flex-col items-end leading-tight">
+                                <span className="text-[11px] font-medium text-muted-foreground line-through">{formatMoney(lineGross)}</span>
+                                <span>{formatMoney(lineTotal)}</span>
+                              </span>
+                            ) : (
+                              formatMoney(lineTotal)
+                            )}
+                          </span>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button type="button" variant="ghost" size="icon" className="h-10 w-10" title="Acciones de línea">
@@ -6711,7 +6781,8 @@ type TableConfirmDialogState =
                         </div>
                       </div>
                     </Card>
-                  ))}
+                  );
+                })}
                   <div ref={cartEndRef} />
                 </div>
               )}
@@ -7453,7 +7524,7 @@ type TableConfirmDialogState =
                               </div>
                               {(item.discountAmount ?? 0) > 0 && (
                                 <div className="text-[11px] gp-primary-text">
-                                  Descuento {formatMoney(item.discountAmount ?? 0)}
+                                  {item.discountName || "Descuento"} -{formatMoney(item.discountAmount ?? 0)}
                                 </div>
                               )}
                             </div>
