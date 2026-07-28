@@ -1,13 +1,15 @@
 from decimal import Decimal
 from unittest.mock import patch
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
 
 from apps.core.models import Branch, ServiceType
 from apps.menu.models import Category, Discount, DiscountRuleTarget, Modifier, ModifierGroup, Product
+from apps.orders.discount_engine import discount_business_weekday, discount_conditions_met
 from apps.orders.serializers import OrderCreateSerializer
+from apps.orders.services.totals import calculate_order_totals
 
 
 class DiscountApplicationTests(TestCase):
@@ -73,7 +75,7 @@ class DiscountApplicationTests(TestCase):
             value="10.00",
             applies_to="order",
             is_active=True,
-            auto_apply=True,
+            auto_apply=False,
             service_types=[],
             days_of_week=[],
             start_time=None,
@@ -505,3 +507,211 @@ class DiscountApplicationTests(TestCase):
 
         self.assertEqual(order_a.discount_total, Decimal("5.00"))
         self.assertEqual(order_b.discount_total, Decimal("5.00"))
+
+
+class AutomaticDiscountEligibilityTests(TestCase):
+    def setUp(self) -> None:
+        self.branch = Branch.objects.create(name="Sucursal descuentos", code="DISC-AUTO")
+        self.mesa_service = ServiceType.objects.create(key="MESA", label="Mesa")
+        self.delivery_service = ServiceType.objects.create(key="DELIVERY", label="Delivery")
+        self.category = Category.objects.create(name="MARISCOS AUTO")
+        self.shrimp = Product.objects.create(
+            name="Camarones empanizados",
+            description="",
+            price=Decimal("5.99"),
+            category=self.category,
+            available=True,
+        )
+        self.crepe = Product.objects.create(
+            name="Crepa de Melocoton",
+            description="",
+            price=Decimal("4.00"),
+            category=self.category,
+            available=True,
+        )
+        self.water = Product.objects.create(
+            name="Agua mineral",
+            description="",
+            price=Decimal("2.00"),
+            category=self.category,
+            available=True,
+        )
+
+    def _student_discount(self, *, days=None, service_types=None, start=None, end=None, products=None, min_amount=Decimal("0.00")) -> Discount:
+        discount = Discount.objects.create(
+            name="DESCUENTO ESTUDIANTE",
+            type="percent",
+            value=Decimal("25.00"),
+            applies_to="products",
+            is_active=True,
+            auto_apply=True,
+            days_of_week=[1, 2, 3, 4, 5, 6] if days is None else days,
+            start_time=time(11, 0) if start is None else start,
+            end_time=time(14, 0) if end is None else end,
+            service_types=["MESA"] if service_types is None else service_types,
+            min_amount=min_amount,
+        )
+        for product in products or [self.shrimp]:
+            DiscountRuleTarget.objects.create(discount=discount, product=product)
+        return discount
+
+    def _capture_payload(self, *, service_type_key="MESA", shrimp_quantity=1, include_crepe=True, product=None):
+        items = []
+        if include_crepe:
+            items.append(
+                {
+                    "product_id": self.crepe.id,
+                    "product_name_snapshot": self.crepe.name,
+                    "price_snapshot": "4.00",
+                    "quantity": 3,
+                    "modifiers": [],
+                }
+            )
+        selected_product = product or self.shrimp
+        items.append(
+            {
+                "product_id": selected_product.id,
+                "product_name_snapshot": selected_product.name,
+                "price_snapshot": str(selected_product.price),
+                "quantity": shrimp_quantity,
+                "modifiers": [],
+            }
+        )
+        return {
+            "branch_id": self.branch.id,
+            "service_type_key": service_type_key,
+            "items": items,
+        }
+
+    def _save_order_at(self, local_dt: datetime, payload: dict):
+        with patch("apps.orders.discount_engine.timezone.now", return_value=local_dt):
+            serializer = OrderCreateSerializer(data=payload)
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+            return serializer.save()
+
+    def test_weekday_mapping_uses_visual_d_l_m_x_j_v_s_values(self) -> None:
+        base_sunday = timezone.make_aware(datetime(2026, 7, 26, 13, 0, 0))
+        for expected_day in range(7):
+            local_dt = base_sunday + timedelta(days=expected_day)
+            self.assertEqual(discount_business_weekday(local_dt), expected_day)
+            discount = Discount(
+                name=f"Dia {expected_day}",
+                type="percent",
+                value=Decimal("10.00"),
+                applies_to="order",
+                is_active=True,
+                auto_apply=True,
+                days_of_week=[expected_day],
+                service_types=["MESA"],
+                start_time=time(11, 0),
+                end_time=time(14, 0),
+                min_amount=Decimal("0.00"),
+            )
+            self.assertTrue(
+                discount_conditions_met(
+                    discount,
+                    service_type_key="MESA",
+                    now=local_dt,
+                    subtotal_before_discounts=Decimal("1.00"),
+                )
+            )
+            discount.days_of_week = [(expected_day + 1) % 7]
+            self.assertFalse(
+                discount_conditions_met(
+                    discount,
+                    service_type_key="MESA",
+                    now=local_dt,
+                    subtotal_before_discounts=Decimal("1.00"),
+                )
+            )
+
+    def test_capture_case_applies_to_selected_product_only(self) -> None:
+        self._student_discount()
+        local_dt = timezone.make_aware(datetime(2026, 7, 27, 13, 16, 0))
+
+        order = self._save_order_at(local_dt, self._capture_payload())
+        items = list(order.items.order_by("id"))
+        totals = calculate_order_totals(order)
+
+        self.assertEqual(order.items.count(), 2)
+        self.assertEqual(order.discount_snapshot.get("name"), "DESCUENTO ESTUDIANTE")
+        self.assertEqual(order.discount_snapshot.get("mode"), "auto")
+        self.assertTrue(order.discount_snapshot.get("conditions_met"))
+        self.assertEqual(totals.subtotal, Decimal("17.99"))
+        self.assertEqual(totals.discount_total, Decimal("1.50"))
+        self.assertEqual(totals.total, Decimal("16.49"))
+        self.assertEqual(order.discount_total, Decimal("1.50"))
+        self.assertEqual(order.total, Decimal("16.49"))
+        self.assertEqual(order.amount_due_cents, 1649)
+        self.assertEqual(items[0].product_id, self.crepe.id)
+        self.assertEqual(items[0].discount_amount, Decimal("0.00"))
+        self.assertEqual(items[1].product_id, self.shrimp.id)
+        self.assertEqual(items[1].discount_amount, Decimal("1.50"))
+
+    def test_sunday_does_not_apply_for_monday_to_saturday_rule(self) -> None:
+        self._student_discount()
+        local_dt = timezone.make_aware(datetime(2026, 8, 2, 13, 16, 0))
+
+        order = self._save_order_at(local_dt, self._capture_payload())
+
+        self.assertEqual(order.discount_total, Decimal("0.00"))
+        self.assertEqual(order.total, Decimal("17.99"))
+        self.assertEqual(order.amount_due_cents, 1799)
+
+    def test_time_window_boundaries_are_local_and_inclusive(self) -> None:
+        self._student_discount()
+        expectations = [
+            (datetime(2026, 7, 27, 10, 59, 0), Decimal("0.00"), Decimal("17.99")),
+            (datetime(2026, 7, 27, 11, 0, 0), Decimal("1.50"), Decimal("16.49")),
+            (datetime(2026, 7, 27, 13, 16, 0), Decimal("1.50"), Decimal("16.49")),
+            (datetime(2026, 7, 27, 14, 0, 0), Decimal("1.50"), Decimal("16.49")),
+            (datetime(2026, 7, 27, 14, 1, 0), Decimal("0.00"), Decimal("17.99")),
+        ]
+
+        for raw_dt, discount_total, total in expectations:
+            order = self._save_order_at(timezone.make_aware(raw_dt), self._capture_payload())
+            self.assertEqual(order.discount_total, discount_total, raw_dt)
+            self.assertEqual(order.total, total, raw_dt)
+
+    def test_time_window_crossing_midnight_uses_local_time(self) -> None:
+        self._student_discount(days=[1, 2, 3, 4, 5, 6], start=time(22, 0), end=time(2, 0))
+        inside_late = self._save_order_at(timezone.make_aware(datetime(2026, 7, 27, 23, 30, 0)), self._capture_payload())
+        inside_early = self._save_order_at(timezone.make_aware(datetime(2026, 7, 28, 1, 30, 0)), self._capture_payload())
+        outside = self._save_order_at(timezone.make_aware(datetime(2026, 7, 28, 3, 0, 0)), self._capture_payload())
+
+        self.assertEqual(inside_late.discount_total, Decimal("1.50"))
+        self.assertEqual(inside_early.discount_total, Decimal("1.50"))
+        self.assertEqual(outside.discount_total, Decimal("0.00"))
+
+    def test_service_type_must_match_stable_key(self) -> None:
+        self._student_discount()
+        local_dt = timezone.make_aware(datetime(2026, 7, 27, 13, 16, 0))
+
+        delivery_order = self._save_order_at(local_dt, self._capture_payload(service_type_key="DELIVERY"))
+        mesa_order = self._save_order_at(local_dt, self._capture_payload(service_type_key="MESA"))
+
+        self.assertEqual(delivery_order.discount_total, Decimal("0.00"))
+        self.assertEqual(delivery_order.total, Decimal("17.99"))
+        self.assertEqual(mesa_order.discount_total, Decimal("1.50"))
+        self.assertEqual(mesa_order.total, Decimal("16.49"))
+
+    def test_unselected_product_does_not_receive_discount(self) -> None:
+        self._student_discount()
+        local_dt = timezone.make_aware(datetime(2026, 7, 27, 13, 16, 0))
+
+        order = self._save_order_at(local_dt, self._capture_payload(include_crepe=False, product=self.water))
+
+        self.assertEqual(order.discount_total, Decimal("0.00"))
+        self.assertEqual(order.total, Decimal("2.00"))
+        self.assertEqual(order.items.first().discount_amount, Decimal("0.00"))
+
+    def test_quantity_uses_line_subtotal_and_half_up_money_rounding(self) -> None:
+        self._student_discount()
+        local_dt = timezone.make_aware(datetime(2026, 7, 27, 13, 16, 0))
+
+        order = self._save_order_at(local_dt, self._capture_payload(include_crepe=False, shrimp_quantity=2))
+
+        self.assertEqual(order.discount_total, Decimal("3.00"))
+        self.assertEqual(order.total, Decimal("8.98"))
+        self.assertEqual(order.amount_due_cents, 898)
+        self.assertEqual(order.items.first().discount_amount, Decimal("3.00"))

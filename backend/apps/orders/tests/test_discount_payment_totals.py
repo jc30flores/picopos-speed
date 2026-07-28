@@ -1,7 +1,10 @@
+from datetime import datetime, time
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.core.models import Branch, ServiceType
@@ -345,3 +348,72 @@ class DiscountedPaymentTotalsTests(TestCase):
         )
         self.assertEqual(duplicate.status_code, 400)
         self.assertEqual(duplicate.data["detail"], "Esta parte ya fue pagada.")
+
+    def test_table_pending_order_sets_mesa_service_and_preserves_auto_snapshot_after_kitchen(self):
+        auto_discount = Discount.objects.create(
+            name="DESCUENTO ESTUDIANTE AUTO",
+            type="percent",
+            value=Decimal("25.00"),
+            applies_to="products",
+            is_active=True,
+            auto_apply=True,
+            service_types=["MESA"],
+            days_of_week=[1, 2, 3, 4, 5, 6],
+            start_time=time(11, 0),
+            end_time=time(14, 0),
+            min_amount=Decimal("0.00"),
+        )
+        DiscountRuleTarget.objects.create(discount=auto_discount, product=self.shrimp)
+        area = DiningArea.objects.create(name="Salón snapshot")
+        table = RestaurantTable.objects.create(area=area, name="Mesa 2", number=2, capacity=2)
+        order = Order.objects.create(order_number=701, branch=self.branch, status="new", is_pending=True, pending_state="pending_payment")
+        session = TableSession.objects.create(
+            guests_count=2,
+            order_mode=TableSession.ORDER_MODE_TABLE,
+            opened_by=self.user,
+            primary_order=order,
+        )
+        TableSessionTable.objects.create(session=session, table=table)
+
+        valid_time = timezone.make_aware(datetime(2026, 7, 27, 13, 16, 0))
+        with patch("apps.orders.discount_engine.timezone.now", return_value=valid_time):
+            response = self.client.post(
+                f"/api/orders/{order.id}/pending/",
+                {
+                    "is_pending": True,
+                    "pending_state": "in_kitchen",
+                    "pending_reference": "Mesa 2",
+                    "items": [self._shrimp_item()],
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        order.refresh_from_db()
+        self.assertEqual(order.service_type.key, "MESA")
+        self.assertEqual(order.discount_total, Decimal("1.50"))
+        self.assertEqual(order.total, Decimal("4.49"))
+        self.assertEqual(order.discount_snapshot.get("mode"), "auto")
+        first_item_id = order.items.first().id
+
+        order.send_to_kitchen = True
+        order.save(update_fields=["send_to_kitchen", "updated_at"])
+        session.status = TableSession.STATUS_SENT_TO_KITCHEN
+        session.save(update_fields=["status", "updated_at"])
+        outside_time = timezone.make_aware(datetime(2026, 7, 27, 14, 30, 0))
+        with patch("apps.orders.discount_engine.timezone.now", return_value=outside_time):
+            response = self.client.post(
+                f"/api/orders/{order.id}/pending/",
+                {
+                    "is_pending": True,
+                    "pending_state": "in_kitchen",
+                    "pending_reference": "Mesa 2",
+                    "items": [{**self._shrimp_item(), "source_order_item_id": first_item_id}],
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        order.refresh_from_db()
+        self.assertEqual(order.discount_total, Decimal("1.50"))
+        self.assertEqual(order.total, Decimal("4.49"))
+        self.assertEqual(order.amount_due_cents, 449)
+        self.assertEqual(order.items.first().discount_amount, Decimal("1.50"))
